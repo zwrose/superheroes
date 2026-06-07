@@ -85,6 +85,7 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ```bash
 if [ "$LOCATION" = "none" ]; then
   LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive true)
+  # If LOC is "ask", STOP — present the in-repo-vs-global AskUserQuestion, set LOC, then run the create calls below.
   PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
@@ -278,7 +279,7 @@ Each round:
 5. **Print findings in chat** — grouped by plan section heading, each with its POV line (e.g. `→ POV: Defer (High confidence) — real gap, but fine to nail down the test names during implementation`). Do **not** write these to a file.
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the plan document at `$PLAN_PATH` directly to address it (apply the finding's suggested replacement). Make these edits without asking.
 7. **Interventions.** `present-set` = effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`). If non-empty, present ONE consolidated `AskUserQuestion`: lead with each finding's POV; offer **Apply as suggested** / **Apply with my guidance** (free text) / **Skip** in this neutral order. Apply the user's chosen revisions to `$PLAN_PATH`. Add every `Skip` identity to the `skip-set`.
-   **Record decisions (learning loop):** append one `decisions.py` record per resolution to `.claude/review-decisions.json` (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
+   **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
 8. **Refresh + exit check.** Re-copy the revised plan: `cp "$PLAN_PATH" "$SESSION_DIR/plan.md"`. If any edits were made this round AND one or more Critical/Important findings remain that are not in the `skip-set` AND `round < 7`, set `round += 1` and repeat from step 1 (re-review the revised plan). Otherwise **EXIT** — but if the loop is exiting because it hit the **7-round cap** with Critical/Important findings still unresolved, `log` that the cap was reached and report those remaining findings explicitly; do **not** declare PLAN READY in that case (coverage may be incomplete, mirroring audit-debt's cap at `audit-debt/SKILL.md`).
 
 After exit, print a terminal summary in chat:
@@ -297,7 +298,7 @@ These four behaviors are **non-blocking**, run **at end of run** (after the term
 
 ### Recording decisions (at resolution time)
 
-Wherever the user resolves a finding (this skill: the §5 step 7 interventions, plus the auto-revised findings in step 6), append ONE record per decision to the **project-level** learning-loop store `.claude/review-decisions.json` (NOT the temp `$SESSION_DIR`). Use the bundled helper:
+Wherever the user resolves a finding (this skill: the §5 step 7 interventions, plus the auto-revised findings in step 6), append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
@@ -325,7 +326,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
-Pass the profile's current `nudge-ack` map keys (read from `.claude/review-profile.md`'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
+Pass the profile's current `nudge-ack` map keys (read from the resolved profile (`$PROFILE`)'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
 - **Apply to `<target>`** — apply the proposed calibration/convention edit to the named target.
 - **Edit then apply** — open a free-text edit, then apply the edited version.
 - **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
@@ -338,7 +339,7 @@ If the loaded profile's `status:` is `provisional` AND this run is interactive (
 
 > This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
 
-- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in `.claude/review-profile.md` (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
+- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
 - **Refresh via review-init** — point the user at `/review-crew:review-init` (its reconcile re-detects + can flip status) and do not change the profile now.
 - **Keep provisional** — record a dismissal (see "Recording a dismissal") using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
 
@@ -346,7 +347,7 @@ Skip this entirely when the run is **headless/non-interactive** (no human to ans
 
 ### Recording a dismissal (shared)
 
-The staleness nudge (above), the learning-loop proposal, and the provisional-profile confirmation share one dismissal mechanism: **write the relevant `signal_hash` into the profile's `nudge-ack` map** in `.claude/review-profile.md`'s provenance block, so the same signal does not re-fire until it changes. The map is `nudge-ack: {<hash>: true, ...}` on the provenance line; add the hash as a new key (the staleness nudge uses `DOCTOR_JSON.signal_hash`; the proposal uses `proposal.signal_hash`; the provisional-profile confirmation's **Keep provisional** uses a **constant signal** — the literal `provisional-confirm` — so that one suppresses re-asking until the profile itself changes, since a reconcile/regenerate that flips or refreshes `status` clears or supersedes it). This is the ONLY write any of these nudges makes to the profile, and only on dismissal — it is not a calibration edit.
+The staleness nudge (above), the learning-loop proposal, and the provisional-profile confirmation share one dismissal mechanism: **write the relevant `signal_hash` into the profile's `nudge-ack` map** in the resolved profile (`$PROFILE`)'s provenance block, so the same signal does not re-fire until it changes. The map is `nudge-ack: {<hash>: true, ...}` on the provenance line; add the hash as a new key (the staleness nudge uses `DOCTOR_JSON.signal_hash`; the proposal uses `proposal.signal_hash`; the provisional-profile confirmation's **Keep provisional** uses a **constant signal** — the literal `provisional-confirm` — so that one suppresses re-asking until the profile itself changes, since a reconcile/regenerate that flips or refreshes `status` clears or supersedes it). This is the ONLY write any of these nudges makes to the profile, and only on dismissal — it is not a calibration edit.
 
 ## Plan-Content Requirements (Opinionated)
 

@@ -3,6 +3,13 @@
 Rule 1: neither path literal may appear INSIDE a fenced code block.
 Rule 2: the literal profile existence test must not appear at all in the three
         review skills (anti-regression for the resolver-driven guard fix).
+
+Assumptions (intentionally narrow — the skills only use these forms):
+  - The fence parser (`_lines_in_fences`) recognizes ``` fences only, not ~~~.
+  - Rule 2 targets only the `[ -f review-profile.md ]` existence-test form
+    (via `pat`); it is not a general literal-in-prose check.
+These rules guard fenced code blocks and the existence-test form; they do NOT
+police descriptive prose, which legitimately still mentions the literals.
 """
 import os
 import re

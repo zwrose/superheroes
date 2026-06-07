@@ -86,6 +86,7 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ```bash
 if [ "$LOCATION" = "none" ]; then
   LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive true)
+  # If LOC is "ask", STOP — present the in-repo-vs-global AskUserQuestion, set LOC, then run the create calls below.
   PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
@@ -153,7 +154,7 @@ if [ -f "$ROOT/package.json" ]; then
 fi
 ```
 
-Then read `CLAUDE.md` and `.claude/review-profile.md` and extract specific factual claims the orchestrator will later verify in §4 (e.g., named module paths under the project's source dirs, a claimed canonical accessor or error-constants location, an `auth` strategy claim). Save the extracted claims to `$SESSION_DIR/sweep-prep/claude-md-claims.txt` so the doc-drift checks in §4 don't re-read the whole file.
+Then read `CLAUDE.md` and the resolved profile (`$PROFILE`) and extract specific factual claims the orchestrator will later verify in §4 (e.g., named module paths under the project's source dirs, a claimed canonical accessor or error-constants location, an `auth` strategy claim). Save the extracted claims to `$SESSION_DIR/sweep-prep/claude-md-claims.txt` so the doc-drift checks in §4 don't re-read the whole file.
 
 Write metadata:
 
@@ -285,7 +286,7 @@ While the specialists run, the main context computes three additional dimensions
 
 - Read `$SESSION_DIR/sweep-prep/claude-md-claims.txt`. For each path/file reference in `CLAUDE.md` (and the profile): verify it exists on disk. Missing references → Minor "CLAUDE.md drift: references nonexistent `<path>`" with effort `Quick`.
 - Repeat for any `docs/*.md` files the project keeps (e.g. `docs/architecture.md`, `docs/api-patterns.md`, `docs/setup.md`, `docs/testing.md`, `docs/product.md`) if they exist. Same check — every file path mentioned in prose should resolve.
-- **The profile's verify command resolves.** Read the `## Verify` block from `.claude/review-profile.md`: if `command:` is set, confirm its binary/command is runnable on the PATH (missing → Minor "verify command `<cmd>` does not resolve" with effort `Quick`). If `mode: unverified` or `mode: review-only`, there is no command to check — skip this check.
+- **The profile's verify command resolves.** Read the `## Verify` block from the resolved profile (`$PROFILE`): if `command:` is set, confirm its binary/command is runnable on the PATH (missing → Minor "verify command `<cmd>` does not resolve" with effort `Quick`). If `mode: unverified` or `mode: review-only`, there is no command to check — skip this check.
 
 Write all orchestrator-derived findings to `$SESSION_DIR/orchestrator-findings.json` using the same schema as the agent findings (including the `effort` field). Use ids like `orchestrator-deps-001`, `orchestrator-todo-001`, `orchestrator-docs-001` so they don't collide with subagent ids.
 
@@ -338,7 +339,7 @@ Render `$SESSION_DIR/report.md`: a markdown report grouped by category (Architec
 - **Critical / Important:** apply the review gate — auto-include findings with `recommendation` of `Fix` or `Defer` (filing an issue _is_ deferring real debt to a backlog), and ask the user only about `Skip`/borderline ones via `AskUserQuestion` (lead with the POV; **File** / **Drop**).
 - **Minor / Nit:** these carry no POV; include them by default.
 
-**Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to `.claude/review-decisions.json`, per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
+**Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to the resolved decisions store (`$DECISIONS`), per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
 - **Do not mix tiers within a single issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
 
 Present the proposed issue set in chat (title + tier + the findings each issue covers). Then `AskUserQuestion`: _"File these as GitHub issues?"_ Options:
@@ -365,7 +366,7 @@ These four behaviors are **non-blocking**, run **at end of run** (after the repo
 
 ### Recording decisions (at resolution time)
 
-audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-included Fix/Defer). Append ONE record per decision to the **project-level** learning-loop store `.claude/review-decisions.json` (NOT the temp `$SESSION_DIR`). Use the bundled helper:
+audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-included Fix/Defer). Append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
@@ -393,7 +394,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
-Pass the profile's current `nudge-ack` map keys (read from `.claude/review-profile.md`'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
+Pass the profile's current `nudge-ack` map keys (read from the resolved profile (`$PROFILE`)'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
 - **Apply to `<target>`** — apply the proposed calibration/convention edit to the named target.
 - **Edit then apply** — open a free-text edit, then apply the edited version.
 - **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
@@ -406,7 +407,7 @@ If the loaded profile's `status:` is `provisional` AND this run is interactive (
 
 > This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
 
-- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in `.claude/review-profile.md` (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
+- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
 - **Refresh via review-init** — point the user at `/review-crew:review-init` (its reconcile re-detects + can flip status) and do not change the profile now.
 - **Keep provisional** — record a dismissal (see "Recording a dismissal") using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
 
@@ -414,7 +415,7 @@ Skip this entirely when the run is **headless/non-interactive** (no human to ans
 
 ### Recording a dismissal (shared)
 
-The staleness nudge (above), the learning-loop proposal, and the provisional-profile confirmation share one dismissal mechanism: **write the relevant `signal_hash` into the profile's `nudge-ack` map** in `.claude/review-profile.md`'s provenance block, so the same signal does not re-fire until it changes. The map is `nudge-ack: {<hash>: true, ...}` on the provenance line; add the hash as a new key (the staleness nudge uses `DOCTOR_JSON.signal_hash`; the proposal uses `proposal.signal_hash`; the provisional-profile confirmation's **Keep provisional** uses a **constant signal** — the literal `provisional-confirm` — so that one suppresses re-asking until the profile itself changes, since a reconcile/regenerate that flips or refreshes `status` clears or supersedes it). This is the ONLY write any of these nudges makes to the profile, and only on dismissal — it is not a calibration edit.
+The staleness nudge (above), the learning-loop proposal, and the provisional-profile confirmation share one dismissal mechanism: **write the relevant `signal_hash` into the profile's `nudge-ack` map** in the resolved profile (`$PROFILE`)'s provenance block, so the same signal does not re-fire until it changes. The map is `nudge-ack: {<hash>: true, ...}` on the provenance line; add the hash as a new key (the staleness nudge uses `DOCTOR_JSON.signal_hash`; the proposal uses `proposal.signal_hash`; the provisional-profile confirmation's **Keep provisional** uses a **constant signal** — the literal `provisional-confirm` — so that one suppresses re-asking until the profile itself changes, since a reconcile/regenerate that flips or refreshes `status` clears or supersedes it). This is the ONLY write any of these nudges makes to the profile, and only on dismissal — it is not a calibration edit.
 
 ## Severity Recalibration for Debt Context
 
