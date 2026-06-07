@@ -70,7 +70,8 @@ storage location and mint the path before writing:
 
 ```bash
 if [ "$LOCATION" = "none" ]; then
-  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive true)
+  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
+  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask", present the in-repo vs global AskUserQuestion, set LOC.
   PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
 fi
