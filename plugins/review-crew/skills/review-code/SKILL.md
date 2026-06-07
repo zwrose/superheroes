@@ -69,11 +69,23 @@ Files written during the review. **Per-round artifacts live under `$SESSION_DIR/
 
 Decide mode (auto-detected or explicit, per `## Invocation`). Create the session directory.
 
-**Resolve the base rubric and profile paths once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`; the project profile lives at `.claude/review-profile.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
 
 ```bash
 RUBRIC="${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
-PROFILE=".claude/review-profile.md"
+```
+
+**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+
+```bash
+RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind profile) \
+  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
+PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
+LOCATION=$(printf '%s' "$RES" | jq -r .location)
+EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+DRES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind decisions) \
+  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 ```
 
 Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
@@ -83,30 +95,34 @@ PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_R
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
-**Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already exists — a MISSING profile routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
+**Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
-if [ -f .claude/review-profile.md ]; then
+if [ "$EXISTS" = "true" ]; then
   # --post path: --root "$SESSION_DIR/repo" (PR-head worktree). branch/default: omit --root (working tree).
   DOCTOR_JSON=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/repo_doctor.py" \
-    .claude/review-profile.md "$PLUGIN_VERSION" "$RUBRIC_VERSION" ${DOCTOR_ROOT_ARG})
+    "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION" ${DOCTOR_ROOT_ARG})
 fi
 ```
 
 (`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
 
-**Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from `.claude/review-profile.md`. If it's absent, create it first:
+**Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
 ```bash
-if [ ! -f .claude/review-profile.md ]; then
-  # No profile yet — run review-init's create procedure INLINE (do not invoke another skill).
-  # Interactive: run review-init Steps 1–4 (detect → interview → seed patterns → write .claude/review-profile.md).
-  # Headless / non-interactive: write a status: provisional profile from detected defaults with the STRICT threat model.
-  :
+if [ "$LOCATION" = "none" ]; then
+  # Decide location: env override > ask (interactive) > global (headless).
+  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive true)
+  # If LOC is "ask", present the in-repo vs global AskUserQuestion now and set LOC.
+  PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind decisions --location "$LOC")
+  # Then run review-init's create procedure inline, writing the profile to $PROFILE.
 fi
 ```
 
-If `.claude/review-profile.md` is absent, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
 
 **Read the verify story from the profile** (`## Verify` section of `.claude/review-profile.md`). This sets `VERIFY_CMD` for the orchestrator's verify gate and the fixer (see `## The verify command` below):
 
@@ -228,7 +244,7 @@ Do **not** tier or skip specialists based on which files changed. Coverage unifo
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all four specialists in a **single message with four `Agent` tool calls** so they run in parallel, each dispatched by its `subagent_type` (the agent's name). Each gets the same prompt template, parameterized by `subagent_type`, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it:
+Launch all four specialists in a **single message with four `Agent` tool calls** so they run in parallel, each dispatched by its `subagent_type` (the agent's name). Each gets the same prompt template, parameterized by `subagent_type`, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
@@ -244,7 +260,7 @@ patterns, conventions). Apply the diff-scope rule: only flag code in `+` or
 ## Context files
 - Diff: $SESSION_DIR/round-<round>/diff.txt
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
-- Project profile (threat model, scope, focus hints, canonical patterns): .claude/review-profile.md
+- Project profile (threat model, scope, focus hints, canonical patterns): <PROFILE_PATH>
 - CLAUDE.md (project conventions): CLAUDE.md
 - <PR read-only paths only> PR branch checkout: $SESSION_DIR/repo/
 - <PR mode only> Prior comments + author justifications: $SESSION_DIR/prior-comments.json
@@ -394,7 +410,7 @@ You are triaging code-review findings for one round of an auto-fix loop.
   findings whose ids are in this list: <ids of effective findings>)
 - Triage rubric: the base rubric's "Triage rubric (mechanical vs judgment)"
   section (absolute path: <absolute RUBRIC path>)
-- Project profile: .claude/review-profile.md (threat model, scope, focus hints)
+- Project profile: <PROFILE_PATH> (threat model, scope, focus hints)
 - Project conventions: CLAUDE.md
 - Code to inspect: the current working tree (read the cited files to judge
   whether a fix is mechanical or a judgment call)
@@ -439,7 +455,7 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Findings to fix: $SESSION_DIR/round-<N>/fix-batch.json (array; each has
   id, severity, dimension, file, line, body, suggestion, and optional
   userGuidance)
-- Conventions: CLAUDE.md and the project profile (.claude/review-profile.md);
+- Conventions: CLAUDE.md and the project profile (<PROFILE_PATH>);
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
 - Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
@@ -580,7 +596,7 @@ Wherever the user resolves a finding (this skill: the §7 interventions and any 
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
-  append .claude/review-decisions.json '<record-json>'
+  append "$DECISIONS" '<record-json>'
 ```
 
 `<record-json>` is `{"dimension": "<finding dimension>", "category": "<finding taxonomy/topic>", "action": "skip"|"guidance"|"fix"}`:
@@ -601,7 +617,7 @@ After the staleness nudge, analyze the decision store for a repeated signal:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
-  analyze .claude/review-decisions.json --nudge-ack <comma-separated profile nudge-ack hashes>
+  analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
 Pass the profile's current `nudge-ack` map keys (read from `.claude/review-profile.md`'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
