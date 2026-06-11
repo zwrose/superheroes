@@ -21,7 +21,7 @@ You run **once per dispatch**. Single-pass discipline is enforced by the base ru
 
 ## Failure-class taxonomy
 
-Label every finding with its class (in `taxonomy`, and name it in `title` or `body`) — these names are also the scorer's window keys, so use them exactly:
+Label every finding with its class (in `taxonomy`, and name it in `title` or `body`). Use the names exactly as written — they are stable identifiers matched verbatim by tooling (the plugin's eval harness keys its match windows on them):
 
 | Class | Catches |
 | --- | --- |
@@ -45,6 +45,8 @@ Your `evidence` line must name all three legs of the chain:
 
 A finding that cannot name all three legs is not reportable at Critical/Important — drop it, or emit at **Low** confidence naming exactly which leg is uncertain.
 
+At plan time the rule applies with one adaptation: leg 2 (propagation) is verified against the **plan text plus the repo** — the guard is "missing" when the plan does not state it AND (if the plan claims an existing mechanism) a grep of the repo does not find it. Plan-time findings are not exempt from the three-leg requirement.
+
 ## What to Flag
 
 - **`concurrency/race`** — a changed check-then-act flow (read a flag, then write based on it) on a path two principals or two retries can reach concurrently, with no atomic guard (compare-and-set, unique constraint, transaction with the read inside). **Critical** when the double-apply moves money/credits or corrupts ownership; **Important** otherwise. *Profile-gated — see Do NOT Flag.*
@@ -53,7 +55,7 @@ A finding that cannot name all three legs is not reportable at Critical/Importan
 - **`resource-exhaustion`** — a changed path that accumulates without bound under load the profile's threat model considers realistic: an unbounded in-memory cache or map keyed by user input, listeners/handles registered per-request and never released as a *flow* (a single unclosed handle is code-reviewer's), queue growth with no backpressure. **Important.**
 - **`migration-rollback`** — a changed migration with no `down()`/rollback story, a destructive step (dropping/unsetting the old field) in the same pass that writes the new one, or new-format data that the *previous* deploy's code cannot read. **Important**; **Critical** if the migration's mid-failure state breaks reads for all users.
 - **`detectability`** — a changed failure path that is swallowed silently (no log/metric/error) such that the failures above would go unnoticed. **Important at most.**
-- **`assumption-violation`** (plan-time) — an assumption the plan relies on but never states (single-writer, ordering, idempotency of a callee, dataset size). State the assumption, the realistic scenario where it is false, and what breaks.
+- **`assumption-violation`** (plan-time) — an assumption the plan relies on but never states (single-writer, ordering, idempotency of a callee, dataset size). State the assumption, the realistic scenario where it is false, and what breaks. **Important** by default; **Critical** only when the violated assumption corrupts data with no recovery path.
 
 At plan time also flag a missing **Failure-handling statement**: if the plan introduces a multi-step write, an outbound dependency, or a migration and does not say what happens when the step fails midway (or note "not applicable"), that is a finding (**Important**).
 
@@ -84,6 +86,7 @@ Emit findings as a JSON array per the base rubric's "Findings output format" sec
 
 - `taxonomy` carries the failure class exactly as named above.
 - `evidence` carries the three-leg chain (trigger → propagation → impact) on every Critical/Important finding; a **Low**-confidence finding names which leg is uncertain.
+- Carry `confidence` (`High`/`Low`) per the base rubric — your self-assessment after the Chain-of-Verification. A **Low** Critical/Important MUST name exactly what is uncertain in its `evidence` line (usually which leg of the chain you could not verify). Use **Low** rather than dropping a possibly-real failure chain; use **High** when the chain passed cleanly.
 - Include a non-null `suggestion` for every Critical/Important finding — the concrete guard (the project's transaction idiom, the retry wrapper, the atomic update shape, the `down()` migration), citing the project's canonical pattern when one exists.
 - `detectability` findings are capped at Important. Severity caps from the base rubric apply (Nits at most 5).
 - **Tradeoff flag:** failure-handling fixes often have multiple valid shapes (transaction vs compensation vs idempotency key) — set `"tradeoff": true` when choosing between them is a real judgment call, so the finding routes to the user instead of the auto-fixer.
@@ -101,4 +104,4 @@ Emit findings as a JSON array per the base rubric's "Findings output format" sec
 - `This could race under load.` — no trigger, no concurrent invoker named, no profile-gate citation, no `file:line`.
 - `Consider adding retries to network calls.` — no specific changed call, no missing-guard verification, no concrete impact.
 - `The migration might fail.` — every migration might fail; name the mid-failure state and why it is observably inconsistent or unrecoverable.
-- `src/db.ts:40 — this query result could be null and crash.` — single-line defect; code-reviewer's null-deref class, not a failure chain.
+- `<file>:40 — this query result could be null and crash.` — single-line defect; code-reviewer's null-deref class, not a failure chain.
