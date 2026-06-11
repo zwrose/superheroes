@@ -64,8 +64,12 @@ _SCRUB_PATTERNS = [
                 r"set-cookie|x-api-key)\s*:\s*).+$"), r"\1[REDACTED]"),
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [REDACTED]"),
     (re.compile(r"(?i)\b(session[_-]?id|session|sid|token|api[_-]?key|"
-                r"access[_-]?token|refresh[_-]?token)=([^&\s;\"']+)"),
+                r"access[_-]?token|refresh[_-]?token|password|passwd|pwd|"
+                r"client[_-]?secret)=([^&\s;\"']+)"),
      r"\1=[REDACTED]"),
+    # URI userinfo credentials: scheme://user:pass@host -> scheme://[REDACTED]@host
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^/\s:@]+):([^@\s/]+)@"),
+     r"\1:[REDACTED]@"),
 ]
 
 
@@ -133,9 +137,9 @@ def upsert(pr, family, key, body, plans_dir=None):
     """Edit-else-create the marker-managed comment; preserve plan checkboxes;
     delete the local fallback file once posted. Returns {"action", "id"}."""
     marker = render_marker(family, key)
+    body = scrub(body)
     if marker not in body:
         body = f"{marker}\n{body}"
-    body = scrub(body)
     author = gh_user()
     existing = find_comment(list_comments(pr), family, key, author)
     if existing:
@@ -178,6 +182,10 @@ def main(argv):
             if not all((pr, family, key, body_file)):
                 sys.stderr.write("usage: upsert --pr N --family plan|results "
                                  "--key K --body-file F [--plans-dir D]\n")
+                return 2
+            if not pr.isdigit():
+                sys.stderr.write(f"error: --pr must be a numeric PR number, "
+                                 f"got {pr!r}\n")
                 return 2
             body = open(body_file).read()
             out = upsert(pr, family, key, body, _arg(args, "--plans-dir"))

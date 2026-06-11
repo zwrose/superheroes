@@ -81,6 +81,26 @@ def test_decide_location():
     assert store.decide_location(None, False) == "global"
 
 
+def test_resolve_global_self_heals_dangling_remote_pointer(tmp_path):
+    """test-004: write a dangling remote pointer; resolve_global heals it."""
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    # Create a real global entry
+    c = store.create(repo, "global", root)
+    live_entry = c["entry_id"]
+    # Overwrite the remote-hash pointer to a nonexistent entry
+    ident = store.derive_identifiers(repo)
+    dead_entry = "deadbeefdeadbeef"
+    store.write_pointer(root, ident["remote_hash"], dead_entry)
+    # resolve_global should fall back to the live gitdir-keyed entry and heal
+    result = store.resolve_global(repo, root)
+    assert result is not None
+    assert result["entry_id"] == live_entry
+    assert result["healed"] is True
+    # The remote pointer must now point at the live entry
+    assert store.read_pointer(root, ident["remote_hash"]) == live_entry
+
+
 def test_cli_key_and_resolve(tmp_path):
     repo = _init_repo(tmp_path / "repo")
     env = dict(os.environ, TEST_PILOT_STORE_ROOT=str(tmp_path / "store"))

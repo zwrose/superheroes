@@ -43,18 +43,25 @@ def read_block_meta(path):
     except (OSError, SyntaxError) as exc:
         raise BlockError(f"cannot parse block {path}: {exc}") from exc
     for node in tree.body:
+        value_node = None
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name) and t.id == "BLOCK_META":
-                    try:
-                        meta = ast.literal_eval(node.value)
-                    except ValueError as exc:
-                        raise BlockError(
-                            f"BLOCK_META in {path} must be a literal dict"
-                        ) from exc
-                    if not isinstance(meta, dict):
-                        raise BlockError(f"BLOCK_META in {path} must be a dict")
-                    return meta
+                    value_node = node.value
+                    break
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "BLOCK_META":
+                value_node = node.value
+        if value_node is not None:
+            try:
+                meta = ast.literal_eval(value_node)
+            except (ValueError, TypeError, SyntaxError, RecursionError) as exc:
+                raise BlockError(
+                    f"BLOCK_META in {path} must be a literal dict"
+                ) from exc
+            if not isinstance(meta, dict):
+                raise BlockError(f"BLOCK_META in {path} must be a dict")
+            return meta
     raise BlockError(f"block {path} has no module-level BLOCK_META")
 
 

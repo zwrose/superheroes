@@ -9,6 +9,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 
@@ -48,8 +49,15 @@ def load_manifest(path):
     if not isinstance(m.get("branch"), str) or not m["branch"].strip():
         raise EngineError(f"manifest {path} is missing the `branch` field "
                           f"(identity lives in the JSON, not the filename)")
-    if m.get("slot") is not None and not store.SLOT_RE.match(m["slot"]):
-        raise EngineError(f"manifest {path} has an invalid slot {m['slot']!r}")
+    slot_val = m.get("slot")
+    if slot_val is not None:
+        if not isinstance(slot_val, str):
+            raise EngineError(
+                f"manifest {path} has a non-string slot {slot_val!r}; "
+                f"slot must be a string")
+        if not store.SLOT_RE.match(slot_val):
+            raise EngineError(
+                f"manifest {path} has an invalid slot {slot_val!r}")
     scenarios = m.get("scenarios")
     if not isinstance(scenarios, list):
         raise EngineError(f"manifest {path}: `scenarios` must be a list")
@@ -103,8 +111,11 @@ def load_plan_record(path, manifest):
         raise EngineError(
             f"plan record {path} has schemaVersion {v!r}; this engine "
             f"supports {PLAN_RECORD_SCHEMA_VERSION}.")
+    if not isinstance(rec.get("steps"), list):
+        raise EngineError(
+            f"plan record {path}: missing or non-list `steps` field")
     ids = {sc["id"] for sc in manifest["scenarios"]}
-    for step in rec.get("steps", []):
+    for step in rec["steps"]:
         for f in ("id", "instruction", "expected"):
             if not isinstance(step.get(f), str) or not step[f]:
                 raise EngineError(
@@ -119,9 +130,7 @@ def load_plan_record(path, manifest):
     return rec
 
 
-import re as _re
-
-_CONFIG_RE = _re.compile(r"```json\s+test-pilot-config\s*\n(.*?)\n```", _re.S)
+_CONFIG_RE = re.compile(r"```json\s+test-pilot-config\s*\n(.*?)\n```", re.S)
 
 
 def load_profile_config(profile_path):
@@ -169,6 +178,69 @@ def config_hash(config):
     return hashlib.sha256(
         json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:16]
+
+
+def scenario_hash(sc):
+    """Hash for dirty detection: covers both config and dependsOn."""
+    return config_hash({"config": sc.get("config", {}),
+                        "dependsOn": sorted(sc.get("dependsOn", []))})
+
+
+def _gate_or_raise(hits, allow_protected, clean_hits=None):
+    """Raise EngineError if hits and not allow_protected; otherwise warn on
+    clean_hits (when allow_protected). clean_hits defaults to hits."""
+    all_hits = hits
+    if not all_hits and not allow_protected:
+        return
+    if all_hits and not allow_protected:
+        sid, target, pat = all_hits[0]
+        raise EngineError(
+            f"protected-target refusal: scenario {sid!r} declares target "
+            f"{target!r} matching protected pattern {pat!r}. Pass "
+            f"--allow-protected ONLY if the user explicitly instructed it.",
+            scenarioId=sid, block=None)
+    if allow_protected and clean_hits:
+        sys.stderr.write(
+            "⚠ --ALLOW-PROTECTED: cleaning protected targets: "
+            + ", ".join(f"{t} (pattern {p}, scenario {s})"
+                        for s, t, p in clean_hits)
+            + "\n")
+
+
+def _plan_and_gate(manifest, mstate, project_blocks, profile_cfg, allow_protected,
+                   branch=None, slot=None):
+    """Plan changes and run gate on both new targets and scheduled-clean targets.
+    Returns (to_clean, to_apply, skipped, all_hits)."""
+    key_or_none = mstate.get("branch"), mstate.get("slot")
+    to_clean, to_apply, skipped = plan_changes(manifest, mstate)
+    clean_pseudo = [{"id": sid, "block": mstate["scenarios"][sid]["block"],
+                     "config": mstate["scenarios"][sid]["config"]}
+                    for sid in to_clean if sid in mstate["scenarios"]]
+    clean_hits = gate_violations(clean_pseudo, project_blocks,
+                                 (profile_cfg or {}).get("protectedTargets"))
+    scenarios_hits = gate_violations(manifest["scenarios"], project_blocks,
+                                     (profile_cfg or {}).get("protectedTargets"))
+    all_hits = scenarios_hits + [h for h in clean_hits if h not in scenarios_hits]
+    if all_hits and not allow_protected:
+        sid, target, pat = all_hits[0]
+        raise EngineError(
+            f"protected-target refusal: scenario {sid!r} declares target "
+            f"{target!r} matching protected pattern {pat!r}. Pass "
+            f"--allow-protected ONLY if the user explicitly instructed it.",
+            scenarioId=sid, block=None)
+    if allow_protected and scenarios_hits:
+        sys.stderr.write(
+            "⚠ --ALLOW-PROTECTED: writing to protected targets: "
+            + ", ".join(f"{t} (pattern {p}, scenario {s})"
+                        for s, t, p in scenarios_hits)
+            + "\n")
+    if allow_protected and clean_hits:
+        sys.stderr.write(
+            "⚠ --ALLOW-PROTECTED: cleaning protected targets: "
+            + ", ".join(f"{t} (pattern {p}, scenario {s})"
+                        for s, t, p in clean_hits)
+            + "\n")
+    return to_clean, to_apply, skipped, all_hits
 
 
 def _now():
@@ -222,6 +294,7 @@ def plan_changes(manifest, mstate):
     for sid, sc in desired.items():
         rec = existing.get(sid)
         if rec and (rec["block"] != sc["block"]
+                    or rec.get("scenarioHash") != scenario_hash(sc)
                     or rec["configHash"] != config_hash(sc["config"])):
             dirty.add(sid)
     deps = _dependents(manifest["scenarios"])
@@ -245,21 +318,6 @@ def apply_manifest(paths, branch, slot, profile_cfg, allow_protected,
             f"{manifest['branch']!r} slot={manifest.get('slot')!r}, not "
             f"({branch!r}, {slot!r}) — identity lives in the JSON")
     project_blocks = blocks.discover_blocks(paths["blocks_dir"])
-    hits = gate_violations(manifest["scenarios"], project_blocks,
-                           profile_cfg.get("protectedTargets"))
-    if hits and not allow_protected:
-        sid, target, pat = hits[0]
-        raise EngineError(
-            f"protected-target refusal: scenario {sid!r} declares target "
-            f"{target!r} matching protected pattern {pat!r}. Pass "
-            f"--allow-protected ONLY if the user explicitly instructed it.",
-            scenarioId=sid, block=None)
-    if hits and allow_protected:
-        sys.stderr.write(
-            "⚠ --ALLOW-PROTECTED: writing to protected targets: "
-            + ", ".join(f"{t} (pattern {p}, scenario {s})" for s, t, p in hits)
-            + "\n")
-
     st_path = _state_path(paths)
 
     if dry_run:
@@ -267,21 +325,8 @@ def apply_manifest(paths, branch, slot, profile_cfg, allow_protected,
         st = state.load_state(st_path)
         mstate = st["manifests"].get(key, {"branch": branch, "slot": slot,
                                            "applyOrder": [], "scenarios": {}})
-        to_clean, to_apply, skipped = plan_changes(manifest, mstate)
-        # Gate removed scenarios being cleaned (dry-run path).
-        clean_pseudo = [{"id": sid, "block": mstate["scenarios"][sid]["block"],
-                         "config": mstate["scenarios"][sid]["config"]}
-                        for sid in to_clean if sid in mstate["scenarios"]]
-        clean_hits = gate_violations(clean_pseudo, project_blocks,
-                                     (profile_cfg or {}).get("protectedTargets"))
-        all_hits = hits + [h for h in clean_hits if h not in hits]
-        if all_hits and not allow_protected:
-            sid, target, pat = all_hits[0]
-            raise EngineError(
-                f"protected-target refusal: scenario {sid!r} declares target "
-                f"{target!r} matching protected pattern {pat!r}. Pass "
-                f"--allow-protected ONLY if the user explicitly instructed it.",
-                scenarioId=sid, block=None)
+        to_clean, to_apply, skipped, all_hits = _plan_and_gate(
+            manifest, mstate, project_blocks, profile_cfg, allow_protected)
         return {"ok": True, "command": "apply", "key": key, "dryRun": True,
                 "wouldClean": to_clean, "wouldApply": to_apply,
                 "skipped": skipped,
@@ -299,27 +344,8 @@ def apply_manifest(paths, branch, slot, profile_cfg, allow_protected,
         st = state.load_state(st_path)
         mstate = st["manifests"].get(key, {"branch": branch, "slot": slot,
                                            "applyOrder": [], "scenarios": {}})
-        to_clean, to_apply, skipped = plan_changes(manifest, mstate)
-        # Gate removed scenarios being cleaned (real path, state now available).
-        clean_pseudo = [{"id": sid, "block": mstate["scenarios"][sid]["block"],
-                         "config": mstate["scenarios"][sid]["config"]}
-                        for sid in to_clean if sid in mstate["scenarios"]]
-        clean_hits = gate_violations(clean_pseudo, project_blocks,
-                                     (profile_cfg or {}).get("protectedTargets"))
-        all_hits = hits + [h for h in clean_hits if h not in hits]
-        if all_hits and not allow_protected:
-            sid, target, pat = all_hits[0]
-            raise EngineError(
-                f"protected-target refusal: scenario {sid!r} declares target "
-                f"{target!r} matching protected pattern {pat!r}. Pass "
-                f"--allow-protected ONLY if the user explicitly instructed it.",
-                scenarioId=sid, block=None)
-        if all_hits and allow_protected and clean_hits:
-            sys.stderr.write(
-                "⚠ --ALLOW-PROTECTED: cleaning protected targets: "
-                + ", ".join(f"{t} (pattern {p}, scenario {s})"
-                            for s, t, p in clean_hits)
-                + "\n")
+        to_clean, to_apply, skipped, all_hits = _plan_and_gate(
+            manifest, mstate, project_blocks, profile_cfg, allow_protected)
         ctx = _ctx(paths, profile_cfg)
         desired = {sc["id"]: sc for sc in manifest["scenarios"]}
         for sid in to_clean:
@@ -337,6 +363,7 @@ def apply_manifest(paths, branch, slot, profile_cfg, allow_protected,
             mstate["scenarios"][sid] = {
                 "block": sc["block"], "config": sc["config"],
                 "configHash": config_hash(sc["config"]),
+                "scenarioHash": scenario_hash(sc),
                 "result": result, "appliedAt": _now()}
             mstate["applyOrder"].append(sid)
             st["manifests"][key] = mstate
@@ -383,19 +410,7 @@ def clean_manifest(paths, branch, slot, profile_cfg=None, allow_protected=False)
                   for sid, rec in mstate["scenarios"].items()]
         hits = gate_violations(pseudo, project_blocks,
                                (profile_cfg or {}).get("protectedTargets"))
-        if hits and not allow_protected:
-            sid, target, pat = hits[0]
-            raise EngineError(
-                f"protected-target refusal: scenario {sid!r} declares target "
-                f"{target!r} matching protected pattern {pat!r}. Pass "
-                f"--allow-protected ONLY if the user explicitly instructed it.",
-                scenarioId=sid, block=None)
-        if hits and allow_protected:
-            sys.stderr.write(
-                "⚠ --ALLOW-PROTECTED: cleaning protected targets: "
-                + ", ".join(f"{t} (pattern {p}, scenario {s})"
-                            for s, t, p in hits)
-                + "\n")
+        _gate_or_raise(hits, allow_protected, clean_hits=hits)
         ctx = _ctx(paths, profile_cfg or {})
         for sid in list(reversed(mstate["applyOrder"])):
             rec = mstate["scenarios"][sid]
@@ -424,7 +439,8 @@ def status(paths):
                 desired = {sc["id"]: sc for sc in manifest["scenarios"]}
                 for sid, rec in mstate["scenarios"].items():
                     sc = desired.get(sid)
-                    if sc is None or rec["configHash"] != config_hash(sc["config"]):
+                    if (sc is None or rec["block"] != sc["block"]
+                            or rec["configHash"] != config_hash(sc["config"])):
                         drift.append(sid)
             except EngineError as exc:
                 drift = [f"manifest unreadable: {exc}"]
@@ -516,6 +532,11 @@ def main(argv):
                "error": payload.get("error", str(exc)),
                "block": payload.get("block"),
                "scenarioId": payload.get("scenarioId")}
+        sys.stdout.write(json.dumps(err) + "\n")
+        return 1
+    except ValueError as exc:
+        err = {"ok": False, "command": cmd, "error": str(exc),
+               "block": None, "scenarioId": None}
         sys.stdout.write(json.dumps(err) + "\n")
         return 1
 

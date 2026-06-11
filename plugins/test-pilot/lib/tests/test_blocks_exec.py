@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import subprocess
 import textwrap
 
 import pytest
@@ -37,6 +39,29 @@ BAD_OUTPUT_BLOCK = """\
     BLOCK_META = {"description": "x", "config": {}, "targets": ["t"]}
     if __name__ == "__main__":
         print("this is not json")
+"""
+
+# PEP 723 block with NO third-party deps (just stdlib) so it runs without network.
+ZERO_DEP_PEP723_BLOCK = """\
+    # /// script
+    # dependencies = []
+    # ///
+    BLOCK_META = {"description": "zero-dep pep723", "config": {}, "targets": ["test-db"]}
+
+    def apply(config, ctx):
+        return {"ok": True, "msg": "pep723-ran"}
+
+    def clean(result, ctx):
+        return {}
+
+    if __name__ == "__main__":
+        import json, sys
+        req = json.load(sys.stdin)
+        if req["op"] == "apply":
+            out = apply(req["config"], req["ctx"])
+        else:
+            out = clean(req.get("result"), req["ctx"])
+        print(json.dumps(out if out is not None else {}))
 """
 
 
@@ -107,9 +132,71 @@ def test_run_command_apply_and_clean(tmp_path):
                             result=result) == {"skipped": "no cleanCommand"}
 
 
+@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not installed")
+def test_pep723_zero_dep_runs_through_real_uv(tmp_path):
+    """architecture-005: a PEP-723 block with zero third-party deps round-trips
+    through real `uv run` end-to-end."""
+    d = _blocks_dir(tmp_path, zerodep=ZERO_DEP_PEP723_BLOCK)
+    found = blocks.discover_blocks(d)
+    result = blocks.run_block("zerodep", "apply", {}, {"repoRoot": str(tmp_path)},
+                              found)
+    assert result.get("ok") is True
+    assert result.get("msg") == "pep723-ran"
+
+
 def test_run_command_failure_names_block(tmp_path):
     cfg = {"command": ["python3", "-c", "import sys; sys.exit(3)"],
            "targets": ["t"]}
     with pytest.raises(blocks.BlockError) as e:
         blocks.run_block("run-command", "apply", cfg, {"repoRoot": str(tmp_path)}, {})
     assert e.value.block == "run-command" and "exit 3" in str(e.value)
+
+
+# test-005: module block nonzero exit
+def test_module_block_nonzero_exit_names_block_and_stderr(tmp_path):
+    d = _blocks_dir(tmp_path, echo=ECHO_BLOCK)
+    found = blocks.discover_blocks(d)
+
+    class FakeProc:
+        returncode = 2
+        stdout = ""
+        stderr = "boom"
+
+    def fake_runner(argv, **kw):
+        return FakeProc()
+
+    with pytest.raises(blocks.BlockError) as e:
+        blocks.run_block("echo", "apply", {"msg": "hi"},
+                         {"repoRoot": str(tmp_path)}, found, runner=fake_runner)
+    assert e.value.block == "echo"
+    assert "boom" in str(e.value)
+    assert "exit 2" in str(e.value)
+
+
+# test-005: module block timeout
+def test_module_block_timeout_raises_block_error(tmp_path):
+    d = _blocks_dir(tmp_path, echo=ECHO_BLOCK)
+    found = blocks.discover_blocks(d)
+
+    def fake_runner(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 600)
+
+    with pytest.raises(blocks.BlockError) as e:
+        blocks.run_block("echo", "apply", {"msg": "hi"},
+                         {"repoRoot": str(tmp_path)}, found, runner=fake_runner)
+    assert e.value.block == "echo"
+    assert "timed out" in str(e.value).lower()
+
+
+# test-005: run-command timeout
+def test_run_command_timeout_raises_block_error(tmp_path):
+    cfg = {"command": ["true"], "targets": ["t"]}
+
+    def fake_runner(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 600)
+
+    with pytest.raises(blocks.BlockError) as e:
+        blocks.run_block("run-command", "apply", cfg,
+                         {"repoRoot": str(tmp_path)}, {}, runner=fake_runner)
+    assert e.value.block == "run-command"
+    assert "timed out" in str(e.value).lower()

@@ -143,6 +143,15 @@ def resolve_global(cwd, root):
          if os.path.isdir(os.path.join(root, "entries", c))), None)
     if entry_id is None:
         return None
+
+    # Warn on a GENUINE conflict: both pointers point at live-but-different entries.
+    if (p_remote and p_gitdir and p_remote != p_gitdir
+            and os.path.isdir(os.path.join(root, "entries", p_remote))
+            and os.path.isdir(os.path.join(root, "entries", p_gitdir))):
+        sys.stderr.write(
+            "test_pilot store: key disagreement — both keys point at live but "
+            "different entries; preferring the remote-keyed entry\n")
+
     healed = False
     if gh and p_gitdir != entry_id:
         write_pointer(root, gh, entry_id)

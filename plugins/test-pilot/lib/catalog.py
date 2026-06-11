@@ -42,13 +42,20 @@ def main(argv):
         sys.stderr.write("usage: catalog.py --blocks-dir DIR\n")
         return 2
     d = args[i + 1]
+    if not os.path.isdir(d):
+        sys.stderr.write(f"catalog error: blocks dir {d!r} does not exist\n")
+        return 1
     try:
         text = generate(d)
     except blocks.BlockError as exc:
         sys.stderr.write(f"catalog error: {exc}\n")
         return 1
-    with open(os.path.join(d, "CATALOG.md"), "w") as fh:
-        fh.write(text)
+    try:
+        with open(os.path.join(d, "CATALOG.md"), "w") as fh:
+            fh.write(text)
+    except OSError as exc:
+        sys.stderr.write(f"catalog error: cannot write CATALOG.md: {exc}\n")
+        return 1
     sys.stdout.write(os.path.join(d, "CATALOG.md") + "\n")
     return 0
 

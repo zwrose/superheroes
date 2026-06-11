@@ -14,6 +14,9 @@ def test_marker_render_uses_key_verbatim():
         pc.render_marker("bogus", "k")
     with pytest.raises(ValueError):
         pc.render_marker("plan", "evil -->key")  # raw, unsanitized input
+    # test-003: --> branch in isolation (no whitespace, only --> violation)
+    with pytest.raises(ValueError):
+        pc.render_marker("plan", "evil-->key")
 
 
 def _c(cid, author, body):
@@ -62,6 +65,18 @@ def test_scrub_strips_auth_material():
     assert "[REDACTED]" in s("GET /api?access_token=xyzzy12345")
     assert "xyzzy12345" not in s("GET /api?access_token=xyzzy12345")
     assert "[REDACTED]" in s("bearer 0123456789abcdef")
+    # security-001: password/passwd/pwd/client_secret key=value forms
+    assert "[REDACTED]" in s("password=hunter2")
+    assert "hunter2" not in s("password=hunter2")
+    assert "[REDACTED]" in s("passwd=s3cr3t")
+    assert "[REDACTED]" in s("pwd=mypass123")
+    assert "[REDACTED]" in s("client_secret=abc123xyz")
+    assert "[REDACTED]" in s("client-secret=abc123xyz")
+    # security-001: URI userinfo credentials
+    assert "[REDACTED]" in s("mongodb://app:s3cret@host/db")
+    assert "s3cret" not in s("mongodb://app:s3cret@host/db")
+    assert "[REDACTED]" in s("postgres://user:pass@localhost/mydb")
+    assert "pass" not in s("postgres://user:pass@localhost/mydb")
 
 
 def test_scrub_negative_benign_text_unchanged():
@@ -83,6 +98,117 @@ def test_parse_paginated_arrays_handles_concatenated_pages():
 def test_scrub_is_idempotent():
     s = "Authorization: Bearer abc123def456\nplain text"
     assert pc.scrub(pc.scrub(s)) == pc.scrub(s)
+
+
+# test-001: upsert unit tests via monkeypatched seams
+def _extract_body_from_gh_args(args):
+    """Extract the body value from -f body=<value> in gh call args."""
+    for i, a in enumerate(args):
+        if a == "-f" and i + 1 < len(args) and args[i + 1].startswith("body="):
+            return args[i + 1][len("body="):]
+    return None
+
+
+def test_upsert_creates_when_no_existing_comment(monkeypatch, tmp_path):
+    """No existing comment -> POST path, action 'created', marker injected."""
+    monkeypatch.setattr(pc, "gh_user", lambda: "zwrose")
+    monkeypatch.setattr(pc, "list_comments", lambda pr: [])
+    posted = {}
+
+    def fake_gh(*args, inp=None):
+        if args[0] == "api" and args[1] == "-X" and args[2] == "POST":
+            posted["body"] = _extract_body_from_gh_args(args)
+            return '{"id": 42}'
+        return ""
+
+    monkeypatch.setattr(pc, "_gh", fake_gh)
+    result = pc.upsert(123, "plan", "feat%2Fx", "body text")
+    assert result["action"] == "created"
+    assert result["id"] == 42
+    marker = pc.render_marker("plan", "feat%2Fx")
+    assert posted["body"] is not None
+    assert marker in posted["body"]
+
+
+def test_upsert_edits_existing_comment(monkeypatch):
+    """Existing comment -> PATCH path, action 'edited' (idempotent)."""
+    key = "feat%2Fx"
+    marker = pc.render_marker("plan", key)
+    existing_body = f"{marker}\n- [ ] step one"
+    monkeypatch.setattr(pc, "gh_user", lambda: "zwrose")
+    monkeypatch.setattr(pc, "list_comments",
+                        lambda pr: [{"id": 7, "author": "zwrose",
+                                     "body": existing_body}])
+    patched = {}
+
+    def fake_gh(*args, inp=None):
+        if args[0] == "api" and args[1] == "-X" and args[2] == "PATCH":
+            patched["called"] = True
+            return ""
+        return ""
+
+    monkeypatch.setattr(pc, "_gh", fake_gh)
+    result = pc.upsert(123, "plan", key, f"{marker}\n- [ ] step one")
+    assert result["action"] == "edited"
+    assert result["id"] == 7
+    assert patched.get("called") is True
+
+
+def test_upsert_plan_family_merges_checkboxes(monkeypatch):
+    """family='plan' -> checked steps from existing body preserved in new body."""
+    key = "feat%2Fx"
+    marker = pc.render_marker("plan", key)
+    existing_body = f"{marker}\n- [x] Open the page\n- [ ] Delete an item"
+    monkeypatch.setattr(pc, "gh_user", lambda: "zwrose")
+    monkeypatch.setattr(pc, "list_comments",
+                        lambda pr: [{"id": 5, "author": "zwrose",
+                                     "body": existing_body}])
+    patched_body = {}
+
+    def fake_gh(*args, inp=None):
+        if args[0] == "api" and args[1] == "-X" and args[2] == "PATCH":
+            patched_body["v"] = _extract_body_from_gh_args(args)
+        return ""
+
+    monkeypatch.setattr(pc, "_gh", fake_gh)
+    pc.upsert(123, "plan", key, f"{marker}\n- [ ] Open the page\n- [ ] Delete an item")
+    assert "- [x] Open the page" in patched_body.get("v", "")
+
+
+def test_upsert_results_family_does_not_merge_checkboxes(monkeypatch):
+    """family='results' -> checkboxes NOT merged from existing body."""
+    key = "feat%2Fx"
+    marker = pc.render_marker("results", key)
+    existing_body = f"{marker}\n- [x] Some step"
+    monkeypatch.setattr(pc, "gh_user", lambda: "zwrose")
+    monkeypatch.setattr(pc, "list_comments",
+                        lambda pr: [{"id": 9, "author": "zwrose",
+                                     "body": existing_body}])
+    patched_body = {}
+
+    def fake_gh(*args, inp=None):
+        if args[0] == "api" and args[1] == "-X" and args[2] == "PATCH":
+            patched_body["v"] = _extract_body_from_gh_args(args)
+        return ""
+
+    monkeypatch.setattr(pc, "_gh", fake_gh)
+    pc.upsert(123, "results", key, f"{marker}\n- [ ] Some step")
+    assert "- [ ] Some step" in patched_body.get("v", "")
+    assert "- [x] Some step" not in patched_body.get("v", "")
+
+
+def test_upsert_deletes_fallback_after_post(monkeypatch, tmp_path):
+    """Fallback file is deleted after a successful post."""
+    key = "feat%2Fx"
+    plans = str(tmp_path / "plans")
+    pc.write_fallback(plans, key, "plan", "some body")
+    fallback = pc.fallback_path(plans, key, "plan")
+    assert os.path.exists(fallback)
+    monkeypatch.setattr(pc, "gh_user", lambda: "zwrose")
+    monkeypatch.setattr(pc, "list_comments", lambda pr: [])
+    monkeypatch.setattr(pc, "_gh", lambda *a, inp=None: '{"id": 1}')
+    pc.upsert(123, "plan", key, "body text", plans_dir=plans)
+    assert not os.path.exists(fallback)
 
 
 def test_fallback_lifecycle(tmp_path):

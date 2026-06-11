@@ -154,11 +154,21 @@ def test_clean_and_status_and_orphans(tmp_path):
 
 
 def test_unlock_releases_stale_lock(tmp_path):
+    """Lock held by a dead pid is genuinely stale; unlock releases it."""
+    import json as _json
+    lp = os.path.join(tmp_path / "state", "engine.lock")
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    # Write a lock file with a pid that cannot possibly be alive.
+    import socket as _socket
+    dead_holder = {"pid": 2**30, "host": _socket.gethostname(),
+                   "acquiredAt": "2020-01-01T00:00:00Z"}
+    with open(lp, "w") as fh:
+        _json.dump(dead_holder, fh)
+    assert lock_mod.is_stale(lp), "lock should be stale before unlock"
     paths = _paths(tmp_path)
-    lock_mod.acquire(os.path.join(paths["state_dir"], "engine.lock"))
     r = engine.unlock(paths)
     assert r["released"] is True
-    assert not os.path.exists(os.path.join(paths["state_dir"], "engine.lock"))
+    assert not os.path.exists(lp)
 
 
 # Fix 1 regression: state must be loaded under the lock.
