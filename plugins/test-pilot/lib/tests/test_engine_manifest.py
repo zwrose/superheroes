@@ -1,0 +1,105 @@
+import json
+
+import pytest
+
+import engine
+
+
+def _manifest(**over):
+    m = {"schemaVersion": 1, "branch": "feat/x", "slot": None,
+         "createdAt": "2026-06-11T00:00:00Z", "updatedAt": "2026-06-11T00:00:00Z",
+         "scenarios": [
+             {"id": "a", "block": "run-command",
+              "config": {"command": ["true"], "targets": ["t"]}, "dependsOn": []},
+             {"id": "b", "block": "run-command",
+              "config": {"command": ["true"], "targets": ["t"]},
+              "dependsOn": ["a"]},
+         ]}
+    m.update(over)
+    return m
+
+
+def _write(tmp_path, m, name="feat%2Fx.json"):
+    p = str(tmp_path / name)
+    json.dump(m, open(p, "w"))
+    return p
+
+
+def test_load_valid_manifest_and_topo_order(tmp_path):
+    m = engine.load_manifest(_write(tmp_path, _manifest()))
+    assert m["branch"] == "feat/x"
+    assert engine.topo_order(m["scenarios"]) == ["a", "b"]
+
+
+def test_identity_from_json_never_filename(tmp_path):
+    # File deliberately misnamed: JSON fields win.
+    m = engine.load_manifest(_write(tmp_path, _manifest(), name="wrong-name.json"))
+    assert m["branch"] == "feat/x" and m["slot"] is None
+
+
+def test_unknown_schema_version_refused(tmp_path):
+    with pytest.raises(engine.EngineError) as e:
+        engine.load_manifest(_write(tmp_path, _manifest(schemaVersion=9)))
+    assert "schemaVersion" in str(e.value)
+
+
+def test_unreadable_manifest_fails_fast(tmp_path):
+    p = str(tmp_path / "x.json")
+    open(p, "w").write("{nope")
+    with pytest.raises(engine.EngineError):
+        engine.load_manifest(p)
+
+
+def test_missing_branch_rejected(tmp_path):
+    bad = _manifest()
+    del bad["branch"]
+    with pytest.raises(engine.EngineError):
+        engine.load_manifest(_write(tmp_path, bad))
+
+
+def test_duplicate_ids_rejected(tmp_path):
+    bad = _manifest()
+    bad["scenarios"].append(dict(bad["scenarios"][0]))
+    with pytest.raises(engine.EngineError) as e:
+        engine.load_manifest(_write(tmp_path, bad))
+    assert "duplicate" in str(e.value)
+
+
+def test_dangling_depends_on_is_structured_error(tmp_path):
+    bad = _manifest()
+    bad["scenarios"][1]["dependsOn"] = ["ghost"]
+    with pytest.raises(engine.EngineError) as e:
+        engine.load_manifest(_write(tmp_path, bad))
+    assert "ghost" in str(e.value)
+
+
+def test_cycle_is_structured_error_not_hang(tmp_path):
+    bad = _manifest()
+    bad["scenarios"][0]["dependsOn"] = ["b"]
+    with pytest.raises(engine.EngineError) as e:
+        engine.load_manifest(_write(tmp_path, bad))
+    assert "cycle" in str(e.value).lower()
+
+
+def test_plan_record_dangling_scenario_id(tmp_path):
+    m = engine.load_manifest(_write(tmp_path, _manifest()))
+    rec = {"schemaVersion": 1, "branch": "feat/x", "slot": None,
+           "createdAt": "2026-06-11T00:00:00Z",
+           "steps": [{"id": "s1", "instruction": "x", "expected": "y",
+                      "scenarioIds": ["missing-id"]}]}
+    p = str(tmp_path / "feat%2Fx.plan.json")
+    json.dump(rec, open(p, "w"))
+    with pytest.raises(engine.EngineError) as e:
+        engine.load_plan_record(p, m)
+    assert "missing-id" in str(e.value)
+
+
+def test_plan_record_valid(tmp_path):
+    m = engine.load_manifest(_write(tmp_path, _manifest()))
+    rec = {"schemaVersion": 1, "branch": "feat/x", "slot": None,
+           "createdAt": "2026-06-11T00:00:00Z",
+           "steps": [{"id": "s1", "instruction": "x", "expected": "y",
+                      "scenarioIds": ["a"]}]}
+    p = str(tmp_path / "feat%2Fx.plan.json")
+    json.dump(rec, open(p, "w"))
+    assert engine.load_plan_record(p, m)["steps"][0]["id"] == "s1"
