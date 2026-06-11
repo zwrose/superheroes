@@ -123,8 +123,11 @@ def run_block(name, op, config, ctx, project_blocks, result=None,
     request = {"op": op, "config": config, "ctx": ctx}
     if result is not None:
         request["result"] = result
-    proc = runner(argv, input=json.dumps(request), text=True,
-                  capture_output=True, cwd=ctx.get("repoRoot"))
+    try:
+        proc = runner(argv, input=json.dumps(request), text=True,
+                      capture_output=True, cwd=ctx.get("repoRoot"), timeout=600)
+    except subprocess.TimeoutExpired:
+        raise BlockError(f"block {name!r} {op} timed out after 600s", block=name)
     if proc.returncode != 0:
         raise BlockError(
             f"block {name!r} {op} failed (exit {proc.returncode}): "
@@ -144,8 +147,12 @@ def _run_command_block(op, config, ctx, runner):
     if not isinstance(argv, list) or not argv:
         raise BlockError("run-command requires config.command (argv array)",
                          block="run-command")
-    proc = runner(argv, text=True, capture_output=True,
-                  cwd=ctx.get("repoRoot"))
+    try:
+        proc = runner(argv, text=True, capture_output=True,
+                      cwd=ctx.get("repoRoot"), timeout=600)
+    except subprocess.TimeoutExpired:
+        raise BlockError(f"block 'run-command' {op} timed out after 600s",
+                         block="run-command")
     if proc.returncode != 0:
         raise BlockError(
             f"run-command {op} failed (exit {proc.returncode}): "

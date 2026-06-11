@@ -109,9 +109,22 @@ def gh_user():
     return _gh("api", "user", "-q", ".login").strip()
 
 
+def _parse_paginated_arrays(text):
+    """gh api --paginate concatenates page outputs; parse them all."""
+    dec, idx, items = json.JSONDecoder(), 0, []
+    while idx < len(text):
+        while idx < len(text) and text[idx] in " \r\n\t":
+            idx += 1
+        if idx >= len(text):
+            break
+        obj, idx = dec.raw_decode(text, idx)
+        items.extend(obj if isinstance(obj, list) else [obj])
+    return items
+
+
 def list_comments(pr):
-    raw = json.loads(_gh("api", f"repos/{{owner}}/{{repo}}/issues/{pr}/comments",
-                         "--paginate"))
+    raw = _parse_paginated_arrays(_gh(
+        "api", f"repos/{{owner}}/{{repo}}/issues/{pr}/comments", "--paginate"))
     return [{"id": c["id"], "author": c["user"]["login"], "body": c["body"]}
             for c in raw]
 
@@ -122,6 +135,7 @@ def upsert(pr, family, key, body, plans_dir=None):
     marker = render_marker(family, key)
     if marker not in body:
         body = f"{marker}\n{body}"
+    body = scrub(body)
     author = gh_user()
     existing = find_comment(list_comments(pr), family, key, author)
     if existing:
