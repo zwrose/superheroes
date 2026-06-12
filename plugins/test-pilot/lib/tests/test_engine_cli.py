@@ -196,15 +196,6 @@ def test_validate_plan_rejects_mismatched_plan_record_slot(tmp_path):
     repo, env, _, key = _setup_repo_with_plan(
         tmp_path, [{"id": "s1", "instruction": "x", "expected": "y",
                     "scenarioIds": ["a"]}])
-    root = env["TEST_PILOT_STORE_ROOT"]
-    c = store.create(repo, "global", root)
-    plan_path = os.path.join(c["manifests_dir"], f"{key}.plan.json")
-    rec = json.load(open(plan_path))
-    # Declare correct branch but a mismatched slot.
-    rec["branch"] = "feat/x"
-    rec["slot"] = "other"
-    json.dump(rec, open(plan_path, "w"))
-    r = _cli(repo, env, "validate-plan", "--branch", "feat/x", "--slot", "qa")
     # Need matching manifest+plan key for slot=qa; write them for the qa slot.
     root = env["TEST_PILOT_STORE_ROOT"]
     c = store.create(repo, "global", root)

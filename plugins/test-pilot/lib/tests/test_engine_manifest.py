@@ -177,3 +177,18 @@ def test_load_plan_record_rejects_slot_mismatch_when_branch_absent(tmp_path):
     with pytest.raises(engine.EngineError) as e:
         engine.load_plan_record(p, m, branch="feat/x", slot="qa")
     assert "slot" in str(e.value)
+
+
+# r4v-0-code-001: slot check is STRICT — a record that declares slot must match
+# even when the caller's slot is None.
+def test_load_plan_record_rejects_declared_slot_when_caller_slot_is_none(tmp_path):
+    """Record declares slot='qa'; caller passes slot=None -> EngineError mentioning slot."""
+    m = engine.load_manifest(_write(tmp_path, _manifest()))
+    rec = {"schemaVersion": 1, "slot": "qa",
+           "steps": [{"id": "s1", "instruction": "x", "expected": "y",
+                      "scenarioIds": ["a"]}]}
+    p = str(tmp_path / "feat%2Fx.plan.json")
+    json.dump(rec, open(p, "w"))
+    with pytest.raises(engine.EngineError) as e:
+        engine.load_plan_record(p, m, slot=None)
+    assert "slot" in str(e.value)

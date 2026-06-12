@@ -121,7 +121,10 @@ def load_plan_record(path, manifest, branch=None, slot=None):
     record is cross-checked independently — the same invariant enforced on the
     manifest by _check_manifest_identity.  A field absent from the record is
     treated as informational-only and is not checked; a field present in the
-    record must match the corresponding requested value.
+    record must match the corresponding requested value (even when the
+    requested value is None — a record that declares a slot must match the
+    caller's slot exactly, so slot=None raises EngineError if the record
+    carries any slot at all).
     """
     rec = _load_json(path, "plan record")
     v = rec.get("schemaVersion")
@@ -131,11 +134,13 @@ def load_plan_record(path, manifest, branch=None, slot=None):
             f"supports {PLAN_RECORD_SCHEMA_VERSION}.")
     # Identity cross-check: each declared field is checked independently.
     # If a field is absent from the record it is skipped (not checked).
+    # The slot check is STRICT: if the record declares a slot it must match
+    # the requested slot regardless of whether slot is None.
     if branch is not None and "branch" in rec and rec["branch"] != branch:
         raise EngineError(
             f"plan record at {path} declares branch={rec['branch']!r}, not "
             f"{branch!r} — identity lives in the JSON")
-    if slot is not None and "slot" in rec and rec["slot"] != slot:
+    if "slot" in rec and rec.get("slot") != slot:
         raise EngineError(
             f"plan record at {path} declares slot={rec['slot']!r}, not "
             f"{slot!r} — identity lives in the JSON")
