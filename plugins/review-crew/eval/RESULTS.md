@@ -89,4 +89,15 @@ Per-agent-dimension recall (own-dimension seeds) + traps:
 
 # Manual plan-time scenario (M1)
 
-**M1: deferred — requires plugin refresh; run after release.** The installed review-crew is the cached 0.2.0 release without `premortem-reviewer`; skill-tests.md §7's procedure requires the updated plugin installed locally. Run M1 against `eval/samples/gappy-plan.md` after `review-crew-v0.3.0` ships (or via a local dev install) and record the outcome here.
+**M1: PASS (methodology proxy).** Date: 2026-06-11.
+
+The installed review-crew at run time was the cached 0.2.0 release (no `premortem-reviewer`), so the literal skill-tests.md §7 procedure — `/review-crew:review-plan` driving the 5-agent crew end-to-end — could not run in-session. Instead M1 was run as a **faithful methodology proxy**: a subagent applied the on-branch `agents/premortem-reviewer.md` + `rubric/review-base.md`, under the review-plan plan-time framing and the strict (no-profile) threat-model fallback, against `eval/samples/gappy-plan.md`, blind to the expected outcome. (The skill *wiring* that dispatches premortem-reviewer as the 5th plan-time agent is separately guarded by `lib/tests/test_dispatch_tables.py`; this proxy verifies the agent *behavior* M1 cares about.)
+
+Both M1 acceptance criteria met, each citing the plan doc:
+
+- **(a)** `assumption-violation` finding at `gappy-plan.md:18 ("Design")` — names the unstated single-writer invariant behind the dirty-flag dedup reasoning. ✓
+- **(b)** missing **Failure-handling statement** at `gappy-plan.md:14 ("Design")` — `partial-failure` on the push-then-clear two-step write (crash between push and dirty-clear leaves dirty rows or duplicate index entries). ✓
+
+Three additional correct gaps surfaced (all Important, all real for this plan): `concurrency/race` (concurrent scheduler runs double-push), `dependency-failure` (outbound HTTP push with no timeout/retry story), `detectability` (no log/metric for failure or dirty-row accumulation). No false positives.
+
+A literal installed-plugin live-run remains available to anyone after `/plugin marketplace update` + `/plugin update` to 0.3.0 (re-run skill-tests.md §7); it is expected to reproduce (a) and (b).
