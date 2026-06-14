@@ -1,8 +1,8 @@
 {
-  "name": "zwr-agent-skills",
+  "name": "superheroes",
   "owner": { "name": "zwrose" },
   "metadata": {
-    "description": "Zach's personal Claude Code marketplace.",
+    "description": "Your team of superheroes, powered by superpowers — Claude Code plugins that team up to run largely-autonomous development.",
     "version": "0.1.0"
   },
   "plugins": [

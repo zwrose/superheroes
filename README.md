@@ -1,13 +1,14 @@
-# zwr-agent-skills
+# superheroes
 
-**Agent tools for [Claude Code](https://code.claude.com) — built for my workflow, open for yours.**
+**Your team of superheroes, powered by [superpowers](https://github.com/obra/superpowers) — agent tools for [Claude Code](https://code.claude.com).**
 
-A small, opinionated marketplace of Claude Code plugins. Everything here earns its
-keep in my own day-to-day; it's public so you can use it too. Add the marketplace
-once, then install the plugins you want:
+A marketplace of Claude Code plugins, each a character with a job to do. They team
+up to take real development work off your plate — reviewing, testing, and (more and
+more) running the loop themselves. Add the marketplace once, then install whichever
+heroes you want:
 
 ```
-/plugin marketplace add zwrose/zwr-agent-skills
+/plugin marketplace add zwrose/superheroes
 ```
 
 ---
@@ -51,8 +52,8 @@ structured results to disk.
 ### Install & first run
 
 ```
-/plugin marketplace add zwrose/zwr-agent-skills
-/plugin install review-crew@zwr-agent-skills
+/plugin marketplace add zwrose/superheroes
+/plugin install review-crew@superheroes
 ```
 
 Then, in any project:
@@ -64,10 +65,47 @@ Then, in any project:
 
 ---
 
+## test-pilot
+
+**Behavioral proof that a change actually works — not just that it compiles.**
+
+review-crew reads your code; test-pilot *drives your app*. It seeds realistic test
+data, writes a manual test plan onto the PR as a checklist, then — when you ask —
+pilots that plan in a real browser, fixes the bugs it trips over, and hands you a
+results comment plus a short spot-check. The goal is a trustworthy "here's it
+working" before a human ever clicks anything.
+
+Like review-crew, it's **calibrated per project** (`test-pilot-init` sets up a
+profile, seeding blocks, and browser tooling) so the plans and data fit *your* app.
+
+### Commands
+
+| Command | Use it to… |
+| --- | --- |
+| `/test-pilot:test-pilot-init` | Set up (or refresh) a project's testing profile, seed blocks, and browser tooling (**run this first**). |
+| `/test-pilot:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
+| `/test-pilot:test-pilot-execute` | Drive the plan in a real browser, fix what breaks, and post a results comment before your spot-check. |
+
+### Install & first run
+
+```
+/plugin marketplace add zwrose/superheroes
+/plugin install test-pilot@superheroes
+```
+
+Then, in any project:
+
+```
+/test-pilot:test-pilot-init   # calibrate to this app
+/test-pilot:test-pilot-plan   # seed data + post a plan to the PR
+```
+
+---
+
 ## Contributing
 
-Issues and pull requests are welcome. Fork the repo, open a PR, and I'll review it
-and help get it merged. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Issues and pull requests are welcome. Fork the repo, open a PR, and we'll help get
+it merged. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
