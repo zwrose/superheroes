@@ -138,6 +138,10 @@ works for owners on any client (including a terminal):
 3. The spec's UI/UX section **references that actual handoff output**, not a
    reinterpretation.
 
+If the owner doesn't have or doesn't want to use Claude Design, **don't block** —
+capture the UI/UX as a plain-language description of the key screens and states in
+the spec instead.
+
 `mcp__visualize__show_widget` (inline SVG/HTML) may help for a quick option
 comparison **on graphical clients only** — it does **not** render in a terminal, so
 never rely on it; always have a plain-text description as the fallback.
@@ -173,6 +177,9 @@ Run review-crew's **`review-spec`** on the authored spec and address its finding
 **before** asking the owner to spend their time — the automated review catches
 ambiguity, missing coverage, and tech leakage the owner would otherwise have to.
 Fix what it raises (or, where it's a judgment call, note it for the owner).
+**If `review-spec` is not available in this project**, say so and proceed to step 8 —
+the self-review (step 6) stands in, and the owner's review is the terminal gate
+regardless. Never fabricate a review result.
 
 ### 8. Owner review & final approval (terminal gate)
 

@@ -1,26 +1,24 @@
 {{frontmatter}}
 # {{Title}}
 
-> Plain-language requirements for this work — the **what**, not the **how**.
-> Owner co-authored. No technical implementation details (libraries, data models,
-> APIs, frameworks) — those live in the `plan`. Depth target: the happy path
-> **plus the significant unhappy paths** that matter, not an exhaustive enumeration.
->
-> **Requirements are written in EARS** (Easy Approach to Requirements Syntax): one
-> constrained-English sentence per requirement, each matching a pattern below. This
-> keeps them plain enough to read, precise enough to verify, and locked to the *what*.
->
-> | Pattern | Shape |
-> | --- | --- |
-> | Ubiquitous (always true) | *The system shall &lt;response&gt;.* |
-> | Event-driven | *When &lt;trigger&gt;, the system shall &lt;response&gt;.* |
-> | State-driven | *While &lt;state&gt;, the system shall &lt;response&gt;.* |
-> | Optional feature | *Where &lt;feature is present&gt;, the system shall &lt;response&gt;.* |
-> | Unwanted behavior | *If &lt;bad thing happens&gt;, then the system shall &lt;response&gt;.* |
->
-> "The system" may be the product's real name. Every requirement names an
-> **observable** result the owner could see. Each carries **≥1 acceptance
-> criterion** (the verifiable face of the requirement).
+<!-- AUTHOR GUIDANCE — for whoever fills this template; DELETE this whole comment
+     before the spec is delivered to the owner. It must not appear in the final spec.
+
+  Plain-language requirements for this work — the WHAT, not the HOW. Owner co-authored.
+  No technical implementation details (libraries, data models, APIs, frameworks) — those
+  live in the `plan`. Depth target: the happy path PLUS the significant unhappy paths that
+  matter, not an exhaustive enumeration.
+
+  Functional requirements are written in EARS (Easy Approach to Requirements Syntax): one
+  constrained-English sentence per requirement, each matching a pattern:
+    - Ubiquitous (always true):  The system shall <response>.
+    - Event-driven:              When <trigger>, the system shall <response>.
+    - State-driven:              While <state>, the system shall <response>.
+    - Optional feature:          Where <feature is present>, the system shall <response>.
+    - Unwanted behavior:         If <bad thing happens>, then the system shall <response>.
+  "The system" may be the product's real name. Every requirement names an OBSERVABLE
+  result the owner could see, and carries >=1 acceptance criterion (the verifiable face).
+-->
 
 ## Purpose
 
@@ -49,32 +47,29 @@ constraint (limit, format).}}
 
 ## When things go wrong (significant unhappy paths)
 
-{{The anti-slop core. Written as **If/Then EARS** requirements (each with an
-acceptance criterion), driven by the coverage checklist below. Cover the cases
-that genuinely matter for THIS work — tag each area **Specify / Defer-to-plan /
-N-A** so a skipped area is a recorded decision, not an oversight. Risk-gate: probe
-deeper only where a failure would cost money, data, safety, trust, or legal
-standing. One representative example per category, not a matrix.}}
+<!-- AUTHOR GUIDANCE (coverage checklist) — DELETE before delivering. Probe each
+     owner-facing area; tag Specify / Defer-to-plan / N-A:
+       - Empty & first-run states: what do they see the first time / with nothing here yet?
+       - Invalid & malformed input: wrong or blank input — what happens + what message?
+       - Boundaries & limits: limits that matter, and behavior right at / just past them?
+       - Errors & failures: a failure that isn't their fault — what do they see + do?
+       - Access & permissions: who may, who may not, what does the wrong person see?
+       - Duplicates & double-actions: submit twice / double-click?
+       - Conflicting / simultaneous use (multi-user): two people edit the same thing?
+       - Misuse & abuse (sensitive features): could someone abuse this — what to prevent?
+       - Reach (if in scope): other languages/currencies/timezones? keyboard + screen-reader?
+     Defer-to-plan promise: for connectivity & timing failures (dropped network, timeouts,
+     duplicate requests at the wire), state only the OWNER-VISIBLE PROMISE here (e.g. "a
+     dropped connection never loses their work or double-charges them"); the mechanism
+     (retries, idempotency, rollback, rate-limits) belongs in the `plan`. -->
 
-| Coverage area (owner-facing) | Prompt |
-| --- | --- |
-| Empty & first-run states | What do they see the very first time, or when there's nothing here yet? |
-| Invalid & malformed input | If they enter something wrong or blank, what happens and what message do they see? |
-| Boundaries & limits | Any limits that matter (biggest/smallest/longest), and what happens right at and just past them? |
-| Errors & failures | When something fails that isn't their fault, what do they see and what can they do (retry, save progress)? |
-| Access & permissions | Who's allowed, who isn't, and what does the wrong person see if they try? |
-| Duplicates & double-actions | What if they submit twice, or double-click the button? |
-| Conflicting / simultaneous use | *(multi-user only)* If two people change the same thing at once — last wins, locked, or merged? |
-| Misuse & abuse | *(sensitive features only)* Could someone abuse this (money, private data, reputation) — what must we prevent? |
-| Reach: language / region / accessibility | *(if in scope)* Other languages, currencies, or timezones? Keyboard-only and screen-reader usable (WCAG AA)? |
+{{The significant unhappy paths for THIS work, as If/Then EARS requirements (each with an
+acceptance criterion), driven by the coverage checklist above. Tag each area Specify /
+Defer-to-plan / N-A. Risk-gate: go deeper only where a failure costs money, data, safety,
+trust, or legal standing. One representative case per area, not a matrix.}}
 
 **UFR-1.** {{If &lt;bad thing&gt;, then the system shall &lt;observable response&gt;.}}
   - *Acceptance:* Given {{context}}, when {{the bad thing}}, then {{what the user sees / can do}}.
-
-> **Defer-to-plan promise:** for connectivity & timing failures (dropped network,
-> timeouts, duplicate requests at the wire), state only the **owner-visible
-> promise** here (e.g. "a dropped connection never loses their work or double-charges
-> them"); the mechanism (retries, idempotency, rollback, rate-limits) belongs in the `plan`.
 
 ## Non-functional requirements
 

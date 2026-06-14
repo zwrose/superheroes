@@ -67,12 +67,17 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - Plain language throughout, **no technical *how***. Delete sections that
      genuinely don't apply (UI/UX for non-user-facing work; Glossary when there are
      no terms). Leave **Open questions** empty (resolve or defer each before approval).
+   - **Strip the author-guidance comments.** The template carries `<!-- AUTHOR
+     GUIDANCE … -->` blocks (the EARS explainer, the coverage checklist, the
+     defer-promise note) — they are for you, not the owner. **Delete every one.** The
+     delivered spec contains only owner-facing content.
 
    Write the assembled file to `$SPEC`.
 
 5. **Self-review** (look at the written file with fresh eyes; fix inline — no
    re-review loop):
-   - **Placeholders:** any `{{…}}`, "TBD", or "TODO" left? Fill them.
+   - **Placeholders & guidance:** any `{{…}}`, "TBD", "TODO", or leftover
+     `<!-- AUTHOR GUIDANCE … -->` comment? Fill or remove it — the owner sees none of it.
    - **EARS + anti-slop:** does each functional requirement match an EARS pattern,
      state one behavior, avoid vague words, and carry an acceptance criterion? Split
      compound requirements; pin vague ones.
