@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "superheroes/define-doc-frontmatter",
+  "title": "superheroes define-doc frontmatter (CONVENTIONS §3.1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["superheroes", "schemaVersion", "docType", "workItem", "issue", "parent", "size", "status", "gates", "producedBy", "created", "updated"],
+  "properties": {
+    "superheroes": { "const": "doc" },
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "docType": { "enum": ["spec", "plan", "tasks"] },
+    "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
+    "issue": { "type": ["integer", "null"] },
+    "parent": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workItem", "docType"],
+          "properties": {
+            "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
+            "docType": { "enum": ["spec", "plan"] }
+          }
+        }
+      ]
+    },
+    "size": { "enum": ["small", "medium", "large"] },
+    "status": { "enum": ["draft", "in-review", "approved"] },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review"],
+      "properties": {
+        "review": { "enum": ["pending", "passed", "changes-requested"] }
+      }
+    },
+    "producedBy": { "type": "string" },
+    "created": { "type": "string" },
+    "updated": { "type": "string" }
+  }
+}

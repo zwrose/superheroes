@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "superheroes/checkpoint",
+  "title": "superheroes checkpoint.json (CONVENTIONS §4.3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workItem", "issue", "size", "phase", "gates", "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep", "updatedAt"],
+  "definitions": {
+    "gate": { "enum": ["pending", "passed", "changes-requested"] }
+  },
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
+    "issue": { "type": ["integer", "null"] },
+    "size": { "enum": ["small", "medium", "large"] },
+    "phase": { "enum": ["discovery", "plan", "tasks", "build", "verify", "integrate"] },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "spec": { "$ref": "#/definitions/gate" },
+        "plan": { "$ref": "#/definitions/gate" },
+        "tasks": { "$ref": "#/definitions/gate" }
+      }
+    },
+    "patternsPin": { "type": "string" },
+    "branch": { "type": "string" },
+    "lockGeneration": { "type": "integer", "minimum": 0 },
+    "pr": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["number", "url"],
+          "properties": {
+            "number": { "type": "integer" },
+            "url": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "lastGoodStep": { "type": "string" },
+    "updatedAt": { "type": "string" }
+  }
+}
