@@ -14,7 +14,7 @@
         "additionalProperties": false,
         "required": ["workItem", "issue", "state", "order"],
         "properties": {
-          "workItem": { "type": "string" },
+          "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
           "issue": { "type": ["integer", "null"] },
           "state": { "enum": ["queued", "claimed", "done", "failed"] },
           "order": { "type": "integer" }

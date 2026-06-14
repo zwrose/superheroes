@@ -464,10 +464,12 @@ into every path, lock ref, and branch (`docs/superheroes/<work-item>/`,
 `projects/<config-key>/docs/<work-item>/`, `issues/<work-item>/`,
 `refs/superheroes/locks/<work-item>`, `superheroes/<work-item>-<hash>`).
 
-- Slug = the title lowercased, non-`[a-z0-9]` runs collapsed to `-`, trimmed, capped at
-  50 chars, **plus a short disambiguating suffix** (`-` + first 6 hex of
-  `sha256(full-title + creation-nonce)`) so two similar titles **never** collide into one
-  dir/lock/branch.
+- Slug = the title **NFC-normalized**, lowercased, non-`[a-z0-9]` runs collapsed to `-`,
+  trimmed, capped at 50 chars (then trimmed again, so the cap can't leave a trailing
+  `-`), **plus a short disambiguating suffix** (`-` + first 6 hex of
+  `sha256(NFC-title + creation-nonce)`) so two similar titles **never** collide into one
+  dir/lock/branch. (NFC normalization makes canonically-equivalent Unicode — e.g.
+  macOS-NFD vs Linux-NFC — yield the same slug.)
 - The **GitHub issue number is a linked attribute** — the `issue:` field in the
   define-doc frontmatter (§3.1), the queue item, and `checkpoint.json` (§4.3) — **not**
   the path segment, so nothing has to be renamed when an issue is later filed for a
@@ -502,8 +504,9 @@ reads as a new attempt). Canonical serialization, in this exact order:
    — and serialize as **JSON with sorted keys** (so `parent` is
    `{"docType":"...","workItem":"..."}`). Volatile fields are excluded (`updated`,
    `created`, `status`, `gates`, `issue`, `producedBy`, provenance timestamps).
-2. Take the doc **body**, normalize line endings to `\n`, and strip trailing whitespace
-   **per line**.
+2. Take the doc **body**, **NFC-normalize it**, normalize line endings to `\n`, and strip
+   trailing whitespace **per line**. (NFC is what makes the across-hosts guarantee hold
+   for non-ASCII text — macOS-NFD and Linux-NFC of the same text hash identically.)
 3. Concatenate `frontmatter-json` + `"\n"` + `body`.
 4. `sha256` of the UTF-8 bytes, first **16 hex**.
 
@@ -527,8 +530,11 @@ does not duplicate it.
   bump). A reader that encounters an **unknown** version **fails closed** with a
   "update the plugin or migrate the file" message — the precedent test-pilot's
   `engine.py`/`state.py` already set. Migration logic lives in the plugin that owns the
-  artifact. (The fuller cross-plugin version-skew / band-compatibility story is deferred;
-  §7.)
+  artifact. A breaking change to the §6.3 `<content-hash>` canonicalization is **likewise
+  a define-doc `schemaVersion` bump** (so old and new hashes never silently collide);
+  whether to *also* embed an explicit canon-version in the stored branch key is deferred
+  to the first consumer (an entry-gate, tracked in `eval/gate.md`). (The fuller
+  cross-plugin version-skew / band-compatibility story is deferred; §7.)
 
 ---
 

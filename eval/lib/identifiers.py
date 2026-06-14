@@ -7,11 +7,14 @@ re-implement them, so two implementers cannot drift (the #1 theme of the convent
 reviews). The storage-key derivations (`<config-key>`, `<absolute-git-dir-key>`) are
 NOT here — they already live in store.py / review_store.py and get unified in Phase 2a.
 
-Dependency-free and deterministic by construction.
+All text inputs are NFC-normalized before use, so canonically-equivalent Unicode
+(e.g. macOS-NFD vs Linux-NFC "café") yields the same identifier — the §6.3
+"byte-identical across hosts" guarantee. Dependency-free and deterministic.
 """
 import hashlib
 import json
 import re
+import unicodedata
 
 # ---- §6.1  <work-item> — the frozen join key -------------------------------------
 
@@ -22,10 +25,13 @@ SLUG_MAX_BASE = 50
 def work_item_slug(title, creation_nonce):
     """The frozen slug chosen ONCE at work-item creation (CONVENTIONS §6.1).
 
-    base = title lowercased, non-[a-z0-9] runs collapsed to '-', trimmed, capped at 50;
-    suffix = first 6 hex of sha256(full-title + creation-nonce) so two similar/identical
-    titles never collide. The caller stores the result and never re-derives it.
+    title is NFC-normalized first; base = lowercased, non-[a-z0-9] runs collapsed to
+    '-', trimmed, capped at 50, trimmed again (so the cap cannot leave a trailing '-');
+    suffix = first 6 hex of sha256(normalized-title + creation-nonce) so two
+    similar/identical titles never collide. The caller stores the result and never
+    re-derives it.
     """
+    title = unicodedata.normalize("NFC", title)
     base = _NON_SLUG.sub("-", title.lower()).strip("-")[:SLUG_MAX_BASE].strip("-")
     if not base:
         base = "item"
@@ -42,8 +48,8 @@ STABLE_FIELDS = ("docType", "parent", "size", "workItem")
 
 
 def _normalize_body(body):
-    # Normalize line endings to \n, then strip trailing whitespace per line.
-    unified = body.replace("\r\n", "\n").replace("\r", "\n")
+    # NFC-normalize, normalize line endings to \n, then strip trailing whitespace per line.
+    unified = unicodedata.normalize("NFC", body).replace("\r\n", "\n").replace("\r", "\n")
     return "\n".join(line.rstrip() for line in unified.split("\n"))
 
 
@@ -52,12 +58,20 @@ def content_hash(frontmatter, body):
 
     Byte-identical across plugins/hosts/sessions:
       1. take the stable frontmatter fields only, serialize as JSON with sorted keys;
-      2. normalize the body (\\n line endings, per-line trailing-whitespace strip);
+      2. normalize the body (NFC, \\n line endings, per-line trailing-whitespace strip);
       3. payload = <frontmatter-json> + "\\n" + <normalized-body>;
       4. sha256(payload), first 16 hex.
     `frontmatter` is the already-parsed mapping; `body` is the doc body (no frontmatter).
+    Fails closed if a stable field is absent (CONVENTIONS §6.4 posture).
     """
-    stable = {k: frontmatter[k] for k in STABLE_FIELDS if k in frontmatter}
+    missing = [k for k in STABLE_FIELDS if k not in frontmatter]
+    if missing:
+        raise ValueError("content_hash: missing required stable field(s): " + ", ".join(missing))
+    stable = {k: frontmatter[k] for k in STABLE_FIELDS}
     fm_json = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    # DEFERRED (canon-version): this canonicalization is implicitly v1. A breaking change
+    # to it counts as a define-doc schemaVersion bump (CONVENTIONS §6.4, fail-closed). When
+    # the first consumer lands (producer/define, Phase 1), decide whether to also embed an
+    # explicit canon-version in the stored branch key. Tracked in eval/gate.md.
     payload = fm_json + "\n" + _normalize_body(body)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

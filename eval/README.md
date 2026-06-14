@@ -50,5 +50,7 @@ enforceable now; the behavioral checks are filled in as Phase 1 builds the loop.
 python3 -m pytest eval/lib/tests/ -q
 ```
 
-(`jsonschema` is needed for the schema-validation tests; the identifier tests are
-dependency-free. CI installs it.)
+`jsonschema` is a **required** test dependency for the schema-validation tests
+(`test_schemas.py` imports it at module level on purpose — a missing dep errors loudly
+rather than silently skipping the schema gate). The identifier tests are dependency-free.
+CI installs `jsonschema`; install it locally to run the full suite.

@@ -10,7 +10,7 @@
   },
   "properties": {
     "schemaVersion": { "type": "integer", "minimum": 1 },
-    "workItem": { "type": "string" },
+    "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
     "issue": { "type": ["integer", "null"] },
     "size": { "enum": ["small", "medium", "large"] },
     "phase": { "enum": ["discovery", "plan", "tasks", "build", "verify", "integrate"] },

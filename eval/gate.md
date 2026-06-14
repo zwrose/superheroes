@@ -32,8 +32,14 @@ get their fixtures as the loop is built.
 ## Resume / idempotency — a taste now, the rest in Phase 2a
 
 - **[live] Content-hash determinism.** The same approved tasks doc hashes identically
-  across runs (so two resumers mint the same branch) and ignores volatile metadata.
-  Covered by `lib/tests/test_identifiers.py`.
+  across runs and hosts (so two resumers mint the same branch), ignores volatile
+  metadata, and is NFC-stable for non-ASCII text. Pinned by a golden value in
+  `lib/tests/test_identifiers.py`.
+- **[Phase 1 — entry-gate] Content-hash canon-versioning.** When `content_hash` gets its
+  first consumer (producer/define), confirm the deferred decision from CONVENTIONS §6.4:
+  a breaking change to the §6.3 canonicalization must bump the define-doc `schemaVersion`,
+  and decide whether to also embed an explicit canon-version in the stored branch key.
+  (The `DEFERRED` comment in `lib/identifiers.py` marks the spot.)
 - **[Phase 2a] Full resume.** Killing the loop mid-phase and resuming reads the same
   branch from `checkpoint.json`, re-acquires the lease, and neither loses nor duplicates
   work. (Phase 2a-core; the crash/compaction spike.)

@@ -1,12 +1,15 @@
 """The locked-artifact JSON schemas are well-formed, and accept/reject the right shapes.
 
-Schema-validation tests use `jsonschema` (installed in CI); they `importorskip` so a
-local run without it still passes the well-formedness checks.
+`jsonschema` is a hard test dependency (installed in CI). It is imported at module level
+ON PURPOSE: if it's missing, this module errors at collection (pytest goes red) rather
+than silently skipping the validation — a skipped schema gate is a false-green that hides
+the `[live]` conformance check (eval/gate.md). Install it locally to run these tests.
 """
 import glob
 import json
 import os
 
+import jsonschema
 import pytest
 
 SCHEMA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schemas")
@@ -63,13 +66,18 @@ INVALID = {
 
 
 def test_valid_samples_validate():
-    jsonschema = pytest.importorskip("jsonschema")
     for name, sample in VALID.items():
         jsonschema.validate(sample, _load(name))
 
 
 def test_invalid_samples_are_rejected():
-    jsonschema = pytest.importorskip("jsonschema")
     for name, sample in INVALID.items():
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(sample, _load(name))
+
+
+def test_define_doc_rejects_malformed_workitem():
+    # The §6.1 slug pattern is the most spec-load-bearing schema rule; exercise it directly.
+    bad = dict(VALID["define-doc.schema.json"], workItem="add-toggle-zzzzzz")  # suffix not 6 hex
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(bad, _load("define-doc.schema.json"))
