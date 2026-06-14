@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "superheroes/registry",
+  "title": "superheroes registry.json — authoritative storage-mode record (CONVENTIONS §4.2/§6.3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "storageMode", "remoteKey", "createdAt"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "storageMode": { "enum": ["in-repo", "global"] },
+    "remoteKey": { "type": ["string", "null"] },
+    "createdAt": { "type": "string" }
+  }
+}

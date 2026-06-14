@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "superheroes/queue",
+  "title": "superheroes queue.json (CONVENTIONS §4.3)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "items"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workItem", "issue", "state", "order"],
+        "properties": {
+          "workItem": { "type": "string" },
+          "issue": { "type": ["integer", "null"] },
+          "state": { "enum": ["queued", "claimed", "done", "failed"] },
+          "order": { "type": "integer" }
+        }
+      }
+    }
+  }
+}
