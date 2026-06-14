@@ -70,7 +70,7 @@ def content_hash(frontmatter, body):
     stable = {k: frontmatter[k] for k in STABLE_FIELDS}
     fm_json = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     # DEFERRED (canon-version): this canonicalization is implicitly v1. A breaking change
-    # to it counts as a define-doc schemaVersion bump (CONVENTIONS §6.4, fail-closed). When
+    # to it counts as a definition-doc schemaVersion bump (CONVENTIONS §6.4, fail-closed). When
     # the first consumer lands (producer/the-architect, Phase 1), decide whether to also embed an
     # explicit canon-version in the stored branch key. Tracked in eval/gate.md.
     payload = fm_json + "\n" + _normalize_body(body)

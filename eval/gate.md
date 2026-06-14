@@ -11,11 +11,11 @@ get their fixtures as the loop is built.
 - **[live] Identifiers via the reference impls.** The work-item slug and the work-branch
   content-hash are produced by [`lib/identifiers.py`](lib/identifiers.py) (or a vendored
   copy proven equal to it), not re-derived ad hoc. Covered by `lib/tests/test_identifiers.py`.
-- **[live] Artifacts validate against their schemas.** Every define-doc's frontmatter,
+- **[live] Artifacts validate against their schemas.** Every definition-doc's frontmatter,
   and every `checkpoint.json` / `queue.json` / `registry.json` the loop writes, validates
   against [`lib/schemas/`](lib/schemas/). Covered for the schemas themselves by
   `lib/tests/test_schemas.py`; the loop's *emitted* artifacts get checked once the-architect/producer exist.
-- **[Phase 1] Gate-state coherence.** A define-doc's `status` is consistent with its
+- **[Phase 1] Gate-state coherence.** A definition-doc's `status` is consistent with its
   `gates.review` (`approved` iff `passed`, CONVENTIONS §3.1); `checkpoint.json` `gates`
   aggregates the per-doc gates.
 
@@ -37,7 +37,7 @@ get their fixtures as the loop is built.
   `lib/tests/test_identifiers.py`.
 - **[Phase 1 — entry-gate] Content-hash canon-versioning.** When `content_hash` gets its
   first consumer (producer/the-architect), confirm the deferred decision from CONVENTIONS §6.4:
-  a breaking change to the §6.3 canonicalization must bump the define-doc `schemaVersion`,
+  a breaking change to the §6.3 canonicalization must bump the definition-doc `schemaVersion`,
   and decide whether to also embed an explicit canon-version in the stored branch key.
   (The `DEFERRED` comment in `lib/identifiers.py` marks the spot.)
 - **[Phase 2a] Full resume.** Killing the loop mid-phase and resuming reads the same

@@ -26,7 +26,7 @@ The development loop:
 Discovery → Plan → Tasks → Build → Verify → Integrate
 ```
 
-Each of the first three phases emits one **define-doc**, and each define-doc gets one
+Each of the first three phases emits one **definition-doc**, and each definition-doc gets one
 review (review-crew owns all three review gates):
 
 | Phase | Emits | Is | Reviewed by | Spec-Kit twin |
@@ -40,19 +40,21 @@ review (review-crew owns all three review gates):
 > `tasks.md`. We adopt its nouns wholesale, for convertibility (§3.3) and to avoid
 > inventing vocabulary.
 
-> **Naming note.** We do **not** name any define-doc "design": **"design" means UI/UX**
+> **Naming note.** We do **not** name any definition-doc "design": **"design" means UI/UX**
 > here, never a technical-approach doc (that is `plan`). **Claude Design** (Anthropic's
-> UI/UX design tool, surfaced via the `DesignSync` tool / `/design-sync` skill) is a
-> first-class **Discovery** activity — UI/UX is explored there and its outcome is
-> captured in the `spec`; the `plan` only references that outcome when describing how
-> the UI gets built.
+> UI/UX design tool — a separate surface) is a first-class **Discovery** activity:
+> Discovery hands the owner a design prompt built from the requirements, the owner creates
+> the design there, and its **handoff output** (not a reinterpretation) is referenced in
+> the `spec`; the `plan` only references that outcome when describing how the UI gets
+> built. (Inline `mcp__visualize__show_widget` mockups are a graphical-client convenience
+> only — they do not render in a terminal — so never the sole path.)
 
 The **cast** referenced below: **producer** (the controller / loop driver),
-**the-architect** (produces the define-docs — spec/plan/tasks), **review-crew** (all
+**the-architect** (produces the definition-docs — spec/plan/tasks), **review-crew** (all
 review gates + code review), **test-pilot** (behavioral/browser verification),
 **coordinator** (owns all GitHub-issue writes). review-crew and test-pilot are
 complete today; the-architect is in progress (Phase 1). (The spec/plan/tasks
-artifact family is called **define-docs** — the docs that *define* a work item —
+artifact family is called **definition-docs** — the docs that *define* a work item —
 independent of the producing plugin's name.)
 
 Load-bearing identifiers used throughout (`<work-item>`, `<content-hash>`, the storage
@@ -77,7 +79,7 @@ band-wide storage mode**.
 
 - **`core.md`** carries band-wide project facts: stack, the canonical *verify* command,
   threat model, canonical patterns. Its **single writer** is the calibration owner
-  (`init` / the profile-management skill) — not `the-architect` (which owns define-docs).
+  (`init` / the profile-management skill) — not `the-architect` (which owns definition-docs).
   Because `core.md` is project-keyed and shared across a project's checkouts (§4.2), the
   writer **serializes its writes under the project-scoped config lock** (§4.4) — a
   machine-local lock distinct from the per-checkout runtime locks; the "applied only on
@@ -132,7 +134,7 @@ per-plugin:
 | --- | --- | --- |
 | Calibration (`core.md`, layers, `patterns.md`) | `.claude/superheroes/` committed with the repo | the project store (§4.2) |
 | Effect | calibration is **shared with collaborators** | the repo stays **pristine** — zero superheroes footprint |
-| Define-docs (§3) | `docs/superheroes/<work-item>/` in the repo | the project store (§4.2) |
+| Definition-docs (§3) | `docs/superheroes/<work-item>/` in the repo | the project store (§4.2) |
 | Runtime state (§4) | always machine-local | always machine-local |
 
 "in-repo" shares *calibration*; it does not promise zero global footprint — runtime
@@ -143,9 +145,9 @@ the *repo* clean of run state.
 project it reconciles content but does **not** silently re-decide the mode. The
 authoritative mode record is `registry.json` in the project store (§4.2/§6.3). A mode
 flip (in-repo↔global) is an **explicit migration** that moves calibration *and* every
-define-doc to the new location and updates `registry.json`; absent that migration,
+definition-doc to the new location and updates `registry.json`; absent that migration,
 `init` refuses to re-decide once the registry records a mode. (Without this rule a flip
-would strand every already-written calibration file and define-doc.)
+would strand every already-written calibration file and definition-doc.)
 
 ### 2.4 Resolution and evolution
 
@@ -162,7 +164,7 @@ would strand every already-written calibration file and define-doc.)
   - **Control-plane key = per-checkout** (`<absolute-git-dir-key>`, §6.2), **without**
     the remote-keyed self-healing — so parallel loops stay isolated (§4.2).
 - **No-remote repositories.** When `git remote get-url origin` is empty (common for the
-  owner *before the first push*, while Discovery is already producing define-docs), the
+  owner *before the first push*, while Discovery is already producing definition-docs), the
   config key is `<common-dir-key>` rather than `<remote-key>` (§6.2), which makes config
   **per-checkout-clone, not shared-across-clones** — the "shared across clones"
   guarantee is impossible until a remote exists. On the first push, `init` **rebinds**
@@ -178,14 +180,14 @@ would strand every already-written calibration file and define-doc.)
 
 ---
 
-## 3. Define-docs (spec / plan / tasks)
+## 3. Definition-docs (spec / plan / tasks)
 
 The three artifacts of the loop's front half. A superset of Spec-Kit's
 `spec`/`plan`/`tasks`, convertible to/from it.
 
 ### 3.1 Shared additive header (YAML frontmatter)
 
-Every define-doc opens with the metadata superheroes owns:
+Every definition-doc opens with the metadata superheroes owns:
 
 ```yaml
 ---
@@ -216,21 +218,26 @@ updated: <date>
 
 > **Why YAML frontmatter here but an HTML-comment in §2.2?** Intentional, not drift.
 > Calibration files are prose config read mostly by agents, with a minimal embedded
-> block for the few code-parsed fields. Define-docs are structured artifacts with rich
+> block for the few code-parsed fields. Definition-docs are structured artifacts with rich
 > machine-read linkage (`docType`, `parent`, `gates`), for which standard frontmatter is
 > the right tool.
 
 ### 3.2 Bodies
 
-- **`spec`** — purpose; functional and non-functional requirements; acceptance
-  criteria; out-of-scope; open questions. Plain-language, owner co-authors, **no tech**.
-  **Depth = the happy path *plus the significant unhappy paths*** — empty/initial
-  states, error/failure behavior, key edge/boundary cases, access/permissions, and
-  input validation — captured as **behavioral requirements + acceptance criteria** (the
-  owner-visible *what*). It is **not** an exhaustive enumeration of every edge case, and
-  **not** the technical *how* (that is the `plan`). This is the anti-slop core: Discovery
-  proactively elicits these via a coverage checklist. Records the UI/UX outcome of
-  Discovery's Claude Design work (§1) as requirements.
+- **`spec`** — plain-language requirements, owner co-authors, **no tech**. Sections:
+  purpose; who it's for; functional requirements; significant unhappy paths;
+  non-functional requirements; UI/UX; definition of done; assumptions & dependencies;
+  constraints; out-of-scope; open questions; glossary. **Functional requirements are
+  written in EARS** (Easy Approach to Requirements Syntax — `When`/`While`/`Where`/`If-Then`
+  + "the system shall …"), one behavior each, every requirement carrying **≥1 acceptance
+  criterion** (Given-When-Then for flows, a rule for simple constraints). **Depth = the
+  happy path *plus the significant unhappy paths*** (the unwanted-behavior `If-Then` EARS),
+  elicited via a coverage checklist (empty/first-run, invalid input, boundaries, errors,
+  access, duplicates, concurrency, abuse, reach) and tagged Specify/Defer-to-plan/N-A —
+  **not** an exhaustive enumeration, and **not** the technical *how* (that is the `plan`).
+  Non-functional requirements are stated as **outcomes with a fit-criterion**. UI/UX
+  **references the Claude Design handoff output** (§1), not a reinterpretation. This is the
+  anti-slop core.
 - **`plan`** — approach and architecture; components and interfaces; data flow; risks;
   alternatives considered. References the spec's UI/UX outcome when describing how it
   is built.
@@ -246,7 +253,7 @@ updated: <date>
 - **Location follows the storage mode (§2.3):** in-repo →
   `docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the repo (committed, diffable);
   global → `projects/<config-key>/docs/<work-item>/…` in the **git-initialized project
-  store** (§4.2), so global-mode define-docs are versioned and diffable too. One file
+  store** (§4.2), so global-mode definition-docs are versioned and diffable too. One file
   per doc-type per work-item.
 - **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
@@ -267,7 +274,7 @@ updated: <date>
 The rule: **git moves state between sessions; GitHub issues surface work to the human;
 live state stays ephemeral.** GitHub issues never hold live machine state. Live state is
 checkpointed *into* the control-plane repo, never into an issue. The source of truth for
-the define-docs is the **files in git**; the issue is the rendered human index. (The
+the definition-docs is the **files in git**; the issue is the rendered human index. (The
 GitHub-issue schema itself — body, labels, index format, write coordination — is
 deferred; see §7.)
 
@@ -278,7 +285,7 @@ config-vs-state line, because the two have opposite sharing needs:
 
 - **Project store = per-project**, keyed by `<config-key>` (§6.2) — shared across all of
   a project's worktrees and clones on a machine (same project ⇒ same
-  threat-model/patterns, one mode record). Holds calibration, global-mode define-docs,
+  threat-model/patterns, one mode record). Holds calibration, global-mode definition-docs,
   the authoritative `registry.json`, and the config lock.
 - **Control-plane store = per-checkout**, keyed by `<absolute-git-dir-key>` (§6.2) —
   **distinct per linked worktree and per clone**. Holds the runtime: queue, checkpoints,
@@ -301,7 +308,7 @@ config-vs-state line, because the two have opposite sharing needs:
     registry.json                       # AUTHORITATIVE: { schemaVersion, storageMode, remoteKey | null, createdAt }
     config.lock                         # the project-scoped config-write lock (§4.4)
     config/                             # core.md, <plugin>.md, patterns.md       (global mode only; in-repo → in the repo)
-    docs/<work-item>/{spec,plan,tasks}.md   # define-docs                          (global mode only; in-repo → in the repo)
+    docs/<work-item>/{spec,plan,tasks}.md   # definition-docs                          (global mode only; in-repo → in the repo)
   checkouts/<absolute-git-dir-key>/     # CONTROL-PLANE STORE — a git repo; ONE per worktree/clone
     .git/
     meta.json                           # { schemaVersion, createdAt }   (mode lives in registry.json, not here — §6.3)
@@ -354,7 +361,7 @@ explicit (`order`), not array position. Item lifecycle is
 }
 ```
 
-- `gates` here is the **aggregation** of each define-doc's per-doc `gates.review` (§3.1),
+- `gates` here is the **aggregation** of each definition-doc's per-doc `gates.review` (§3.1),
   keyed by doc-type; it can hold `changes-requested`.
 - `branch` is content-addressed (§6.3) and **is** the idempotency anchor (§4.4).
 - `lockGeneration` is the fencing token (§4.4).
@@ -453,7 +460,7 @@ the per-checkout store (correct, but a network round-trip per lock — so not th
 | Thing | in-repo mode | global mode | Keyed per |
 | --- | --- | --- | --- |
 | Calibration (`core`/`<plugin>`/`patterns`) | `.claude/superheroes/` (committed) | project store `config/` | project (`<config-key>`) |
-| Define-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | project store `docs/` | project (`<config-key>`) |
+| Definition-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | project store `docs/` | project (`<config-key>`) |
 | `registry.json` + `config.lock` | machine-local project store | machine-local project store | project (`<config-key>`) |
 | Runtime (queue, checkpoints, briefs, events) | machine-local control-plane store | machine-local control-plane store | checkout (`<absolute-git-dir-key>`) |
 | Work items + rendered index | GitHub issues | GitHub issues | — |
@@ -480,7 +487,7 @@ into every path, lock ref, and branch (`docs/superheroes/<work-item>/`,
   dir/lock/branch. (NFC normalization makes canonically-equivalent Unicode — e.g.
   macOS-NFD vs Linux-NFC — yield the same slug.)
 - The **GitHub issue number is a linked attribute** — the `issue:` field in the
-  define-doc frontmatter (§3.1), the queue item, and `checkpoint.json` (§4.3) — **not**
+  definition-doc frontmatter (§3.1), the queue item, and `checkpoint.json` (§4.3) — **not**
   the path segment, so nothing has to be renamed when an issue is later filed for a
   work-item that began as a pre-issue draft.
 
@@ -535,12 +542,12 @@ does not duplicate it.
   **descriptive** — consumers must accept it; no control-flow keys off it yet. (The
   word "tier" is reserved for the §4 state substrates and durability tiers.)
 - **`schemaVersion`** is stamped independently on each artifact family (`core.md`,
-  define-docs, runtime files). Bump on a **breaking** change (additive changes do not
+  definition-docs, runtime files). Bump on a **breaking** change (additive changes do not
   bump). A reader that encounters an **unknown** version **fails closed** with a
   "update the plugin or migrate the file" message — the precedent test-pilot's
   `engine.py`/`state.py` already set. Migration logic lives in the plugin that owns the
   artifact. A breaking change to the §6.3 `<content-hash>` canonicalization is **likewise
-  a define-doc `schemaVersion` bump** (so old and new hashes never silently collide);
+  a definition-doc `schemaVersion` bump** (so old and new hashes never silently collide);
   whether to *also* embed an explicit canon-version in the stored branch key is deferred
   to the first consumer (an entry-gate, tracked in `eval/gate.md`). (The fuller
   cross-plugin version-skew / band-compatibility story is deferred; §7.)

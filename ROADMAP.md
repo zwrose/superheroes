@@ -15,7 +15,7 @@ each row.
 
 | Phase | Goal | Delivers | Heroes | Conventions it locks (CONVENTIONS §7) |
 | --- | --- | --- | --- | --- |
-| **0 · Foundations** *(done)* | a clean brand + the contracts everything builds on | rebrand to `superheroes`; [CONVENTIONS.md](CONVENTIONS.md) (calibration, define-docs, state tiers, disk-state); the eval-harness skeleton | review-crew, test-pilot | — |
+| **0 · Foundations** *(done)* | a clean brand + the contracts everything builds on | rebrand to `superheroes`; [CONVENTIONS.md](CONVENTIONS.md) (calibration, definition-docs, state tiers, disk-state); the eval-harness skeleton | review-crew, test-pilot | — |
 | **1 · One issue, supervised** *(next)* | prove the full loop on a single work-item, with a human watching | one work-item taken Discovery→Integrate end-to-end; evals gate every step | + **the-architect** (spec/plan/tasks), the **review trio** (review-spec/plan/tasks) | — |
 | **2a-core · Survive interruption** | the loop can be killed and resumed without losing or duplicating work | disk-state-as-source-of-truth; idempotent steps; the fenced-lease lock + exactly-once recovery; a crash/compaction spike | + **producer** (core) | loop failure / retry / cascade semantics; `resume-brief.md` + `events.jsonl` schemas |
 | **2a-plus · Unattended queue** | run a queue of work-items walk-away, across sessions | self-pacing controller; per-checkout isolation; the keepalive daemon; walk-away durability via the state remote | + **coordinator** (issue writes) | GitHub-issue ↔ work-item schema; owner-interaction / approval-gate contract; auth / scopes; cleanup / retention (start) |

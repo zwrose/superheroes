@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""the-architect: define-doc location + frontmatter helper (CONVENTIONS §3, §6.1).
+"""the-architect: definition-doc location + frontmatter helper (CONVENTIONS §3, §6.1).
 
-Phase 1 is deliberately MINIMAL and in-repo only: define-docs live at
+Phase 1 is deliberately MINIMAL and in-repo only: definition-docs live at
 `docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the target repo. Global
 mode, the project/registry store, and the unified resolver are deferred to 2a
 (CONVENTIONS §2.3/§4.2) — this module hard-codes the in-repo layout and takes a
@@ -162,14 +162,14 @@ def render_frontmatter(fm):
 # --- CLI -------------------------------------------------------------------
 
 def _build_parser():
-    p = argparse.ArgumentParser(description="the-architect define-doc helper (§3, §6.1)")
+    p = argparse.ArgumentParser(description="the-architect definition-doc helper (§3, §6.1)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     m = sub.add_parser("mint", help="freeze a <work-item> slug for a title (§6.1)")
     m.add_argument("--title", required=True)
     m.add_argument("--nonce", default=None)
 
-    pa = sub.add_parser("path", help="resolve the on-disk path for a define-doc")
+    pa = sub.add_parser("path", help="resolve the on-disk path for a definition-doc")
     pa.add_argument("--work-item", required=True)
     pa.add_argument("--doc", required=True, choices=DOC_TYPES)
     pa.add_argument("--root", default=".")
@@ -214,5 +214,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv))
     except (ValueError, OSError) as exc:
-        sys.stderr.write(f"define_doc error: {exc}\n")
+        sys.stderr.write(f"definition_doc error: {exc}\n")
         sys.exit(1)

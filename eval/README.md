@@ -26,7 +26,7 @@ conventions are frozen and these checks need no running loop:
   Plugins consume these instead of re-implementing them, so they can't drift (the #1
   theme of the convention reviews). *How a plugin consumes them — vendor vs shared dep —
   is decided when the first plugin needs them (Phase 1+).*
-- [`lib/schemas/`](lib/schemas/) — JSON Schemas for the locked artifacts (define-doc
+- [`lib/schemas/`](lib/schemas/) — JSON Schemas for the locked artifacts (definition-doc
   frontmatter, `checkpoint.json`, `queue.json`, `registry.json`). The canonical shape
   any plugin's output is validated against.
 - [`lib/tests/`](lib/tests/) — determinism / freeze / collision tests for the impls,
