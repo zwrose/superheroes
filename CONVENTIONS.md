@@ -2,7 +2,7 @@
 
 These are the **contracts the superheroes plugins share**: artifact formats, storage
 rules, and the coordination primitives that let a band of independent plugins
-(today review-crew + test-pilot; soon producer, define, coordinator) run a project's
+(today review-crew + test-pilot; soon producer, the-architect, coordinator) run a project's
 development loop together without stepping on each other.
 
 **Status.** This document *locks* conventions — it decides and records the schema so
@@ -48,9 +48,12 @@ review (review-crew owns all three review gates):
 > the UI gets built.
 
 The **cast** referenced below: **producer** (the controller / loop driver),
-**define** (produces spec/plan/tasks), **review-crew** (all review gates + code
-review), **test-pilot** (behavioral/browser verification), **coordinator** (owns all
-GitHub-issue writes). Only review-crew and test-pilot exist today.
+**the-architect** (produces the define-docs — spec/plan/tasks), **review-crew** (all
+review gates + code review), **test-pilot** (behavioral/browser verification),
+**coordinator** (owns all GitHub-issue writes). review-crew and test-pilot are
+complete today; the-architect is in progress (Phase 1). (The spec/plan/tasks
+artifact family is called **define-docs** — the docs that *define* a work item —
+independent of the producing plugin's name.)
 
 Load-bearing identifiers used throughout (`<work-item>`, `<content-hash>`, the storage
 keys) and the schema-versioning policy are defined once in **§6**.
@@ -74,7 +77,7 @@ band-wide storage mode**.
 
 - **`core.md`** carries band-wide project facts: stack, the canonical *verify* command,
   threat model, canonical patterns. Its **single writer** is the calibration owner
-  (`init` / the profile-management skill) — not `define` (which owns define-docs).
+  (`init` / the profile-management skill) — not `the-architect` (which owns define-docs).
   Because `core.md` is project-keyed and shared across a project's checkouts (§4.2), the
   writer **serializes its writes under the project-scoped config lock** (§4.4) — a
   machine-local lock distinct from the per-checkout runtime locks; the "applied only on
@@ -195,7 +198,7 @@ parent: { workItem: <id>, docType: spec | plan }   # plan→spec, tasks→plan; 
 size: small | medium | large          # work-item sizing (see §6.4); "tier" is reserved for state substrates
 status: draft | in-review | approved  # DERIVED, human-facing: approved iff gates.review == passed
 gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review state for THIS doc
-producedBy: define@<version>
+producedBy: the-architect@<version>
 created: <date>
 updated: <date>
 ---
@@ -221,7 +224,13 @@ updated: <date>
 
 - **`spec`** — purpose; functional and non-functional requirements; acceptance
   criteria; out-of-scope; open questions. Plain-language, owner co-authors, **no tech**.
-  Records the UI/UX outcome of Discovery's Claude Design work (§1) as requirements.
+  **Depth = the happy path *plus the significant unhappy paths*** — empty/initial
+  states, error/failure behavior, key edge/boundary cases, access/permissions, and
+  input validation — captured as **behavioral requirements + acceptance criteria** (the
+  owner-visible *what*). It is **not** an exhaustive enumeration of every edge case, and
+  **not** the technical *how* (that is the `plan`). This is the anti-slop core: Discovery
+  proactively elicits these via a coverage checklist. Records the UI/UX outcome of
+  Discovery's Claude Design work (§1) as requirements.
 - **`plan`** — approach and architecture; components and interfaces; data flow; risks;
   alternatives considered. References the spec's UI/UX outcome when describing how it
   is built.
@@ -496,7 +505,7 @@ normative spec. **Hash:** `sha256(...)` truncated to **16 hex** (`short_hash`).
 
 `<content-hash>` makes the work branch content-addressed. It is computed **once at branch
 creation** from the **approved `tasks` doc**, and **must be byte-identical across plugins,
-hosts, and sessions** (`define` recomputes it to detect a material change; `producer`
+hosts, and sessions** (`the-architect` recomputes it to detect a material change; `producer`
 computes it to create the branch — they must agree, or every metadata touch spuriously
 reads as a new attempt). Canonical serialization, in this exact order:
 
