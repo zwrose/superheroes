@@ -102,6 +102,12 @@ Then, in any project:
 
 ---
 
+## Where this is going
+
+superheroes is growing into a band that runs much of a project's development loop for
+you. See the [roadmap](ROADMAP.md) for the phases, and [CONVENTIONS.md](CONVENTIONS.md)
+for the cross-plugin contracts.
+
 ## Contributing
 
 Issues and pull requests are welcome. Fork the repo, open a PR, and we'll help get
