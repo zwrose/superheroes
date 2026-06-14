@@ -19,7 +19,7 @@
           "additionalProperties": false,
           "required": ["workItem", "docType"],
           "properties": {
-            "workItem": { "type": "string" },
+            "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
             "docType": { "enum": ["spec", "plan"] }
           }
         }

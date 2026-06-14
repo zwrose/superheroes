@@ -8,9 +8,12 @@ the `[live]` conformance check (eval/gate.md). Install it locally to run these t
 import glob
 import json
 import os
+import re
 
 import jsonschema
 import pytest
+
+import identifiers as ids
 
 SCHEMA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schemas")
 
@@ -60,7 +63,7 @@ VALID = {
 INVALID = {
     "define-doc.schema.json": dict(VALID["define-doc.schema.json"], docType="design"),  # "design" is not a docType
     "checkpoint.schema.json": dict(VALID["checkpoint.schema.json"], phase="unknown"),
-    "queue.schema.json": {"schemaVersion": 1, "items": [{"workItem": "x", "state": "queued", "order": 0}]},  # missing issue
+    "queue.schema.json": {"schemaVersion": 1, "items": [{"workItem": "add-toggle-abc123", "state": "queued", "order": 0}]},  # missing issue is the SOLE violation (workItem is a valid slug)
     "registry.schema.json": dict(VALID["registry.schema.json"], storageMode="hybrid"),  # not a mode
 }
 
@@ -81,3 +84,33 @@ def test_define_doc_rejects_malformed_workitem():
     bad = dict(VALID["define-doc.schema.json"], workItem="add-toggle-zzzzzz")  # suffix not 6 hex
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(bad, _load("define-doc.schema.json"))
+
+
+# The §6.1 work-item slug pattern is duplicated across every schema that carries a
+# work-item (4 sites). These two tests are the anti-drift guard: all sites must use the
+# SAME pattern, and that pattern must agree with what work_item_slug actually emits — so
+# no schema can silently diverge from the canonical reference impl.
+SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$"
+
+
+def _all_workitem_patterns():
+    dd = _load("define-doc.schema.json")
+    cp = _load("checkpoint.schema.json")
+    q = _load("queue.schema.json")
+    return {
+        "define-doc.workItem": dd["properties"]["workItem"]["pattern"],
+        "define-doc.parent.workItem": dd["properties"]["parent"]["oneOf"][1]["properties"]["workItem"]["pattern"],
+        "checkpoint.workItem": cp["properties"]["workItem"]["pattern"],
+        "queue.items.workItem": q["properties"]["items"]["items"]["properties"]["workItem"]["pattern"],
+    }
+
+
+def test_workitem_pattern_consistent_across_schemas():
+    pats = _all_workitem_patterns()
+    assert all(p == SLUG_PATTERN for p in pats.values()), pats
+
+
+def test_workitem_pattern_matches_reference_impl():
+    # A real slug validates against the schema pattern; a raw title does not.
+    assert re.fullmatch(SLUG_PATTERN, ids.work_item_slug("Some Example Title", "nonce"))
+    assert not re.fullmatch(SLUG_PATTERN, "Some Example Title")
