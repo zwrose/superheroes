@@ -13,7 +13,8 @@ says so. Conventions not yet specified are named in **§7**, bound to the plugin
 roadmap phase that will own them — so deferral is explicit, not silent.
 
 **Scope.** This file is the authoritative contract. The broader product vision lives
-elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap.
+elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (For the phases
+referenced in §7, see [ROADMAP.md](ROADMAP.md).)
 
 ---
 
@@ -65,7 +66,7 @@ band-wide storage mode**.
 ### 2.1 Layout (decision: core file + per-plugin files)
 
 ```
-.claude/superheroes/
+.claude/superheroes/        # in-repo mode; in global mode this content lives in the project store (§4.2)
   core.md            # the shared brain — read by every hero
   <plugin>.md        # one per plugin: review-crew.md, test-pilot.md, …
   patterns.md        # research-derived "current best-practice" layer (own lifecycle)
@@ -74,10 +75,12 @@ band-wide storage mode**.
 - **`core.md`** carries band-wide project facts: stack, the canonical *verify* command,
   threat model, canonical patterns. Its **single writer** is the calibration owner
   (`init` / the profile-management skill) — not `define` (which owns define-docs).
-  Because `core.md` is project-keyed and therefore shared across a project's checkouts
-  (§4.2), the writer **serializes its writes under the per-project lock** (§4.4); the
-  "applied only on confirmation" rule (§2.4) gates *intent*, not concurrent physical
-  writes.
+  Because `core.md` is project-keyed and shared across a project's checkouts (§4.2), the
+  writer **serializes its writes under the project-scoped config lock** (§4.4) — a
+  machine-local lock distinct from the per-checkout runtime locks; the "applied only on
+  confirmation" rule (§2.4) gates *intent*, not concurrent physical writes. (In in-repo
+  mode, cross-machine config writes are additionally git-mediated, since config is
+  committed.)
 - **`<plugin>.md`** is a layer **owned and versioned by that plugin**. Each plugin
   writes only its own layer — no plugin co-edits another's file.
 - **`patterns.md`** is the research-derived opinion layer. It lives in its own file
@@ -124,21 +127,22 @@ per-plugin:
 
 | | **in-repo** | **global ("without a trace")** |
 | --- | --- | --- |
-| Calibration (`core.md`, layers, `patterns.md`) | `.claude/superheroes/` committed with the repo | the project's global store (§4) |
+| Calibration (`core.md`, layers, `patterns.md`) | `.claude/superheroes/` committed with the repo | the project store (§4.2) |
 | Effect | calibration is **shared with collaborators** | the repo stays **pristine** — zero superheroes footprint |
-| Define-docs (§3) | `docs/superheroes/<work-item>/` in the repo | the global store |
-| Runtime state (§4) | always machine-local global | always machine-local global |
+| Define-docs (§3) | `docs/superheroes/<work-item>/` in the repo | the project store (§4.2) |
+| Runtime state (§4) | always machine-local | always machine-local |
 
 "in-repo" shares *calibration*; it does not promise zero global footprint — runtime
-state is always machine-local (§4). Both modes keep the *repo* clean of run state.
+state, plus the per-project registry, are always machine-local (§4.2). Both modes keep
+the *repo* clean of run state.
 
 **Mode is set once and is sticky.** `init` is idempotent: on an already-initialized
-project it reconciles content but does **not** silently re-decide the mode. A mode flip
-(in-repo↔global) is an **explicit migration** that moves calibration *and* every
-define-doc to the new location and updates the registry entry and `meta.json` together;
-absent that migration, `init` refuses to re-decide once the registry records a mode.
-(Without this rule a flip would strand every already-written calibration file and
-define-doc.)
+project it reconciles content but does **not** silently re-decide the mode. The
+authoritative mode record is `registry.json` in the project store (§4.2/§6.3). A mode
+flip (in-repo↔global) is an **explicit migration** that moves calibration *and* every
+define-doc to the new location and updates `registry.json`; absent that migration,
+`init` refuses to re-decide once the registry records a mode. (Without this rule a flip
+would strand every already-written calibration file and define-doc.)
 
 ### 2.4 Resolution and evolution
 
@@ -149,18 +153,18 @@ define-doc.)
   even comments "Same algorithm as review_store"). Convergence means **unifying those
   two near-duplicate libs into one shared resolver** — not grafting a lib onto a
   lib-less plugin. That resolver exposes **two distinct key derivations**, because
-  config and runtime have opposite sharing needs (see §4.2):
-  - **Config key = per-project** (git remote + `--git-common-dir`), with self-healing
-    pointers — deliberately unifies a project's clones/worktrees so they share
-    calibration.
-  - **Control-plane key = per-checkout** (`--absolute-git-dir`), **without** the
-    remote-keyed self-healing — so parallel loops stay isolated (§4.2).
+  config and runtime have opposite sharing needs (see §4.2 and §6.2):
+  - **Config key = per-project** (`<config-key>`, §6.2), with self-healing pointers —
+    deliberately unifies a project's clones/worktrees so they share calibration.
+  - **Control-plane key = per-checkout** (`<absolute-git-dir-key>`, §6.2), **without**
+    the remote-keyed self-healing — so parallel loops stay isolated (§4.2).
 - **No-remote repositories.** When `git remote get-url origin` is empty (common for the
   owner *before the first push*, while Discovery is already producing define-docs), the
-  config key falls back to `--git-common-dir` alone, which makes config **per-checkout,
-  not shared-across-clones** — the §4.2 "shared across clones" guarantee is impossible
-  until a remote exists. On the first push, `init` **rebinds** the config entry to the
-  new remote key (and merges the fallback entry) so calibration does not fork.
+  config key is `<common-dir-key>` rather than `<remote-key>` (§6.2), which makes config
+  **per-checkout-clone, not shared-across-clones** — the "shared across clones"
+  guarantee is impossible until a remote exists. On the first push, `init` **rebinds**
+  the project store to the new `<remote-key>` (and merges the fallback entry) so
+  calibration does not fork.
 - **Living profiles.** Lift review-crew's mechanisms band-wide: a *staleness nudge*,
   a *learning-loop proposal* (any hero may **propose** a calibration edit, applied only
   on confirmation), and a **`nudge-ack` map** so a dismissed signal does not re-fire
@@ -231,8 +235,10 @@ updated: <date>
 ### 3.3 Location and convertibility
 
 - **Location follows the storage mode (§2.3):** in-repo →
-  `docs/superheroes/<work-item>/{spec,plan,tasks}.md` (committed, diffable); global →
-  the project's git-initialized global store (§4). One file per doc-type per work-item.
+  `docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the repo (committed, diffable);
+  global → `projects/<config-key>/docs/<work-item>/…` in the **git-initialized project
+  store** (§4.2), so global-mode define-docs are versioned and diffable too. One file
+  per doc-type per work-item.
 - **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
   needs it.
@@ -256,18 +262,18 @@ the define-docs is the **files in git**; the issue is the rendered human index. 
 GitHub-issue schema itself — body, labels, index format, write coordination — is
 deferred; see §7.)
 
-### 4.2 The control-plane store and its keying
+### 4.2 Two stores and their keying
 
-The control-plane is a **`git init`-ed** store (test-pilot's global store is plain
-directories today; we add git on top). Its keying is split along the
+Superheroes uses **two kinds of git-initialized store**, split along the
 config-vs-state line, because the two have opposite sharing needs:
 
-- **Config = per-project**, keyed by **git remote + `--git-common-dir`** — shared across
-  all of a project's worktrees and clones (same project ⇒ same threat-model/patterns).
-  This is what the existing resolvers already give.
-- **Control-plane runtime = per-checkout**, keyed by a hash of
-  `git rev-parse --absolute-git-dir` — **distinct per linked worktree and per clone** —
-  and **each gets its own `.git`**.
+- **Project store = per-project**, keyed by `<config-key>` (§6.2) — shared across all of
+  a project's worktrees and clones on a machine (same project ⇒ same
+  threat-model/patterns, one mode record). Holds calibration, global-mode define-docs,
+  the authoritative `registry.json`, and the config lock.
+- **Control-plane store = per-checkout**, keyed by `<absolute-git-dir-key>` (§6.2) —
+  **distinct per linked worktree and per clone**. Holds the runtime: queue, checkpoints,
+  per-issue state. Each checkout gets its **own** control-plane store.
 
 > **Divergence note — this is NEW code, like the lock.py and resolver-unification notes.**
 > The cited `store.py get_gitdir()` today prefers `--git-common-dir`, which is *shared*
@@ -281,10 +287,15 @@ config-vs-state line, because the two have opposite sharing needs:
 
 ```
 <global-store>/
-  projects/<remote-key>/config/         # core.md, <plugin>.md, patterns.md  (global mode; shared by all this repo's loops)
-  checkouts/<absolute-git-dir-key>/     # ONE per worktree/clone — its OWN git repo
+  projects/<config-key>/                # PROJECT STORE — a git repo; per-project, shared across this project's checkouts
     .git/
-    meta.json                           # { schemaVersion, createdAt }   (storageMode lives in the registry, §6.3)
+    registry.json                       # AUTHORITATIVE: { schemaVersion, storageMode, remoteKey | null, createdAt }
+    config.lock                         # the project-scoped config-write lock (§4.4)
+    config/                             # core.md, <plugin>.md, patterns.md       (global mode only; in-repo → in the repo)
+    docs/<work-item>/{spec,plan,tasks}.md   # define-docs                          (global mode only; in-repo → in the repo)
+  checkouts/<absolute-git-dir-key>/     # CONTROL-PLANE STORE — a git repo; ONE per worktree/clone
+    .git/
+    meta.json                           # { schemaVersion, createdAt }   (mode lives in registry.json, not here — §6.3)
     queue.json                          # producer-owned ordered work-list (schema in §4.3)
     issues/<work-item>/
       checkpoint.json
@@ -293,7 +304,10 @@ config-vs-state line, because the two have opposite sharing needs:
       events.jsonl                      # append-only audit log
 ```
 
-(`<remote-key>` and `<absolute-git-dir-key>` derivations are defined in §6.2.)
+The project store exists in **both** modes (it is the machine-local home of
+`registry.json` and `config.lock`); in in-repo mode its `config/` and `docs/` content
+lives in the repo instead. (`<config-key>` and `<absolute-git-dir-key>` derivations are
+in §6.2.)
 
 ### 4.3 Runtime schemas
 
@@ -303,12 +317,13 @@ config-vs-state line, because the two have opposite sharing needs:
 {
   "schemaVersion": 1,
   "items": [
-    { "workItem": "...", "state": "queued | claimed | done | failed", "order": 0 }
+    { "workItem": "...", "issue": 42, "state": "queued | claimed | done | failed", "order": 0 }
   ]
 }
 ```
 
-Ordering is explicit (`order`), not array position. Item lifecycle is
+`issue` is the linked GitHub issue number (or `null` pre-issue, §6.1). Ordering is
+explicit (`order`), not array position. Item lifecycle is
 `queued → claimed → done | failed`.
 
 **`checkpoint.json`** — the sole source of truth for resuming an issue:
@@ -317,6 +332,7 @@ Ordering is explicit (`order`), not array position. Item lifecycle is
 {
   "schemaVersion": 1,
   "workItem": "...",
+  "issue": 42,
   "size": "medium",
   "phase": "discovery | plan | tasks | build | verify | integrate",
   "gates": { "spec": "passed", "plan": "passed", "tasks": "pending | changes-requested" },
@@ -339,10 +355,10 @@ Ordering is explicit (`order`), not array position. Item lifecycle is
 (`resume-brief.md` and `events.jsonl` have schemas of their own — deferred to §7, since
 the producer that reads/writes them does not exist yet.)
 
-### 4.4 Coordination = git refs, not file polling
+### 4.4 Coordination = git refs and a config lock, not file polling
 
-**Lock — a leased git ref**, `refs/superheroes/locks/<work-item>`, valued
-`{ holder, host, acquiredAt, generation }`:
+**Work-item lock — a leased git ref**, `refs/superheroes/locks/<work-item>`, valued
+`{ holder, host, acquiredAt, generation }`, in the per-checkout control-plane store:
 
 - The holder **renews** the ref (bumps `acquiredAt`) on a heartbeat interval **≪ TTL**
   while it works.
@@ -350,10 +366,13 @@ the producer that reads/writes them does not exist yet.)
   on the ref (atomic), **incrementing `generation`**.
 - **Fencing:** the current `generation` is written into `checkpoint.json`
   (`lockGeneration`); before any external write (push / PR / issue), the holder
-  re-reads the lock ref and **aborts if its generation is stale** — so a stale holder
-  that wakes up cannot complete a write. (TTL + CAS alone is unsound: it would let a
-  live-but-slow holder, or a slept laptop, be stolen from while still holding live
-  state.)
+  re-reads the lock ref and **aborts if its generation is stale**. This makes a stale
+  holder **very unlikely** to complete a write — and it is a check-then-act, not atomic
+  with the remote, so it *narrows* rather than fully closes the woken-stale-holder
+  window. Any write that does land on the target remote is caught by the exactly-once
+  anchor below; issue writes (no anchor until §7's coordinator schema) rely on the fence
+  alone. (TTL + CAS *without* fencing would be outright unsound — a live-but-slow holder,
+  or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
   full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
 - The existing file-based [`lock.py`](plugins/test-pilot/lib/lock.py) is a *narrower,
@@ -361,6 +380,14 @@ the producer that reads/writes them does not exist yet.)
   reboot/pid-recycle) and never wired into `acquire()`. The **ref-lease above is the
   cross-session / cross-host primitive**; where the file lock is retained it gets a
   TTL fallback + host-boot-id check, otherwise it is superseded by the ref-lease.
+
+**Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
+shared across a project's checkouts (§4.2), so it is **not** guarded by the per-checkout
+locks above. Config writes acquire an advisory **`flock` on `projects/<config-key>/config.lock`**
+in the machine-local project store (present in both modes), which serializes them across
+the project's checkouts on that machine. In in-repo mode, cross-machine config writes are
+additionally mediated by git (config is committed). Config write cadence is owner-driven
+and low.
 
 **Exactly-once — the remote work branch is the idempotency anchor**, with an explicit
 resume recovery procedure (not just a happy path):
@@ -381,7 +408,7 @@ it is only at-least-once under `gh` eventual consistency.)
 ### 4.5 Concurrency model (three layers)
 
 - **Per-checkout isolation (local).** Each worktree/clone loop has its own control-plane
-  repo, queue, and lock refs. **`init`/the producer acquires a per-checkout lock at
+  store, queue, and lock refs. **`init`/the producer acquires a per-checkout lock at
   startup**, so a second loop launched in the *same* checkout **fails closed** — turning
   "one active loop per checkout" from an assumption into an enforced gate. (atomic file
   writes prevent torn files, not lost updates; the startup lock is what prevents the
@@ -395,20 +422,20 @@ it is only at-least-once under `gh` eventual consistency.)
   loop** — it cannot run on subscription-billed Claude Code mechanics, so it is out of
   contract here.)
 - **Cross-loop backstop = the target repo's remote.** The genuinely shared write targets
-  are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4), the
-  shared **config store** (owner-confirmation-gated and written under the per-project
-  lock, §2.1, so effectively single-threaded), and the **state remote** (whose
+  are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4); the
+  shared **config store** (serialized by the project-scoped config lock, §4.4, and
+  git-mediated cross-machine in in-repo mode); and the **state remote** (whose
   branch-per-checkout isolation depends on the §4.2 keying fix). The exactly-once
   machinery lives on the target remote, so it is inherently cross-process and
   cross-machine.
 
-**Residual edge (named, not fixed now):** local per-checkout locks won't stop two
+**Residual edge (named, not fixed now):** per-checkout work-item locks won't stop two
 *different* checkout-loops from both grabbing the *same* work-item if it is mis-queued
 into both. Worst case is **wasted duplicate work, not corruption** — the target-remote
-backstop (§4.4) still prevents a double-merge, and the shared config/state writes are
-serialized or owner-gated as above. If cross-loop work-item overlap ever becomes a real
-pattern, the escalation is to host the lock ref on the *shared target remote* instead of
-locally (correct, but a network round-trip per lock — so not the default).
+backstop (§4.4) still prevents a double-merge, and shared config writes are serialized by
+the config lock. If cross-loop work-item overlap ever becomes a real pattern, the
+escalation is to host the work-item lock ref on the *shared target remote* instead of
+the per-checkout store (correct, but a network round-trip per lock — so not the default).
 
 ---
 
@@ -416,9 +443,10 @@ locally (correct, but a network round-trip per lock — so not the default).
 
 | Thing | in-repo mode | global mode | Keyed per |
 | --- | --- | --- | --- |
-| Calibration (`core`/`<plugin>`/`patterns`) | `.claude/superheroes/` (committed) | `projects/<remote-key>/config/` | project (remote + common-dir) |
-| Define-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | global store | project (remote + common-dir) |
-| Runtime (queue, checkpoints, briefs, events) | machine-local control-plane repo | machine-local control-plane repo | checkout (`--absolute-git-dir`) |
+| Calibration (`core`/`<plugin>`/`patterns`) | `.claude/superheroes/` (committed) | project store `config/` | project (`<config-key>`) |
+| Define-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | project store `docs/` | project (`<config-key>`) |
+| `registry.json` + `config.lock` | machine-local project store | machine-local project store | project (`<config-key>`) |
+| Runtime (queue, checkpoints, briefs, events) | machine-local control-plane store | machine-local control-plane store | checkout (`<absolute-git-dir-key>`) |
 | Work items + rendered index | GitHub issues | GitHub issues | — |
 | Walk-away durability | `superheroes-state-<project>` remote, branch per checkout | same | checkout (branch) |
 
@@ -433,45 +461,59 @@ The cross-cutting values every plugin must compute identically.
 `<work-item>` is a **frozen slug**, chosen **once** at work-item creation and **never
 re-derived** (a title edit does not change it). It is the stable segment interpolated
 into every path, lock ref, and branch (`docs/superheroes/<work-item>/`,
-`checkouts/.../issues/<work-item>/`, `refs/superheroes/locks/<work-item>`,
-`superheroes/<work-item>-<hash>`).
+`projects/<config-key>/docs/<work-item>/`, `issues/<work-item>/`,
+`refs/superheroes/locks/<work-item>`, `superheroes/<work-item>-<hash>`).
 
 - Slug = the title lowercased, non-`[a-z0-9]` runs collapsed to `-`, trimmed, capped at
   50 chars, **plus a short disambiguating suffix** (`-` + first 6 hex of
   `sha256(full-title + creation-nonce)`) so two similar titles **never** collide into one
   dir/lock/branch.
-- The **GitHub issue number is a linked attribute** (`issue:` in frontmatter / a field
-  in the queue and checkpoint), **not** the path segment — so nothing has to be renamed
-  when an issue is later filed for a work-item that began as a pre-issue draft.
+- The **GitHub issue number is a linked attribute** — the `issue:` field in the
+  define-doc frontmatter (§3.1), the queue item, and `checkpoint.json` (§4.3) — **not**
+  the path segment, so nothing has to be renamed when an issue is later filed for a
+  work-item that began as a pre-issue draft.
 
 ### 6.2 Storage keys
 
 Reuse the existing resolver's derivation (`store.py` / `review_store.py`) as the
-normative spec:
+normative spec. **Hash:** `sha256(...)` truncated to **16 hex** (`short_hash`).
 
-- **Hash:** `sha256(...)` truncated to **16 hex** (`short_hash`).
 - **`<remote-key>`** = `short_hash(normalize_remote(origin))`, where `normalize_remote`
   lowercases the host and strips scheme/userinfo/port and a trailing `.git`.
-- **`<absolute-git-dir-key>`** = `short_hash(realpath(git rev-parse --absolute-git-dir))`
-  — distinct per linked worktree and per clone (see §4.2).
+- **`<common-dir-key>`** = `short_hash(realpath(git rev-parse --path-format=absolute --git-common-dir))`
+  — shared across a clone's linked worktrees; the no-remote fallback (§2.4).
+- **`<config-key>`** (the project-store key) = `<remote-key>` when a remote exists,
+  else `<common-dir-key>`. On first push, `init` rebinds `<common-dir-key>` →
+  `<remote-key>` (§2.4).
+- **`<absolute-git-dir-key>`** (the control-plane key) =
+  `short_hash(realpath(git rev-parse --absolute-git-dir))` — distinct per linked
+  worktree and per clone (§4.2). Note `--absolute-git-dir` ≠ `--git-common-dir` for a
+  linked worktree, so this is **never** equal to `<common-dir-key>`.
 
 ### 6.3 `<content-hash>` — the exactly-once key
 
 `<content-hash>` makes the work branch content-addressed. It is computed **once at branch
-creation** from the **approved `tasks` doc**, and **must be byte-identical across hosts
-and sessions** (or two resumers mint different branches and exactly-once degrades to a
-double-merge):
+creation** from the **approved `tasks` doc**, and **must be byte-identical across plugins,
+hosts, and sessions** (`define` recomputes it to detect a material change; `producer`
+computes it to create the branch — they must agree, or every metadata touch spuriously
+reads as a new attempt). Canonical serialization, in this exact order:
 
-- Input = the `tasks` doc **body** plus the **stable** frontmatter fields
-  (`workItem`, `docType`, `parent`, `size`), with **volatile fields excluded**
-  (`updated`, `created`, `status`, `gates`, and any provenance timestamps).
-- Canonicalize (normalize line endings to `\n`, strip trailing whitespace, sort any
-  serialized maps) before hashing; `sha256(...)[:16]`.
-- A re-approval that materially changes the `tasks` body yields a **new** hash → a new
-  attempt branch (the prior PR is closed by the loop). A pure metadata touch does not.
+1. Take the **stable** frontmatter fields only — `workItem`, `docType`, `parent`, `size`
+   — and serialize as **JSON with sorted keys** (so `parent` is
+   `{"docType":"...","workItem":"..."}`). Volatile fields are excluded (`updated`,
+   `created`, `status`, `gates`, `issue`, `producedBy`, provenance timestamps).
+2. Take the doc **body**, normalize line endings to `\n`, and strip trailing whitespace
+   **per line**.
+3. Concatenate `frontmatter-json` + `"\n"` + `body`.
+4. `sha256` of the UTF-8 bytes, first **16 hex**.
 
-`storageMode` (§2.3) is recorded **authoritatively in the per-project registry entry**;
-`meta.json` does not duplicate it.
+A re-approval that materially changes the `tasks` body or stable frontmatter yields a
+**new** hash → a new attempt branch (the prior PR is closed by the loop). A pure
+metadata touch does not. (A normal resume reads `branch` verbatim from `checkpoint.json`,
+§4.3 — it does not recompute the hash.)
+
+`storageMode` is recorded **authoritatively in `registry.json`** (§4.2); `meta.json`
+does not duplicate it.
 
 ### 6.4 `size` and schema versioning
 
@@ -494,8 +536,9 @@ double-merge):
 
 Real conventions the band will need that are **intentionally not specified yet**, because
 the plugin that owns each does not exist — specifying them blind would be guesswork.
-**Each is an entry-gate for its owning phase:** building that plugin means specifying its
-conventions here first. (Surfaced by the §-review of 2026-06-14.)
+**Each is an entry-gate for its owning phase** (see [ROADMAP.md](ROADMAP.md)): building
+that plugin means specifying its conventions here first. (Surfaced by the reviews of
+2026-06-14.)
 
 | Deferred convention | What it must define | Owner · phase |
 | --- | --- | --- |
