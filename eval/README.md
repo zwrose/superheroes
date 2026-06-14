@@ -33,7 +33,7 @@ conventions are frozen and these checks need no running loop:
   and accept/reject tests for the schemas.
 
 **2. Behavioral & loop — populated as plugins land.** Does the loop *do the right
-thing*? (define producing a sound spec/plan/tasks; each review gate actually blocking a
+thing*? (the-architect producing a sound spec/plan/tasks; each review gate actually blocking a
 bad artifact; the loop surviving interruption and producing a PR that meets the spec's
 acceptance criteria.) These need a runnable loop, so their fixtures arrive with the
 plugins that produce them — Phase 1 onward. `fixtures/` is the placeholder home.

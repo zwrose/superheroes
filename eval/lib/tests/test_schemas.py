@@ -45,7 +45,7 @@ VALID = {
         "workItem": "add-toggle-abc123", "issue": 42,
         "parent": {"workItem": "add-toggle-abc123", "docType": "plan"},
         "size": "medium", "status": "approved", "gates": {"review": "passed"},
-        "producedBy": "define@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
+        "producedBy": "the-architect@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
     "checkpoint.schema.json": {
         "schemaVersion": 1, "workItem": "add-toggle-abc123", "issue": 42, "size": "medium",
         "phase": "tasks", "gates": {"spec": "passed", "plan": "passed", "tasks": "pending"},

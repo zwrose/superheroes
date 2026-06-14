@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """VENDORED from eval/lib/identifiers.py — the band's canonical CONVENTIONS §6 reference impls.
 
-A self-contained copy so the `define` plugin works when installed independently (a
+A self-contained copy so the `the-architect` plugin works when installed independently (a
 distributed plugin can't import the band-level `eval/`). The *source of truth* is
 `eval/lib/identifiers.py`; do NOT edit the logic here directly — change the source and
 re-sync this copy. The behavioral-equivalence drift test in

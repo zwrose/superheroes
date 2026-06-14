@@ -2,7 +2,7 @@
 """Canonical reference implementations of the superheroes load-bearing identifiers.
 
 These are the executable spec of CONVENTIONS.md §6 — the two NEW pure functions the
-conventions pin. Plugins (define, producer, …) should consume these rather than
+conventions pin. Plugins (the-architect, producer, …) should consume these rather than
 re-implement them, so two implementers cannot drift (the #1 theme of the convention
 reviews). The storage-key derivations (`<config-key>`, `<absolute-git-dir-key>`) are
 NOT here — they already live in store.py / review_store.py and get unified in Phase 2a.
@@ -71,7 +71,7 @@ def content_hash(frontmatter, body):
     fm_json = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     # DEFERRED (canon-version): this canonicalization is implicitly v1. A breaking change
     # to it counts as a define-doc schemaVersion bump (CONVENTIONS §6.4, fail-closed). When
-    # the first consumer lands (producer/define, Phase 1), decide whether to also embed an
+    # the first consumer lands (producer/the-architect, Phase 1), decide whether to also embed an
     # explicit canon-version in the stored branch key. Tracked in eval/gate.md.
     payload = fm_json + "\n" + _normalize_body(body)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

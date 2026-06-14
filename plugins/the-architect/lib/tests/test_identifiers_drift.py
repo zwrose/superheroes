@@ -1,7 +1,7 @@
 """Anti-drift guard: the vendored identifiers must behave IDENTICALLY to the band reference.
 
 This is what makes vendoring safe (CONVENTIONS' "plugins consume the reference impl"
-decision): plugins/define/lib/identifiers.py is a copy of eval/lib/identifiers.py, and if
+decision): plugins/the-architect/lib/identifiers.py is a copy of eval/lib/identifiers.py, and if
 the two ever diverge in behavior, this test fails loudly. We compare behavior (outputs),
 not bytes, so the vendored copy may carry its own header/docstring.
 
