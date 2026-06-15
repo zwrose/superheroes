@@ -267,8 +267,9 @@ caught being a *wrong* one.
 - [ ] Matches the project's actual stack and conventions; reuses existing abstractions.
 
 **Simple, honest, complete**
-- [ ] Solves only the stated task — no abstraction without real call sites, no new
-  dependency without a one-line justification; a subtraction pass was done.
+- [ ] Solves only the stated task — no abstraction without **three** real call sites
+  (the rule of three), no new dependency without a one-line justification; a
+  subtraction pass was done.
 - [ ] Assumptions are listed; if the spec's implied approach is wrong, the plan says so
   (correctness over agreement).
 - [ ] Failure modes and an explicit security/privacy pass are covered (not happy-path only).
