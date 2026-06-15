@@ -70,10 +70,14 @@ or your confidence is low on something consequential.**
 
 **Escalate if the decision trips any trigger:**
 
-1. **One-way door** — hard or expensive to undo later: the **data model/schema**, the
-   persistence engine, a **public API/contract** others build against, the **core
-   framework**, the **auth/permission model**, service boundaries. *(Hard floor: never
-   take an irreversible/destructive action, and never merge/deploy, without sign-off.)*
+1. **One-way door with an owner-visible trade-off** — hard or expensive to undo later
+   **and** carrying a consequence the owner can weigh: the **data model/schema**, a
+   **public API/contract** others build against, the **auth/permission model**, the
+   persistence engine, service boundaries. (Being hard to reverse is only axis 1 — it
+   escalates when there's *also* a cost / risk / lock-in / product consequence. A pure
+   framework/library choice is a one-way door too, but usually has none, so it's
+   record-only below.) *(Hard floor: never take an irreversible/destructive action, and
+   never merge/deploy, without sign-off.)*
 2. **Spends money or usage** — adds a paid service, an ongoing cost, or materially
    increases usage. *(Hard floor: never silently spend.)*
 3. **Security / privacy / data-handling** — decides where personal/user data lives, who
@@ -93,9 +97,11 @@ or your confidence is low on something consequential.**
 
 **Do NOT escalate (record-only):** decisions that are architecturally significant but
 **engineering-internal** — framework/library/pattern choice, internal structure,
-build/deploy setup, internal decomposition — when they're reversible, cost nothing, and
-expose no data. The owner has no basis to choose and asking is just noise. **Record them
-in *Key decisions*; never interrupt the owner with them.**
+build/deploy setup, internal decomposition. A **framework/library choice is itself a
+one-way door**, but on its own it carries no trade-off the owner can weigh, so it lands
+here — it escalates **only** when it *also* adds lock-in (4) or cost (2), or carries a real
+product trade-off (5). For all of these the owner has no basis to choose and asking is just
+noise. **Record them in *Key decisions*; never interrupt the owner with them.**
 
 **Keep escalation proportionate:**
 
@@ -175,7 +181,7 @@ escalations were the touchpoints). Hand off; do **not** start `tasks` yourself.
 
 | Excuse | Reality |
 | --- | --- |
-| "I'll ask the owner which framework" | Pure-tech and reversible — decide it, record it. Don't nag. |
+| "I'll ask the owner which framework" | A routine framework pick carries no owner-weighable trade-off — decide it, record it. Escalate only if it adds lock-in or cost (triggers 2/4/5). |
 | "This decision is important, escalate it" | Important ≠ escalate. Two-axis gate: consequence **AND** owner-weighable. |
 | "I'll just add the paid service" | New cost is a hard floor — escalate. Never silently spend. |
 | "The data model is obvious" | The data model is a one-way door — if there's a real trade-off, escalate it. |
