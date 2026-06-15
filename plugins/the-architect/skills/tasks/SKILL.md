@@ -170,13 +170,19 @@ in). Never fabricate a review result.
 
 ### 6. Record the tasks gate → ready for Build
 
-Tasks is autonomous — like Plan, there is **no owner-approval gate**. Once self-review and
-(when present) `review-tasks` pass, record the tasks review gate so the producer's **Build**
-can begin:
+Tasks is autonomous — like Plan, there is **no owner-approval gate**. **Certify only a
+complete doc:** confirm the step-4 self-review actually passed — the capture-at-seam is
+fully applied (heading reframed, the agentic-worker line replaced by the build contract, no
+orphan `docs/superpowers/plans/` file, no leftover `{{…}}` or placeholder) — **before**
+recording the gate. `set-gate` writes `passed` from the **frontmatter alone** and cannot see
+a half-applied body, so certifying before the self-review passes would silently bless a
+broken doc. Once that and (when present) `review-tasks` pass, record the tasks review gate
+so the producer's **Build** can begin:
 
 ```bash
 set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
+WORK_ITEM="<the work-item directory name>"
 python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
   --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
 ```
