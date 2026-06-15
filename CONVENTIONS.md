@@ -16,6 +16,21 @@ roadmap phase that will own them — so deferral is explicit, not silent.
 elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (For the phases
 referenced in §7, see [ROADMAP.md](ROADMAP.md).)
 
+**Band posture — designed to be used together.** The heroes ship as *separately installable
+plugins* but form a *cohesively designed band*: within the loop they **assume each other's
+presence** and **cross-reference freely by qualified name** (`the-architect:plan`,
+`review-crew:review-plan`). We **design for the integrated band and do not compromise that
+design — or add machinery — to guarantee standalone-equivalence**; a hero used outside the
+band carries **no warranty** (an individual hero may still have standalone utility — e.g.
+review-crew's `review-code`, test-pilot's browser runs — but that is not a contract). A
+missing band member **degrades, it does not crash**: e.g. an absent `review-X` gate falls
+back to the producing skill's self-certification with a note (§3.1). That is
+"degrade-not-crash," **not** "degrade gracefully to full standalone" — we don't carry
+dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
+of "superpowers is an assumed dependency." *(How many install-units the band ships as —
+**packaging** — is a separate question from this posture and from the cast of characters;
+deferred, §7.)*
+
 ---
 
 ## 1. Vocabulary: the loop and its artifacts
@@ -571,3 +586,4 @@ that plugin means specifying its conventions here first. (Surfaced by the review
 | **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | **producer / coordinator · Phase 2a-plus / 4** |
 | **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **producer · Phase 2a-plus** |
 | **Plugin-version / band-compatibility** | cross-plugin `schemaVersion` skew handling; whether a minimum-compatible-band matrix exists (minimal fail-closed-on-unknown is already specified in §6.4) | **band-wide · later** |
+| **Plugin packaging / bundling** | how many install-units the band ships as. Lean: review-crew & test-pilot stay separate (genuine standalone value + already published). Open: whether to bundle the tightly-coupled, band-only orchestration (the-architect / producer / coordinator) into fewer plugins once their version-coupling is concrete. Decide with real coupling info, not blind. (Packaging ≠ the cast — see Band posture above; the brand is fixed.) | **band-wide · revisit when producer/coordinator land (~Phase 2a)** |
