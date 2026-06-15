@@ -142,14 +142,18 @@ finding with its taxonomy term.
 ## Verdict labels & mapping
 
 - `/review-crew:review-code`: `READY FOR PR` / `FIX BEFORE PR` / `MAJOR FIXES NEEDED`
-- `/review-crew:review-plan`: `PLAN READY` / `REVISE BEFORE IMPLEMENTING` / `MAJOR GAPS — RECONSIDER DESIGN`
+- `/review-crew:review-spec`: `SPEC READY` / `REVISE BEFORE OWNER REVIEW` / `MAJOR GAPS — RETURN TO DISCOVERY` *(advisory — the owner is the spec's gate authority; review-spec records no `passed`)*
+- `/review-crew:review-plan`: `PLAN READY` / `REVISE BEFORE TASKS` / `MAJOR GAPS — RECONSIDER DESIGN`
+- `/review-crew:review-tasks`: `TASKS READY` / `REVISE BEFORE BUILD` / `MAJOR GAPS — RECONSIDER PLAN`
 - `/review-crew:audit-debt`: no single verdict — a prioritized backlog
 
-Mapping (post-dedupe, post-filter counts):
-- 0 Critical, 0 Important → READY / PLAN READY
-- 0 Critical, ≥1 Important → FIX BEFORE PR / REVISE BEFORE IMPLEMENTING
-- ≥1 Critical → MAJOR FIXES NEEDED / MAJOR GAPS
-- Only Minor/Nit → READY / PLAN READY (informational)
+Mapping (post-dedupe, post-filter counts) — the same shape for every skill (the first / second / third label):
+- 0 Critical, 0 Important → the **READY** label (`READY FOR PR` / `SPEC READY` / `PLAN READY` / `TASKS READY`)
+- 0 Critical, ≥1 Important → the **REVISE** label (`FIX BEFORE PR` / `REVISE BEFORE OWNER REVIEW` / `REVISE BEFORE TASKS` / `REVISE BEFORE BUILD`)
+- ≥1 Critical → the **MAJOR** label
+- Only Minor/Nit → the READY label (informational)
+
+The trio's **certifying** skills (`review-plan`, `review-tasks`) map the verdict onto the doc's `gates.review` via the-architect's lib: a READY verdict → `passed`; any REVISE/MAJOR verdict, or a deliberately-skipped blocking finding, → `changes-requested`. `review-spec` is **advisory** and records no gate — the owner approves the spec in Discovery.
 
 ## Where calibration comes from (read these, in order)
 

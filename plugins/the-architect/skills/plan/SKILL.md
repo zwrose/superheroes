@@ -303,36 +303,51 @@ caught being a *wrong* one.
 ### 6. review-plan (automated gate)
 
 Run review-crew's **`review-plan`** on the authored plan and address its findings — this is
-the **external-feedback** leg; self-review alone cannot replace it. **If `review-plan` is
-not available in this project**, say so and proceed (self-review stands in). Never fabricate
-a review result.
+the **external-feedback** leg; self-review alone cannot replace it. When it runs, **`review-plan`
+itself records the plan's review gate** (`passed` when clean, `changes-requested` when blocking
+findings remain) — so it, not Plan, is the gate's writer. **If `review-plan` is not available
+in this project**, say so and proceed (self-review stands in); the gate is then self-certified
+in step 7. Never fabricate a review result.
 
 ### 7. Record the plan gate → ready for Tasks
 
-Once self-review and (when present) `review-plan` pass, record the plan's review gate so the
-autonomous **Tasks** phase can begin:
+The plan's `gates.review` is the machine-readable signal `tasks` reads (step 1 there). **Who
+writes it depends on whether `review-plan` ran:**
+
+- **`review-plan` ran (step 6) → it already recorded the gate.** Do **not** overwrite it. If
+  it recorded `changes-requested`, you are not done: address the findings and **re-run
+  `review-plan`** (loop back to step 6) until it records `passed` — never advance on
+  `changes-requested`.
+- **`review-plan` is unavailable (degraded mode) → Plan self-certifies** the gate after a
+  clean self-review, because nothing else will write it.
+
+Self-certification is safe **only** because Plan is autonomous + escalate-only (the
+escalations were the owner's touchpoints; there is no owner to approve the *how*; the real
+human gate is the final PR). This is the deliberate asymmetry with `spec`, where the **owner**
+is the gate authority and the agent must never self-approve.
+
+Record it idempotently — **set `passed` only when the gate is still `pending`** (no
+`review-plan` wrote it), so a `review-plan` verdict is never clobbered:
 
 ```bash
 set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
-  --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+  --doc plan --work-item "$WORK_ITEM" --root "$ROOT")
+if [ "$CURRENT" = pending ]; then
+  # degraded mode: review-plan didn't run — self-certify after a clean self-review
+  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+    --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+else
+  echo "gate already recorded by review-plan ($CURRENT) — not overwriting"
+  [ "$CURRENT" = passed ] || { echo "review-plan requested changes — address them and re-run review-plan; do not advance" >&2; exit 1; }
+fi
 ```
 
-This writes `gates.review: passed` (and derives `status: approved`) — the machine-readable
-signal `tasks` checks (step 1 there reads it). It is a **self-certification** of an
-autonomous phase, **not** the spec's owner-authority gate: Plan is autonomous + escalate-only
-(the escalations were the owner's touchpoints), there is no owner to approve the *how*, and
-the real human gate is the final PR. This is the deliberate asymmetry with `spec` — where the
-**owner** is the gate authority and the agent must never self-approve. When review-crew's
-`review-plan` is wired, **it** owns this write (and can set `changes-requested` to block);
-until then, Plan records it after a clean self-review — exactly as `tasks` self-certifies its
-own gate, and as discovery records the spec gate in degraded mode. Run it only **after** the
-review/self-review actually pass, never before.
-
-The work-item is now ready for the **Tasks** phase. Hand off; do **not** start `tasks`
-yourself.
+Run the self-certify branch only **after** the self-review actually passes, never before. The
+work-item is ready for **Tasks** once the gate reads `passed`. Hand off; do **not** start
+`tasks` yourself.
 
 ## Rationalization table
 
