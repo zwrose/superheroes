@@ -1,14 +1,14 @@
 <!-- review-profile · managed by review-crew · schema 1 -->
 <!-- provenance — do not hand-edit this block; everything below it is yours to edit -->
 schema: 1
-plugin: review-crew@0.2.0
-rubric-version: 2
+plugin: review-crew@0.3.0
+rubric-version: 3
 generated: 2026-06-10
-updated: 2026-06-10
+updated: 2026-06-15
 status: stable
 nudge-ack: {}
 signals:
-  dep-set: [pytest]
+  dep-set: [pytest, jsonschema, pyyaml]
   default-branch: main
   forge: github
 <!-- end provenance -->
@@ -20,7 +20,7 @@ Claude Code plugin marketplace (markdown skills/agents + Python lib helpers); th
 single-user
 
 ## Verify
-command: python3 .github/scripts/validate_marketplace.py && python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ -q
+command: python3 .github/scripts/validate_marketplace.py && python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
 
 ## Scope exclusions
 - No deployed service, API surface, or end-user data: multi-tenant/IDOR/SSRF/rate-limiting classes do not apply. Security scope = secrets committed to the repo and unsafe shell in bundled scripts/snippets.

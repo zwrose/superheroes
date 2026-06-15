@@ -216,6 +216,18 @@
       "dimension": "Test",
       "category": "trap-liveness-smoke",
       "action": "fix"
+    },
+    {
+      "id": "2cf3dff29bb8",
+      "dimension": "Code",
+      "category": "unbound-variable-set-u",
+      "action": "fix"
+    },
+    {
+      "id": "8350443d87b3",
+      "dimension": "Failure-Mode",
+      "category": "silent-self-certification",
+      "action": "fix"
     }
   ]
 }
