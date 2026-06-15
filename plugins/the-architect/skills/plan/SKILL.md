@@ -17,18 +17,45 @@ is **no mandatory owner approval gate**: the escalations are the owner's touchpo
 the PR is the final human gate later. The plan doc's audience is the **build** (agents /
 engineers), so it may use technical language — unlike the spec.
 
+**The loop resolves; it does not park.** A finished plan carries **no open questions**.
+Every question routes to a resolution: an owner call → **escalate** (step 3); a genuine
+unknown → a **Risk with a contingency**, de-risked first; a detail that's only clear
+in-code → deferred to **Tasks**; a true blocker (the spec can't be met as-is) → **escalate
+or loop back** to the owner/spec. You do not hand off a plan with a decision left open.
+
 **Precondition:** an approved `spec` exists for the work-item. Plan builds on it; do not
 plan from an unapproved or absent spec.
+
+## Design principles (the durable ones — apply throughout)
+
+1. **State the trade-off, not just the choice.** Every non-trivial decision names what it
+   optimizes for, the alternative it beat (including "use what's already here"), and the
+   **downside being accepted**. A decision with no named downside is unexamined.
+2. **Calibrate rigor to reversibility.** One-way doors (data model, public contracts, auth
+   model, persistence) get deliberate care; two-way doors get a fast reasonable pick.
+   Actively turn one-way doors into two-way ones (a seam, an adapter, a flag).
+3. **Boring by default; novelty must earn its place.** Prefer proven tech and existing
+   repo patterns. No microservices / event-sourcing / CQRS / queue / heavy framework
+   unless a *present* constraint forces it. New tech states its failure modes.
+4. **Deep modules, low coupling.** Simple interfaces over powerful implementations; high
+   cohesion; push complexity down rather than out to callers.
+5. **Reliability, scalability, maintainability are explicit** — never just "does it work."
+   Name the likely faults and how they're tolerated; the load and the target; how it's
+   operated, observed, and rolled back.
+6. **Separate essential from accidental complexity.** Justify every layer. Where you can,
+   design an error *out of existence* (idempotent delete, empty-not-error) instead of
+   handling it.
+7. **Grow it; don't big-bang it.** Validate the riskiest, most-irreversible parts earliest.
 
 ## Checklist
 
 Create a TodoWrite item for each step:
 
 1. **Load the approved spec + ground in the codebase & calibration**
-2. **Design the technical approach** (autonomous)
+2. **Design the technical approach** (the 9-move method, autonomous)
 3. **Apply the escalation rubric** — escalate the consequential calls, record the rest
-4. **Author the plan** via the template
-5. **Self-review**
+4. **Author the plan** via the template (right-sized)
+5. **Self-review** (design quality + the failure-mode checklist)
 6. **review-plan** (automated gate; graceful degradation)
 7. **Ready for Tasks**
 
@@ -36,30 +63,57 @@ Create a TodoWrite item for each step:
 
 ### 1. Load the approved spec + ground
 
-- The spec is at `docs/superheroes/<work-item>/spec.md` (the **work-item slug is the
-  directory name**). Read it fully: purpose, who it's for, the functional requirements,
-  the significant unhappy paths, non-functional requirements, constraints, the UI/UX
-  handoff, `size`, and the definition of done.
-- **Confirm it's approved** (the owner signed off / `gates.review` passed). If it isn't,
-  stop — Plan builds on an approved spec.
-- **Ground the approach in reality:** explore the codebase (existing stack, patterns,
-  conventions in `CLAUDE.md`) and read the calibration profile / `patterns.md` when
-  present (the project's stack, threat model, and current best-practice opinions). The
-  plan must fit the **existing** project, not a green-field assumption.
+Ground before you design — **bake in the durable, look up the volatile.**
 
-### 2. Design the technical approach (autonomous)
+- **Read the spec** at `docs/superheroes/<work-item>/spec.md` (the **work-item slug is the
+  directory name**): purpose, who it's for, functional requirements, significant unhappy
+  paths, non-functional requirements, constraints, the UI/UX handoff, `size`, definition
+  of done. **Confirm it's approved** (`gates.review` passed / owner signed off); if not,
+  stop.
+- **Read the calibration layer as binding constraints, not suggestions:** `CLAUDE.md`, the
+  profile / `patterns.md` (stack, threat model, current best-practice opinions), and any
+  prior decisions/ADRs. The plan must fit the project these describe.
+- **Explore the actual codebase before designing:** read the files the spec touches, grep
+  the relevant symbols, follow imports to neighbours. Identify the layering, error-handling,
+  naming, and test conventions **actually in use**, and design to match them — reuse
+  existing abstractions over inventing new ones.
+- **Look up the volatile** (only the unfamiliar / version-specific): fetch current docs for
+  any external library/framework/API the design will lean on (e.g. via
+  `mcp__plugin_context7_context7__query-docs`). Do **not** trust training-data memory for
+  APIs, and don't over-research stable stdlib basics.
 
-Design: the overall approach; the architecture/shape; components and their interfaces;
-data flow and the data model; how each spec requirement (functional **and**
-non-functional, plus the unhappy paths) is met; and the risks. Reference the spec's Claude
-Design handoff when describing how the UI gets built.
+### 2. Design the technical approach — the method
 
-**Default = ACT.** Decide the *how* yourself — this is automated away from the owner. You
-do **not** ask about routine technical choices (framework, libraries, file layout,
-internal patterns); decide them and record them in *Key decisions*. Prefer the **simplest**
-approach that meets the spec (YAGNI — nothing the spec doesn't justify), and prefer
-**reversible / standard / swappable** choices (wrap external dependencies behind a clean
-boundary) so fewer decisions are one-way doors.
+Work these moves in order. They front-load what's easy to skip (uncertainty, alternatives,
+non-functional fit). Reference the spec's Claude Design handoff when describing the UI.
+
+1. **Frame.** Restate scope, the goals, and the **non-goals** (things that could be goals
+   but are deliberately excluded). Extract the spec's non-functional requirements explicitly.
+2. **Find the risk first.** Name the single riskiest or most-uncertain element (unfamiliar
+   tech, external dependency, hard integration, perf unknown) and design or de-risk *it*
+   first — a spike or a thin end-to-end slice if needed.
+3. **Design it twice.** Produce **at least two materially different** approaches (not minor
+   variants), each grounded in the codebase and sketched far enough to expose its
+   trade-offs. *(Highest-leverage move — do not commit to the first idea.)*
+4. **Choose, with explicit trade-offs.** Pick one and record it ADR-style in *Key
+   decisions*: context → choice → rejected alternatives → what it achieves → **accepted
+   downside**; classify it reversible vs one-way door. **Apply the escalation rubric
+   (step 3) here** — the one-way doors with an owner-weighable trade-off are your triggers.
+5. **Pin the contracts before the internals.** Specify the public signatures, endpoints,
+   schemas, and error cases, and how they fit existing interfaces — *at design altitude*,
+   before describing implementation.
+6. **Validate against the NFRs.** Walk each non-functional requirement through the design;
+   confirm it's met; where improving one attribute degrades another, justify the balance.
+7. **Pre-mortem.** "It's six months out and this failed in production — why?" List the top
+   failure modes (dependency down, partial failure, migration/rollback, concurrency,
+   resource exhaustion) and the mitigation for each; cover observability and rollback.
+8. **Prune (YAGNI).** Drop anything not traceable to a spec requirement. Simplest design
+   that meets the spec and its NFRs.
+9. **Sequence** the work so the riskiest / most-irreversible decisions are validated first.
+
+**Two hard gates** (the self-review checks these): at least **two materially different
+options** existed before you recorded a choice; **every recorded decision names an accepted
+downside.**
 
 ### 3. The escalation rubric — when to pause for the owner
 
@@ -144,32 +198,75 @@ python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" frontmatter \
 ```
 
 Fill `${CLAUDE_PLUGIN_ROOT}/templates/plan.md`: replace `{{frontmatter}}` with the emitted
-block, set the title, fill every section, and **strip the `<!-- AUTHOR GUIDANCE … -->`
-comment**. Map every spec requirement in *How the requirements are met*; log every
+block, set the title, fill the sections, and **strip the `<!-- AUTHOR GUIDANCE … -->`
+comments**. Map every spec requirement in *How the requirements are met*; log every
 significant decision (escalated or not) with its reversibility in *Key decisions*. Write to
 `$PLAN`.
 
-### 5. Self-review
+**Right-size to the inherited `size`** — effort proportional to the work:
 
-Look at the written plan with fresh eyes; fix inline:
+- **small** — fill the core sections (Overview, Goals & non-goals, Architecture, Components
+  & interfaces, How-requirements-met, Key decisions, Risks). The situational sections
+  (Cross-cutting, Rollout & migration, Dependencies & assumptions) collapse to a line or
+  **"N/A — because …"**. Aim for ~one page.
+- **medium** — the above filled out, plus a substantive Cross-cutting section, Rollout &
+  migration if anything is stateful/user-facing, and Dependencies & assumptions.
+- **large** — every section substantive: full alternatives with trade-offs, the full
+  operability cluster, rollback validation, and the dependency list.
 
-- **Coverage both ways:** every spec requirement (functional, non-functional, unhappy
-  paths, constraints) is addressed, and nothing in the plan lacks a spec basis (no
-  gold-plating / scope creep).
-- **Sound + minimal:** the simplest approach that meets the spec; reversible/standard
-  choices preferred.
-- **Decisions recorded:** every significant decision is in *Key decisions* with its
-  reversibility; every escalation and its outcome is captured.
-- **No missed escalation:** scan for any hard-to-reverse **and** owner-weighable decision
-  you decided silently — that's an escalation you missed; go back and escalate it.
-- **Placeholders & guidance:** no `{{…}}` or leftover `<!-- AUTHOR GUIDANCE … -->` comment
-  remains.
+A situational section is **always present as a heading** — you mark it "N/A — because …"
+rather than silently dropping it, so a concern is recorded as considered, not forgotten.
+
+### 5. Self-review (design quality + failure-mode checklist)
+
+Look at the written plan with fresh eyes; fix inline. This is where a *plausible* plan is
+caught being a *wrong* one.
+
+**Design-quality hard gates**
+- [ ] **≥2 materially different options** were weighed before each significant choice.
+- [ ] **Every recorded decision names its accepted downside** (not just the upside).
+
+**Grounded & verified (the LLM failure-mode guards)**
+- [ ] Significant decisions cite a concrete file/symbol they match or depart from; no
+  citation → marked an assumption. Designed from the real codebase, not in a vacuum.
+- [ ] **Every new package/library is confirmed to exist** and every API/param/config key is
+  confirmed against the **installed version's** docs — not plausible-sounding memory. A
+  verification miss is a **hard stop**, not a footnote. (Package hallucination is real.)
+- [ ] Matches the project's actual stack and conventions; reuses existing abstractions.
+
+**Simple, honest, complete**
+- [ ] Solves only the stated task — no abstraction without real call sites, no new
+  dependency without a one-line justification; a subtraction pass was done.
+- [ ] Assumptions are listed; if the spec's implied approach is wrong, the plan says so
+  (correctness over agreement).
+- [ ] Failure modes and an explicit security/privacy pass are covered (not happy-path only).
+
+**Good-doc quality markers**
+- [ ] **Trade-offs present, not an implementation manual** — every significant choice has a
+  *why* and the alternatives it beat.
+- [ ] **Non-goals stated;** scope boundary explicit.
+- [ ] **Operability answered:** "how does on-call debug this at 2am?" and "how do we turn it
+  off / roll back?" — or marked N/A with a reason.
+- [ ] **Right altitude:** no pasted full schemas, full code, test cases, or dated rollout
+  steps — those belong to Tasks. Strategy yes, steps no.
+- [ ] **Right-sized** for `size`; situational sections collapsed to "N/A — because …" rather
+  than padded or silently dropped.
+- [ ] **Reader test:** a build agent could implement from this and not be surprised.
+
+**Coverage & cleanup**
+- [ ] Every spec requirement (functional, NFR, unhappy path, constraint) is addressed, and
+  nothing in the plan lacks a spec basis.
+- [ ] **No open questions left parked** — each is escalated, made a Risk-with-contingency,
+  deferred to Tasks, or looped back; no missed escalation (a hard-to-reverse **and**
+  owner-weighable decision you decided silently).
+- [ ] No `{{…}}` or leftover `<!-- AUTHOR GUIDANCE … -->` comment remains.
 
 ### 6. review-plan (automated gate)
 
-Run review-crew's **`review-plan`** on the authored plan and address its findings. **If
-`review-plan` is not available in this project**, say so and proceed — the self-review
-(step 5) stands in. Never fabricate a review result.
+Run review-crew's **`review-plan`** on the authored plan and address its findings — this is
+the **external-feedback** leg; self-review alone cannot replace it. **If `review-plan` is
+not available in this project**, say so and proceed (self-review stands in). Never fabricate
+a review result.
 
 ### 7. Ready for Tasks
 
@@ -181,10 +278,12 @@ escalations were the touchpoints). Hand off; do **not** start `tasks` yourself.
 
 | Excuse | Reality |
 | --- | --- |
+| "First approach is fine, no need for a second" | Design it twice — ≥2 materially different options before you commit. It's the highest-leverage move. |
+| "This package looks right" | Looks right ≠ exists. Verify every package/API against the installed version's docs. Hard stop on a miss. |
 | "I'll ask the owner which framework" | A routine framework pick carries no owner-weighable trade-off — decide it, record it. Escalate only if it adds lock-in or cost (triggers 2/4/5). |
 | "This decision is important, escalate it" | Important ≠ escalate. Two-axis gate: consequence **AND** owner-weighable. |
 | "I'll just add the paid service" | New cost is a hard floor — escalate. Never silently spend. |
-| "The data model is obvious" | The data model is a one-way door — if there's a real trade-off, escalate it. |
-| "I'll escalate each call as I hit it" | Batch them into one moment; serial interrupts erode trust into rubber-stamping. |
-| "I'll design beyond the spec to be safe" | YAGNI. Nothing the spec doesn't justify; the plan covers the spec, no more. |
-| "Owner approved the spec, get the plan signed off too" | Plan is autonomous + escalate-only — no mandatory gate; escalations are the touchpoint. |
+| "I'll design beyond the spec to be safe" | YAGNI. Nothing the spec doesn't justify; prune to the spec. |
+| "I'll leave that as an open question" | The loop resolves, it doesn't park — escalate it, make it a Risk-with-contingency, or defer it to Tasks. |
+| "Small change, I'll skip the situational sections" | Right-size, don't drop — mark them "N/A — because …" so the concern is recorded as considered. |
+| "Self-review passed, it's done" | Self-review isn't verification — `review-plan` is the external feedback that catches what you can't. |
