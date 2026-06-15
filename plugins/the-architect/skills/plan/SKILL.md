@@ -63,7 +63,7 @@ Create a TodoWrite item for each step:
 4. **Author the plan** via the template (right-sized)
 5. **Self-review** (design quality + the failure-mode checklist)
 6. **review-plan** (automated gate; graceful degradation)
-7. **Ready for Tasks**
+7. **Record the plan gate → ready for Tasks**
 
 ## The steps
 
@@ -307,11 +307,32 @@ the **external-feedback** leg; self-review alone cannot replace it. **If `review
 not available in this project**, say so and proceed (self-review stands in). Never fabricate
 a review result.
 
-### 7. Ready for Tasks
+### 7. Record the plan gate → ready for Tasks
 
-Plan authored + review-plan passed → the work-item is ready for the **Tasks** phase.
-Plan is autonomous + escalate-only: there is no separate owner-approval gate (the
-escalations were the touchpoints). Hand off; do **not** start `tasks` yourself.
+Once self-review and (when present) `review-plan` pass, record the plan's review gate so the
+autonomous **Tasks** phase can begin:
+
+```bash
+set -euo pipefail
+ROOT=$(git rev-parse --show-toplevel)
+WORK_ITEM="<the work-item directory name>"
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+  --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+```
+
+This writes `gates.review: passed` (and derives `status: approved`) — the machine-readable
+signal `tasks` checks (step 1 there reads it). It is a **self-certification** of an
+autonomous phase, **not** the spec's owner-authority gate: Plan is autonomous + escalate-only
+(the escalations were the owner's touchpoints), there is no owner to approve the *how*, and
+the real human gate is the final PR. This is the deliberate asymmetry with `spec` — where the
+**owner** is the gate authority and the agent must never self-approve. When review-crew's
+`review-plan` is wired, **it** owns this write (and can set `changes-requested` to block);
+until then, Plan records it after a clean self-review — exactly as `tasks` self-certifies its
+own gate, and as discovery records the spec gate in degraded mode. Run it only **after** the
+review/self-review actually pass, never before.
+
+The work-item is now ready for the **Tasks** phase. Hand off; do **not** start `tasks`
+yourself.
 
 ## Rationalization table
 

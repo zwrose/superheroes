@@ -1,0 +1,205 @@
+---
+name: tasks
+description: Use after a `plan` is approved, to turn it into the bite-sized, test-first executable `tasks` for a work-item — the checkbox TDD steps the build follows. This is superheroes' Tasks phase: it WRAPS superpowers `writing-plans` (the engine that decomposes the plan into steps) and owns the superheroes definition-doc around it. In a superheroes project, route plan-decomposition HERE rather than invoking `writing-plans` standalone, so the output is captured into `docs/superheroes/<work-item>/tasks.md` and execution stays with the producer's Build. Runs LARGELY AUTONOMOUSLY (like Plan) and produces the `tasks` definition-doc, then runs review-tasks. Not for requirements (that is `discovery`) or technical approach (that is `plan`); it does NOT execute the steps (that is Build).
+---
+
+# Tasks
+
+Turn the approved **`plan`** into the **`tasks`** definition-doc: the bite-sized,
+test-first, executable steps the build follows. This is the last of the loop's front half
+(Discovery → Plan → **Tasks** → Build → Verify → Integrate).
+
+**Tasks wraps superpowers `writing-plans`.** That skill is the engine that decomposes a
+plan into checkbox TDD tasks; this skill owns the superheroes **definition-doc** around it
+— the §3.1 frontmatter, the build contract, the review gate — and the **capture-at-seam**
+so the output lands as `docs/superheroes/<work-item>/tasks.md`, not an orphan
+`docs/superpowers/plans/` file. *Own the interface, delegate the labor.*
+
+**Tasks runs autonomously**, like Plan. Discovery is owner-co-authored (the *what*); Plan
+and Tasks are the autonomous *how*. There is **no owner-approval gate** — the escalations
+happened in Plan, and the PR is the final human gate later. Tasks does **not** execute the
+steps: execution is the **producer's Build** phase, governed by the build contract. Tasks
+stops at a reviewed, gated tasks doc that is ready for Build.
+
+**The loop resolves; it does not park.** A finished tasks doc carries **no placeholders** —
+no "TBD", no "add error handling", no "similar to Task N". Every step is concrete and
+executable, or it isn't done. A gap in the plan surfaces as a loop-back to `plan`, never as
+a vague task.
+
+<HARD-GATE>
+**Precondition: the plan is approved.** Tasks builds on an approved `plan`; never decompose
+an unapproved or absent one. **Verify it programmatically** (step 1), don't just assert it:
+`gates.review: passed` on the plan is the machine-readable signal (set by `review-plan`, or
+by the plan self-certifying its autonomous review when review-plan is absent); a `pending`
+or `changes-requested` plan is **not** approved — stop.
+
+**And do NOT execute the tasks** — no code, no worktree, no `subagent-driven-development`,
+no `finishing-a-development-branch`. That is the producer's **Build**. Tasks produces the
+doc and hands off.
+</HARD-GATE>
+
+## Checklist
+
+Create a TodoWrite item for each step:
+
+1. **Load the approved plan + verify its gate + ground**
+2. **Generate the bite-sized tasks** via superpowers `writing-plans` (the engine)
+3. **Capture-at-seam → author the `tasks` definition-doc** (frontmatter + build contract + body)
+4. **Self-review**
+5. **review-tasks** (automated gate; graceful degradation)
+6. **Record the tasks gate → ready for Build**
+
+## The steps
+
+### 1. Load the approved plan + verify its gate + ground
+
+- **Read the plan** at `docs/superheroes/<work-item>/plan.md` (the **work-item slug is the
+  directory name**): approach, architecture, components & interfaces, data flow, key
+  decisions, risks. **Read the spec too** (the plan's parent,
+  `docs/superheroes/<work-item>/spec.md`) — the functional requirements, significant unhappy
+  paths, NFRs, and definition of done are what the tasks must ultimately satisfy.
+- **Verify the plan is approved — programmatically, not by eye** (the HARD GATE above). Read
+  `gates.review` on the **plan** doc and stop unless it is `passed`:
+
+  ```bash
+  set -euo pipefail
+  ROOT=$(git rev-parse --show-toplevel) || { echo "not in a git repo" >&2; exit 1; }
+  WORK_ITEM="<the work-item directory name>"
+  REVIEW=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+    --doc plan --work-item "$WORK_ITEM" --root "$ROOT") \
+    || { echo "no readable plan for $WORK_ITEM — run plan first" >&2; exit 1; }
+  [ "$REVIEW" = passed ] || { echo "plan not approved (gates.review=$REVIEW) — stop; it needs review-plan, or the plan's own self-certification, first" >&2; exit 1; }
+  ```
+
+  `gates.review: passed` on the plan is written by review-crew's `review-plan` when it runs,
+  and — when review-plan isn't wired yet — by the plan **self-certifying** its autonomous
+  review (plan skill, final step). Plan is autonomous-by-design, so its gate is a
+  self-certification, not an owner approval; either way `passed` means the plan's review
+  completed. Tasks builds only on an approved plan.
+- **Ground for an accurate decomposition.** `writing-plans` writes exact file paths and
+  real code, so the inputs must be real: read `CLAUDE.md` / the calibration layer, and
+  explore the actual files the plan touches (grep the symbols, follow imports, note the
+  test conventions) so the tasks reference real paths and match existing patterns.
+
+### 2. Generate the bite-sized tasks via superpowers `writing-plans`
+
+Invoke the superpowers **`writing-plans`** skill — it is the engine that turns the plan into
+bite-sized, test-first checkbox tasks. **Drive it as a wrapped sub-skill**, with three
+overrides so its output becomes a superheroes definition-doc rather than a standalone
+superpowers plan:
+
+- **Input = the approved `plan`** (and the spec it satisfies). The plan is the source of
+  truth: `writing-plans` decomposes its approach into steps — it does **not** re-decide the
+  architecture. If decomposition exposes a real gap or contradiction in the plan, **loop
+  back to `plan`**; don't paper over it with a vague task.
+- **Save location = our tasks path.** `writing-plans` defaults to
+  `docs/superpowers/plans/…`; override it to write at
+  `docs/superheroes/<work-item>/tasks.md` (it explicitly allows a location override). This
+  is the **capture-at-seam** — no orphan `superpowers/plans` file. Step 3 then reframes the
+  file in place.
+- **Do NOT perform its Execution Handoff.** `writing-plans` ends by offering to execute
+  (subagent-driven-development / executing-plans). **Suppress that.** In superheroes,
+  execution is the **producer's Build** phase, governed by the build contract — not
+  something Tasks launches. When `writing-plans` reaches that handoff, return here instead.
+
+Honor `writing-plans`' quality bar — it **is** the tasks-doc quality contract: bite-sized
+one-action steps; exact file paths; complete code in every code step; exact test commands
+with expected output; frequent commits; **no placeholders** (no "TBD", "add validation",
+"handle edge cases", "similar to Task N"); the type-consistency self-check across tasks.
+
+### 3. Capture-at-seam → author the `tasks` definition-doc
+
+The tasks doc **reuses the plan's frozen work-item slug** (never mint a new one) and
+inherits its `size`. Emit the §3.1 frontmatter via the lib (`docType: tasks`, parent = the
+plan) and wrap the captured body:
+
+```bash
+set -euo pipefail
+ROOT=$(git rev-parse --show-toplevel)
+WORK_ITEM="<the work-item directory name>"
+SIZE=$(grep -m1 '^size:' "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" | sed 's/^size: *//')
+TASKS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc tasks --root "$ROOT")
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" frontmatter \
+  --doc tasks --work-item "$WORK_ITEM" --size "$SIZE" --parent-item "$WORK_ITEM"
+```
+
+Assemble `$TASKS` from `${CLAUDE_PLUGIN_ROOT}/templates/tasks.md`:
+
+- Replace `{{frontmatter}}` with the emitted block; set the `# {{Title}} — Tasks` title
+  (this **reframes** `writing-plans`' `# … Implementation Plan` heading).
+- **Keep the `writing-plans` body verbatim** below the build contract: its **Goal /
+  Architecture / Tech Stack** lines, then every `### Task N` checkbox step. CONVENTIONS §3.2
+  pins the tasks body as the `writing-plans` body verbatim — don't paraphrase the tasks.
+- **Replace** `writing-plans`' agentic-worker line (`> **For agentic workers:** REQUIRED
+  SUB-SKILL: …subagent-driven-development…`) **with the build contract** from the template.
+  The SDD clips (worktree **pre-verified, not created**; **no** `finishing-a-development-branch`)
+  are the **producer's Build** to invoke — recorded here as contract, not launched here.
+- Fill the build-contract `{{size}}`; **strip every `<!-- AUTHOR GUIDANCE … -->` comment**.
+
+The result is a single `docs/superheroes/<work-item>/tasks.md`: frontmatter + title + build
+contract + the verbatim `writing-plans` body. If `writing-plans` left a file anywhere else,
+delete it — there is one tasks doc, in the work-item directory.
+
+### 4. Self-review
+
+Look at the written tasks doc with fresh eyes; fix inline (no re-review loop):
+
+- **Placeholders & guidance:** any `{{…}}`, "TBD", "TODO", "add error handling", "similar to
+  Task N", or leftover `<!-- AUTHOR GUIDANCE … -->`? Remove it — `writing-plans`'
+  No-Placeholders bar is non-negotiable; every code step shows the actual code.
+- **Type consistency:** do types, signatures, and names used in later tasks match what
+  earlier tasks defined? (`clearLayers()` in Task 3 vs `clearFullLayers()` in Task 7 is a
+  bug.)
+- **Coverage:** every plan component/interface and every spec requirement (functional, NFR,
+  unhappy path) maps to at least one task; nothing in the tasks lacks a plan/spec basis. A
+  spec requirement with no task → add the task (or loop back to `plan` if the plan never
+  covered it).
+- **Frontmatter & seam:** `docType: tasks`, `parent` is the **plan**, the slug is **reused**
+  (not re-minted), `size` is **inherited** from the plan; the title is reframed; the
+  agentic-worker line is replaced by the build contract; there is **no orphan** file under
+  `docs/superpowers/plans/`.
+- **Altitude:** these are executable steps (exact paths, commands, code) — not plan-level
+  strategy restated. Strategy stayed in the plan.
+
+### 5. review-tasks (automated gate)
+
+Run review-crew's **`review-tasks`** on the authored tasks doc and address its findings —
+this is the **external-feedback** leg; self-review alone cannot replace it. **If
+`review-tasks` is not available in this project**, say so and proceed (self-review stands
+in). Never fabricate a review result.
+
+### 6. Record the tasks gate → ready for Build
+
+Tasks is autonomous — like Plan, there is **no owner-approval gate**. Once self-review and
+(when present) `review-tasks` pass, record the tasks review gate so the producer's **Build**
+can begin:
+
+```bash
+set -euo pipefail
+ROOT=$(git rev-parse --show-toplevel)
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+  --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+```
+
+This writes `gates.review: passed` (and derives `status: approved`) — the machine-readable
+signal the producer's Build checks. This is a **self-certification** of an autonomous phase,
+**not** the spec's owner-authority gate: there is no owner to approve the *how*, and the
+real human gate is the final PR. When review-crew's `review-tasks` is wired, **it** owns this
+write (and can set `changes-requested` to block); until then, Tasks records it after a clean
+self-review — exactly as Plan self-certifies its own gate, and as discovery records the spec
+gate in degraded mode.
+
+The work-item is now ready for the **Build** phase. Do **not** start the build or
+`subagent-driven-development` yourself — hand off; the producer/owner drives the transition.
+
+## Rationalization table
+
+| Excuse | Reality |
+| --- | --- |
+| "I'll just use `writing-plans` directly" | In a superheroes project the Tasks phase wraps it — route through `tasks` so the body is captured into the definition-doc and the producer owns execution. |
+| "Let me start executing the tasks" | Execution is the producer's **Build** (subagent-driven-development, worktree, finishing-a-branch). Tasks stops at a reviewed, gated doc. |
+| "`writing-plans` saved to `docs/superpowers/plans/`" | Override its location to our tasks path (capture-at-seam); leave no orphan file. |
+| "I'll re-decide the approach while decomposing" | The plan is the source of truth — Tasks decomposes it, it doesn't re-design. A real plan gap loops back to `plan`. |
+| "I'll leave a TBD in this task" | No placeholders — `writing-plans`' hard bar. Every step is concrete and executable, or it's not done. |
+| "Plan looks approved to me" | Verify `gates.review: passed` programmatically; a `pending`/`changes-requested` plan is not approved. |
+| "Self-review passed, it's done" | `review-tasks` is the external feedback self-review can't replace. |

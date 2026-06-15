@@ -260,3 +260,29 @@ def test_cli_set_then_read_gate(tmp_path, capsys):
     rc = DD.main(["definition_doc.py", "read-gate", "--doc", "spec", "--work-item", WI,
                   "--root", str(tmp_path)])
     assert rc == 0 and capsys.readouterr().out.strip() == "passed"
+
+
+@pytest.mark.parametrize("doc_type,wi,parent", [
+    ("plan", "plan-x-aaa111", WI),
+    ("tasks", "tasks-x-bbb222", {"workItem": "plan-x-aaa111", "docType": "plan"}),
+])
+def test_cli_set_then_read_gate_for_autonomous_doctypes(tmp_path, capsys, doc_type, wi, parent):
+    # Plan and Tasks are autonomous: each self-certifies its OWN gate (no owner authority,
+    # unlike spec) so the next phase doesn't deadlock. That drives `set-gate --doc plan` /
+    # `--doc tasks` — prove the gate CLI is doc-type-agnostic, not spec-only, and that it
+    # round-trips to passed + derives an approved, schema-valid frontmatter.
+    fm = DD.frontmatter(doc_type, wi, size="small", parent=parent,
+                        created="2026-06-14", updated="2026-06-14")
+    d = tmp_path / "docs" / "superheroes" / wi
+    d.mkdir(parents=True)
+    (d / (doc_type + ".md")).write_text(DD.render_frontmatter(fm) + "\n# t\n", encoding="utf-8")
+    rc = DD.main(["definition_doc.py", "set-gate", "--doc", doc_type, "--work-item", wi,
+                  "--review", "passed", "--root", str(tmp_path)])
+    assert rc == 0
+    capsys.readouterr()
+    rc = DD.main(["definition_doc.py", "read-gate", "--doc", doc_type, "--work-item", wi,
+                  "--root", str(tmp_path)])
+    assert rc == 0 and capsys.readouterr().out.strip() == "passed"
+    parsed = _parse_frontmatter((d / (doc_type + ".md")).read_text(encoding="utf-8"))
+    jsonschema.validate(parsed, SCHEMA)
+    assert parsed["gates"]["review"] == "passed" and parsed["status"] == "approved"
