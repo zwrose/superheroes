@@ -21,7 +21,8 @@ have presented the requirements (the **what**) and the owner has explicitly
 approved them. And do NOT consider Discovery finished until the owner gives their
 final approval of the written spec (step 8) — review-crew advises, the owner
 decides. A spec can be short; it cannot be skipped, and its gates cannot be
-self-approved.
+self-approved — you may *record the owner's* explicit approval (step 8), but never
+approve on your own behalf.
 </HARD-GATE>
 
 ## Checklist
@@ -183,17 +184,39 @@ regardless. Never fabricate a review result.
 
 ### 8. Owner review & final approval (terminal gate)
 
-Ask the owner to review the written, review-passed spec:
+Ask the owner to review the written spec. **Tell them the truth about whether an
+automated review ran** — never claim a review that didn't happen:
 
-> "Spec written to `docs/superheroes/<work-item>/spec.md` and through review.
-> Please review it and tell me if you want any changes before it moves to planning."
+> *If `review-spec` ran (step 7):* "Spec written to
+> `docs/superheroes/<work-item>/spec.md` and through automated review. Please review
+> it and tell me if you want any changes before it moves to planning."
+>
+> *If `review-spec` was unavailable:* "Spec written to
+> `docs/superheroes/<work-item>/spec.md`. Automated spec-review isn't set up on this
+> project, so it's coming straight to you — please review it and tell me if you want
+> any changes before it moves to planning."
 
-- If the owner requests changes, apply them and **re-run `review-spec` on the
-  deltas** before coming back to them.
+- If the owner requests changes, apply them and (where available) **re-run
+  `review-spec` on the deltas** before coming back to them.
 - **The owner's approval is the terminal gate** — review-crew advises, the owner
-  decides. On approval, Discovery is done and the spec is ready for the (more
-  autonomous) **Plan** phase. Do **not** start `plan` yourself — hand off; the
-  producer/owner drives the transition.
+  decides. **Only once the owner explicitly approves**, record their decision so the
+  autonomous Plan phase can begin:
+
+  ```bash
+  ROOT=$(git rev-parse --show-toplevel)
+  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+    --doc spec --work-item "<work-item>" --review passed --root "$ROOT"
+  ```
+
+  This writes `gates.review: passed` (and derives `status: approved`) — the
+  machine-readable signal `plan` checks (and the only thing that flips the gate when
+  `review-spec` isn't wired yet). Recording the **owner's** explicit decision is
+  **not** self-approval — the HARD-GATE forbids *you* rubber-stamping your own
+  un-reviewed work, not recording the owner's call. Run this **after** the owner says
+  yes, never before.
+- Discovery is now done and the spec is ready for the (more autonomous) **Plan**
+  phase. Do **not** start `plan` yourself — hand off; the producer/owner drives the
+  transition.
 
 ## Rationalization table
 

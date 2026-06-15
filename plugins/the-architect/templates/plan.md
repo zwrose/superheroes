@@ -13,8 +13,9 @@
   - Cover every spec requirement; add nothing the spec doesn't justify (no gold-plating).
     Prefer the simplest, most boring approach and reversible/swappable choices.
   - RIGHT-SIZE to the spec's `size`: small → fill the core sections, collapse the
-    situational ones (Cross-cutting, Rollout & migration, Dependencies & assumptions) to a
-    line or "N/A — because …"; large → every section substantive. A situational section is
+    situational ones (Data flow & data model, Cross-cutting, Rollout & migration,
+    Dependencies & assumptions) to a line or "N/A — because …"; large → every section
+    substantive. A situational section is
     always present as a heading, marked "N/A — because …", never silently dropped.
   - ALTITUDE: strategy here, steps in Tasks. No pasted full schemas, full code, test cases,
     or dated rollout sequences — those belong to the `tasks` doc.

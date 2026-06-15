@@ -24,6 +24,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -159,6 +160,74 @@ def render_frontmatter(fm):
     return "\n".join(lines) + "\n"
 
 
+# --- review gate (§3.1) ----------------------------------------------------
+
+REVIEW_STATES = ("pending", "passed", "changes-requested")
+# `status` is DERIVED from gates.review (§3.1): approved iff review == passed.
+_STATUS_FOR_REVIEW = {"passed": "approved", "changes-requested": "in-review", "pending": "draft"}
+_GATES_RE = re.compile(r"^gates:\s*\{\s*review:\s*([a-z-]+)\s*\}\s*$")
+_STATUS_RE = re.compile(r"^status:\s*[a-z-]+\s*$")
+_UPDATED_RE = re.compile(r'^updated:\s*".*"\s*$')
+
+
+def _frontmatter_bounds(text, path):
+    """Return (lines, end) where the frontmatter is lines[1:end] (between the two `---`)."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        raise ValueError(f"{path}: missing opening '---' frontmatter fence")
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        raise ValueError(f"{path}: unterminated frontmatter (no closing '---')")
+    return lines, end
+
+
+def read_gate(path):
+    """Return the definition-doc's gates.review value, parsed from the frontmatter.
+
+    Reads from the `---`-fenced frontmatter only (so a body line can't spoof it),
+    and gives a clear error if the gates line is absent or malformed — more robust
+    than a skill grepping the raw file.
+    """
+    with open(path, encoding="utf-8") as fh:
+        lines, end = _frontmatter_bounds(fh.read(), path)
+    for ln in lines[1:end]:
+        m = _GATES_RE.match(ln)
+        if m:
+            return m.group(1)
+    raise ValueError(f"{path}: no parseable 'gates: {{review: …}}' line in frontmatter")
+
+
+def set_gate(path, review):
+    """Set gates.review in place (and derive status, bump updated) — §3.1.
+
+    The lib owns the frontmatter shape, so the gate flip lives here rather than a
+    skill hand-editing YAML. In the Phase-1 degraded mode (no review-spec), the
+    owner's recorded terminal approval is what calls this with review=passed.
+    """
+    if review not in REVIEW_STATES:
+        raise ValueError(f"unknown review state {review!r}; expected one of {REVIEW_STATES}")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    lines, end = _frontmatter_bounds(text, path)
+    status = _STATUS_FOR_REVIEW[review]
+    today = datetime.date.today().isoformat()
+    found = False
+    for i in range(1, end):
+        if _GATES_RE.match(lines[i]):
+            lines[i] = f"gates: {{review: {review}}}"
+            found = True
+        elif _STATUS_RE.match(lines[i]):
+            lines[i] = f"status: {status}"
+        elif _UPDATED_RE.match(lines[i]):
+            lines[i] = f'updated: "{today}"'
+    if not found:
+        raise ValueError(f"{path}: no 'gates: {{review: …}}' line to update")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return {"review": review, "status": status}
+
+
 # --- CLI -------------------------------------------------------------------
 
 def _build_parser():
@@ -187,6 +256,17 @@ def _build_parser():
                    help="parent work-item slug (required for plan/tasks)")
     f.add_argument("--created", default=None)
     f.add_argument("--updated", default=None)
+
+    sg = sub.add_parser("set-gate", help="record gates.review on a definition-doc (derives status)")
+    sg.add_argument("--work-item", required=True)
+    sg.add_argument("--doc", required=True, choices=DOC_TYPES)
+    sg.add_argument("--review", required=True, choices=list(REVIEW_STATES))
+    sg.add_argument("--root", default=".")
+
+    rg = sub.add_parser("read-gate", help="print a definition-doc's gates.review value")
+    rg.add_argument("--work-item", required=True)
+    rg.add_argument("--doc", required=True, choices=DOC_TYPES)
+    rg.add_argument("--root", default=".")
     return p
 
 
@@ -206,6 +286,13 @@ def main(argv):
             args.doc, args.work_item, size=args.size, parent=args.parent_item,
             issue=args.issue, created=args.created, updated=args.updated)
         sys.stdout.write(render_frontmatter(fm))
+        return 0
+    if args.cmd == "set-gate":
+        result = set_gate(doc_path(args.work_item, args.doc, args.root), args.review)
+        sys.stdout.write(json.dumps(result) + "\n")
+        return 0
+    if args.cmd == "read-gate":
+        sys.stdout.write(read_gate(doc_path(args.work_item, args.doc, args.root)) + "\n")
         return 0
     return 2
 

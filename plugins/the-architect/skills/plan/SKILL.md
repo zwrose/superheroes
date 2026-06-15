@@ -27,7 +27,8 @@ or loop back** to the owner/spec. You do not hand off a plan with a decision lef
 **Precondition: the spec is approved.** Plan builds on an approved `spec`; never plan from
 an unapproved or absent one — it's the only guarantee an approved requirements baseline
 exists before an autonomous build. **Verify it programmatically** (step 1), don't just
-assert it: `gates.review: passed` is the machine-readable signal (set by `review-spec`); a
+assert it: `gates.review: passed` is the machine-readable signal (set by `review-spec`, or
+by discovery recording the owner's terminal approval when review-spec is absent); a
 `pending` or `changes-requested` spec is **not** approved — stop.
 </HARD-GATE>
 
@@ -81,14 +82,19 @@ Ground before you design — **bake in the durable, look up the volatile.**
   set -euo pipefail
   ROOT=$(git rev-parse --show-toplevel) || { echo "not in a git repo" >&2; exit 1; }
   WORK_ITEM="<the work-item directory name>"
-  SPEC="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
-  [ -f "$SPEC" ] || { echo "no spec at $SPEC — run discovery first" >&2; exit 1; }
-  REVIEW=$(grep -m1 '^gates:' "$SPEC" | sed -E 's/.*review: *([a-z-]+).*/\1/')
-  [ "$REVIEW" = passed ] || { echo "spec not approved (gates.review=$REVIEW) — stop; it must pass review-spec first" >&2; exit 1; }
+  # read-gate parses gates.review from the spec frontmatter via the lib (robust to
+  # formatting; errors clearly if the spec is missing or malformed)
+  REVIEW=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+    --doc spec --work-item "$WORK_ITEM" --root "$ROOT") \
+    || { echo "no readable spec for $WORK_ITEM — run discovery first" >&2; exit 1; }
+  [ "$REVIEW" = passed ] || { echo "spec not approved (gates.review=$REVIEW) — stop; it needs the owner's approval (or review-spec) first" >&2; exit 1; }
   ```
 
-  (`review-spec` sets `gates.review: passed`; until the review trio is wired, this gate is
-  satisfied once that step runs.)
+  `gates.review: passed` is written by review-crew's `review-spec` when it runs, and —
+  when review-spec isn't wired yet — by discovery recording the **owner's** terminal
+  approval (discovery step 8). Either way it reflects a real approval, never a
+  self-approval; a spec straight out of discovery with the owner's sign-off will read
+  `passed`.
 - **Read the calibration layer as binding constraints, not suggestions:** `CLAUDE.md`, the
   profile / `patterns.md` (stack, threat model, current best-practice opinions), and any
   prior decisions/ADRs. The plan must fit the project these describe.
