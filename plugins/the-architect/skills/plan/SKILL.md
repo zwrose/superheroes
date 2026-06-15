@@ -23,8 +23,13 @@ unknown → a **Risk with a contingency**, de-risked first; a detail that's only
 in-code → deferred to **Tasks**; a true blocker (the spec can't be met as-is) → **escalate
 or loop back** to the owner/spec. You do not hand off a plan with a decision left open.
 
-**Precondition:** an approved `spec` exists for the work-item. Plan builds on it; do not
-plan from an unapproved or absent spec.
+<HARD-GATE>
+**Precondition: the spec is approved.** Plan builds on an approved `spec`; never plan from
+an unapproved or absent one — it's the only guarantee an approved requirements baseline
+exists before an autonomous build. **Verify it programmatically** (step 1), don't just
+assert it: `gates.review: passed` is the machine-readable signal (set by `review-spec`); a
+`pending` or `changes-requested` spec is **not** approved — stop.
+</HARD-GATE>
 
 ## Design principles (the durable ones — apply throughout)
 
@@ -68,8 +73,22 @@ Ground before you design — **bake in the durable, look up the volatile.**
 - **Read the spec** at `docs/superheroes/<work-item>/spec.md` (the **work-item slug is the
   directory name**): purpose, who it's for, functional requirements, significant unhappy
   paths, non-functional requirements, constraints, the UI/UX handoff, `size`, definition
-  of done. **Confirm it's approved** (`gates.review` passed / owner signed off); if not,
-  stop.
+  of done.
+- **Verify the spec is approved — programmatically, not by eye** (the HARD GATE above; an
+  executing agent skips a prose check). Read `gates.review` and stop unless it is `passed`:
+
+  ```bash
+  set -euo pipefail
+  ROOT=$(git rev-parse --show-toplevel) || { echo "not in a git repo" >&2; exit 1; }
+  WORK_ITEM="<the work-item directory name>"
+  SPEC="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
+  [ -f "$SPEC" ] || { echo "no spec at $SPEC — run discovery first" >&2; exit 1; }
+  REVIEW=$(grep -m1 '^gates:' "$SPEC" | sed -E 's/.*review: *([a-z-]+).*/\1/')
+  [ "$REVIEW" = passed ] || { echo "spec not approved (gates.review=$REVIEW) — stop; it must pass review-spec first" >&2; exit 1; }
+  ```
+
+  (`review-spec` sets `gates.review: passed`; until the review trio is wired, this gate is
+  satisfied once that step runs.)
 - **Read the calibration layer as binding constraints, not suggestions:** `CLAUDE.md`, the
   profile / `patterns.md` (stack, threat model, current best-practice opinions), and any
   prior decisions/ADRs. The plan must fit the project these describe.
@@ -92,13 +111,18 @@ non-functional fit). Reference the spec's Claude Design handoff when describing 
 2. **Find the risk first.** Name the single riskiest or most-uncertain element (unfamiliar
    tech, external dependency, hard integration, perf unknown) and design or de-risk *it*
    first — a spike or a thin end-to-end slice if needed.
-3. **Design it twice.** Produce **at least two materially different** approaches (not minor
-   variants), each grounded in the codebase and sketched far enough to expose its
-   trade-offs. *(Highest-leverage move — do not commit to the first idea.)*
+3. **Design it twice.** Produce **at least two materially different** approaches —
+   *materially different* = they differ on a **named axis** (data model, a boundary, sync
+   vs async, build vs buy — not parameter tweaks), each grounded in the codebase and
+   sketched far enough to expose its trade-offs. Treat any approach the spec hints at as
+   **one anchor among several, not the answer**. *(Highest-leverage move — do not commit to
+   the first idea.)*
 4. **Choose, with explicit trade-offs.** Pick one and record it ADR-style in *Key
    decisions*: context → choice → rejected alternatives → what it achieves → **accepted
-   downside**; classify it reversible vs one-way door. **Apply the escalation rubric
-   (step 3) here** — the one-way doors with an owner-weighable trade-off are your triggers.
+   downside**. **State the strongest case *for* the runner-up** — the case the chosen option
+   had to beat; a rejected option with no real case for it was a strawman, not a second
+   design. Classify it reversible vs one-way door. **Apply the escalation rubric (step 3)
+   here** — the one-way doors with an owner-weighable trade-off are your triggers.
 5. **Pin the contracts before the internals.** Specify the public signatures, endpoints,
    schemas, and error cases, and how they fit existing interfaces — *at design altitude*,
    before describing implementation.
@@ -112,8 +136,9 @@ non-functional fit). Reference the spec's Claude Design handoff when describing 
 9. **Sequence** the work so the riskiest / most-irreversible decisions are validated first.
 
 **Two hard gates** (the self-review checks these): at least **two materially different
-options** existed before you recorded a choice; **every recorded decision names an accepted
-downside.**
+options** (differing on a named axis, each a genuine contender — not a strawman) existed
+before you recorded a choice; **every recorded decision names an accepted downside** *and*
+the strongest case for the option it beat.
 
 ### 3. The escalation rubric — when to pause for the owner
 
@@ -189,6 +214,7 @@ its `size`. Resolve the path at the repo root and emit the §3.1 frontmatter via
 (`docType: plan`, parent = the spec):
 
 ```bash
+set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 SIZE=$(grep -m1 '^size:' "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" | sed 's/^size: *//')
@@ -207,15 +233,19 @@ significant decision (escalated or not) with its reversibility in *Key decisions
 
 - **small** — fill the core sections (Overview, Goals & non-goals, Architecture, Components
   & interfaces, How-requirements-met, Key decisions, Risks). The situational sections
-  (Cross-cutting, Rollout & migration, Dependencies & assumptions) collapse to a line or
-  **"N/A — because …"**. Aim for ~one page.
-- **medium** — the above filled out, plus a substantive Cross-cutting section, Rollout &
-  migration if anything is stateful/user-facing, and Dependencies & assumptions.
+  (**Data flow & data model**, Cross-cutting, Rollout & migration, Dependencies &
+  assumptions) collapse to a line or **"N/A — because …"** (e.g. Data flow → "N/A — no new
+  or changed data"). Aim for ~one page.
+- **medium** — the above filled out, plus Data flow & data model where data is touched, a
+  substantive Cross-cutting section, Rollout & migration if anything is stateful/user-facing,
+  and Dependencies & assumptions.
 - **large** — every section substantive: full alternatives with trade-offs, the full
   operability cluster, rollback validation, and the dependency list.
 
 A situational section is **always present as a heading** — you mark it "N/A — because …"
 rather than silently dropping it, so a concern is recorded as considered, not forgotten.
+**UI/UX is conditional, not situational:** include it only for user-facing work and omit it
+entirely otherwise.
 
 ### 5. Self-review (design quality + failure-mode checklist)
 
@@ -223,7 +253,9 @@ Look at the written plan with fresh eyes; fix inline. This is where a *plausible
 caught being a *wrong* one.
 
 **Design-quality hard gates**
-- [ ] **≥2 materially different options** were weighed before each significant choice.
+- [ ] **≥2 materially different options** (differing on a named axis, each a genuine
+  contender — not a strawman) were weighed before each significant choice, and the
+  strongest case for the rejected option is stated.
 - [ ] **Every recorded decision names its accepted downside** (not just the upside).
 
 **Grounded & verified (the LLM failure-mode guards)**
