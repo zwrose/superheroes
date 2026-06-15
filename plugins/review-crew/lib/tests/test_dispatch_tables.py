@@ -48,7 +48,7 @@ def _rubric_dimensions():
     return set(re.findall(r"`([A-Za-z-]+)`", m.group(1)))
 
 
-@pytest.mark.parametrize("skill", ["review-plan", "review-code"])
+@pytest.mark.parametrize("skill", ["review-plan", "review-code", "review-spec", "review-tasks"])
 def test_full_crew_table_has_one_row_per_agent(skill):
     rows = _table_rows(os.path.join("skills", skill, "SKILL.md"))
     expected_set = _agent_slugs()
@@ -65,6 +65,8 @@ def test_audit_debt_table_lists_exactly_the_original_four():
 @pytest.mark.parametrize("skill,expected_slugs", [
     ("review-plan", "ALL"),
     ("review-code", "ALL"),
+    ("review-spec", "ALL"),
+    ("review-tasks", "ALL"),
     ("audit-debt", "FOUR"),
 ])
 def test_specialists_to_dispatch_prose_enumeration(skill, expected_slugs):
@@ -74,7 +76,7 @@ def test_specialists_to_dispatch_prose_enumeration(skill, expected_slugs):
     assert enumerated == want
 
 
-@pytest.mark.parametrize("skill", ["review-plan", "review-code", "audit-debt"])
+@pytest.mark.parametrize("skill", ["review-plan", "review-code", "review-spec", "review-tasks", "audit-debt"])
 def test_table_dimensions_exist_in_rubric(skill):
     dims = _rubric_dimensions()
     for slug, _findings, dimension in _table_rows(os.path.join("skills", skill, "SKILL.md")):

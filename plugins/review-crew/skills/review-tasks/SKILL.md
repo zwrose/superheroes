@@ -1,0 +1,469 @@
+---
+name: review-tasks
+description: Use to review the-architect's `tasks` definition-doc (the bite-sized, test-first executable steps for a work-item) before the producer's Build runs it. Red-teams the tasks doc against the base rubric with the five specialist agents, revises it in place, and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads. The Tasks leg of the superheroes review trio (review-spec / review-plan / review-tasks).
+user-invocable: true
+---
+
+# Review Tasks
+
+Red-team the-architect's **`tasks` definition-doc** — the bite-sized, test-first executable
+steps for a work-item (`docs/superheroes/<work-item>/tasks.md`) — **before** the producer's
+Build executes them. The main context is an orchestrator: it locates the tasks doc, reads
+its parent `plan` (and the `spec` behind it) for the work it must cover, dispatches the same
+five specialist agents `/review-crew:review-code` uses (architecture, code, security, test,
+premortem) in parallel against the tasks doc, compiles their findings under the base rubric,
+attaches its own point of view to each finding, and **revises the tasks doc in place** —
+auto-applying mechanical fixes and stopping to ask only about findings it would skip/defer or
+fixes that involve a judgment call. On a clean exit it **records the review gate**
+(`gates.review: passed`); if blocking findings remain it records `changes-requested`.
+
+This is the **Tasks leg of the superheroes review trio** (`review-spec` / `review-plan` /
+`review-tasks`) — the automated gate the-architect's `tasks` skill calls. Read the base
+rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`) for severity calibration and the
+verification rules every finding must pass; if anything below contradicts the base rubric,
+the base rubric wins.
+
+> **Band posture.** This reviews the superheroes `tasks` definition-doc (CONVENTIONS §3),
+> designed to run inside the band alongside the-architect. If handed a doc with no
+> `superheroes: doc` / `docType: tasks` frontmatter it **degrades, it does not crash**: it
+> still red-teams the document, but skips the gate write and says so.
+
+The tasks doc is the *how-exactly*: the writing-plans body (bite-sized checkbox TDD steps)
+captured under the superheroes build contract (CONVENTIONS §3.2). Tasks-time review checks
+that the steps are **executable and complete** and **faithfully cover the plan** — not that
+they re-litigate the plan's design (that was `review-plan`'s job). A task that re-decides the
+architecture is itself a finding (it belongs in the plan, or it's drift).
+
+## Invocation
+
+| Form                               | Behavior                                                                     |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `/review-crew:review-tasks`        | Review the most recent `docs/superheroes/*/tasks.md`.                        |
+| `/review-crew:review-tasks <work-item>` | Review `docs/superheroes/<work-item>/tasks.md`.                         |
+| `/review-crew:review-tasks <path>` | Review the tasks doc at `<path>` (relative to repo root or absolute).        |
+
+If no tasks doc is found and no argument was passed, ask the user via `AskUserQuestion` before
+continuing — there is nothing to review otherwise.
+
+## Session Directory
+
+All review artifacts live in a per-invocation temp directory so parallel reviews don't collide:
+
+```bash
+SESSION_DIR=$(mktemp -d /tmp/review-tasks-XXXXXXXX)
+```
+
+| Path                                      | Written by   | Purpose                                                        |
+| ----------------------------------------- | ------------ | -------------------------------------------------------------- |
+| `$SESSION_DIR/meta.json`                  | orchestrator | Tasks path, work-item, session dir, classification             |
+| `$SESSION_DIR/tasks.md`                   | orchestrator | Stable copy of the target tasks doc — subagents read this      |
+| `$SESSION_DIR/plan.md`                    | orchestrator | Stable copy of the parent plan (context for the reviewers)     |
+| `$SESSION_DIR/spec.md`                    | orchestrator | Stable copy of the spec behind the plan (context)              |
+| `$SESSION_DIR/findings-architecture.json` | arch agent   | Architecture-reviewer findings array                           |
+| `$SESSION_DIR/findings-code.json`         | code agent   | Code-reviewer findings array                                   |
+| `$SESSION_DIR/findings-security.json`     | sec agent    | Security-reviewer findings array                               |
+| `$SESSION_DIR/findings-test.json`         | test agent   | Test-reviewer findings array                                   |
+| `$SESSION_DIR/findings-premortem.json`    | premortem agent | Premortem-reviewer (Failure-Mode) findings array            |
+| `$SESSION_DIR/compiled.json`              | orchestrator | Deduplicated, verified findings + summary + verdict            |
+
+## Workflow
+
+### 1. Setup
+
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
+
+```bash
+RUBRIC="${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
+```
+
+**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+
+```bash
+RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind profile) \
+  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
+PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
+LOCATION=$(printf '%s' "$RES" | jq -r .location)
+EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+DRES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind decisions) \
+  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
+```
+
+Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
+
+```bash
+PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json'))['version'])")
+RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
+```
+
+**Staleness self-check (first action).** Before the profile bootstrap and before locating the tasks doc or dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. review-tasks reads the working tree (default root), so no `--root` is passed. Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below, not to staleness:
+
+```bash
+if [ "$EXISTS" = "true" ]; then
+  DOCTOR_JSON=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/repo_doctor.py" \
+    "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
+fi
+```
+
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
+
+**Profile bootstrap (run before locating the tasks doc or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
+
+```bash
+if [ "$LOCATION" = "none" ]; then
+  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
+  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  # If LOC is "ask", STOP — present the in-repo-vs-global AskUserQuestion, set LOC, then run the create calls below.
+  PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind decisions --location "$LOC")
+fi
+```
+
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+
+**Locate the target tasks doc.** Resolve by work-item slug, explicit path, or most-recent:
+
+```bash
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+if [ -n "$ARG" ] && [ -f "$ARG" ]; then
+  TASKS_PATH="$ARG"                                            # explicit path
+elif [ -n "$ARG" ] && [ -f "$ROOT/docs/superheroes/$ARG/tasks.md" ]; then
+  TASKS_PATH="$ROOT/docs/superheroes/$ARG/tasks.md"            # work-item slug
+else
+  TASKS_PATH=$(ls -t "$ROOT"/docs/superheroes/*/tasks.md 2>/dev/null | head -1)   # most recent
+fi
+```
+
+If `$TASKS_PATH` is empty or the file doesn't exist, use `AskUserQuestion` to ask for a work-item or path. Do not invent one.
+
+**Derive the work-item and confirm this is a tasks definition-doc:**
+
+```bash
+WORK_ITEM=$(basename "$(dirname "$TASKS_PATH")")
+IS_DEF_DOC=$(grep -qE '^superheroes:\s*doc' "$TASKS_PATH" && grep -qE '^docType:\s*tasks' "$TASKS_PATH" && echo yes || echo no)
+```
+
+If `IS_DEF_DOC` is `no`, note it and **proceed without a gate write** (degrade-not-crash): red-team the document, skip step 6.
+
+Copy the tasks doc to a stable artifact path, copy its **parent plan** and the **spec** behind it for context (the tasks must faithfully cover the plan, which satisfies the spec), and classify what it touches:
+
+```bash
+cp "$TASKS_PATH" "$SESSION_DIR/tasks.md"
+[ -f "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" ] && cp "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" "$SESSION_DIR/plan.md"
+[ -f "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" ] && cp "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" "$SESSION_DIR/spec.md"
+
+TOUCHES=()
+grep -Eqi 'route|endpoint|api|handler'                  "$SESSION_DIR/tasks.md" && TOUCHES+=("API")
+grep -Eqi 'component|view|page|screen|UI'               "$SESSION_DIR/tasks.md" && TOUCHES+=("UI")
+grep -Eqi 'schema|migration|database|collection|table|model' "$SESSION_DIR/tasks.md" && TOUCHES+=("data")
+grep -Eqi 'auth|session|permission|owner|tenant'        "$SESSION_DIR/tasks.md" && TOUCHES+=("auth")
+grep -Eqi 'test|spec|coverage'                          "$SESSION_DIR/tasks.md" && TOUCHES+=("tests")
+grep -Eqi 'architecture|layering|abstraction|module'    "$SESSION_DIR/tasks.md" && TOUCHES+=("architecture")
+```
+
+Write metadata:
+
+```bash
+cat > "$SESSION_DIR/meta.json" <<EOF
+{
+  "tasksPath": "$TASKS_PATH",
+  "workItem": "$WORK_ITEM",
+  "isDefinitionDoc": "$IS_DEF_DOC",
+  "sessionDir": "$SESSION_DIR",
+  "touches": $(printf '%s\n' "${TOUCHES[@]}" | jq -R . | jq -sc .)
+}
+EOF
+```
+
+The classification is informational — **all five specialists still run**.
+
+### 2. Dispatch Summary
+
+Print this dispatch summary as a plain status message, then dispatch the specialists immediately (no approval gate):
+
+- **Tasks doc:** `$TASKS_PATH` (work-item `$WORK_ITEM`) and its line count (`wc -l < $SESSION_DIR/tasks.md`)
+- **Gate:** will be recorded on the tasks doc (`isDefinitionDoc == yes`), or skipped (`no` — degraded)
+- **Classification:** the `touches` array
+- **Specialists to dispatch (all five, in parallel):**
+  - `test-reviewer` → `findings-test.json` _(does the heaviest lifting at tasks time — TDD discipline + coverage)_
+  - `code-reviewer` → `findings-code.json` _(the step code: paths, snippets, type-consistency, no placeholders)_
+  - `architecture-reviewer` → `findings-architecture.json` _(decomposition fidelity to the plan)_
+  - `security-reviewer` → `findings-security.json`
+  - `premortem-reviewer` → `findings-premortem.json` _(inter-task ordering / broken-tree-between-steps hazards)_
+- **Session directory:** `$SESSION_DIR`
+
+### 3. Dispatch Specialists in Parallel
+
+Launch all five specialists in a **single message with five `Agent` tool calls** so they run in parallel, each dispatched by its `subagent_type` (the agent's name). Each gets the same prompt template, parameterized by `subagent_type`, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
+
+```
+You are reviewing the-architect's `tasks` definition-doc (the bite-sized,
+test-first executable steps for a work-item), NOT code and NOT a diff.
+
+## Your assignment
+Review the tasks doc at $SESSION_DIR/tasks.md for your dimension. Its parent
+`plan` is at $SESSION_DIR/plan.md and the `spec` behind it at $SESSION_DIR/spec.md
+(if present) — the tasks must faithfully COVER the plan (which satisfies the
+spec); cross-check against them. Read the base rubric (absolute path below) for
+severity calibration, verification rules, and the findings output format. Read
+the project profile and CLAUDE.md for calibration.
+
+## Context files
+- Tasks (the doc under review): $SESSION_DIR/tasks.md
+- Parent plan (what the tasks must cover): $SESSION_DIR/plan.md
+- Spec behind the plan (the ultimate requirements): $SESSION_DIR/spec.md
+- Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
+- Project profile (threat model, scope, focus hints, canonical patterns): <PROFILE_PATH>
+- CLAUDE.md (project conventions): CLAUDE.md
+- Project structure: feel free to Read/Grep/Glob the current repo to confirm the
+  file paths, symbols, and packages the tasks reference actually exist.
+- <if focus notes> Focus: <focus notes>
+
+## Calibration precedence
+Base rubric (binding) > CLAUDE.md (conventions) > profile (adder over CLAUDE.md)
+> strict fallback when a needed field is absent in all of them.
+
+## What a good `tasks` definition-doc must do (flag departures)
+The tasks doc is the writing-plans body (bite-sized checkbox TDD steps) under the
+superheroes build contract (CONVENTIONS §3.2). It is sound when:
+- **Executable & complete — NO placeholders.** Every step is concrete: exact file
+  paths, complete code in each code step, exact test commands with expected output.
+  "TBD", "add error handling", "handle edge cases", "similar to Task N", "write
+  tests for the above" (without the test code) are **failures**, not nits.
+- **Faithful coverage of the plan.** Every plan component/interface and every spec
+  requirement (functional, NFR, significant unhappy path) maps to at least one task;
+  nothing in the tasks lacks a plan/spec basis. A requirement with no task is a gap;
+  a task with no basis is scope creep.
+- **TDD discipline.** Behavior is introduced test-first (a failing test, then the
+  minimal code, then green); the spec's significant unhappy paths have test steps,
+  not just the happy path.
+- **Type/name consistency across tasks.** A symbol defined in an early task is
+  referenced by the same name/signature later (e.g. `clearLayers()` in Task 3 vs
+  `clearFullLayers()` in Task 7 is a bug).
+- **Right altitude — steps, not strategy.** The tasks execute the plan; they do not
+  re-decide the architecture. A task that re-architects (vs the plan) is a finding:
+  it belongs in the plan, or it is drift.
+- **Build contract present.** The doc carries the superheroes wrapper (size, the
+  SDD clips) and the writing-plans body verbatim (Goal/Architecture/Tech-Stack +
+  `### Task N`), with the agentic-worker handoff replaced by the build contract and
+  no orphan superpowers/plans artifact.
+
+## Per-dimension framing (you are reviewing executable steps)
+- Test-reviewer (heaviest here): TDD ordering (failing test precedes implementation);
+  are the spec's unhappy paths covered by test steps; are the tests meaningful (not
+  tautologies / mock-echo); is anything asserted that the step's code can't satisfy.
+- Code-reviewer: do the step code blocks fit conventions and reference real
+  paths/symbols/packages (grep to confirm); type/name consistency across tasks;
+  placeholder scan (the No-Placeholders bar).
+- Architecture-reviewer: decomposition fidelity — do the tasks realize the plan's
+  components/boundaries without re-architecting; is the task breakdown coherent and
+  appropriately granular.
+- Security-reviewer: where the plan specified an auth/ownership/validation check, do
+  the tasks actually include a step that implements (and tests) it? Honor the
+  profile's threat model.
+- Premortem-reviewer: inter-task hazards — a step order that leaves the tree broken
+  or untested between commits; a missing rollback/cleanup step; a task that depends
+  on something an earlier task never produced. Honor the profile's threat model.
+
+## Out of scope at tasks time
+- Re-litigating the plan's design decisions (that was review-plan's job; only flag a
+  task that CONTRADICTS or drifts from the plan).
+- Naming preferences that don't break type-consistency.
+
+## Verification rules
+- `file:line` citation required. Cite the tasks-doc heading/step + line number, OR a
+  related project file if the finding references existing code.
+- Before flagging "missing X", grep the project for X under variant names.
+- Before flagging a path/symbol/package "doesn't exist", actually check the repo /
+  installed version — but a reference you cannot confirm IS worth flagging.
+
+## Output
+Write findings to $SESSION_DIR/findings-<agent>.json as a JSON array per the base
+rubric's "Findings output format" section. The `file` field may be the tasks path
+OR a related project file path. Set `dimension` to "<dimension>" on every entry.
+If you have nothing to flag, write `[]` — do not skip writing the file.
+```
+
+Per-agent substitutions:
+
+| Agent slug / `subagent_type` | `<agent>` (findings filename) | `<dimension>` |
+| ---------------------------- | ----------------------------- | ------------- |
+| architecture-reviewer        | architecture                  | Architecture  |
+| code-reviewer                | code                          | Code          |
+| security-reviewer            | security                      | Security      |
+| test-reviewer                | test                          | Test          |
+| premortem-reviewer           | premortem                     | Failure-Mode  |
+
+After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator does not read agent transcripts — only the JSON files.
+
+### 4. Compile Findings (main context)
+
+Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
+
+1. **Citation check.** Drop any finding with `file == null` or `line == null`.
+2. **Dedupe by tasks section + topic.** When two findings target the same task/step and same topic, merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
+3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count.
+
+Determine the verdict per the base rubric's "Verdict labels & mapping". For `/review-crew:review-tasks` the labels are **TASKS READY** / **REVISE BEFORE BUILD** / **MAJOR GAPS — RECONSIDER PLAN**:
+
+- 0 Critical, 0 Important → **TASKS READY**
+- 0 Critical, 1+ Important → **REVISE BEFORE BUILD**
+- 1+ Critical → **MAJOR GAPS — RECONSIDER PLAN**
+- Only Minor and/or Nit → **TASKS READY** (Minor/Nit are informational)
+
+Write to `$SESSION_DIR/compiled.json`:
+
+```json
+{
+  "summary": "<1-2 sentence overall summary>",
+  "verdict": "TASKS READY" | "REVISE BEFORE BUILD" | "MAJOR GAPS — RECONSIDER PLAN",
+  "findings": [<deduplicated, verified findings array>]
+}
+```
+
+Order findings: Critical → Important → Minor → Nit, then by `file` then by `line`.
+
+### 5. Revise Loop
+
+This skill **revises the tasks doc in place** until it passes review. The deliverable is the improved tasks document at `$TASKS_PATH`. Findings are **printed in chat each round — never written to a markdown file in the repo.** (The subagent JSON under `$SESSION_DIR` is internal plumbing and stays.)
+
+Initialize `round = 1` and an empty `skip-set` (finding identities the user chose not to act on; identity = `task-step::normalized-title`). If context was compacted mid-loop, re-read `$SESSION_DIR/meta.json` and the latest `$SESSION_DIR/compiled.json` to restore state, and re-derive the `skip-set` from your chat record.
+
+Each round:
+
+1. **Review.** (Round 1: the five specialists dispatched in §3 have already written `$SESSION_DIR/findings-*.json`.) For round > 1, re-dispatch the five specialists per §3 against the freshly-copied `$SESSION_DIR/tasks.md`.
+2. **Compile** per §4 into `$SESSION_DIR/compiled.json` with verdict.
+3. **Effective findings** = `compiled.findings` whose identity is NOT in the `skip-set`.
+4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited step in `$SESSION_DIR/tasks.md` (and any cited project file), emit for each finding a **recommendation** (`Fix` = revise the tasks doc; `Defer` = real but fine to settle during Build; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. filling in a placeholder with the concrete code/command; `judgment` = a real choice among options, e.g. how to decompose a step). A **placeholder** or a **missing-coverage** finding is almost always `Fix` + `mechanical` — the tasks bar forbids placeholders.
+5. **Print findings in chat** — grouped by task/step, each with its POV line. Do **not** write these to a file.
+6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the tasks document at `$TASKS_PATH` directly to address it. Make these edits without asking. **If a finding exposes a real gap in the PLAN** (a requirement the plan never covered, so no task can faithfully cover it), do **not** invent a task — flag it for the user as a loop-back to `review-plan`/`plan` (a `judgment` intervention), since tasks must not re-decide design.
+7. **Interventions.** `present-set` = effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`). If non-empty, present ONE consolidated `AskUserQuestion`: lead with each finding's POV; offer **Apply as suggested** / **Apply with my guidance** (free text) / **Skip** in this neutral order. Apply the user's chosen revisions to `$TASKS_PATH`. Add every `Skip` identity to the `skip-set`.
+   **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
+8. **Refresh + exit check.** Re-copy the revised doc: `cp "$TASKS_PATH" "$SESSION_DIR/tasks.md"`. If any edits were made this round AND one or more Critical/Important findings remain that are not in the `skip-set` AND `round < 7`, set `round += 1` and repeat from step 1. Otherwise **EXIT** the loop — but if it is exiting because it hit the **7-round cap** with Critical/Important findings still unresolved, `log` that the cap was reached and report those remaining findings explicitly; do **not** declare TASKS READY in that case.
+
+### 6. Record the review gate
+
+After the loop exits, record the outcome on the tasks doc — the machine-readable signal the
+producer's Build reads (it supersedes the-architect's `tasks` self-certification). **Skip
+this step entirely when `isDefinitionDoc == no`.**
+
+- **TASKS READY** (no unresolved Critical/Important) → record `passed`.
+- **REVISE BEFORE BUILD / MAJOR GAPS**, or the 7-round cap hit with Critical/Important still
+  open, or the user **skipped** a blocking finding → record `changes-requested`.
+
+```bash
+ROOT=$(git rev-parse --show-toplevel)
+# REVIEW is "passed" or "changes-requested" per the verdict above
+python3 "${ARCHITECT_LIB:-$ROOT/plugins/the-architect/lib}/definition_doc.py" set-gate \
+  --doc tasks --work-item "$WORK_ITEM" --review "$REVIEW" --root "$ROOT"
+```
+
+The gate is owned by **the-architect's lib** (`definition_doc.py`), the single writer of the
+§3.1 frontmatter. Resolve it via the-architect's `${CLAUDE_PLUGIN_ROOT}` when known; otherwise
+the in-repo path above. **If the lib is not present** (the-architect isn't installed), say the
+gate could not be recorded and stop — do **not** hand-edit the frontmatter (degrade-not-crash).
+
+After exit, print a terminal summary in chat:
+
+- Lead with the final verdict label in bold, and the **gate recorded** (`passed` /
+  `changes-requested` / `not recorded — not a definition-doc` / `not recorded — the-architect
+  lib absent`). If the loop hit the 7-round cap with Critical/Important unresolved, the verdict
+  is **REVISE** and the gate is `changes-requested` — do **not** declare TASKS READY.
+- List, grouped by task/step, the revisions applied (auto + user-approved) and the findings the
+  user chose to skip — each with its POV line.
+- End with a count summary (e.g. `"3 auto-revised, 1 skipped; TASKS READY; gate → passed"`).
+
+**Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge**, (2) the **learning-loop proposal**, then (3) the **provisional-profile confirmation**. All three are placed after the review output and none blocks.
+
+Nothing else is written to the repo — the revised `$TASKS_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
+
+## Learning Loop & Staleness Nudge
+
+These four behaviors are **non-blocking**, run **at end of run** (after the terminal summary), and are **identical across `review-code`, `review-plan`, `review-spec`, `review-tasks`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
+
+### Recording decisions (at resolution time)
+
+Wherever the user resolves a finding (this skill: the §5 step 7 interventions, plus the auto-revised findings in step 6), append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
+  append "$DECISIONS" '<record-json>'
+```
+
+`<record-json>` is `{"dimension": "<finding dimension>", "category": "<finding taxonomy/topic>", "action": "skip"|"guidance"|"fix"}`:
+- `action` maps from the user's choice: **Skip** → `skip`; **Apply with my guidance** → `guidance`; **Apply as suggested** (and step-6 auto-revises) → `fix`.
+- `dimension` is the finding's `dimension`; `category` is the finding's taxonomy/topic (its normalized title or topic tag). The store is append-only and atomic; it soft-fails on a bad/missing store, so this never blocks.
+
+### Staleness nudge (end of run)
+
+Using the `DOCTOR_JSON` captured in Setup: print the doctor's `message` as a single non-blocking line **only when** `message` is non-null AND `nudge_acked` is false:
+
+> ℹ️ Profile may be stale: `<message>`. Run `/review-crew:review-init` to refresh (this nudge won't repeat once acknowledged).
+
+If the user declines or ignores it, record the dismissal (see "Recording a dismissal" below) using the doctor's `signal_hash`. Suppress the line entirely when `nudge_acked` is true or `message` is null.
+
+### Learning-loop proposal (end of run)
+
+After the staleness nudge, analyze the decision store for a repeated signal:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
+  analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
+```
+
+Pass the profile's current `nudge-ack` map keys (read from the resolved profile (`$PROFILE`)'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
+- **Apply to `<target>`** — apply the proposed calibration/convention edit to the named target.
+- **Edit then apply** — open a free-text edit, then apply the edited version.
+- **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
+
+**NEVER auto-apply.** A proposal is applied ONLY on the user's explicit **Apply** / **Edit then apply** choice. If `proposal` is null, do nothing.
+
+### Provisional-profile confirmation (interactive only, end of run)
+
+If the loaded profile's `status:` is `provisional` AND this run is interactive (a human is present to answer) AND the provisional-confirm signal is not already in the profile's `nudge-ack`, offer ONE non-blocking `AskUserQuestion` after the review output:
+
+> This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
+
+- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (bump `updated:`). Nothing else changes.
+- **Refresh via review-init** — point the user at `/review-crew:review-init` and do not change the profile now.
+- **Keep provisional** — record a dismissal using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
+
+Skip this entirely when the run is **headless/non-interactive**, when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged.
+
+### Recording a dismissal (shared)
+
+The staleness nudge, the learning-loop proposal, and the provisional-profile confirmation share one dismissal mechanism: **write the relevant `signal_hash` into the profile's `nudge-ack` map** in the resolved profile (`$PROFILE`)'s provenance block, so the same signal does not re-fire until it changes. The map is `nudge-ack: {<hash>: true, ...}` on the provenance line; add the hash as a new key (the staleness nudge uses `DOCTOR_JSON.signal_hash`; the proposal uses `proposal.signal_hash`; the provisional-profile confirmation's **Keep provisional** uses the constant literal `provisional-confirm`). This is the ONLY write any of these nudges makes to the profile, and only on dismissal.
+
+## Tasks-Content Requirements (Opinionated)
+
+Agents flag departures from these — every one is in the writing-plans + CONVENTIONS §3.2 contract:
+
+- **No placeholders** — no "TBD", "add validation", "handle edge cases", "similar to Task N", or "write tests for the above" without the actual code. Every code step shows the code; every test step shows the command + expected output.
+- **Plan/spec coverage** — every plan component/interface and every spec requirement (functional, NFR, unhappy path) maps to at least one task; nothing lacks a basis.
+- **TDD discipline** — behavior is introduced test-first; the spec's significant unhappy paths have test steps.
+- **Type/name consistency** — symbols defined in early tasks are referenced identically later.
+- **Right altitude** — executable steps, not the plan's strategy restated; no task re-decides the design.
+- **Build contract present** — size + the SDD clips + the writing-plans body verbatim; no orphan superpowers/plans artifact.
+
+## Out of Scope at Tasks Time
+
+- **Re-litigating the plan's design** — that was review-plan. Only flag a task that contradicts or drifts from the plan.
+- **Naming preferences** that don't break type-consistency.
+- **Style / lint / type checks** — they fire on the eventual code.
+
+## Common Mistakes
+
+| Mistake                                                                     | Fix                                                                                                                                                             |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Re-reviewing the plan's design decisions at tasks time                      | That was review-plan's job. Here, only flag a task that contradicts or drifts from the plan — design is settled.                                                |
+| Tolerating a placeholder ("add error handling")                             | The tasks bar forbids placeholders. A placeholder is a Fix + mechanical finding — fill it with the concrete code/command, or flag the plan gap behind it.        |
+| Inventing a task to cover a missing requirement                             | If the PLAN never covered a requirement, tasks can't faithfully add it — loop back to review-plan/plan. Tasks must not re-decide design.                         |
+| Overwriting a `changes-requested` gate with `passed`                        | The gate write reflects the verdict. A skipped blocking finding or a 7-round cap with open Critical/Important → `changes-requested`, never `passed`.            |
+| Hand-editing the frontmatter to set the gate                                | The gate is written only via the-architect's `definition_doc.py set-gate`. If that lib is absent, report "gate not recorded" — never hand-edit the YAML.        |
+| Citing line numbers from the wrong file                                     | Tasks-doc citations point at `$SESSION_DIR/tasks.md`; project-file citations point at repo paths. Don't mix them.                                               |
+| Re-raising findings the user skipped                                        | Check the `skip-set` and prior rounds before raising a finding.                                                                                                 |
+| Skipping the all-five-specialists rule based on classification              | The `touches` array is informational. All five always run — each returns `[]` when there's nothing in its dimension.                                            |
+| Dispatching reviewers by reading an agent file                              | The five reviewers are bundled plugin agents — dispatch each by its `subagent_type` (its name). The methodology is the agent's own system prompt.               |
+| Skipping the profile bootstrap                                              | If no profile resolves, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                        |

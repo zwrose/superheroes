@@ -164,36 +164,54 @@ Look at the written tasks doc with fresh eyes; fix inline (no re-review loop):
 ### 5. review-tasks (automated gate)
 
 Run review-crew's **`review-tasks`** on the authored tasks doc and address its findings —
-this is the **external-feedback** leg; self-review alone cannot replace it. **If
-`review-tasks` is not available in this project**, say so and proceed (self-review stands
-in). Never fabricate a review result.
+this is the **external-feedback** leg; self-review alone cannot replace it. When it runs,
+**`review-tasks` itself records the tasks review gate** (`passed` when clean,
+`changes-requested` when blocking findings remain) — so it, not Tasks, is the gate's writer.
+**If `review-tasks` is not available in this project**, say so and proceed (self-review
+stands in); the gate is then self-certified in step 6. Never fabricate a review result.
 
 ### 6. Record the tasks gate → ready for Build
 
-Tasks is autonomous — like Plan, there is **no owner-approval gate**. **Certify only a
-complete doc:** confirm the step-4 self-review actually passed — the capture-at-seam is
-fully applied (heading reframed, the agentic-worker line replaced by the build contract, no
-orphan `docs/superpowers/plans/` file, no leftover `{{…}}` or placeholder) — **before**
-recording the gate. `set-gate` writes `passed` from the **frontmatter alone** and cannot see
-a half-applied body, so certifying before the self-review passes would silently bless a
-broken doc. Once that and (when present) `review-tasks` pass, record the tasks review gate
-so the producer's **Build** can begin:
+Tasks is autonomous — like Plan, there is **no owner-approval gate**. The tasks
+`gates.review` is the signal the producer's **Build** reads. **Who writes it depends on
+whether `review-tasks` ran:**
+
+- **`review-tasks` ran (step 5) → it already recorded the gate.** Do **not** overwrite it.
+  If it recorded `changes-requested`, you are not done: address the findings and **re-run
+  `review-tasks`** until it records `passed` — never advance on `changes-requested`.
+- **`review-tasks` is unavailable (degraded mode) → Tasks self-certifies.** **Certify only a
+  complete doc:** first confirm the step-4 self-review actually passed — the capture-at-seam
+  is fully applied (heading reframed, the agentic-worker line replaced by the build contract,
+  no orphan `docs/superpowers/plans/` file, no leftover `{{…}}` or placeholder) — **before**
+  recording the gate. `set-gate` writes `passed` from the **frontmatter alone** and cannot
+  see a half-applied body, so certifying before the self-review passes would silently bless a
+  broken doc.
+
+Self-certification is safe **only** because Tasks is autonomous (no owner approves the *how*;
+the real human gate is the final PR) — the deliberate asymmetry with `spec`. Record it
+idempotently — **set `passed` only when the gate is still `pending`** (no `review-tasks`
+wrote it), so a `review-tasks` verdict is never clobbered:
 
 ```bash
 set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
-  --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+  --doc tasks --work-item "$WORK_ITEM" --root "$ROOT")
+if [ "$CURRENT" = pending ]; then
+  # degraded mode: review-tasks didn't run — self-certify after a clean self-review
+  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+    --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+else
+  echo "gate already recorded by review-tasks ($CURRENT) — not overwriting"
+  [ "$CURRENT" = passed ] || { echo "review-tasks requested changes — address them and re-run review-tasks; do not advance" >&2; exit 1; }
+fi
 ```
 
 This writes `gates.review: passed` (and derives `status: approved`) — the machine-readable
-signal the producer's Build checks. This is a **self-certification** of an autonomous phase,
-**not** the spec's owner-authority gate: there is no owner to approve the *how*, and the
-real human gate is the final PR. When review-crew's `review-tasks` is wired, **it** owns this
-write (and can set `changes-requested` to block); until then, Tasks records it after a clean
-self-review — exactly as Plan self-certifies its own gate, and as discovery records the spec
-gate in degraded mode.
+signal the producer's Build checks. When review-crew's `review-tasks` is wired, **it** owns
+this write; in its absence Tasks records it after a clean self-review, exactly as Plan does
+for its own gate.
 
 The work-item is now ready for the **Build** phase. Do **not** start the build or
 `subagent-driven-development` yourself — hand off; the producer/owner drives the transition.
