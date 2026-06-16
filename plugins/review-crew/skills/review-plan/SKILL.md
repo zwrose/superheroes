@@ -362,48 +362,37 @@ gate to set; say so and stop at the terminal summary).
   still open, or the user **skipped** a blocking finding → record `changes-requested` (the
   plan is not cleared to advance; report what remains).
 
-The gate is owned by **the-architect's lib** (`definition_doc.py`), the single writer of the
-§3.1 frontmatter — never hand-edit the YAML. Three guards apply before the write (each
-**degrades, it does not crash** — it skips the gate with a message, the doc is still
-reviewed/revised):
+The gate write — and its guards — live in **one tested place**, `lib/gate_write.py` (the
+same handshake review-tasks and review-spec use, so a fix can't miss a copy). It owns the
+whole sequence and **degrades, it does not crash**: resolve the-architect's lib (the single
+§3.1 frontmatter writer) cross-plugin → a **canonical-path guard** (refuse to stamp a doc
+other than the one reviewed — `set-gate` reconstructs `docs/superheroes/<work-item>/plan.md`
+from `--work-item`, so an out-of-layout `<path>` would otherwise hit a *different* doc) → the
+**parent-gate precondition** (a plan is never certified `passed` while its `spec` isn't
+approved — it downgrades to `changes-requested`) → a guarded `set-gate`. It prints a
+human-readable detail to stderr and a one-word outcome to stdout:
 
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
-# Resolve the-architect's lib (the single gate writer) CROSS-PLUGIN: in-repo, else an
-# installed marketplace sibling, else fail closed (CONVENTIONS §7, via architect_lib.py).
-LIB=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/architect_lib.py" --root "$ROOT") || LIB=""
-CANON="$ROOT/docs/superheroes/$WORK_ITEM/plan.md"
-if [ -z "$LIB" ]; then
-  echo "the-architect lib not resolvable (not in-repo, not an installed sibling) — gate NOT recorded. ⚠ the-architect's plan will then SELF-CERTIFY, so review-crew's verdict will NOT gate the build until the-architect is installed alongside review-crew. The plan was still reviewed/revised." >&2
-elif [ ! "$PLAN_PATH" -ef "$CANON" ]; then
-  echo "reviewed doc ($PLAN_PATH) is outside the canonical docs/superheroes/$WORK_ITEM/ layout — gate NOT recorded (refusing to stamp a different file). The plan was still reviewed/revised." >&2
-else
-  # Parent precondition: never certify a plan whose spec isn't approved (mirror
-  # the-architect's chain). Surface read-gate's actual error rather than swallowing it.
-  PARENT=$(python3 "$LIB" read-gate --doc spec --work-item "$WORK_ITEM" --root "$ROOT" 2>&1) \
-    || { echo "could not read parent spec gate: $PARENT" >&2; PARENT=unreadable; }
-  if [ "$REVIEW" = passed ] && [ "$PARENT" != passed ]; then
-    echo "parent spec gate is '$PARENT' (not 'passed') — recording changes-requested, not passed; the spec must be approved first." >&2
-    REVIEW=changes-requested
-  fi
-  python3 "$LIB" set-gate --doc plan --work-item "$WORK_ITEM" --review "$REVIEW" --root "$ROOT" \
-    || echo "set-gate failed — gate NOT recorded (the plan doc may be missing/malformed despite reaching this step)." >&2
-fi
+GATE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/gate_write.py" --mode certify --doc plan \
+  --work-item "$WORK_ITEM" --reviewed-path "$PLAN_PATH" --review "$REVIEW" \
+  --parent-doc spec --root "$ROOT")
 ```
 
-The `-ef` guard closes the **wrong-file** hole: `set-gate` reconstructs the canonical
-`docs/superheroes/<work-item>/plan.md` from `--work-item`, so without this check an explicit
-`<path>` outside that layout would stamp the gate onto a *different* doc than the one
-reviewed. The parent check prevents certifying a plan whose spec isn't approved even when
-review-plan is invoked out-of-band.
+`$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
+`skipped:lib-absent` / `failed:set-gate` — surface it (and any stderr detail) in the terminal
+summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
+only writer.
 
 After exit, print a terminal summary in chat:
 
-- Lead with the final verdict label in bold, and the **gate recorded** (`passed` /
-  `changes-requested` / `not recorded — not a definition-doc` / `not recorded — the-architect
-  lib absent`). If the loop hit the 7-round cap with Critical/Important unresolved, the
-  verdict is **REVISE** and the gate is `changes-requested` — do **not** declare PLAN READY.
+- Lead with the final verdict label in bold, and the **gate outcome** (`$GATE` from the
+  helper — e.g. `recorded:passed`, `recorded:changes-requested`, `skipped:noncanonical`,
+  `skipped:lib-absent`; or "not recorded — not a definition-doc" when `isDefinitionDoc == no`,
+  in which case step 6 was skipped). If the loop hit the 7-round cap with Critical/Important
+  unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not**
+  declare PLAN READY.
 - List, grouped by plan section heading, the revisions applied (auto + user-approved) and
   the findings the user chose to skip — each with its POV line.
 - End with a count summary (e.g. `"2 auto-revised, 1 applied with guidance, 1 skipped;

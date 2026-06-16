@@ -363,28 +363,26 @@ Set `REVISED=yes` **iff** the step-5 loop actually applied at least one revision
 this run (otherwise `REVISED=no`) — a clean, zero-edit re-run on an approved spec must
 **not** revoke a still-valid approval:
 
+The reset itself — resolve the-architect's lib cross-plugin, the canonical-path guard, the
+"only revoke an actually-`passed` gate" check, and the guarded `set-gate pending` — lives in
+the **same tested helper** the certifying legs use, `lib/gate_write.py` (mode `reset`). The
+skill only gates it on `REVISED` (a loop concern the helper can't know); the helper does the
+rest and **never grants `passed`** (it can only reset `passed`→`pending` or no-op):
+
 ```bash
-ROOT=$(git rev-parse --show-toplevel)
-CANON="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
-LIB=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/architect_lib.py" --root "$ROOT") || LIB=""
-if [ "$REVISED" = yes ] && [ -n "$LIB" ] && [ "$SPEC_PATH" -ef "$CANON" ]; then
-  # Surface a read-gate error rather than swallowing it — a malformed gate on a
-  # was-approved spec must not pass silently.
-  CURRENT=$(python3 "$LIB" read-gate --doc spec --work-item "$WORK_ITEM" --root "$ROOT" 2>&1) \
-    || { echo "could not read the spec gate ($CURRENT) — if it was approved, warn the owner the approval may be stale." >&2; CURRENT=unreadable; }
-  if [ "$CURRENT" = passed ]; then
-    python3 "$LIB" set-gate --doc spec --work-item "$WORK_ITEM" --review pending --root "$ROOT" \
-      && echo "spec was already approved and has now been revised — gate reset to 'pending'; the owner must re-approve before it advances." >&2 \
-      || echo "⚠ could not reset the stale-approval gate (set-gate failed) — warn the owner: the 'passed' gate is STALE and the spec needs re-approval." >&2
-  fi
-elif [ "$REVISED" = yes ]; then
-  echo "⚠ spec was revised but the gate could not be reset (the-architect lib unresolvable, or the doc is outside the canonical layout) — if it was approved, warn the owner: the 'passed' gate may be STALE; the spec needs re-approval." >&2
+if [ "$REVISED" = yes ]; then
+  ROOT=$(git rev-parse --show-toplevel)
+  GATE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/gate_write.py" --mode reset --doc spec \
+    --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT")
 fi
 ```
 
-`set-gate --review pending` derives `status: draft` (§3.1), so a programmatic consumer sees
-the spec is no longer approved. (The fuller "any content change invalidates approval"
-contract is the §7 owner-approval-contract's; this closes the in-repo programmatic hole.)
+`$GATE` is `reset:pending` (a stale approval was revoked), `noop:not-approved` (gate wasn't
+`passed` — nothing to revoke), `skipped:noncanonical`, or `skipped:lib-absent`; the helper
+prints the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
+(§3.1), so a programmatic consumer sees the spec is no longer approved. (The fuller "any
+content change invalidates approval" contract is the §7 owner-approval-contract's; this
+closes the in-repo programmatic hole.)
 
 After the loop exits, print a terminal summary in chat:
 
