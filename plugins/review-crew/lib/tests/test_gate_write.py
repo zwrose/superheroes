@@ -29,7 +29,7 @@ DD = _load(os.path.join(_REAL_ARCHITECT, "lib", "definition_doc.py"), "architect
 
 def _docs_root(tmp_path, with_architect=True):
     root = tmp_path / "repo"
-    (root / "docs" / "superheroes" / WI).mkdir(parents=True)
+    os.makedirs(DD.work_item_dir(WI, str(root)))  # the-architect owns the layout — derive, don't inline
     if with_architect:
         (root / "plugins").mkdir(parents=True)
         os.symlink(_REAL_ARCHITECT, str(root / "plugins" / "the-architect"))
@@ -41,7 +41,9 @@ def _write(root, doc, *, where=None):
     parent = None if doc == "spec" else WI  # plan→spec, tasks→plan (normalized by the lib)
     fm = DD.frontmatter(doc, WI, size="small", parent=parent,
                         created="2026-06-15", updated="2026-06-15")
-    path = os.path.join(where or os.path.join(root, "docs", "superheroes", WI), doc + ".md")
+    # Canonical path comes from the-architect (the layout owner); `where` (a dir) overrides for
+    # the deliberately-noncanonical cases. No inline path literal — see test_canonical_path_*.
+    path = os.path.join(where, doc + ".md") if where else DD.doc_path(WI, doc, root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(DD.render_frontmatter(fm) + "\n# " + doc + "\n")
@@ -49,7 +51,17 @@ def _write(root, doc, *, where=None):
 
 
 def _gate(root, doc):
-    return DD.read_gate(os.path.join(root, "docs", "superheroes", WI, doc + ".md"))
+    return DD.read_gate(DD.doc_path(WI, doc, root))
+
+
+def test_canonical_path_matches_the_architect(tmp_path):
+    # arch-r3-001: gate_write._canonical re-encodes the-architect's docs/superheroes/<wi>/<doc>.md
+    # layout so the samefile guard runs without a subprocess. the-architect's doc_path() OWNS that
+    # layout; pin the two equal so a layout change there (e.g. a versioned subdir) can't silently
+    # drift gate_write's guard — which would re-open the wrong-file hole the guard exists to close.
+    root = str(tmp_path / "repo")
+    for doc in ("spec", "plan", "tasks"):
+        assert GW._canonical(root, WI, doc) == DD.doc_path(WI, doc, root)
 
 
 def _run(capsys, *args):
@@ -182,6 +194,20 @@ def test_reset_lib_absent_fails_closed(tmp_path, capsys):
                    "--reviewed-path", spec, "--root", root)
     assert rc == 0 and out == "skipped:lib-absent"
     assert _gate(root, "spec") == "passed"  # could not reset; warned (stderr)
+
+
+def test_reset_set_gate_failure_reports(tmp_path, capsys, monkeypatch):
+    # The reset twin of test_certify_set_gate_failure_reports. read-gate must SUCCEED and return
+    # 'passed' first (so a malformed file can't induce it the way certify's test does) — force
+    # _set_gate to fail after a clean read. The stale 'passed' must remain on disk (the hazard the
+    # helper warns the owner about), and the outcome token must be failed:set-gate.
+    root = _docs_root(tmp_path)
+    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    monkeypatch.setattr(GW, "_set_gate", lambda *a, **k: (False, "induced write failure"))
+    rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
+                   "--reviewed-path", spec, "--root", root)
+    assert rc == 0 and out == "failed:set-gate"
+    assert _gate(root, "spec") == "passed"  # stale approval still on disk — the warned-about state
 
 
 def test_certify_requires_review(tmp_path, capsys):

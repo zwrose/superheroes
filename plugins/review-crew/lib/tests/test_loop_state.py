@@ -31,7 +31,8 @@ def _run(capsys, *args):
 # --- the pure decision matrix --------------------------------------------
 
 def test_breaker_halt_wins():
-    assert LS.decide(2, 0, 1, 7, breaker_halt=True)[0] == "halt"
+    action, mandatory, _ = LS.decide(2, 0, 1, 7, breaker_halt=True)
+    assert action == "halt" and mandatory is True  # a halt directive is mandatory, not advisory
 
 
 def test_blocking_fix_mandates_review():
@@ -41,7 +42,8 @@ def test_blocking_fix_mandates_review():
 
 
 def test_blocking_fix_at_cap_halts_not_review():
-    assert LS.decide(1, 0, 7, 7, breaker_halt=False)[0] == "halt"
+    action, mandatory, _ = LS.decide(1, 0, 7, 7, breaker_halt=False)
+    assert action == "halt" and mandatory is True  # cap-with-open-blockers halts AND is mandatory
 
 
 def test_no_fix_no_skip_exits_clean():
@@ -87,12 +89,23 @@ def test_cli_skipped_derived_from_resolutions(tmp_path, capsys):
 
 def test_cli_breaker_halt(capsys):
     rc, out = _run(capsys, "--round", "3", "--blocking-fixed", "1", "--breaker-halt", "yes")
-    assert out["action"] == "halt"
+    assert out["action"] == "halt" and out["mandatory"] is True
 
 
 def test_cli_bad_artifact_fails_safe_to_review(tmp_path, capsys):
     rc, out = _run(capsys, "--round", "1", "--fix-batch", str(tmp_path / "does-not-exist.json"))
     assert rc == 0 and out["action"] == "review"  # fail SAFE toward review, never a silent exit
+
+
+def test_cli_malformed_json_content_fails_safe_to_review(tmp_path, capsys):
+    # A half-written / truncated artifact (valid path, invalid JSON *content*) raises
+    # json.JSONDecodeError, not OSError — distinct from the missing-file case above. The fail-safe
+    # except must still default to review; this pins json.JSONDecodeError in the except tuple so a
+    # mutant dropping it can't silently exit on a corrupt artifact.
+    fb = tmp_path / "fix-batch.json"
+    fb.write_text("{ not valid json", encoding="utf-8")
+    rc, out = _run(capsys, "--round", "1", "--fix-batch", str(fb))
+    assert rc == 0 and out["action"] == "review"
 
 
 # --- the revise-loop wiring: derive the count from compiled.json, not self-report ---------

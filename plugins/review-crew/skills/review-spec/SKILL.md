@@ -388,9 +388,11 @@ fi
 ```
 
 `$GATE` is `reset:pending` (a stale approval was revoked), `noop:not-approved` (gate wasn't
-`passed` — nothing to revoke), `skipped:noncanonical`, `skipped:lib-absent`, or
-`failed:set-gate` (the stale `passed` could **not** be revoked — surface it: the approval is
-stale and the owner must re-approve); the helper prints the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
+`passed` — nothing to revoke), `skipped:noncanonical`, `skipped:lib-absent`,
+`skipped:unreadable` (the gate could **not** be read — if it was approved, the approval may be
+stale and the owner must re-approve), or `failed:set-gate` (the stale `passed` could **not** be
+revoked — surface it: the approval is stale and the owner must re-approve); the helper prints
+the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
 (§3.1), so a programmatic consumer sees the spec is no longer approved. (The fuller "any
 content change invalidates approval" contract is the §7 owner-approval-contract's; this
 closes the in-repo programmatic hole.)

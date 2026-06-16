@@ -52,6 +52,12 @@ def _emit(token):
 
 
 def _canonical(root, work_item, doc):
+    # the-architect OWNS this layout — its doc_path() and set-gate/read-gate derive the same
+    # docs/superheroes/<work-item>/<doc>.md. We re-encode it here only so the samefile guard can
+    # run without a subprocess round-trip. test_gate_write.py::test_canonical_path_matches_the_architect
+    # PINS this equal to the-architect's doc_path(), so the two copies cannot drift undetected —
+    # a layout change there (e.g. a versioned subdir) fails CI instead of silently re-opening the
+    # wrong-file hole this guard exists to close (arch-r3-001).
     return os.path.join(root, "docs", "superheroes", work_item, doc + ".md")
 
 
