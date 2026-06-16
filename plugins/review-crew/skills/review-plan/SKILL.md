@@ -347,7 +347,17 @@ Each round:
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the plan document at `$PLAN_PATH` directly to address it (apply the finding's suggested replacement). Make these edits without asking.
 7. **Interventions.** `present-set` = effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`). If non-empty, present ONE consolidated `AskUserQuestion`: lead with each finding's POV; offer **Apply as suggested** / **Apply with my guidance** (free text) / **Skip** in this neutral order. Apply the user's chosen revisions to `$PLAN_PATH`. Add every `Skip` identity to the `skip-set`.
    **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
-8. **Refresh + exit check.** Re-copy the revised plan: `cp "$PLAN_PATH" "$SESSION_DIR/plan.md"`. If any edits were made this round AND one or more Critical/Important findings remain that are not in the `skip-set` AND `round < 7`, set `round += 1` and repeat from step 1 (re-review the revised plan). Otherwise **EXIT** the loop — but if it is exiting because it hit the **7-round cap** with Critical/Important findings still unresolved, `log` that the cap was reached and report those remaining findings explicitly; do **not** declare PLAN READY in that case (coverage may be incomplete, mirroring audit-debt's cap).
+8. **Refresh + continuation gate.** Re-copy the revised plan: `cp "$PLAN_PATH" "$SESSION_DIR/plan.md"`. Whether to re-review is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `BLOCKING_FIXED` = the count of Critical/Important findings you **revised this round** (auto-revised in step 6 or applied via the user's choice in step 7) and `SKIPPED_BLOCKING` = Critical/Important findings added to the `skip-set` this round, then run the gate and obey its `action`:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py" --round <N> --max-rounds 7 \
+     --blocking-fixed <BLOCKING_FIXED> --skipped-blocking <SKIPPED_BLOCKING>
+   ```
+
+   - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved" (that belief is what this gate overrides).
+   - **`exit_clean`** → **EXIT** the loop (then record the gate, §6).
+   - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain PLAN READY.
+   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare PLAN READY (coverage may be incomplete).
 
 ### 6. Record the review gate
 

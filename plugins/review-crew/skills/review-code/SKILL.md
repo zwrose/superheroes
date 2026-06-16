@@ -399,10 +399,23 @@ Each round:
     - Status `CHECK_FAILED` → **HALT**; surface the failing `VERIFY_CMD` output. (When the profile is `mode: unverified`, the fixer runs no checks and cannot return `CHECK_FAILED`.)
     - Status `ESCALATED` → for each escalated finding, present it as a `present-set` intervention now (same prompt shape as step 7), then re-dispatch the fixer with the user's decisions folded in. The follow-up dispatch uses this same `CHECK_FAILED`/`ESCALATED` contract; a finding the user has already decided on is no longer eligible to escalate, so it cannot ping-pong. Do NOT add an escalated finding to the skip-set unless the user skips it. After escalation handling resolves the final `fix-batch`, recompute **blocking-to-fix** (step 9) before evaluating step 14.
 12. **Verify.** If a `VERIFY_CMD` is set, the orchestrator independently runs it from the user's own working tree (never the PR head), non-interactively, with a timeout. Fail (non-zero exit) → **HALT** with `CHECK_FAILED`; surface output. (Do not re-review on a broken tree.) If the profile's verify story is `mode: unverified`, **SKIP this gate** — there is no command to run; the round's commit stands ungated.
-13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON. If `halt: true` → **HALT**; surface `reason` + `detail` + still-open findings + the commit range (`git log <baseRef>..HEAD --oneline`). Do NOT read or `cat` the diff into the orchestrator context.
-14. If `blocking-to-fix > 0` → `round += 1` and repeat from step 1. If `blocking-to-fix == 0`:
-    - and there is **no** skipped-blocking finding → **EXIT SUCCESS** (no blocking findings remain; any Minor/Nit are now fixed).
-    - and one or more blocking findings were deliberately skipped → **EXIT — CLEAN EXCEPT FOR SKIPPED**: the tree is clean except for the skipped blocking finding(s). List them; do not report a plain SUCCESS verdict.
+13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON; **capture `halt`** as `BREAKER_HALT` (`yes`/`no`). Do NOT read or `cat` the diff into the orchestrator context. (Don't act on it yet — step 14 feeds it to the continuation gate so the next action is decided in one place.)
+14. **Continuation gate — the next action is decided by a script, not by you.** Whether to run another round is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run the deterministic gate and **obey its `action`** (it derives the blocking counts from the round artifacts, so they are not yours to self-report either):
+
+    ```bash
+    python3 "${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py" --round <N> --max-rounds 7 \
+      --breaker-halt "$BREAKER_HALT" \
+      --fix-batch "$SESSION_DIR/round-<N>/fix-batch.json" \
+      --resolutions "$SESSION_DIR/round-<N>/resolutions.json"
+    ```
+
+    (Omit `--resolutions` if no resolutions file was written this round.) Parse its JSON `{action, reason}` and **do exactly what `action` says — you may not substitute your own judgment for it**:
+    - **`review`** → `round += 1` and **repeat from step 1**. This is **MANDATORY**: you applied a blocking fix and the loop must re-review to verify it. Do **not** exit, declare success, or present the next round as optional. (The classic skip is to stop here believing it's clean — that belief is exactly what this gate overrides; the last time it was trusted, the "obviously clean" re-review found two real bugs in the fix.)
+    - **`exit_clean`** → **EXIT SUCCESS** (no blocking fix applied this round and none skipped; any Minor/Nit are now fixed).
+    - **`exit_skipped`** → **EXIT — CLEAN EXCEPT FOR SKIPPED**: list the deliberately-skipped blocking finding(s); do **not** report a plain SUCCESS verdict.
+    - **`halt`** → **HALT**: surface the gate's `reason` (plus the breaker's `reason`/`detail` if it halted) + the still-open findings + the commit range (`git log <baseRef>..HEAD --oneline`).
+
+    On `ESCALATED` re-handling (step 11), recompute the fix-batch first, then run this gate on the final `round-<N>/fix-batch.json`. **Red flags that mean you are about to skip the loop** — if you catch yourself thinking any of these, run the gate and obey it instead: "it's a trivial/one-line fix" · "round N+1 will obviously be clean" · "I have full context, I can tell it's done" · "a re-review is diminishing returns / not worth the tokens" · "I'll *offer* another round as optional." None of these is yours to act on; `loop_state.py` decides.
 
 ### Triage subagent prompt
 
@@ -682,6 +695,7 @@ These are the base rubric's binding verification rules; they are restated in eve
 | Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. (No gate when the profile is `mode: unverified`.) |
 | Re-raising a finding the user skipped                   | Skipped identities go in the skip-set and are excluded from every later round's effective findings AND the circuit breaker.                                        |
 | Eyeballing "are we stuck?" by hand                      | Always call `circuit_breaker.py`. Finding-identity comparison across rounds is deterministic; manual judgment drifts after compaction.                             |
+| Exiting the loop early because a fix "looks done"       | The continue decision is `loop_state.py`'s, not yours (step 14). A blocking fix → another round is **mandatory**. "Trivial fix / it'll be clean / save the tokens / I'll offer it as optional" are the rationalizations it overrides — unverified fixes ship exactly this way. |
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
 | Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch each by its `subagent_type` (its name). The methodology is the agent's own system prompt.                  |
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |

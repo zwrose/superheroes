@@ -342,7 +342,17 @@ Each round:
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the spec at `$SPEC_PATH` directly (EARS rephrasing, adding a missing acceptance criterion, removing leaked tech, splitting a compound requirement). Make these edits without asking. Keep the owner's voice; never invent a behavior the owner didn't state.
 7. **Interventions.** `present-set` = effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`). If non-empty, present ONE consolidated `AskUserQuestion`: lead with each finding's POV; offer **Apply as suggested** / **Apply with my guidance** (free text) / **Skip** in this neutral order. For a genuine requirements question, the owner's answer becomes the requirement. Apply the chosen revisions to `$SPEC_PATH`. Add every `Skip` identity to the `skip-set`.
    **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
-8. **Refresh + exit check.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. If any edits were made this round AND one or more Critical/Important findings remain that are not in the `skip-set` AND `round < 7`, set `round += 1` and repeat from step 1. Otherwise **EXIT** the loop — but if it is exiting because it hit the **7-round cap** with Critical/Important findings still unresolved, `log` that the cap was reached and report those remaining findings explicitly; do **not** declare SPEC READY in that case.
+8. **Refresh + continuation gate.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. Whether to re-review is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `BLOCKING_FIXED` = the count of Critical/Important findings you **revised this round** (auto-revised in step 6 or applied via the owner's answer in step 7) and `SKIPPED_BLOCKING` = Critical/Important findings added to the `skip-set` this round, then run the gate and obey its `action`:
+
+   ```bash
+   python3 "${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py" --round <N> --max-rounds 7 \
+     --blocking-fixed <BLOCKING_FIXED> --skipped-blocking <SKIPPED_BLOCKING>
+   ```
+
+   - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved."
+   - **`exit_clean`** → **EXIT** the loop (then report, §6 — review-spec records no `passed`).
+   - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain SPEC READY.
+   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare SPEC READY.
 
 ### 6. Report (advisory — never grants the gate)
 
