@@ -7,6 +7,11 @@
   },
   "plugins": [
     {
+      "name": "the-architect",
+      "source": "./plugins/the-architect",
+      "description": "Turns a fuzzy idea into a reviewed spec → plan → tasks — the requirements-first front half of the loop."
+    },
+    {
       "name": "review-crew",
       "source": "./plugins/review-crew",
       "description": "Multi-agent code, plan, and tech-debt review, calibrated per-project."
