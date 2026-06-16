@@ -23,10 +23,12 @@ presence** and **cross-reference freely by qualified name** (`the-architect:plan
 design — or add machinery — to guarantee standalone-equivalence**; a hero used outside the
 band carries **no warranty** (an individual hero may still have standalone utility — e.g.
 review-crew's `review-code`, test-pilot's browser runs — but that is not a contract). A
-missing band member **degrades, it does not crash**: e.g. an absent `review-X` gate falls
-back to the producing skill's self-certification with a note (§3.1). That is
-"degrade-not-crash," **not** "degrade gracefully to full standalone" — we don't carry
-dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
+missing band member **degrades, it does not crash**: e.g. an absent `review-plan` /
+`review-tasks` gate falls back to the **producing skill's self-certification** (plan and
+tasks are autonomous), while an absent `review-spec` simply leaves the spec for the **owner**
+to approve — the spec is **owner-gated and never self-certified** (the deliberate asymmetry,
+§3.1). That is "degrade-not-crash," **not** "degrade gracefully to full standalone" — we
+don't carry dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
 of "superpowers is an assumed dependency." *(How many install-units the band ships as —
 **packaging** — is a separate question from this posture and from the cast of characters;
 deferred, §7.)*

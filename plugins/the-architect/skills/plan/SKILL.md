@@ -334,7 +334,8 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
-  --doc plan --work-item "$WORK_ITEM" --root "$ROOT")
+  --doc plan --work-item "$WORK_ITEM" --root "$ROOT") \
+  || { echo "could not read the plan gate (missing/malformed frontmatter) — not self-certifying; fix the plan doc first" >&2; exit 1; }
 if [ "$CURRENT" = pending ]; then
   # degraded mode: review-plan didn't run — self-certify after a clean self-review
   python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \

@@ -172,7 +172,7 @@ cat > "$SESSION_DIR/meta.json" <<EOF
   "workItem": "$WORK_ITEM",
   "isDefinitionDoc": "$IS_DEF_DOC",
   "sessionDir": "$SESSION_DIR",
-  "touches": $(printf '%s\n' "${TOUCHES[@]}" | jq -R . | jq -sc .)
+  "touches": $(printf '%s\n' "${TOUCHES[@]}" | jq -R . | jq -sc 'map(select(length>0))')
 }
 EOF
 ```
@@ -353,17 +353,39 @@ this step entirely when `isDefinitionDoc == no`.**
 - **REVISE BEFORE BUILD / MAJOR GAPS**, or the 7-round cap hit with Critical/Important still
   open, or the user **skipped** a blocking finding → record `changes-requested`.
 
+The gate is owned by **the-architect's lib** (`definition_doc.py`), the single writer of the
+§3.1 frontmatter — never hand-edit the YAML. Three guards apply before the write (each
+**degrades, it does not crash** — it skips the gate with a message; the doc is still
+reviewed/revised):
+
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
-# REVIEW is "passed" or "changes-requested" per the verdict above
-python3 "${ARCHITECT_LIB:-$ROOT/plugins/the-architect/lib}/definition_doc.py" set-gate \
-  --doc tasks --work-item "$WORK_ITEM" --review "$REVIEW" --root "$ROOT"
+# REVIEW is "passed" or "changes-requested" per the verdict above.
+# Phase 1 resolves the-architect's lib IN-REPO. Locating an INSTALLED the-architect
+# across plugins is a deferred cross-plugin-interface concern (CONVENTIONS §7) — until
+# then this fails closed (reports, never crashes, never hand-edits) outside the monorepo.
+LIB="$ROOT/plugins/the-architect/lib/definition_doc.py"
+CANON="$ROOT/docs/superheroes/$WORK_ITEM/tasks.md"
+if [ ! -f "$LIB" ]; then
+  echo "the-architect lib not found ($LIB) — gate NOT recorded (CONVENTIONS §7: cross-plugin lib resolution deferred). The tasks doc was still reviewed/revised." >&2
+elif [ ! "$TASKS_PATH" -ef "$CANON" ]; then
+  echo "reviewed doc ($TASKS_PATH) is outside the canonical docs/superheroes/$WORK_ITEM/ layout — gate NOT recorded (refusing to stamp a different file). The tasks doc was still reviewed/revised." >&2
+else
+  # Parent precondition: never certify tasks whose plan isn't approved (mirror
+  # the-architect's chain). read-gate may legitimately error (no plan) → 'unknown'.
+  PARENT=$(python3 "$LIB" read-gate --doc plan --work-item "$WORK_ITEM" --root "$ROOT" 2>/dev/null || echo unknown)
+  if [ "$REVIEW" = passed ] && [ "$PARENT" != passed ]; then
+    echo "parent plan gate is '$PARENT' (not approved) — recording changes-requested, not passed; the plan must be approved first." >&2
+    REVIEW=changes-requested
+  fi
+  python3 "$LIB" set-gate --doc tasks --work-item "$WORK_ITEM" --review "$REVIEW" --root "$ROOT"
+fi
 ```
 
-The gate is owned by **the-architect's lib** (`definition_doc.py`), the single writer of the
-§3.1 frontmatter. Resolve it via the-architect's `${CLAUDE_PLUGIN_ROOT}` when known; otherwise
-the in-repo path above. **If the lib is not present** (the-architect isn't installed), say the
-gate could not be recorded and stop — do **not** hand-edit the frontmatter (degrade-not-crash).
+The `-ef` guard closes the **wrong-file** hole (`set-gate` reconstructs the canonical
+`docs/superheroes/<work-item>/tasks.md` from `--work-item`, so an explicit `<path>` outside
+that layout would otherwise stamp a *different* doc). The parent check prevents certifying
+tasks whose plan isn't approved even when review-tasks is invoked out-of-band.
 
 After exit, print a terminal summary in chat:
 

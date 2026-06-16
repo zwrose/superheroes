@@ -197,7 +197,8 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
-  --doc tasks --work-item "$WORK_ITEM" --root "$ROOT")
+  --doc tasks --work-item "$WORK_ITEM" --root "$ROOT") \
+  || { echo "could not read the tasks gate (missing/malformed frontmatter) — not self-certifying; fix the tasks doc first" >&2; exit 1; }
 if [ "$CURRENT" = pending ]; then
   # degraded mode: review-tasks didn't run — self-certify after a clean self-review
   python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \

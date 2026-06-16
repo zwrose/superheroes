@@ -23,8 +23,9 @@ approve on the owner's behalf. This is the deliberate asymmetry with `review-pla
 `review-tasks` (which *certify* an autonomous doc's gate) — see the base rubric's verdict
 mapping.
 
-This is the **Spec leg of the superheroes review trio** — the automated gate the-architect's
-`discovery` skill calls. Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`)
+This is the **Spec leg of the superheroes review trio** — the automated *spec-review*
+the-architect's `discovery` skill calls (an automated **review**, not a gate: it writes
+none). Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`)
 for severity calibration and the verification rules every finding must pass; if anything
 below contradicts the base rubric, the base rubric wins.
 
@@ -171,7 +172,7 @@ cat > "$SESSION_DIR/meta.json" <<EOF
   "workItem": "$WORK_ITEM",
   "isDefinitionDoc": "$IS_DEF_DOC",
   "sessionDir": "$SESSION_DIR",
-  "touches": $(printf '%s\n' "${TOUCHES[@]}" | jq -R . | jq -sc .)
+  "touches": $(printf '%s\n' "${TOUCHES[@]}" | jq -R . | jq -sc 'map(select(length>0))')
 }
 EOF
 ```
@@ -346,8 +347,18 @@ Each round:
 ### 6. Report (advisory — no gate)
 
 review-spec **records no gate** — the spec stays `pending` until the **owner** approves it
-(Discovery step 8). Do **not** call `set-gate`; do **not** mark the spec approved. After the
-loop exits, print a terminal summary in chat:
+(Discovery step 8). Do **not** call `set-gate`; do **not** mark the spec approved.
+
+**Stale-approval guard.** review-spec normally runs *before* approval (Discovery step 7,
+gate `pending`). But if it is **re-run on an already-approved spec** (`gates.review: passed`)
+**and makes any revision**, that revision invalidates the owner's approval — the owner
+approved the *old* content. review-spec is advisory and must not flip the gate itself
+(only the owner sets `passed`, only Discovery/the approval-contract resets it — a deferred
+§7 concern). So **warn the owner prominently**: "this spec was already approved; the
+revisions above mean it needs **re-approval** before it advances — its `passed` gate is now
+stale." Do not silently leave a changed-but-`approved` spec without flagging it.
+
+After the loop exits, print a terminal summary in chat:
 
 - Lead with the final verdict label in bold (`SPEC READY` = ready for the owner to review,
   **not** approved). If the loop hit the 7-round cap with Critical/Important unresolved, the
