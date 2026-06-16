@@ -359,18 +359,25 @@ approved the *old* content, and plan's HARD-GATE reads `gates.review` **programm
 never *grants* one. Do this **only when this run actually revised an already-`passed`
 spec** (no revision → the approval still holds; leave it):
 
+Set `REVISED=yes` **iff** the step-5 loop actually applied at least one revision to the spec
+this run (otherwise `REVISED=no`) — a clean, zero-edit re-run on an approved spec must
+**not** revoke a still-valid approval:
+
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
 CANON="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
 LIB=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/architect_lib.py" --root "$ROOT") || LIB=""
-if [ -n "$LIB" ] && [ "$SPEC_PATH" -ef "$CANON" ]; then
-  CURRENT=$(python3 "$LIB" read-gate --doc spec --work-item "$WORK_ITEM" --root "$ROOT" 2>/dev/null || echo unknown)
+if [ "$REVISED" = yes ] && [ -n "$LIB" ] && [ "$SPEC_PATH" -ef "$CANON" ]; then
+  # Surface a read-gate error rather than swallowing it — a malformed gate on a
+  # was-approved spec must not pass silently.
+  CURRENT=$(python3 "$LIB" read-gate --doc spec --work-item "$WORK_ITEM" --root "$ROOT" 2>&1) \
+    || { echo "could not read the spec gate ($CURRENT) — if it was approved, warn the owner the approval may be stale." >&2; CURRENT=unreadable; }
   if [ "$CURRENT" = passed ]; then
     python3 "$LIB" set-gate --doc spec --work-item "$WORK_ITEM" --review pending --root "$ROOT" \
       && echo "spec was already approved and has now been revised — gate reset to 'pending'; the owner must re-approve before it advances." >&2
   fi
-else
-  echo "⚠ if the spec was already approved, its gate could not be reset (the-architect lib unresolvable, or the doc is outside the canonical layout) — warn the owner: the 'passed' gate may be STALE; the spec needs re-approval." >&2
+elif [ "$REVISED" = yes ]; then
+  echo "⚠ spec was revised but the gate could not be reset (the-architect lib unresolvable, or the doc is outside the canonical layout) — if it was approved, warn the owner: the 'passed' gate may be STALE; the spec needs re-approval." >&2
 fi
 ```
 

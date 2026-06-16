@@ -4,9 +4,10 @@
 The review trio (review-spec/review-plan/review-tasks) records definition-doc review
 gates via **the-architect's** lib — the single writer of the §3.1 frontmatter
 (CONVENTIONS §3). But review-crew and the-architect install as **separate plugins**, so
-review-crew must LOCATE the-architect's lib at runtime. This is the cross-plugin
-lib-resolution concern deferred in CONVENTIONS §7 — resolved here so the certifying gate
-is reachable in a shipped band, not only in the monorepo.
+review-crew must LOCATE the-architect's lib at runtime — the band's heroes install as
+separate plugins (CONVENTIONS "Band posture"). This resolver closes that cross-plugin
+lib-resolution gap so the certifying gate is reachable in a shipped band, not only in the
+monorepo.
 
 Resolution order (first hit wins):
   1. **In-repo** (monorepo / dogfooding): ``<root>/plugins/the-architect/lib/definition_doc.py``.
