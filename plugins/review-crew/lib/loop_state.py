@@ -16,13 +16,14 @@ output: the model OBEYS the action, it does not decide it.
 Actions (stdout JSON `{action, mandatory, reason}`):
   - `review`        — a blocking fix landed; re-review from scratch. MANDATORY.
   - `exit_clean`    — no blocking fix applied and none skipped; the loop is done.
-  - `exit_skipped`  — no blocking fix applied, but blocking finding(s) were deliberately
+  - `exit_skipped`  — no blocking finding addressed, but blocking finding(s) were deliberately
                       skipped; exit CLEAN-EXCEPT-FOR-SKIPPED (report them, not plain success).
-  - `halt`          — the circuit breaker halted, the round cap was hit with fixes still
-                      landing, or blocking findings remain neither fixed nor skipped (stuck).
+  - `halt`          — the circuit breaker halted, or the round cap was hit with blocking
+                      findings still being addressed.
 
-The blocking counts can be passed explicitly OR derived from the round artifacts
-(`--fix-batch`, `--resolutions`) so the model can't fudge them. stdlib only.
+The blocking counts can be passed explicitly OR derived from the round artifacts so the
+model can't self-report them: review-code passes `--fix-batch` (+ `--resolutions`); the
+revise loops pass `--compiled` (+ `--skipped-blocking`). stdlib only.
 """
 import argparse
 import json
@@ -51,7 +52,17 @@ def _skipped_blocking_from_resolutions(path):
                if r.get("action") == "skip" and r.get("severity") in _BLOCKING)
 
 
-def decide(blocking_fixed, skipped_blocking, blocking_open, rnd, max_rounds, breaker_halt):
+def _blocking_present_from_compiled(path):
+    """compiled.json: { findings: [{severity}] }; count blocking findings present this round.
+    Used by the revise loops (which have no fix-batch) so their continue count is derived
+    from the agents' findings, not self-reported by the orchestrator."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    findings = data if isinstance(data, list) else data.get("findings", [])
+    return _count_blocking(findings)
+
+
+def decide(blocking_fixed, skipped_blocking, rnd, max_rounds, breaker_halt):
     """Pure decision. Returns (action, mandatory, reason)."""
     if breaker_halt:
         return ("halt", True,
@@ -63,25 +74,19 @@ def decide(blocking_fixed, skipped_blocking, blocking_open, rnd, max_rounds, bre
                     "round cap (%d) reached with blocking fixes still landing — REPORT the open "
                     "findings; do NOT declare success." % max_rounds)
         return ("review", True,
-                "MANDATORY: %d blocking (Critical/Important) fix(es) were applied this round — "
-                "re-review from scratch to verify they resolved the findings and introduced "
-                "nothing new. You may NOT exit, declare success, or offer the next round as "
-                "'optional'. The loop exists to verify fixes; your confidence that 'it is "
-                "clean' is exactly what this gate overrides." % blocking_fixed)
-    # No blocking fix was applied this round.
-    unaddressed = max(0, blocking_open - skipped_blocking)
-    if unaddressed > 0:
-        return ("halt", True,
-                "%d blocking finding(s) remain neither fixed nor skipped, and no fix was "
-                "applied this round — the loop is stuck; report them rather than exiting "
-                "clean." % unaddressed)
+                "MANDATORY: %d blocking (Critical/Important) finding(s) were addressed this "
+                "round — re-review from scratch to verify they resolved and introduced nothing "
+                "new. You may NOT exit, declare success, or offer the next round as 'optional'. "
+                "The loop exists to verify fixes; your confidence that 'it is clean' is exactly "
+                "what this gate overrides." % blocking_fixed)
+    # No blocking finding was addressed this round (none present, or all skipped).
     if skipped_blocking > 0:
         return ("exit_skipped", False,
-                "no blocking fix applied; %d blocking finding(s) were deliberately skipped — "
-                "exit CLEAN-EXCEPT-FOR-SKIPPED: list the skipped blocker(s); do not report a "
-                "plain success." % skipped_blocking)
+                "no blocking finding addressed; %d blocking finding(s) were deliberately "
+                "skipped — exit CLEAN-EXCEPT-FOR-SKIPPED: list the skipped blocker(s); do not "
+                "report a plain success." % skipped_blocking)
     return ("exit_clean", False,
-            "no blocking findings to fix and none skipped — the loop is genuinely done; "
+            "no blocking findings to address and none skipped — the loop is genuinely done; "
             "exit SUCCESS.")
 
 
@@ -90,24 +95,19 @@ def main(argv):
     ap.add_argument("--round", type=int, required=True, dest="rnd")
     ap.add_argument("--max-rounds", type=int, default=7)
     ap.add_argument("--breaker-halt", choices=["yes", "no"], default="no")
-    # blocking-fixed: explicit, or derived from the fix-batch artifact.
+    # blocking-fixed: explicit, or derived from an artifact — review-code from its fix-batch
+    # (already excludes skipped); the revise loops from compiled.json (blocking present minus
+    # the blockers they skipped). Deriving it means the count is NOT self-reported.
     ap.add_argument("--blocking-fixed", type=int, default=None)
-    ap.add_argument("--fix-batch", default=None, help="round-<N>/fix-batch.json (derives blocking-fixed)")
+    ap.add_argument("--fix-batch", default=None, help="round-<N>/fix-batch.json (review-code: derives blocking-fixed)")
+    ap.add_argument("--compiled", default=None, help="compiled.json (revise loops: derives blocking present this round)")
     # skipped-blocking: explicit, or derived from the resolutions artifact.
     ap.add_argument("--skipped-blocking", type=int, default=None)
     ap.add_argument("--resolutions", default=None, help="round-<N>/resolutions.json (derives skipped-blocking)")
-    ap.add_argument("--blocking-open", type=int, default=None,
-                    help="effective blocking findings remaining (defaults to skipped-blocking)")
     args = ap.parse_args(argv[1:])
 
     try:
-        if args.blocking_fixed is not None:
-            blocking_fixed = args.blocking_fixed
-        elif args.fix_batch is not None:
-            blocking_fixed = _blocking_fixed_from_fix_batch(args.fix_batch)
-        else:
-            blocking_fixed = 0  # no fixer ran this round (e.g. everything skipped)
-
+        # Skipped count first — the --compiled derivation of blocking-fixed depends on it.
         if args.skipped_blocking is not None:
             skipped_blocking = args.skipped_blocking
         elif args.resolutions is not None:
@@ -115,16 +115,26 @@ def main(argv):
         else:
             skipped_blocking = 0
 
-        blocking_open = args.blocking_open if args.blocking_open is not None else skipped_blocking
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        # Fail SAFE toward more review, never toward a silent exit.
+        if args.blocking_fixed is not None:
+            blocking_fixed = args.blocking_fixed
+        elif args.fix_batch is not None:
+            blocking_fixed = _blocking_fixed_from_fix_batch(args.fix_batch)
+        elif args.compiled is not None:
+            # revise loops: every effective blocker present this round was revised, so the
+            # count addressed = blockers present minus the ones skipped.
+            blocking_fixed = max(0, _blocking_present_from_compiled(args.compiled) - skipped_blocking)
+        else:
+            blocking_fixed = 0  # nothing addressed this round (e.g. everything skipped)
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, json.JSONDecodeError) as exc:
+        # Fail SAFE toward more review, never toward a silent exit — a malformed or wrong-shape
+        # artifact must not let the loop slip out early.
         sys.stdout.write(json.dumps({
             "action": "review", "mandatory": True,
             "reason": "could not read the round artifacts (%s) — defaulting to another review "
                       "round rather than risk a premature exit." % exc}) + "\n")
         return 0
 
-    action, mandatory, reason = decide(blocking_fixed, skipped_blocking, blocking_open,
+    action, mandatory, reason = decide(blocking_fixed, skipped_blocking,
                                        args.rnd, args.max_rounds, args.breaker_halt == "yes")
     sys.stdout.write(json.dumps({"action": action, "mandatory": mandatory, "reason": reason}) + "\n")
     return 0

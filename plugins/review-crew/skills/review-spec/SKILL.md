@@ -342,11 +342,11 @@ Each round:
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the spec at `$SPEC_PATH` directly (EARS rephrasing, adding a missing acceptance criterion, removing leaked tech, splitting a compound requirement). Make these edits without asking. Keep the owner's voice; never invent a behavior the owner didn't state.
 7. **Interventions.** `present-set` = effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`). If non-empty, present ONE consolidated `AskUserQuestion`: lead with each finding's POV; offer **Apply as suggested** / **Apply with my guidance** (free text) / **Skip** in this neutral order. For a genuine requirements question, the owner's answer becomes the requirement. Apply the chosen revisions to `$SPEC_PATH`. Add every `Skip` identity to the `skip-set`.
    **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
-8. **Refresh + continuation gate.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. Whether to re-review is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `BLOCKING_FIXED` = the count of Critical/Important findings you **revised this round** (auto-revised in step 6 or applied via the owner's answer in step 7) and `SKIPPED_BLOCKING` = Critical/Important findings added to the `skip-set` this round, then run the gate and obey its `action`:
+8. **Refresh + continuation gate.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. Whether to re-review is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `SKIPPED_BLOCKING` = the count of Critical/Important findings you added to the `skip-set` this round; the gate **derives the number of blockers addressed from this round's `compiled.json`** (blockers present minus skipped), so it is **not yours to self-report**. Run it and obey its `action`:
 
    ```bash
    python3 "${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py" --round <N> --max-rounds 7 \
-     --blocking-fixed <BLOCKING_FIXED> --skipped-blocking <SKIPPED_BLOCKING>
+     --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
 
    - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved."
@@ -388,8 +388,9 @@ fi
 ```
 
 `$GATE` is `reset:pending` (a stale approval was revoked), `noop:not-approved` (gate wasn't
-`passed` — nothing to revoke), `skipped:noncanonical`, or `skipped:lib-absent`; the helper
-prints the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
+`passed` — nothing to revoke), `skipped:noncanonical`, `skipped:lib-absent`, or
+`failed:set-gate` (the stale `passed` could **not** be revoked — surface it: the approval is
+stale and the owner must re-approve); the helper prints the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
 (§3.1), so a programmatic consumer sees the spec is no longer approved. (The fuller "any
 content change invalidates approval" contract is the §7 owner-approval-contract's; this
 closes the in-repo programmatic hole.)

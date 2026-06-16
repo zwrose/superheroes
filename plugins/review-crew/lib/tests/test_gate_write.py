@@ -10,8 +10,6 @@ in so the in-repo resolver finds the real lib while docs stay isolated.
 import importlib.util
 import os
 
-import pytest
-
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
 _REAL_ARCHITECT = os.path.join(_REPO_ROOT, "plugins", "the-architect")
@@ -102,6 +100,20 @@ def test_certify_noncanonical_skips_and_leaves_canonical_untouched(tmp_path, cap
     assert _gate(root, "plan") == "changes-requested"  # the wrong-file hole: canonical doc untouched
 
 
+def test_certify_downgrades_when_parent_gate_unreadable(tmp_path, capsys):
+    # A malformed parent spec → read-gate errors → parent resolves to 'unreadable' (not 'passed')
+    # → certify must downgrade to changes-requested, never stamp passed on an unverifiable parent.
+    root = _docs_root(tmp_path)
+    canon_spec = os.path.join(root, "docs", "superheroes", WI, "spec.md")
+    with open(canon_spec, "w", encoding="utf-8") as fh:
+        fh.write("# malformed spec — no frontmatter\n")
+    plan = _write(root, "plan")
+    rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
+                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
+    assert rc == 0 and out == "recorded:changes-requested"
+    assert _gate(root, "plan") == "changes-requested"
+
+
 def test_certify_set_gate_failure_reports(tmp_path, capsys):
     root = _docs_root(tmp_path)
     canon = os.path.join(root, "docs", "superheroes", WI, "plan.md")
@@ -149,6 +161,18 @@ def test_reset_noncanonical_skips_and_leaves_canonical(tmp_path, capsys):
                    "--reviewed-path", external, "--root", root)
     assert rc == 0 and out == "skipped:noncanonical"
     assert _gate(root, "spec") == "passed"  # canonical approval untouched
+
+
+def test_reset_skipped_when_gate_unreadable(tmp_path, capsys):
+    # A malformed (was-approved) spec → read-gate errors → reset must surface skipped:unreadable
+    # (warn the owner the approval may be stale), not silently no-op.
+    root = _docs_root(tmp_path)
+    canon = os.path.join(root, "docs", "superheroes", WI, "spec.md")
+    with open(canon, "w", encoding="utf-8") as fh:
+        fh.write("# malformed — no frontmatter\n")
+    rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
+                   "--reviewed-path", canon, "--root", root)
+    assert rc == 0 and out == "skipped:unreadable"
 
 
 def test_reset_lib_absent_fails_closed(tmp_path, capsys):

@@ -22,8 +22,11 @@ def _read(skill):
 
 
 def test_looping_skills_invoke_the_continuation_gate():
-    missing = [s for s in LOOPING_SKILLS if "loop_state.py" not in _read(s)]
-    assert not missing, "continuation gate (loop_state.py) not wired in: " + ", ".join(missing)
+    # Match the INVOCATION shape (`loop_state.py" --round`), not a bare mention — review-code
+    # also references loop_state.py in prose (the Common-Mistakes row), which must not let a
+    # skill that dropped the actual call pass vacuously.
+    missing = [s for s in LOOPING_SKILLS if 'loop_state.py" --round' not in _read(s)]
+    assert not missing, "continuation gate not actually invoked in: " + ", ".join(missing)
 
 
 def test_loop_state_lib_exists():
