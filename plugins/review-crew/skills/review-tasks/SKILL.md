@@ -361,24 +361,25 @@ reviewed/revised):
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
-# Phase 1 resolves the-architect's lib IN-REPO. Locating an INSTALLED the-architect
-# across plugins is a deferred cross-plugin-interface concern (CONVENTIONS §7) — until
-# then this fails closed (reports, never crashes, never hand-edits) outside the monorepo.
-LIB="$ROOT/plugins/the-architect/lib/definition_doc.py"
+# Resolve the-architect's lib (the single gate writer) CROSS-PLUGIN: in-repo, else an
+# installed marketplace sibling, else fail closed (CONVENTIONS §7, via architect_lib.py).
+LIB=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/architect_lib.py" --root "$ROOT") || LIB=""
 CANON="$ROOT/docs/superheroes/$WORK_ITEM/tasks.md"
-if [ ! -f "$LIB" ]; then
-  echo "the-architect lib not found ($LIB) — gate NOT recorded (CONVENTIONS §7: cross-plugin lib resolution deferred). The tasks doc was still reviewed/revised." >&2
+if [ -z "$LIB" ]; then
+  echo "the-architect lib not resolvable (not in-repo, not an installed sibling) — gate NOT recorded. ⚠ the-architect's tasks will then SELF-CERTIFY, so review-crew's verdict will NOT gate the build until the-architect is installed alongside review-crew. The tasks doc was still reviewed/revised." >&2
 elif [ ! "$TASKS_PATH" -ef "$CANON" ]; then
   echo "reviewed doc ($TASKS_PATH) is outside the canonical docs/superheroes/$WORK_ITEM/ layout — gate NOT recorded (refusing to stamp a different file). The tasks doc was still reviewed/revised." >&2
 else
   # Parent precondition: never certify tasks whose plan isn't approved (mirror
-  # the-architect's chain). read-gate may legitimately error (no plan) → 'unknown'.
-  PARENT=$(python3 "$LIB" read-gate --doc plan --work-item "$WORK_ITEM" --root "$ROOT" 2>/dev/null || echo unknown)
+  # the-architect's chain). Surface read-gate's actual error rather than swallowing it.
+  PARENT=$(python3 "$LIB" read-gate --doc plan --work-item "$WORK_ITEM" --root "$ROOT" 2>&1) \
+    || { echo "could not read parent plan gate: $PARENT" >&2; PARENT=unreadable; }
   if [ "$REVIEW" = passed ] && [ "$PARENT" != passed ]; then
-    echo "parent plan gate is '$PARENT' (not approved) — recording changes-requested, not passed; the plan must be approved first." >&2
+    echo "parent plan gate is '$PARENT' (not 'passed') — recording changes-requested, not passed; the plan must be approved first." >&2
     REVIEW=changes-requested
   fi
-  python3 "$LIB" set-gate --doc tasks --work-item "$WORK_ITEM" --review "$REVIEW" --root "$ROOT"
+  python3 "$LIB" set-gate --doc tasks --work-item "$WORK_ITEM" --review "$REVIEW" --root "$ROOT" \
+    || echo "set-gate failed — gate NOT recorded (the tasks doc may be missing/malformed despite reaching this step)." >&2
 fi
 ```
 

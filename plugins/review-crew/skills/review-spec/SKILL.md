@@ -24,16 +24,16 @@ approve on the owner's behalf. This is the deliberate asymmetry with `review-pla
 mapping.
 
 This is the **Spec leg of the superheroes review trio** — the automated *spec-review*
-the-architect's `discovery` skill calls (an automated **review**, not a gate: it writes
-none). Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`)
+the-architect's `discovery` skill calls (an automated **review**, not a gate: it never
+grants `passed`). Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`)
 for severity calibration and the verification rules every finding must pass; if anything
 below contradicts the base rubric, the base rubric wins.
 
 > **Band posture.** This reviews the superheroes `spec` definition-doc (CONVENTIONS §3),
 > designed to run inside the band alongside the-architect. If handed a doc with no
 > `superheroes: doc` / `docType: spec` frontmatter it **degrades, it does not crash**: it
-> still red-teams the document and reports (it writes no gate either way — there is nothing
-> to skip).
+> still red-teams the document and reports (it never grants `passed`; a non-definition-doc
+> has no gate to reset either).
 
 Spec review is about the **requirements**, not code or design. The spec is plain-language,
 owner-facing, and **carries no technical *how*** (that is the `plan`). The reviewers' job is
@@ -143,7 +143,7 @@ fi
 
 If `$SPEC_PATH` is empty or the file doesn't exist, use `AskUserQuestion` to ask for a work-item or path. Do not invent one.
 
-**Derive the work-item and note whether this is a spec definition-doc** (review-spec writes no gate either way, but the work-item labels the report):
+**Derive the work-item and note whether this is a spec definition-doc** (review-spec never grants `passed`; the work-item labels the report and scopes the step-6 stale-approval reset):
 
 ```bash
 WORK_ITEM=$(basename "$(dirname "$SPEC_PATH")")
@@ -184,7 +184,7 @@ The classification is informational — **all five specialists still run**.
 Print this dispatch summary as a plain status message, then dispatch the specialists immediately (no approval gate):
 
 - **Spec doc:** `$SPEC_PATH` (work-item `$WORK_ITEM`) and its line count (`wc -l < $SESSION_DIR/spec.md`)
-- **Gate:** none — review-spec is **advisory**; the owner approves the spec in Discovery.
+- **Gate:** advisory — never grants `passed` (the owner approves in Discovery); may reset a *stale* approval to `pending` (step 6).
 - **Classification:** the `touches` array (e.g. `["access", "data", "money"]`)
 - **Specialists to dispatch (all five, in parallel — reframed to requirements quality):**
   - `code-reviewer` → `findings-code.json` _(requirements clarity: EARS form, anti-slop, no tech leak)_
@@ -344,19 +344,39 @@ Each round:
    **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
 8. **Refresh + exit check.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. If any edits were made this round AND one or more Critical/Important findings remain that are not in the `skip-set` AND `round < 7`, set `round += 1` and repeat from step 1. Otherwise **EXIT** the loop — but if it is exiting because it hit the **7-round cap** with Critical/Important findings still unresolved, `log` that the cap was reached and report those remaining findings explicitly; do **not** declare SPEC READY in that case.
 
-### 6. Report (advisory — no gate)
+### 6. Report (advisory — never grants the gate)
 
-review-spec **records no gate** — the spec stays `pending` until the **owner** approves it
-(Discovery step 8). Do **not** call `set-gate`; do **not** mark the spec approved.
+review-spec **never writes `passed`** — the spec reaches `passed` only when the **owner**
+approves it (Discovery step 8). It does not approve the spec. (It may **revoke** a now-stale
+approval — see below — but it can never grant one; that is the advisory invariant.)
 
 **Stale-approval guard.** review-spec normally runs *before* approval (Discovery step 7,
 gate `pending`). But if it is **re-run on an already-approved spec** (`gates.review: passed`)
-**and makes any revision**, that revision invalidates the owner's approval — the owner
-approved the *old* content. review-spec is advisory and must not flip the gate itself
-(only the owner sets `passed`, only Discovery/the approval-contract resets it — a deferred
-§7 concern). So **warn the owner prominently**: "this spec was already approved; the
-revisions above mean it needs **re-approval** before it advances — its `passed` gate is now
-stale." Do not silently leave a changed-but-`approved` spec without flagging it.
+**and makes any revision**, the revision invalidates the owner's approval — the owner
+approved the *old* content, and plan's HARD-GATE reads `gates.review` **programmatically**
+(it can't see a chat warning). So **reset the gate to `pending`** — marking "needs
+(re-)approval". Resetting is advisory-consistent: review-spec *revokes* a stale approval, it
+never *grants* one. Do this **only when this run actually revised an already-`passed`
+spec** (no revision → the approval still holds; leave it):
+
+```bash
+ROOT=$(git rev-parse --show-toplevel)
+CANON="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
+LIB=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/architect_lib.py" --root "$ROOT") || LIB=""
+if [ -n "$LIB" ] && [ "$SPEC_PATH" -ef "$CANON" ]; then
+  CURRENT=$(python3 "$LIB" read-gate --doc spec --work-item "$WORK_ITEM" --root "$ROOT" 2>/dev/null || echo unknown)
+  if [ "$CURRENT" = passed ]; then
+    python3 "$LIB" set-gate --doc spec --work-item "$WORK_ITEM" --review pending --root "$ROOT" \
+      && echo "spec was already approved and has now been revised — gate reset to 'pending'; the owner must re-approve before it advances." >&2
+  fi
+else
+  echo "⚠ if the spec was already approved, its gate could not be reset (the-architect lib unresolvable, or the doc is outside the canonical layout) — warn the owner: the 'passed' gate may be STALE; the spec needs re-approval." >&2
+fi
+```
+
+`set-gate --review pending` derives `status: draft` (§3.1), so a programmatic consumer sees
+the spec is no longer approved. (The fuller "any content change invalidates approval"
+contract is the §7 owner-approval-contract's; this closes the in-repo programmatic hole.)
 
 After the loop exits, print a terminal summary in chat:
 
@@ -372,7 +392,7 @@ After the loop exits, print a terminal summary in chat:
 
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge**, (2) the **learning-loop proposal**, then (3) the **provisional-profile confirmation**. All three are placed after the review output and none blocks.
 
-Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map). **No gate is written.**
+Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map). **The only gate write review-spec can make is the stale-approval reset to `pending` above — it never writes `passed`.**
 
 ## Learning Loop & Staleness Nudge
 
@@ -452,7 +472,7 @@ Agents flag departures from these — the spec contract (CONVENTIONS §3.2):
 
 | Mistake                                                                     | Fix                                                                                                                                                             |
 | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Recording a gate / marking the spec approved                                | review-spec is **advisory** — it writes NO gate. The owner approves the spec in Discovery (step 8). Never call `set-gate`.                                       |
+| Marking the spec approved / writing `passed`                                | review-spec is **advisory** — it **never writes `passed`** (the owner approves in Discovery step 8). Its only gate write is resetting a *stale* approval to `pending` (step 6). Never grant approval.                |
 | Proposing a technical approach in a finding                                 | The spec is the *what*. Flag tech that leaked in; don't add more. The *how* is the `plan`.                                                                       |
 | Inventing an answer to a requirements question                              | A genuine "what should happen here?" is a `judgment` finding for the owner — surface it; never fabricate the behavior.                                           |
 | Adding implementation detail while "fixing" a vague requirement             | Keep the owner's plain-language voice. Replace vagueness with a concrete behavior/fit-criterion, not a mechanism.                                                |

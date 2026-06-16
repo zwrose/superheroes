@@ -153,7 +153,7 @@ Mapping (post-dedupe, post-filter counts) — the same shape for every skill (th
 - ≥1 Critical → the **MAJOR** label
 - Only Minor/Nit → the READY label (informational)
 
-The trio's **certifying** skills (`review-plan`, `review-tasks`) map the verdict onto the doc's `gates.review` via the-architect's lib: a READY verdict → `passed`; any REVISE/MAJOR verdict, or a deliberately-skipped blocking finding, → `changes-requested`. `review-spec` is **advisory** and records no gate — the owner approves the spec in Discovery.
+The trio's **certifying** skills (`review-plan`, `review-tasks`) map the verdict onto the doc's `gates.review` via the-architect's lib: a READY verdict → `passed`; any REVISE/MAJOR verdict, or a deliberately-skipped blocking finding, → `changes-requested`. `review-spec` is **advisory** — it never records `passed` (the owner approves the spec in Discovery); its only gate write is resetting a *stale* approval to `pending`.
 
 ## Where calibration comes from (read these, in order)
 
