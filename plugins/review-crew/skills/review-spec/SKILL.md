@@ -374,7 +374,8 @@ if [ "$REVISED" = yes ] && [ -n "$LIB" ] && [ "$SPEC_PATH" -ef "$CANON" ]; then
     || { echo "could not read the spec gate ($CURRENT) — if it was approved, warn the owner the approval may be stale." >&2; CURRENT=unreadable; }
   if [ "$CURRENT" = passed ]; then
     python3 "$LIB" set-gate --doc spec --work-item "$WORK_ITEM" --review pending --root "$ROOT" \
-      && echo "spec was already approved and has now been revised — gate reset to 'pending'; the owner must re-approve before it advances." >&2
+      && echo "spec was already approved and has now been revised — gate reset to 'pending'; the owner must re-approve before it advances." >&2 \
+      || echo "⚠ could not reset the stale-approval gate (set-gate failed) — warn the owner: the 'passed' gate is STALE and the spec needs re-approval." >&2
   fi
 elif [ "$REVISED" = yes ]; then
   echo "⚠ spec was revised but the gate could not be reset (the-architect lib unresolvable, or the doc is outside the canonical layout) — if it was approved, warn the owner: the 'passed' gate may be STALE; the spec needs re-approval." >&2

@@ -56,11 +56,12 @@ def test_prefers_highest_installed_version(tmp_path):
 
 
 def test_non_numeric_version_does_not_crash(tmp_path):
-    # A pre-release dir exercises the `-`→`.` + non-numeric arm of _version_key: it must
-    # NOT raise (no int-vs-str TypeError from comparing "rc1" against an int) and must
-    # still resolve to a valid the-architect lib. Exact release-vs-pre-release ordering is
-    # not a contract — the-architect ships plain x.y.z; this only guards against a crash.
-    plugin_root = _fake_cache(tmp_path, ["0.10.0", "0.10.0-rc1"])
+    # `0.10.0` vs `0.10.x` differ at the SAME index with a numeric-vs-non-numeric segment,
+    # so the comparison actually reaches the int-vs-str case _version_key guards. Without
+    # the (0,int)/(1,str) tag this raises TypeError — so this kills a tag-removal mutant
+    # (whereas a shared-prefix fixture would route around it). Exact ordering of the odd
+    # version is not a contract; we only assert no-crash + a valid resolved path.
+    plugin_root = _fake_cache(tmp_path, ["0.10.0", "0.10.x"])
     p = AL.resolve(root=None, plugin_root=plugin_root)
     assert p and p.endswith(os.path.join("lib", "definition_doc.py")) and os.path.isfile(p)
 
