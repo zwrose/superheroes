@@ -101,7 +101,11 @@ def main(argv):
     ap.add_argument("--blocking-fixed", type=int, default=None)
     ap.add_argument("--fix-batch", default=None, help="round-<N>/fix-batch.json (review-code: derives blocking-fixed)")
     ap.add_argument("--compiled", default=None, help="compiled.json (revise loops: derives blocking present this round)")
-    # skipped-blocking: explicit, or derived from the resolutions artifact.
+    # skipped-blocking: explicit, or derived from the resolutions artifact. For the --compiled
+    # (revise-loop) path this count is CUMULATIVE — ALL blockers present this round that are in the
+    # skip-set, not just those newly skipped — because compiled.json re-flags a skipped finding
+    # every round; a delta count would re-count a once-skipped blocker as "addressed" forever and
+    # `exit_skipped` would never be reached (arch-r2-001).
     ap.add_argument("--skipped-blocking", type=int, default=None)
     ap.add_argument("--resolutions", default=None, help="round-<N>/resolutions.json (derives skipped-blocking)")
     args = ap.parse_args(argv[1:])
@@ -120,8 +124,15 @@ def main(argv):
         elif args.fix_batch is not None:
             blocking_fixed = _blocking_fixed_from_fix_batch(args.fix_batch)
         elif args.compiled is not None:
-            # revise loops: every effective blocker present this round was revised, so the
-            # count addressed = blockers present minus the ones skipped.
+            # revise loops: compiled.json holds ALL blocking findings still present this round —
+            # the specialists re-flag a skipped finding every round (they do not know it was
+            # skipped). The orchestrator owns the skip-set, so --skipped-blocking must be the count
+            # of those *present* blockers that are in the skip-set (CUMULATIVE — every round, not
+            # just the ones newly skipped). blockers addressed = present minus present-and-skipped,
+            # i.e. the effective (non-skipped) blockers, each of which was revised this round.
+            # Counting skips cumulatively is what keeps `exit_skipped` reachable: once only skipped
+            # blockers remain, present == skipped, blocking_fixed == 0, and the loop exits
+            # CLEAN-EXCEPT-FOR-SKIPPED instead of forcing `review` to the round cap (arch-r2-001).
             blocking_fixed = max(0, _blocking_present_from_compiled(args.compiled) - skipped_blocking)
         else:
             blocking_fixed = 0  # nothing addressed this round (e.g. everything skipped)

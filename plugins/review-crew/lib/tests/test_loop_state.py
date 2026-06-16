@@ -113,6 +113,22 @@ def test_cli_compiled_all_blockers_skipped_exits_skipped(tmp_path, capsys):
     assert out["action"] == "exit_skipped"  # the only blocker was skipped → nothing addressed
 
 
+def test_cli_compiled_skip_count_must_be_cumulative_present(tmp_path, capsys):
+    # arch-r2-001 regression: a blocker skipped in an earlier round is RE-FLAGGED in compiled.json
+    # every subsequent round (the specialists don't know it was skipped). The revise loops must
+    # pass SKIPPED_BLOCKING as the CUMULATIVE count of present-and-skipped blockers, not just those
+    # newly skipped this round. With the cumulative count, the lone re-flagged skipped blocker
+    # yields exit_skipped...
+    comp = tmp_path / "compiled.json"
+    comp.write_text(json.dumps({"findings": [{"severity": "Critical"}]}), encoding="utf-8")
+    rc, out = _run(capsys, "--round", "4", "--compiled", str(comp), "--skipped-blocking", "1")
+    assert out["action"] == "exit_skipped"  # cumulative skip count → loop converges
+    # ...whereas a delta count of 0 (the old bug: "nothing NEW was skipped this round") would have
+    # mis-read the same re-flagged blocker as addressed, forcing review to the round cap forever.
+    rc, out = _run(capsys, "--round", "4", "--compiled", str(comp), "--skipped-blocking", "0")
+    assert out["action"] == "review"  # demonstrates why the count must be cumulative, not a delta
+
+
 def test_cli_compiled_no_blockers_exits_clean(tmp_path, capsys):
     comp = tmp_path / "compiled.json"
     comp.write_text(json.dumps({"findings": [{"severity": "Minor"}, {"severity": "Nit"}]}), encoding="utf-8")
