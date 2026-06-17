@@ -61,7 +61,8 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1
      acceptance criterion (Given-When-Then for flows, rule bullets for constraints).
    - **Significant unhappy paths as If/Then EARS**, driven by the coverage checklist;
-     tag each area Specify/Defer-to-plan/N-A.
+     record each area's disposition (Specify/Defer-to-plan/N-A) in the `## Coverage` table at
+     the end — not as an inline tag list inside the unhappy-paths section.
    - **Non-functional requirements as outcomes with a fit-criterion.**
    - **UI/UX references the actual Claude Design handoff output** (not a rewrite).
    - Plain language throughout, **no technical *how***. Delete sections that
@@ -83,8 +84,9 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      compound requirements; pin vague ones.
    - **No tech leaked:** any implementation detail (libraries, schemas, APIs) that
      belongs in the `plan`? Move it out — the spec is the *what*.
-   - **Coverage:** are the significant unhappy paths actually addressed (each area
-     Specify/Defer/N-A), or only the happy path?
+   - **Coverage:** does the `## Coverage` table disposition every area (Specify/Defer/N-A),
+     with each `Specify` backed by a real UFR — and are the significant unhappy paths actually
+     addressed, not just the happy path?
    - **Internal consistency:** do acceptance criteria and the definition of done
      match the requirements? Any section contradict another?
    - **Scope:** focused enough for one plan, or does it need decomposition?
