@@ -76,6 +76,13 @@ Decide mode (auto-detected or explicit, per `## Invocation`). Create the session
 RUBRIC="${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
+**Resolve the escalation guard wrapper and repo root once.** Subagents do not inherit `${CLAUDE_PLUGIN_ROOT}` or `$REPO_ROOT`, so compute both absolute values here (in the orchestrator's context, where they expand) for embedding into the fixer prompt's `## Input` block — the same way `RUBRIC`/`PROFILE` are embedded as expanded absolute paths:
+
+```bash
+ESC_WRAPPER="${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py"   # absolute; embed the expanded value in the fixer prompt
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
+```
+
 **Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
 
 ```bash
@@ -385,6 +392,7 @@ Each round:
 7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each **Critical/Important** effective finding, route its disposition with the shared rubric (modes PROCEED/NOTIFY/GATE). **GATE** (the consolidated `AskUserQuestion` below) only the blockers whose skip-or-fix is genuinely the owner's call — a product/scope/risk trade-off. For the rest, **verify and proceed**, recording the disposition so `loop_state` still sees it:
    - **Fix, one right answer per the project's conventions** → fold into the fix batch (step 8) using the POV's suggested approach (a step-8 auto-fix).
    - **Verifiably-safe skip / believed false-positive** → record a **skip** in `resolutions.json` (`action: "skip"`, **carrying the finding's `severity`**) and add the identity to the skip-set, **with a verification trace** (cite the source / test you checked). A skip with no citable ground truth is **not** eligible — it GATEs. **Never silently drop a blocker** — a skipped blocker is recorded with its severity, so `loop_state` counts it.
+   - **NOTIFY (the rubric's middle mode on a blocker)** → act on the best default (the auto-fix when there is one right answer, else the verifiably-safe skip) and record it via `decisions.py` and in the End-of-Loop Summary with its reverse-path/expiry — surfaced, not asked. (Mirrors the trio: record GATE outcomes and NOTIFY decisions in the summary with their reverse-path/expiry, per `escalation-base.md`.)
    - Minor/Nit → never escalated: apply the triage recommendation automatically — `Skip`/`Defer` → add the identity to the skip-set; `Fix` → fold into the fix batch (step 8), using the POV's suggested approach for a judgment-fix — then record each via `decisions.py` and surface them in the End-of-Loop Summary (auto-skipped / auto-fixed).
    Resolve the rubric for this dispatch once via the wrapper (with `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` defined in setup): `RUBRIC_RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")` — read its `path` and embed it (apply the embedded fail-closed posture if `degraded`: apply the hard floor and GATE anything owner-weighable). Nothing is hidden, just not asked; everything the agent recommends fixing mechanically (any severity) is handled in step 8 without asking.
    - If non-empty: present ONE consolidated `AskUserQuestion`. For each finding, **lead with the orchestrator POV** from `triage.json` (per the base rubric's "Orchestrator POV") — show the recommendation, rationale, and confidence right under the finding, e.g. `→ POV: Skip (Low confidence) — correct in theory but this path is never hit concurrently under the profile's threat model`. Then offer **Fix as suggested** / **Fix with my guidance** (free text) / **Skip** — keep the options in this neutral order regardless of the POV; the POV informs, it does not pre-select. List the auto-fix findings (`recommendation` Fix AND `classification` mechanical) in the same prompt as an FYI (no per-item action; they are fixed automatically). Write `round-<round>/resolutions.json`:
@@ -469,12 +477,12 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 
 ### Fixer subagent prompt
 
-**Fixer file-scope guard (`escalation-base.md` hard floor — runtime self-modification).** Define the
-repo root once in setup so the guard can anchor the in-repo (dogfood) safety files —
-`REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` (the project's canonical safe-capture
-pattern — an *empty* `REPO_ROOT` would collapse `_band_roots` and silently fail the guard open) —
-then, before the fixer edits any file, gate it:
-`python3 "${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py" guard --root "$REPO_ROOT" --path "<file>"`.
+**Fixer file-scope guard (`escalation-base.md` hard floor — runtime self-modification).** The guard runs
+in the **fixer subagent** context, which does NOT inherit `${CLAUDE_PLUGIN_ROOT}` or `$REPO_ROOT`. So the
+orchestrator embeds both absolute values into the fixer prompt's `## Input` block (the expanded `ESC_WRAPPER`
+and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`PROFILE` paths. Before the
+fixer edits any file, it gates it with those embedded absolute values:
+`python3 "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
 If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — `escalation.py`,
 `escalation_resolve.py`, `loop_state.py`, `circuit_breaker.py`, `gate_write.py`, `architect_lib.py`,
 `definition_doc.py`, the rubrics); surface it as a finding for the owner instead. A `degraded:true`
@@ -484,9 +492,11 @@ result also refuses (fail-closed). The fixer never pushes/merges/deploys (those 
 > by skill prose — a subagent *could* skip it, the same rationalize-past-prose risk `loop_state` was
 > built to remove. F5 deliberately ships the deterministic guard *function* (tested, §8) + this
 > wiring; the **non-bypassable** enforcement at the action boundary is the F3 producer's job (§4
-> bound-2, §12). `REPO_ROOT` must be defined wherever this guard is wired (without it, `_band_roots`
-> omits the in-repo plugin dirs and the dogfood guard fails *open*) — the missing definition was the
-> round-2 fix.
+> bound-2, §12). `REPO_ROOT` must be defined in setup and embedded wherever this guard is wired: an
+> *empty* `--root` does **not** fail the guard open — `_band_roots("")` still returns `[_PLUGIN_ROOT]`
+> and an empty `--root` makes the wrapper refuse (`allow:false, degraded:true`). What an empty
+> `REPO_ROOT` actually drops is the **in-repo the-architect anchor**, so a dogfood edit to
+> the-architect's own safety files might not be caught. Define `REPO_ROOT` to keep that anchor.
 
 ```
 You are the fixer for one round of an auto-fix code-review loop.
@@ -498,14 +508,17 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Conventions: CLAUDE.md and the project profile (<PROFILE_PATH>);
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
+- Repo root: <absolute REPO_ROOT>
+- Escalation guard: <absolute ESC_WRAPPER path>
 - Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
    canonical patterns. When a finding has userGuidance, follow it over the
    original suggestion. BEFORE editing any file, gate it with the fixer
-   file-scope guard:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py" guard --root "$REPO_ROOT" --path "<file>"`
+   file-scope guard, using the absolute "Escalation guard" and "Repo root"
+   values from ## Input:
+   `python3 "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`
    — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
    safety machinery); report it under "escalated" for the owner instead. Never
    push/merge/deploy (those stay user-gated).
