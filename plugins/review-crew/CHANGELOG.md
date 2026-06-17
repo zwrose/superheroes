@@ -6,6 +6,37 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-16
+
+### Added
+
+- **The review trio** — `review-spec`, `review-plan`, `review-tasks`: red-team
+  the-architect's spec/plan/tasks definition-docs with the same five specialists
+  (reframed per artifact), in a single-pass-with-revise loop. `review-plan` /
+  `review-tasks` are **certifying** (record `gates.review: passed` /
+  `changes-requested` via the-architect's lib); `review-spec` is **advisory** — it
+  never grants the gate (the owner approves the spec in Discovery), only resets a
+  *stale* approval to `pending`.
+- **`lib/architect_lib.py`** — cross-plugin resolver that locates the-architect's
+  `definition_doc.py` (in-repo → installed marketplace sibling → fail-closed), so
+  the certifying gate is reachable in a shipped band, not only the monorepo.
+- **`lib/gate_write.py`** — the trio's gate-write handshake in one tested place
+  (certify / reset modes; canonical-path guard; parent-gate precondition;
+  degrade-not-crash; stdlib-only) + `test_gate_write.py`.
+- **`lib/loop_state.py`** — a deterministic loop-continuation gate, the symmetric
+  partner to `circuit_breaker`: from the round's facts it emits the one mandatory
+  next action (`review` / `exit_clean` / `exit_skipped` / `halt`), derived from the
+  round artifacts so the model can't self-report — closing the long-standing "skip
+  the auto-fix loop's mandatory re-review" defect. Wired into `review-code` and the
+  trio's revise loops, with `test_loop_state.py` + `test_loop_gate_wired.py`.
+
+### Changed
+
+- **Escalation is now severity-gated.** `review-code` and the trio no longer ask the
+  owner to ratify Minor/Nit findings — only blocking (Critical/Important) Skip/Defer
+  or judgment-fix decisions are escalated. Minor/Nit are auto-handled per the triage
+  recommendation and listed in the end-of-run summary.
+
 ## [0.3.0] — 2026-06-11
 
 ### Added
