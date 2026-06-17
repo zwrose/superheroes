@@ -343,21 +343,30 @@ Render `$SESSION_DIR/report.md`: a markdown report grouped by category (Architec
 **Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to the resolved decisions store (`$DECISIONS`), per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
 - **Do not mix tiers within a single issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
 
-Present the proposed issue set in chat (title + tier + the findings each issue covers). Then `AskUserQuestion`: _"File these as GitHub issues?"_ Options:
+Present the proposed issue set in chat (title + tier + the findings each issue covers).
 
-- **Yes, file all** — run `gh issue create` for each proposed issue.
-- **Let me deselect some** — present the proposed issues multi-select, then file the kept ones.
-- **No** — skip.
+Per `the-architect/rubric/escalation-base.md`: filing debt issues is reversible (issues can be
+closed/deleted) → **NOTIFY, not GATE**. By default, file the Critical/Important debt items as
+issues and report what was filed (with the issue links = the reverse path). Only **GATE** (ask
+first) when filing would touch the hard floor — e.g. it would post to a public/shared tracker the
+owner hasn't opted into, or spend on a paid tracker. Saving the report locally is **PROCEED**
+(record-only) — write it and state the path.
+
+For the Minor/Nit findings and any Skip/borderline Critical/Important ones (where the POV
+recommends Drop), present those as a deselect pass via `AskUserQuestion` (**File** / **Drop**)
+before filing, then file the kept ones.
 
 Issue title format: `"<severity>: <finding title>"` (for a multi-finding lower-tier issue, a summary title like `"Nit: 5 convention nits across src/"`). Body: each finding's text + `file:line` + suggestion + effort estimate, then `_Surfaced by /review-crew:audit-debt on <date>_`. The POV guides filing decisions; it is not written into the issue body.
 
-**Optionally save the report.** `AskUserQuestion`: _"Save this report to a file?"_ Options:
+**Save the report (PROCEED).** Write the report to the default location and state the path:
 
-- **Yes, default location** — `cp "$SESSION_DIR/report.md" "docs/debt-audit-$(date +%Y-%m-%d).md"`
-- **Yes, custom path** — prompt for the path, then `cp`.
-- **No** — skip.
+```bash
+cp "$SESSION_DIR/report.md" "docs/debt-audit-$(date +%Y-%m-%d).md"
+```
 
-**Then, after the report-save offer**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the audit output and none blocks.
+Report where it was saved. No ask needed — saving locally is record-only and reversible (the file can be deleted).
+
+**Then, after filing issues and saving the report**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the audit output and none blocks.
 
 End of skill — no code edits, no commits, no posting to PRs, no further checks (beyond the non-blocking end-of-run learning-loop/staleness steps above, which write only the project-level `.claude/review-decisions.json` store and — only on a dismissal — the profile's `nudge-ack` map).
 
