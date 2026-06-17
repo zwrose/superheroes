@@ -157,3 +157,35 @@ def test_cli_wrong_shape_artifact_fails_safe_to_review(tmp_path, capsys):
     res.write_text(json.dumps([{"action": "skip", "severity": "Critical"}]), encoding="utf-8")
     rc, out = _run(capsys, "--round", "1", "--resolutions", str(res), "--blocking-fixed", "0")
     assert rc == 0 and out["action"] == "review"
+
+
+# --- disposition-pipeline property: no believed blocker ever vanishes into exit_clean ----
+
+import json as _json
+
+def test_recorded_skip_blocker_never_exits_clean_resolutions(tmp_path, capsys):
+    # review-code path: a believed-false-positive blocker recorded as action==skip with
+    # its blocking severity must NOT yield exit_clean (it enters the skip-set).
+    res = tmp_path / "resolutions.json"
+    res.write_text(_json.dumps({"resolutions": [
+        {"action": "skip", "severity": "Important"}]}), encoding="utf-8")
+    rc, out = _run(capsys, "--round", "1", "--resolutions", str(res))
+    assert rc == 0 and out["action"] == "exit_skipped" and out["action"] != "exit_clean"
+
+def test_recorded_skip_blocker_never_exits_clean_compiled(tmp_path, capsys):
+    # trio path: the blocker is still present in compiled.json AND cumulatively skipped ->
+    # blocking_fixed == 0, skipped_blocking == 1 -> exit_skipped, never exit_clean.
+    comp = tmp_path / "compiled.json"
+    comp.write_text(_json.dumps({"findings": [{"severity": "Important"}]}), encoding="utf-8")
+    rc, out = _run(capsys, "--round", "1", "--compiled", str(comp), "--skipped-blocking", "1")
+    assert rc == 0 and out["action"] == "exit_skipped" and out["action"] != "exit_clean"
+
+def test_present_unskipped_blocker_reviews_never_clean(tmp_path, capsys):
+    # A blocker present in compiled.json and NOT skipped -> blocking_fixed = max(0,1-0) = 1
+    # -> review (mandatory), never exit_clean. (Renamed: the review flagged that the earlier
+    # "neither input" name didn't match this setup — loop_state counts a present-unskipped
+    # blocker as fixed -> review, which is itself the right safety property to pin.)
+    comp = tmp_path / "compiled.json"
+    comp.write_text(_json.dumps({"findings": [{"severity": "Critical"}]}), encoding="utf-8")
+    rc, out = _run(capsys, "--round", "1", "--compiled", str(comp), "--skipped-blocking", "0")
+    assert rc == 0 and out["action"] == "review" and out["action"] != "exit_clean"
