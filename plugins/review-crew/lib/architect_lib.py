@@ -39,29 +39,32 @@ def _version_key(path):
     return [(0, int(p)) if p.isdigit() else (1, p) for p in ver.replace("-", ".").split(".")]
 
 
-def resolve(root=None, plugin_root=None):
-    """Return the absolute path to the-architect's definition_doc.py, or None.
+def resolve_target(target, root=None, plugin_root=None):
+    """Return the absolute path to one of the-architect's files, or None.
 
-    `root` is the target-repo root (the in-repo case); `plugin_root` overrides
-    `$CLAUDE_PLUGIN_ROOT` (the installed-sibling case). Both are optional; whichever
-    resolves first wins.
+    `target` is a path tuple relative to a plugins/ dir, e.g.
+    ("the-architect", "lib", "escalation.py") or
+    ("the-architect", "rubric", "escalation-base.md"). Resolution order matches the
+    existing definition_doc.py logic: in-repo (root/plugins/...) first, then the
+    installed sibling under the marketplace cache (highest version wins). Fail-closed.
     """
-    # 1. in-repo (the-architect vendored alongside review-crew under plugins/)
     if root:
-        cand = os.path.join(root, "plugins", *_DOC)
+        cand = os.path.join(root, "plugins", *target)
         if os.path.isfile(cand):
             return os.path.abspath(cand)
-    # 2. installed sibling under the marketplace cache
     plugin_root = plugin_root or os.environ.get("CLAUDE_PLUGIN_ROOT")
     if plugin_root:
-        # <CLAUDE_PLUGIN_ROOT> = .../<marketplace>/review-crew/<ver>; the marketplace
-        # dir (where the-architect installs as a sibling) is two levels up.
         marketplace = os.path.abspath(os.path.join(plugin_root, os.pardir, os.pardir))
-        matches = [p for p in glob.glob(os.path.join(marketplace, _DOC[0], "*", *_DOC[1:]))
+        matches = [p for p in glob.glob(os.path.join(marketplace, target[0], "*", *target[1:]))
                    if os.path.isfile(p)]
         if matches:
             return os.path.abspath(max(matches, key=_version_key))
     return None
+
+
+def resolve(root=None, plugin_root=None):
+    """Back-compat: resolve the-architect's definition_doc.py (the original behavior)."""
+    return resolve_target(_DOC, root=root, plugin_root=plugin_root)
 
 
 def main(argv):
