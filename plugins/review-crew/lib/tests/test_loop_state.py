@@ -189,3 +189,22 @@ def test_present_unskipped_blocker_reviews_never_clean(tmp_path, capsys):
     comp.write_text(_json.dumps({"findings": [{"severity": "Critical"}]}), encoding="utf-8")
     rc, out = _run(capsys, "--round", "1", "--compiled", str(comp), "--skipped-blocking", "0")
     assert rc == 0 and out["action"] == "review" and out["action"] != "exit_clean"
+
+
+# --- fail-safe: a severity-less skip record counts conservatively (defense-in-depth) -----
+
+def test_skip_record_missing_severity_counts_conservatively(tmp_path, capsys):
+    # FAIL-SAFE: action==skip with a MISSING/unrecognized severity must NOT be silently
+    # uncounted (a real blocker recorded without severity would otherwise yield exit_clean).
+    res = tmp_path / "resolutions.json"
+    res.write_text(_json.dumps({"resolutions": [{"action": "skip"}]}), encoding="utf-8")
+    rc, out = _run(capsys, "--round", "1", "--resolutions", str(res))
+    assert rc == 0 and out["action"] != "exit_clean"
+
+def test_skip_record_minor_severity_not_counted(tmp_path, capsys):
+    # A well-formed Minor skip is NOT a blocker -> still exit_clean (happy path unchanged).
+    res = tmp_path / "resolutions.json"
+    res.write_text(_json.dumps({"resolutions": [{"action": "skip", "severity": "Minor"}]}),
+                   encoding="utf-8")
+    rc, out = _run(capsys, "--round", "1", "--resolutions", str(res))
+    assert rc == 0 and out["action"] == "exit_clean"
