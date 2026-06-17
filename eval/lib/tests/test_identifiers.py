@@ -108,7 +108,7 @@ def test_content_hash_is_16_hex():
 
 def test_content_hash_ignores_volatile_fields():
     noisy = dict(BASE_FM, updated="2026-06-14", created="2025-01-01", status="approved",
-                 gates={"review": "passed"}, issue=42, producedBy="define@9.9.9")
+                 gates={"review": "passed"}, issue=42, producedBy="the-architect@9.9.9")
     assert ids.content_hash(noisy, BODY) == ids.content_hash(BASE_FM, BODY)
 
 

@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 
 PATH_LITERALS = (".claude/review-profile.md", ".claude/review-decisions.json")
-REVIEW_SKILLS = ("review-code", "review-plan", "audit-debt")
+REVIEW_SKILLS = ("review-code", "review-plan", "review-spec", "review-tasks", "audit-debt")
 ALL_SKILLS = REVIEW_SKILLS + ("review-init",)
 
 

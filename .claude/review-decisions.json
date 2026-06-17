@@ -216,6 +216,42 @@
       "dimension": "Test",
       "category": "trap-liveness-smoke",
       "action": "fix"
+    },
+    {
+      "id": "2cf3dff29bb8",
+      "dimension": "Code",
+      "category": "unbound-variable-set-u",
+      "action": "fix"
+    },
+    {
+      "id": "8350443d87b3",
+      "dimension": "Failure-Mode",
+      "category": "silent-self-certification",
+      "action": "fix"
+    },
+    {
+      "id": "62b39b753742",
+      "dimension": "Failure-Mode",
+      "category": "cross-plugin-lib-resolution",
+      "action": "fix"
+    },
+    {
+      "id": "8f5b6c74b1d6",
+      "dimension": "Failure-Mode",
+      "category": "stale-approval-reset",
+      "action": "fix"
+    },
+    {
+      "id": "590006e0fada",
+      "dimension": "Code",
+      "category": "missing-failure-guard",
+      "action": "fix"
+    },
+    {
+      "id": "2bbdbeef0227",
+      "dimension": "Test",
+      "category": "weak-fixture",
+      "action": "fix"
     }
   ]
 }

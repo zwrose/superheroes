@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "superheroes/define-doc-frontmatter",
-  "title": "superheroes define-doc frontmatter (CONVENTIONS §3.1)",
+  "$id": "superheroes/definition-doc-frontmatter",
+  "title": "superheroes definition-doc frontmatter (CONVENTIONS §3.1)",
   "type": "object",
   "additionalProperties": false,
   "required": ["superheroes", "schemaVersion", "docType", "workItem", "issue", "parent", "size", "status", "gates", "producedBy", "created", "updated"],

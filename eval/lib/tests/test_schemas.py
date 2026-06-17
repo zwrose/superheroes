@@ -40,12 +40,12 @@ def test_schemas_present_and_well_formed():
 
 # A CONVENTIONS-conformant sample per schema, and a minimally-broken counterpart.
 VALID = {
-    "define-doc.schema.json": {
+    "definition-doc.schema.json": {
         "superheroes": "doc", "schemaVersion": 1, "docType": "tasks",
         "workItem": "add-toggle-abc123", "issue": 42,
         "parent": {"workItem": "add-toggle-abc123", "docType": "plan"},
         "size": "medium", "status": "approved", "gates": {"review": "passed"},
-        "producedBy": "define@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
+        "producedBy": "the-architect@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
     "checkpoint.schema.json": {
         "schemaVersion": 1, "workItem": "add-toggle-abc123", "issue": 42, "size": "medium",
         "phase": "tasks", "gates": {"spec": "passed", "plan": "passed", "tasks": "pending"},
@@ -61,7 +61,7 @@ VALID = {
 }
 
 INVALID = {
-    "define-doc.schema.json": dict(VALID["define-doc.schema.json"], docType="design"),  # "design" is not a docType
+    "definition-doc.schema.json": dict(VALID["definition-doc.schema.json"], docType="design"),  # "design" is not a docType
     "checkpoint.schema.json": dict(VALID["checkpoint.schema.json"], phase="unknown"),
     "queue.schema.json": {"schemaVersion": 1, "items": [{"workItem": "add-toggle-abc123", "state": "queued", "order": 0}]},  # missing issue is the SOLE violation (workItem is a valid slug)
     "registry.schema.json": dict(VALID["registry.schema.json"], storageMode="hybrid"),  # not a mode
@@ -79,11 +79,11 @@ def test_invalid_samples_are_rejected():
             jsonschema.validate(sample, _load(name))
 
 
-def test_define_doc_rejects_malformed_workitem():
+def test_definition_doc_rejects_malformed_workitem():
     # The §6.1 slug pattern is the most spec-load-bearing schema rule; exercise it directly.
-    bad = dict(VALID["define-doc.schema.json"], workItem="add-toggle-zzzzzz")  # suffix not 6 hex
+    bad = dict(VALID["definition-doc.schema.json"], workItem="add-toggle-zzzzzz")  # suffix not 6 hex
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(bad, _load("define-doc.schema.json"))
+        jsonschema.validate(bad, _load("definition-doc.schema.json"))
 
 
 # The §6.1 work-item slug pattern is duplicated across every schema that carries a
@@ -94,12 +94,12 @@ SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$"
 
 
 def _all_workitem_patterns():
-    dd = _load("define-doc.schema.json")
+    dd = _load("definition-doc.schema.json")
     cp = _load("checkpoint.schema.json")
     q = _load("queue.schema.json")
     return {
-        "define-doc.workItem": dd["properties"]["workItem"]["pattern"],
-        "define-doc.parent.workItem": dd["properties"]["parent"]["oneOf"][1]["properties"]["workItem"]["pattern"],
+        "definition-doc.workItem": dd["properties"]["workItem"]["pattern"],
+        "definition-doc.parent.workItem": dd["properties"]["parent"]["oneOf"][1]["properties"]["workItem"]["pattern"],
         "checkpoint.workItem": cp["properties"]["workItem"]["pattern"],
         "queue.items.workItem": q["properties"]["items"]["items"]["properties"]["workItem"]["pattern"],
     }
