@@ -93,7 +93,7 @@ def test_route_missing_key_reports_degraded(capsys, tmp_path, monkeypatch):
     # lib resolves and subprocess returns a well-formed dict but missing the "mode" key
     # -> fail closed to "gate" AND degraded must be True (not False).
     monkeypatch.setattr(ER, "_resolve", lambda root: "/some/escalation.py")
-    monkeypatch.setattr(ER, "_subprocess_json", lambda lib, cli_args: {})
+    monkeypatch.setattr(ER, "_subprocess_json", lambda lib, cli_args: {"unexpected": 1})
     rc, out = _run(capsys, "route", "--root", str(tmp_path),
                    "--on-floor", "false", "--ground-truth-locus", "owner",
                    "--owner-weighable", "true", "--reversible", "true", "--confidence", "high")
@@ -112,6 +112,25 @@ def test_guard_subprocess_garbage_fails_closed(capsys, tmp_path, monkeypatch):
     # lib resolves but the subprocess fails / returns garbage -> fail closed to refuse (allow False).
     monkeypatch.setattr(ER, "_resolve", lambda root: "/some/escalation.py")
     monkeypatch.setattr(ER, "_subprocess_json", lambda lib, cli_args: None)
+    rc, out = _run(capsys, "guard", "--root", str(tmp_path),
+                   "--path", str(tmp_path / "whatever.py"))
+    assert rc == 0 and out["allow"] is False and out["degraded"] is True
+
+
+def test_classify_missing_key_fails_closed(capsys, tmp_path, monkeypatch):
+    # subprocess returns a non-empty dict missing the "on_floor" key -> the key-presence
+    # clause must fail closed (on_floor True, degraded True), not pass the dict through.
+    monkeypatch.setattr(ER, "_resolve", lambda root: "/some/escalation.py")
+    monkeypatch.setattr(ER, "_subprocess_json", lambda lib, cli_args: {"unexpected": 1})
+    rc, out = _run(capsys, "classify", "--root", str(tmp_path), "--action", "rename a local variable")
+    assert rc == 0 and out["on_floor"] is True and out["degraded"] is True
+
+
+def test_guard_missing_key_fails_closed(capsys, tmp_path, monkeypatch):
+    # subprocess returns a non-empty dict missing the "allow" key -> fail closed to refuse
+    # (allow False, degraded True).
+    monkeypatch.setattr(ER, "_resolve", lambda root: "/some/escalation.py")
+    monkeypatch.setattr(ER, "_subprocess_json", lambda lib, cli_args: {"unexpected": 1})
     rc, out = _run(capsys, "guard", "--root", str(tmp_path),
                    "--path", str(tmp_path / "whatever.py"))
     assert rc == 0 and out["allow"] is False and out["degraded"] is True
