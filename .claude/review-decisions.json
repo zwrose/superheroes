@@ -252,6 +252,240 @@
       "dimension": "Test",
       "category": "weak-fixture",
       "action": "fix"
+    },
+    {
+      "id": "4d66160bf411",
+      "dimension": "Failure-Mode",
+      "category": "loop-state-disposition-mapping",
+      "action": "fix"
+    },
+    {
+      "id": "33c38746a885",
+      "dimension": "Security",
+      "category": "floor-classification-bound",
+      "action": "fix"
+    },
+    {
+      "id": "ea8f1d44944f",
+      "dimension": "Security",
+      "category": "fail-closed-both-artifacts",
+      "action": "fix"
+    },
+    {
+      "id": "e91b790f8573",
+      "dimension": "Test",
+      "category": "eval-deterministic-scorer-seam",
+      "action": "fix"
+    },
+    {
+      "id": "f4f1817b9e5b",
+      "dimension": "Failure-Mode",
+      "category": "notify-durable-trace-verification",
+      "action": "fix"
+    },
+    {
+      "id": "915cb6860d2c",
+      "dimension": "Architecture",
+      "category": "resolver-is-new-work",
+      "action": "fix"
+    },
+    {
+      "id": "59db1f4625b7",
+      "dimension": "Security",
+      "category": "global-self-grant-invariant",
+      "action": "fix"
+    },
+    {
+      "id": "19ce51d7cdeb",
+      "dimension": "Security",
+      "category": "floor-egress-self-modify",
+      "action": "fix"
+    },
+    {
+      "id": "8cdb979e1625",
+      "dimension": "Test",
+      "category": "route-cases-failclosed-test",
+      "action": "fix"
+    },
+    {
+      "id": "d418d0ec2bdc",
+      "dimension": "Architecture",
+      "category": "resolve-once-cache",
+      "action": "fix"
+    },
+    {
+      "id": "74462431b5a3",
+      "dimension": "Failure-Mode",
+      "category": "eliminate-silent-drop",
+      "action": "fix"
+    },
+    {
+      "id": "80403b14dbf3",
+      "dimension": "Code",
+      "category": "loop-state-three-inputs-compiled",
+      "action": "fix"
+    },
+    {
+      "id": "1a3123a6e4cc",
+      "dimension": "Architecture",
+      "category": "skip-record-severity-field",
+      "action": "fix"
+    },
+    {
+      "id": "4fcceb368eb7",
+      "dimension": "Test",
+      "category": "disposition-pipeline-property-test",
+      "action": "fix"
+    },
+    {
+      "id": "0ddfa4bd822f",
+      "dimension": "Security",
+      "category": "fixer-file-scope-guard",
+      "action": "fix"
+    },
+    {
+      "id": "34da0075220f",
+      "dimension": "Test",
+      "category": "floor-classifier-vs-route-split",
+      "action": "fix"
+    },
+    {
+      "id": "ffe7682e8a7f",
+      "dimension": "Security",
+      "category": "route-fail-closed-bad-axes",
+      "action": "fix"
+    },
+    {
+      "id": "4e0240e24342",
+      "dimension": "Architecture",
+      "category": "escalation-py-import-mechanism",
+      "action": "fix"
+    },
+    {
+      "id": "74d67bd53c89",
+      "dimension": "Security",
+      "category": "safety-machinery-set-broaden-pin",
+      "action": "fix"
+    },
+    {
+      "id": "17679efa399e",
+      "dimension": "Test",
+      "category": "fixer-guard-test-group",
+      "action": "fix"
+    },
+    {
+      "id": "069e79befc58",
+      "dimension": "Architecture",
+      "category": "route-short-circuit-on-floor",
+      "action": "fix"
+    },
+    {
+      "id": "3cc75f032fee",
+      "dimension": "Failure-Mode",
+      "category": "trio-skip-cumulative-language",
+      "action": "fix"
+    },
+    {
+      "id": "9eb2b3ce9d91",
+      "dimension": "Security",
+      "category": "safety-set-criterion-canonical-path",
+      "action": "fix"
+    },
+    {
+      "id": "548d94316220",
+      "dimension": "Architecture",
+      "category": "escalation-py-cli-subprocess-shape",
+      "action": "fix"
+    },
+    {
+      "id": "07bcb154537f",
+      "dimension": "Architecture",
+      "category": "escalation-local-wrapper-component",
+      "action": "fix"
+    },
+    {
+      "id": "03bd6a88529b",
+      "dimension": "Security",
+      "category": "wrapper-in-safety-set",
+      "action": "fix"
+    },
+    {
+      "id": "17304d2e13f2",
+      "dimension": "Code",
+      "category": "wrapper-argparse-root-ordering",
+      "action": "fix"
+    },
+    {
+      "id": "b28af35b1c0d",
+      "dimension": "Security",
+      "category": "guard-canonical-path-keying",
+      "action": "fix"
+    },
+    {
+      "id": "ee09f7f01683",
+      "dimension": "Architecture",
+      "category": "wrapper-rubric-subcommand",
+      "action": "fix"
+    },
+    {
+      "id": "7451d777744d",
+      "dimension": "Failure-Mode",
+      "category": "loop-state-severity-failsafe",
+      "action": "fix"
+    },
+    {
+      "id": "85a2a9fa3da3",
+      "dimension": "Test",
+      "category": "wrapper-coverage-partial-resolution",
+      "action": "fix"
+    },
+    {
+      "id": "417783fccc8a",
+      "dimension": "Test",
+      "category": "misnamed-property-test",
+      "action": "fix"
+    },
+    {
+      "id": "607c96f07bbc",
+      "dimension": "Security",
+      "category": "guard-wiring-repo-root-undefined",
+      "action": "fix"
+    },
+    {
+      "id": "6c8a4d249ee7",
+      "dimension": "Failure-Mode",
+      "category": "trio-leg-failsafe-unification",
+      "action": "fix"
+    },
+    {
+      "id": "1a6f88a7e83c",
+      "dimension": "Failure-Mode",
+      "category": "guard-prose-residual-documented",
+      "action": "guidance"
+    },
+    {
+      "id": "1c7a00687b9a",
+      "dimension": "Architecture",
+      "category": "eval-fixture-completeness-test",
+      "action": "fix"
+    },
+    {
+      "id": "0a695864bc30",
+      "dimension": "Failure-Mode",
+      "category": "revert-trio-unification-arch-r2-001",
+      "action": "fix"
+    },
+    {
+      "id": "cbbc3dc43953",
+      "dimension": "Security",
+      "category": "repo-root-safe-capture-fallback",
+      "action": "fix"
+    },
+    {
+      "id": "abdb211ca01a",
+      "dimension": "Failure-Mode",
+      "category": "premortem-r2-001-scoped-not-coded",
+      "action": "guidance"
     }
   ]
 }

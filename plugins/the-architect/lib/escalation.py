@@ -29,10 +29,9 @@ def route(axes):
     """
     if not isinstance(axes, dict):
         return _MODE_GATE
-    # 1. Hard floor — unconditional, regardless of every other axis.
-    if axes.get("on_floor") is True:
-        return _MODE_GATE
-    if axes.get("on_floor") is not False:        # must be an explicit bool
+    # 1. Hard floor — unconditional. Only an explicit `on_floor is False` proceeds past the
+    #    floor; True (on-floor) and any non-bool (malformed) both gate (fail-closed).
+    if axes.get("on_floor") is not False:
         return _MODE_GATE
     locus = axes.get("ground_truth_locus")
     if locus not in _LOCUS:
