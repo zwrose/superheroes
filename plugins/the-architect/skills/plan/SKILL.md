@@ -148,6 +148,13 @@ the strongest case for the option it beat.
 
 ### 3. The escalation rubric — when to pause for the owner
 
+> **Source of truth:** this section instantiates the shared band rubric
+> `the-architect/rubric/escalation-base.md` (the escalation analogue of `review-base.md`).
+> The three modes are **PROCEED** (act + record), **NOTIFY** (act on the best default + record a
+> flagged, undoable heads-up the owner can veto), and **GATE** (stop + `AskUserQuestion`). The
+> two-axis gate and seven triggers below decide GATE; everything else that is owner-relevant but
+> reversible is **NOTIFY**, and the rest is **PROCEED** (record-only).
+
 Default = ACT autonomously. Escalate a decision to the owner **only** when it clears the
 **two-axis gate**: **high consequence (hard to reverse / wide blast radius) AND a call the
 owner can actually weigh (cost, speed, risk, data, user experience, future flexibility) —
@@ -180,13 +187,13 @@ or your confidence is low on something consequential.**
    a gap the spec never specified, **and** the decision is hard to reverse / wide blast
    radius. **Probe first** (read more code, re-read the spec); escalate only if still unsure.
 
-**Do NOT escalate (record-only):** decisions that are architecturally significant but
-**engineering-internal** — framework/library/pattern choice, internal structure,
-build/deploy setup, internal decomposition. A **framework/library choice is itself a
-one-way door**, but on its own it carries no trade-off the owner can weigh, so it lands
-here — it escalates **only** when it *also* adds lock-in (4) or cost (2), or carries a real
-product trade-off (5). For all of these the owner has no basis to choose and asking is just
-noise. **Record them in *Key decisions*; never interrupt the owner with them.**
+**Do NOT GATE — but choose PROCEED vs NOTIFY:** decisions that don't clear the two-axis gate are
+not escalated. Of those: an **engineering-internal** call (framework/library/pattern, internal
+structure, build setup) is **PROCEED, record-only** in *Key decisions* — never surface it. A call
+that is **owner-relevant but reversible and safely defaultable** (a default the owner might have a
+mild preference on, cheaply changed later) is **NOTIFY**: act on your best default and add a
+one-line heads-up to *Key decisions* with its **reverse path + expiry** ("went with X; reversible —
+say so before build if you'd prefer Y"). Never interrupt the owner for either.
 
 **Keep escalation proportionate:**
 

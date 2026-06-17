@@ -21,6 +21,10 @@ happened in Plan, and the PR is the final human gate later. Tasks does **not** e
 steps: execution is the **producer's Build** phase, governed by the build contract. Tasks
 stops at a reviewed, gated tasks doc that is ready for Build.
 
+Any judgment call during decomposition follows the shared rubric
+`the-architect/rubric/escalation-base.md` (modes PROCEED/NOTIFY/GATE) — like Plan, Tasks runs
+autonomously and escalates only a genuine GATE; tasks decisions are almost always PROCEED.
+
 **The loop resolves; it does not park.** A finished tasks doc carries **no placeholders** —
 no "TBD", no "add error handling", no "similar to Task N". Every step is concrete and
 executable, or it isn't done. A gap in the plan surfaces as a loop-back to `plan`, never as

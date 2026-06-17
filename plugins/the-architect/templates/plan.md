@@ -64,9 +64,11 @@ check: nothing in the spec left unaddressed, nothing here the spec doesn't ask f
 **≥2 options** considered, the choice and why, the **accepted downside**, whether it is
 reversible (two-way door) or hard to undo (one-way door), and whether it was ESCALATED to
 the owner (with their call recorded). Engineering-internal significant decisions are
-recorded here too — they simply weren't escalated.}}
+recorded here too — they simply weren't escalated. NOTIFY decisions (owner-relevant but
+reversible) are also recorded here with their **reverse path** and **expiry** so the owner
+can veto before costs rise.}}
 
-- **Decision:** {{…}} · **Options weighed:** {{≥2, materially different}} · **Choice + why:** {{…}} · **Accepted downside:** {{…}} · **Reversible?** {{two-way / one-way}} · **Escalated?** {{no / yes — owner chose …}}
+- **Decision:** {{…}} · **Options weighed:** {{≥2, materially different}} · **Choice + why:** {{…}} · **Accepted downside:** {{…}} · **Reversible?** {{two-way / one-way}} · **Mode:** {{PROCEED / NOTIFY / GATE}} · **Reverse path:** {{how to undo, e.g. "revert before build"}} · **Expiry:** {{until when cheaply reversible, or "n/a"}} · **Escalated?** {{no / yes — owner chose …}}
 
 ## Cross-cutting concerns
 
