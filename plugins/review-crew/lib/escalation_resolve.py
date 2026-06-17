@@ -102,8 +102,10 @@ def main(argv):
                                      "--owner-weighable", args.owner_weighable,
                                      "--reversible", args.reversible,
                                      "--confidence", args.confidence])
-        mode = res["mode"] if res and "mode" in res else "gate"   # fail closed
-        sys.stdout.write(json.dumps({"mode": mode, "degraded": res is None}) + "\n")
+        ok = bool(res) and "mode" in res
+        mode = res["mode"] if ok else "gate"                       # fail closed
+        degraded = not ok
+        sys.stdout.write(json.dumps({"mode": mode, "degraded": degraded}) + "\n")
         return 0
 
     if args.cmd == "classify":
@@ -111,8 +113,10 @@ def main(argv):
             sys.stdout.write(json.dumps({"on_floor": True, "degraded": True}) + "\n")  # conservative
             return 0
         res = _subprocess_json(lib, ["classify", "--action", args.action])
-        on_floor = res["on_floor"] if res and "on_floor" in res else True
-        sys.stdout.write(json.dumps({"on_floor": on_floor, "degraded": res is None}) + "\n")
+        ok = bool(res) and "on_floor" in res
+        on_floor = res["on_floor"] if ok else True                 # fail closed
+        degraded = not ok
+        sys.stdout.write(json.dumps({"on_floor": on_floor, "degraded": degraded}) + "\n")
         return 0
 
     if args.cmd == "guard":
@@ -123,8 +127,10 @@ def main(argv):
         for r in _band_roots(args.root):
             band_args += ["--band-root", r]
         res = _subprocess_json(lib, ["guard", "--path", args.path, *band_args])
-        allow = res["allow"] if res and "allow" in res else False
-        sys.stdout.write(json.dumps({"allow": allow, "degraded": res is None}) + "\n")
+        ok = bool(res) and "allow" in res
+        allow = res["allow"] if ok else False                      # fail closed
+        degraded = not ok
+        sys.stdout.write(json.dumps({"allow": allow, "degraded": degraded}) + "\n")
         return 0
     return 2
 

@@ -80,3 +80,14 @@ def test_route_partial_resolution_fails_closed(capsys, tmp_path, monkeypatch):
                    "--on-floor", "false", "--ground-truth-locus", "owner",
                    "--owner-weighable", "true", "--reversible", "true", "--confidence", "high")
     assert rc == 0 and out["mode"] == "gate" and out["degraded"] is True
+
+
+def test_route_missing_key_reports_degraded(capsys, tmp_path, monkeypatch):
+    # lib resolves and subprocess returns a well-formed dict but missing the "mode" key
+    # -> fail closed to "gate" AND degraded must be True (not False).
+    monkeypatch.setattr(ER, "_resolve", lambda root: "/some/escalation.py")
+    monkeypatch.setattr(ER, "_subprocess_json", lambda lib, cli_args: {})
+    rc, out = _run(capsys, "route", "--root", str(tmp_path),
+                   "--on-floor", "false", "--ground-truth-locus", "owner",
+                   "--owner-weighable", "true", "--reversible", "true", "--confidence", "high")
+    assert rc == 0 and out["mode"] == "gate" and out["degraded"] is True
