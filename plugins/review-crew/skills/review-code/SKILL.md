@@ -485,7 +485,7 @@ fixer edits any file, it gates it with those embedded absolute values:
 `python3 "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
 If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — `escalation.py`,
 `escalation_resolve.py`, `loop_state.py`, `circuit_breaker.py`, `gate_write.py`, `architect_lib.py`,
-`definition_doc.py`, the rubrics — the authoritative membership is `escalation.py`'s `SAFETY_MACHINERY` tuple, kept in sync by `test_guard_fixture_covers_every_safety_member`; this inline list is reader convenience); surface it as a finding for the owner instead. A `degraded:true`
+`definition_doc.py`, the rubrics — the authoritative membership is `escalation.py`'s `SAFETY_MACHINERY` tuple; this inline list is reader convenience and is not itself drift-guarded, so treat the tuple as the source of truth); surface it as a finding for the owner instead. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
 > **Enforcement boundary (review-flagged residual, design-consistent).** In F5 this guard is invoked

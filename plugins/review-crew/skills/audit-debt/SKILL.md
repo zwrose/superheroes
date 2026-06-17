@@ -361,6 +361,7 @@ Issue title format: `"<severity>: <finding title>"` (for a multi-finding lower-t
 **Save the report (PROCEED).** Write the report to the default location and state the path:
 
 ```bash
+mkdir -p docs
 cp "$SESSION_DIR/report.md" "docs/debt-audit-$(date +%Y-%m-%d).md"
 ```
 
@@ -463,7 +464,7 @@ The `severity × inverse-effort` sort means an `Important + Quick` finding ranks
 | Treating consistent patterns as drift                              | Consistency > novelty. If 12 of 13 routes use the same pattern, the 13th matching is **consistency**, not debt. If 6 use pattern A and 7 use pattern B, THAT is drift.     |
 | Mapping every dependency-audit advisory to Critical                | Advisory severity is a hint, not a verdict — `moderate` maps to Minor in this skill. If the vulnerable code path isn't reachable in our usage, the advisory is even lower. |
 | Running this before every PR                                       | This skill is slow and broad by design. Run it monthly. For PR review, use `/review-crew:review-code`.                                                                     |
-| Treating the GitHub-issue offer as automatic                       | Every issue created is a chore for the author. Review the proposed issue set before filing — use "Let me deselect some" or "No" to trim it down.                           |
+| Filing noisy findings the owner won't action                       | Issue-filing is NOTIFY — findings are filed by default and reported back; use the **File** / **Drop** deselect pass to trim, and hard-floor trackers (public/shared/paid) still GATE.                           |
 | Running a deps pass when no audit tool ran                         | The deps audit is ecosystem-aware and skips gracefully (no manifest, or tool absent). If §1 wrote no audit artifact, emit no deps findings — don't invent advisories.     |
 | Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch each by its `subagent_type` (its name). The methodology is the agent's own system prompt.                          |
 | Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                 |
