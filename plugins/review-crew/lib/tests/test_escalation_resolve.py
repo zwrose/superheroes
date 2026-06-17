@@ -62,6 +62,13 @@ def test_lib_absent_fails_closed_to_gate(capsys, tmp_path):
     assert rc == 0 and out["mode"] == "gate" and out["degraded"] is True
 
 
+def test_classify_lib_absent_fails_closed(capsys, tmp_path):
+    # the-architect not resolvable -> conservative embedded fallback: on the floor, degraded.
+    # an unrecognized (benign-looking) action must still report on_floor True under degradation.
+    rc, out = _run(capsys, "classify", "--root", str(tmp_path), "--action", "rename a local variable")
+    assert rc == 0 and out["on_floor"] is True and out["degraded"] is True
+
+
 def test_guard_lib_absent_fails_closed_to_refuse(capsys, tmp_path):
     rc, out = _run(capsys, "guard", "--root", str(tmp_path), "--path", "src/feature.py")
     assert rc == 0 and out["allow"] is False and out["degraded"] is True

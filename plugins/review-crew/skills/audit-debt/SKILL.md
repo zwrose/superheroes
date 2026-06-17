@@ -16,7 +16,7 @@ Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`) first for t
 
 | Form                       | Behavior                                                                                                                                                                                                                                                       |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/review-crew:audit-debt`  | Sweep the whole repo. No flags. Repeats the specialist sweep until it stops surfacing new blocking debt (hard cap 7 rounds), then consolidates findings across all tiers into a proposed set of GitHub issues and offers to file them and/or save the report.  |
+| `/review-crew:audit-debt`  | Sweep the whole repo. No flags. Repeats the specialist sweep until it stops surfacing new blocking debt (hard cap 7 rounds), then consolidates findings across all tiers into GitHub issues (filed by default — NOTIFY) and saves a report.  |
 
 ## Session Directory
 
@@ -372,7 +372,7 @@ End of skill — no code edits, no commits, no posting to PRs, no further checks
 
 ## Learning Loop & Staleness Nudge
 
-These four behaviors are **non-blocking**, run **at end of run** (after the report-save offer), and are **identical across `review-code`, `review-plan`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
+These four behaviors are **non-blocking**, run **at end of run** (after filing issues and saving the report), and are **identical across `review-code`, `review-plan`, and `audit-debt`**. Nothing here ever auto-applies a profile or `CLAUDE.md` edit — every change is user-gated.
 
 ### Recording decisions (at resolution time)
 
