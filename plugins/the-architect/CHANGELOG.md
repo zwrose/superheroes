@@ -6,6 +6,16 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-16
+
+### Added
+
+- **Escalation rubric (F5).** `lib/escalation.py` (deterministic floor action-classifier + pure
+  `route()` + fixer file-scope guard) and `rubric/escalation-base.md` (the shared PROCEED/NOTIFY/GATE
+  policy — the escalation analogue of `review-base.md`). `plan` and `tasks` now instantiate the
+  shared rubric and gain the NOTIFY tier (owner-relevant-but-reversible decisions surface as undoable
+  heads-ups instead of silent record-only).
+
 ## [0.1.0] — 2026-06-16
 
 ### Added

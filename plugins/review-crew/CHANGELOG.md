@@ -6,6 +6,24 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-16
+
+### Changed
+
+- **Escalation now follows the shared `escalation-base.md` rubric (F5), replacing the interim F4
+  severity-gate.** review-code and the trio's step-7 present-set GATE only **owner-weighable**
+  blockers; everything else is verify-and-proceed. A believed false-positive is a **recorded skip**
+  (never silently dropped), so `loop_state`'s arithmetic is preserved — pinned by a
+  disposition-pipeline property test. audit-debt issue-filing is now NOTIFY, not a blocking ask.
+
+### Added
+
+- `lib/escalation_resolve.py` — review-crew-local wrapper (resolve via `architect_lib` → subprocess
+  the-architect's `escalation.py` → fail-closed-conservative degradation).
+- `architect_lib.resolve_target()` — generalized cross-plugin resolution (escalation lib + rubric).
+- A **fixer file-scope guard** refusing edits to the safety-machinery set; escalation eval (layer-1
+  deterministic gate + layer-2 calibration).
+
 ## [0.4.0] — 2026-06-16
 
 ### Added
