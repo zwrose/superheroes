@@ -123,6 +123,7 @@ New files introduced by this plan:
 - [ ] Add `eval/fixtures/dual-host/manifests/codex-marketplace.valid.json` by copying the new Codex marketplace shape.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-marketplace.bad-source.json` where one Codex source points at `./plugins/review-crew`.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/cross-host-version-drift.json` where one host reports a different marketplace metadata version.
+- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/plugin-version-drift.json` where one Codex plugin manifest version differs from the matching Claude plugin manifest version.
 - [ ] Run the existing Claude marketplace validator to confirm this task has not regressed Claude:
 
   ```bash
@@ -290,6 +291,13 @@ New files introduced by this plan:
   ```
 
 - [ ] Treat those Codex-local shared README files as vendored package contents, not a second source of truth.
+- [ ] Copy the base rubric into the review-crew Codex package root:
+
+  ```text
+  plugins/review-crew/rubric/review-base.md -> plugins/review-crew/codex/shared/rubric/review-base.md
+  ```
+
+- [ ] Treat `plugins/review-crew/codex/shared/rubric/review-base.md` as vendored package content, not a second source of truth.
 - [ ] Add `eval/lib/tests/test_runtime_layout.py` with assertions:
 
   - Every plugin has a root `.claude-plugin/plugin.json`.
@@ -297,7 +305,10 @@ New files introduced by this plan:
   - Every plugin has a `shared/README.md`.
   - Every plugin has a package-local `codex/shared/README.md`.
   - Each `codex/shared/README.md` is byte-for-byte identical to the matching `shared/README.md`.
+  - The review-crew Codex package has `codex/shared/rubric/review-base.md`.
+  - The review-crew Codex package-local rubric is byte-for-byte identical to `plugins/review-crew/rubric/review-base.md`.
   - Every Codex package source has at least one `skills/*/SKILL.md`.
+  - No Codex skill references shared runtime dependencies outside its package root.
   - No file under any `plugins/*/shared/` path has a runtime-state extension or name from this denylist:
 
     ```python
@@ -449,7 +460,7 @@ New files introduced by this plan:
   ```
 
 - [ ] For every Codex review-crew review skill, assert the dimension names `Architecture`, `Code`, `Security`, `Test`, and `Failure-Mode` appear unless the corresponding Claude skill intentionally omits that dimension.
-- [ ] For every Codex review-crew review skill, assert it references the base rubric and does not restate severity tiers inline.
+- [ ] For every Codex review-crew review skill, assert it references the package-local base rubric at `shared/rubric/review-base.md` and does not restate severity tiers inline.
 
 ## Task 7: Add Versioned Shared Contract Schemas And Fixtures
 
@@ -485,9 +496,10 @@ New files introduced by this plan:
 - [ ] The v2 schemas must require common host provenance:
 
   ```python
-  COMMON_PROVENANCE = {"host", "hostVersion", "pluginVersion", "runId"}
+  COMMON_PROVENANCE = {"schemaVersion", "host", "hostVersion", "pluginVersion", "runId"}
   ```
 
+- [ ] Every v2 schema must pin `schemaVersion` with `const: 2`.
 - [ ] The v2 schemas must enforce artifact-specific timestamp fields:
 
   ```python
@@ -529,12 +541,19 @@ New files introduced by this plan:
   definition-doc-v2-codex.valid.json
   definition-doc-v2-claude.valid.json
   checkpoint-v2-codex.valid.json
+  checkpoint-v2-claude.valid.json
   queue-v2-claude.valid.json
+  queue-v2-codex.valid.json
   finding-v2-codex.valid.json
+  finding-v2-claude.valid.json
   review-profile-v2-claude.valid.json
+  review-profile-v2-codex.valid.json
   test-pilot-plan-v2-codex.valid.json
+  test-pilot-plan-v2-claude.valid.json
   test-pilot-results-v2-claude.valid.json
+  test-pilot-results-v2-codex.valid.json
   lock-v2-codex.valid.json
+  lock-v2-claude.valid.json
   ```
 
 - [ ] Add negative fixtures:
@@ -542,12 +561,19 @@ New files introduced by this plan:
   ```text
   definition-doc-v2-missing-host.invalid.json
   definition-doc-v2-invalid-host.invalid.json
+  definition-doc-v2-unknown-schema.invalid.json
   checkpoint-v2-missing-createdAt.invalid.json
+  checkpoint-v2-unknown-schema.invalid.json
   queue-v2-unknown-schema.invalid.json
   queue-v2-unsupported-plugin.invalid.json
   finding-v2-invalid-severity.invalid.json
+  finding-v2-unknown-schema.invalid.json
+  review-profile-v2-unknown-schema.invalid.json
   test-pilot-plan-v2-missing-scrubber.invalid.json
+  test-pilot-plan-v2-unknown-schema.invalid.json
+  test-pilot-results-v2-unknown-schema.invalid.json
   lock-v2-missing-fencing-token.invalid.json
+  lock-v2-unknown-schema.invalid.json
   ```
 
 - [ ] Add `eval/lib/tests/test_dual_host_contracts.py` that loads these fixtures.
@@ -567,6 +593,8 @@ New files introduced by this plan:
   ```
 
 - [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks a v1 fixture, v2 schema, positive v2 fixture, or negative v2 fixture.
+- [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks both `<artifact>-v2-claude.valid.json` and `<artifact>-v2-codex.valid.json`.
+- [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks an unknown-schema negative fixture.
 - [ ] In the test file, validate v1 fixtures against the existing strict schemas.
 - [ ] In the test file, validate v2 fixtures against the new companion v2 schemas.
 - [ ] The tests must prove the negative fixtures fail for the intended reason:
@@ -594,6 +622,7 @@ New files introduced by this plan:
   - Definition-docs
   - Review findings
   - Test-pilot plans
+  - Test-pilot results
   - Checkpoints
   - Queues
   - Profiles and calibration
