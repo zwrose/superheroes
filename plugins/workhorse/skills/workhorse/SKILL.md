@@ -75,7 +75,9 @@ a result file:
 ```
 RESULT="$(mktemp)"
 # invoke: /review-crew:review-code --result-file "$RESULT"
-python3 <review-crew>/lib/review_result.py  # (the reader; or read $RESULT directly)
+# then read the terminal action — fail-closed (missing/garbled/unknown -> "halt"),
+# mirroring review-crew's review_result.read_result (a library reader, not a CLI):
+ACTION=$(python3 -c "import json; print(json.load(open('$RESULT'))['action'])" 2>/dev/null || echo halt)
 ```
 
 Read `$RESULT` (via `review_result.read_result`). Branch on `action`:
