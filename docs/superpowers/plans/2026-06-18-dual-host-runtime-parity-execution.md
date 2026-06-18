@@ -132,7 +132,7 @@ Write `.agents/plugins/marketplace.json`:
 }
 ```
 
-Add `.codex-plugin/plugin.json` in each `plugins/<name>/codex/<name>` Codex package root with `name`, `version`, `description`, `author`, `skills`, and `interface` metadata. Set `skills` to `./skills/`. Copy version, author, and description from the matching Claude manifest so metadata validation can enforce drift from the first task without exposing the Claude root `skills/` tree to Codex discovery.
+Add `.codex-plugin/plugin.json` in each `plugins/<name>/codex/<name>` Codex package root with `name`, `version`, `description`, `author`, `skills`, and `interface` metadata. Set `skills` to `./skills/`. Copy version and author from the matching Claude manifest so metadata validation can enforce drift from the first task without exposing the Claude root `skills/` tree to Codex discovery. Descriptions may use host-native wording, but must be non-empty and reviewed for equivalent intent before release.
 
 - [ ] **Step 2: Write failing marketplace tests**
 
@@ -174,7 +174,7 @@ Implement these functions in `.github/scripts/validate_dual_host_marketplace.py`
 - `load_json(path: Path) -> dict | None`: returns parsed JSON, appends a readable error for missing or invalid files, and never raises JSON errors to callers.
 - `validate_claude_marketplace(repo: Path, errors: list[str]) -> dict`: validates `.claude-plugin/marketplace.json`, returns `{name, plugins}` where each plugin record includes `name`, `version`, `author`, `description`, and resolved `source`.
 - `validate_codex_marketplace(repo: Path, phase: str, errors: list[str], warnings: list[str]) -> dict`: validates `.agents/plugins/marketplace.json`, returns the same normalized `{name, plugins}` shape as Claude, reads `.codex-plugin/plugin.json` from each `plugins/<entry-name>/codex/<entry-name>` package root, and uses `warnings` rather than `errors` for missing `shared/README.md` and skill files when `phase == "metadata"`.
-- `validate_cross_host_drift(claude: dict, codex: dict, errors: list[str]) -> None`: compares marketplace name, plugin set, plugin manifest version, author name, and non-empty descriptions.
+- `validate_cross_host_drift(claude: dict, codex: dict, errors: list[str]) -> None`: compares marketplace name, plugin set, plugin manifest version, author name, and non-empty descriptions. Descriptions remain host-native; validation enforces presence and release-review intent, not exact string equality.
 - `main(argv: list[str] | None = None) -> int`: parses `--phase metadata|strict`, prints warnings before errors, prints `dual-host marketplace + plugin manifests valid` on success, and returns `1` on any error.
 
 Rules:
@@ -401,7 +401,7 @@ For review-crew specifically, the copied-package smoke tests must invoke `gate_w
 
 - [ ] **Step 3: Finalize Codex manifests**
 
-Review the `.codex-plugin/plugin.json` files created in Task 1 and add any missing full `interface` metadata. Keep `name`, `version`, `description`, and `author` synchronized with the matching Claude plugin manifests, and keep `skills` pointed at `./skills/` inside the isolated Codex package root.
+Review the `.codex-plugin/plugin.json` files created in Task 1 and add any missing full `interface` metadata. Keep `name`, `version`, and `author` synchronized with the matching Claude plugin manifests, keep descriptions host-native but equivalent in intent, and keep `skills` pointed at `./skills/` inside the isolated Codex package root.
 
 - [ ] **Step 4: Add Codex skills**
 
@@ -467,6 +467,7 @@ SHARED_ARTIFACTS = {
     "checkpoint",
     "queue",
     "finding",
+    "finding-batch",
     "review-profile",
     "test-pilot-plan",
     "test-pilot-results",
@@ -509,9 +510,9 @@ Each host-specific skill must call its package-local helper: Claude/source-check
 Implement these interfaces:
 
 - `class ArtifactReadError(Exception)`: raised for fail-closed reader failures.
-- `read_artifact(path: Path, artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict`: reads v1 or v2 artifacts, normalizes known v1 markdown/JSON records to dicts, validates optional fencing context, and raises `ArtifactReadError` for unknown schema versions.
+- `read_artifact(path: Path, artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict | list[dict]`: reads v1 or v2 artifacts, normalizes known v1 markdown/JSON records to dicts, preserves review-crew findings batches as lists for `finding-batch`, validates optional fencing context, and raises `ArtifactReadError` for unknown schema versions.
 - `read_registry(path: Path) -> dict`: reads registry/storage-mode records and returns a normalized dict with `schemaVersion`, `storageMode`, `remoteKey`, and timestamps.
-- `validate_known_schema(record: dict, artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict`: validates a normalized record against the known artifact contract and returns the record when valid.
+- `validate_known_schema(record: dict | list[dict], artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict | list[dict]`: validates a normalized record or findings batch against the known artifact contract and returns it when valid.
 
 Readers must fail closed on unknown schema version, unsupported plugin version, missing v2 provenance, stale fencing tokens, and host/version skew that requires doctor/reconcile.
 
@@ -529,6 +530,7 @@ Return machine-readable statuses for divergence, stale locks, version skew, and 
 Create `eval/lib/tests/test_dual_host_conformance.py` that executes real reader and doctor/reconcile helpers against:
 
 - Claude-authored and Codex-authored findings
+- Claude-authored and Codex-authored findings batches copied from real `findings-*.json` arrays
 - Claude-authored and Codex-authored test-pilot plans/results
 - Claude-authored and Codex-authored definition-docs
 - held, stale, and fencing-token lock cases

@@ -624,6 +624,7 @@ New files introduced by this plan:
   eval/lib/schemas/dual-host/checkpoint-v2.schema.json
   eval/lib/schemas/dual-host/queue-v2.schema.json
   eval/lib/schemas/dual-host/finding-v2.schema.json
+  eval/lib/schemas/dual-host/finding-batch-v2.schema.json
   eval/lib/schemas/dual-host/review-profile-v2.schema.json
   eval/lib/schemas/dual-host/test-pilot-plan-v2.schema.json
   eval/lib/schemas/dual-host/test-pilot-results-v2.schema.json
@@ -647,6 +648,7 @@ New files introduced by this plan:
       "checkpoint": {"createdAt", "updatedAt"},
       "queue": {"createdAt", "updatedAt"},
       "finding": {"createdAt", "updatedAt"},
+      "finding-batch": {"createdAt", "updatedAt"},
       "review-profile": {"created", "updated"},
       "test-pilot-plan": {"createdAt", "updatedAt"},
       "test-pilot-results": {"createdAt", "updatedAt"},
@@ -671,6 +673,7 @@ New files introduced by this plan:
 - [ ] `checkpoint-v2.schema.json` must preserve the current `updatedAt` field, add `createdAt`, and add the common host provenance fields.
 - [ ] `queue-v2.schema.json` must preserve the current `items` shape and add `createdAt`, `updatedAt`, and the common host provenance fields at the top level.
 - [ ] `finding-v2.schema.json` must preserve the full review-base finding contract needed by the runtime, require `id`, `title`, `dimension`, `severity`, `file`, `line`, `body`, and `suggestion`, preserve optional taxonomy and `tradeoff`, require `confidence` and evidence fields for Critical/Important findings according to the rubric, allow Minor/Nit findings to omit `confidence` with the rubric's default-High interpretation, and add the common host provenance fields.
+- [ ] `finding-batch-v2.schema.json` must preserve review-crew's current per-reviewer findings-file contract. It must accept legacy v1 top-level arrays copied from real `findings-*.json` files through the v1 reader path, and define v2 as an object with batch provenance plus a `findings` array validated item-by-item with `finding-v2.schema.json`.
 - [ ] `review-profile-v2.schema.json` must preserve the profile calibration concepts from `.claude/review-profile.md`, including the markdown/provenance artifact contract current readers parse, and add the common host provenance fields without requiring existing markdown profiles to be rewritten.
 - [ ] `test-pilot-plan-v2.schema.json` must preserve the plan/comment fields used by `plugins/test-pilot/templates/plan-comment.md` and the engine state readers, then add the common host provenance fields.
 - [ ] `test-pilot-results-v2.schema.json` must preserve the results/comment fields used by `plugins/test-pilot/templates/results-comment.md`, then add the common host provenance fields.
@@ -687,6 +690,9 @@ New files introduced by this plan:
   queue-v2-codex.valid.json
   finding-v2-codex.valid.json
   finding-v2-claude.valid.json
+  finding-batch-v1-reviewer.valid.json
+  finding-batch-v2-codex.valid.json
+  finding-batch-v2-claude.valid.json
   review-profile-v2-claude.valid.json
   review-profile-v2-codex.valid.json
   test-pilot-plan-v2-codex.valid.json
@@ -711,6 +717,8 @@ New files introduced by this plan:
   queue-v2-unsupported-plugin.invalid.json
   finding-v2-invalid-severity.invalid.json
   finding-v2-unknown-schema.invalid.json
+  finding-batch-v2-invalid-item.invalid.json
+  finding-batch-v2-unknown-schema.invalid.json
   review-profile-v2-unknown-schema.invalid.json
   test-pilot-plan-v2-missing-steps.invalid.json
   test-pilot-plan-v2-unknown-schema.invalid.json
@@ -730,6 +738,7 @@ New files introduced by this plan:
       "checkpoint",
       "queue",
       "finding",
+      "finding-batch",
       "review-profile",
       "test-pilot-plan",
       "test-pilot-results",
@@ -752,6 +761,7 @@ New files introduced by this plan:
   ```python
   SHAPE_BACKED_V1 = {
       "finding",
+      "finding-batch",
       "review-profile",
       "test-pilot-plan",
       "test-pilot-results",

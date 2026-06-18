@@ -99,7 +99,7 @@ runtime path.
 Codex gets first-class Codex mechanics:
 
 - `.agents/plugins/marketplace.json`
-- `plugins/<name>/codex/.codex-plugin/plugin.json`
+- `plugins/<name>/codex/<name>/.codex-plugin/plugin.json`
 - Codex plugin install/update docs
 - Codex-native skill/runtime instructions
 - Codex tool discovery instructions
@@ -216,10 +216,11 @@ plugins/<name>/
     .claude-plugin/
     skills/
     agents/
-  codex/                  # Codex-native package source
-    .codex-plugin/
-    skills/
-    agents/               # wrappers or host files when Codex needs them
+  codex/
+    <name>/               # Codex-native package source; basename matches plugin.json name
+      .codex-plugin/
+      skills/
+      agents/             # wrappers or host files when Codex needs them
 ```
 
 The current root-level `skills/`, `agents/`, and `.claude-plugin/` directories are
