@@ -577,7 +577,7 @@ New files introduced by this plan:
 
 - [ ] For `review-plan`, `review-spec`, and `review-tasks`, assert the same reviewer set unless a skill explicitly documents a narrower scope and the existing Claude skill has the same narrower scope.
 - [ ] For `audit-debt`, assert its documented reviewer set matches the existing Claude `audit-debt` skill's intentional subset.
-- [ ] For every Codex review-crew review skill, assert the expected findings filenames appear:
+- [ ] For every Codex review-crew review skill, derive the expected findings filenames from the matching Claude skill's reviewer set before asserting filenames. Skills that use all five reviewers expect:
 
   ```python
   FINDINGS_FILES = {
@@ -588,6 +588,8 @@ New files introduced by this plan:
       "findings-test.json",
   }
   ```
+
+- [ ] `audit-debt` must expect only the findings files for its existing Claude reviewer subset unless the Claude `audit-debt` skill is intentionally expanded first.
 
 - [ ] For every Codex review-crew review skill, assert the dimension names `Architecture`, `Code`, `Security`, `Test`, and `Failure-Mode` appear unless the corresponding Claude skill intentionally omits that dimension.
 - [ ] For every Codex review-crew review skill, assert it references the package-local base rubric at `shared/rubric/review-base.md` and does not restate severity tiers inline.
@@ -644,6 +646,7 @@ New files introduced by this plan:
       "test-pilot-plan": {"createdAt", "updatedAt"},
       "test-pilot-results": {"createdAt", "updatedAt"},
       "lock": {"acquiredAt", "updatedAt"},
+      "registry": {"createdAt", "updatedAt"},
   }
   ```
 
@@ -662,11 +665,12 @@ New files introduced by this plan:
 
 - [ ] `checkpoint-v2.schema.json` must preserve the current `updatedAt` field, add `createdAt`, and add the common host provenance fields.
 - [ ] `queue-v2.schema.json` must preserve the current `items` shape and add `createdAt`, `updatedAt`, and the common host provenance fields at the top level.
-- [ ] `finding-v2.schema.json` must preserve the full review-base finding contract needed by the runtime, require `id`, `title`, `dimension`, `severity`, `file`, `line`, `body`, `suggestion`, and `confidence`, preserve optional taxonomy and `tradeoff`, require evidence fields for Important/Critical findings according to the rubric, and add the common host provenance fields.
+- [ ] `finding-v2.schema.json` must preserve the full review-base finding contract needed by the runtime, require `id`, `title`, `dimension`, `severity`, `file`, `line`, `body`, and `suggestion`, preserve optional taxonomy and `tradeoff`, require `confidence` and evidence fields for Critical/Important findings according to the rubric, allow Minor/Nit findings to omit `confidence` with the rubric's default-High interpretation, and add the common host provenance fields.
 - [ ] `review-profile-v2.schema.json` must preserve the profile calibration concepts from `.claude/review-profile.md` and add the common host provenance fields.
 - [ ] `test-pilot-plan-v2.schema.json` must preserve the plan/comment fields used by `plugins/test-pilot/templates/plan-comment.md` and the engine state readers, then add the common host provenance fields.
 - [ ] `test-pilot-results-v2.schema.json` must preserve the results/comment fields used by `plugins/test-pilot/templates/results-comment.md`, then add the common host provenance fields.
 - [ ] `lock-v2.schema.json` must preserve atomic lock ownership fields and require `host`, `runId`, `pluginVersion`, `acquiredAt`, `updatedAt`, and a generation or fencing token.
+- [ ] `registry-v2.schema.json` must preserve the current `eval/lib/schemas/registry.schema.json` storage-mode contract, add the common host provenance fields, and require `createdAt` and `updatedAt`.
 - [ ] Add positive fixtures:
 
   ```text
@@ -686,6 +690,8 @@ New files introduced by this plan:
   test-pilot-results-v2-codex.valid.json
   lock-v2-codex.valid.json
   lock-v2-claude.valid.json
+  registry-v2-codex.valid.json
+  registry-v2-claude.valid.json
   ```
 
 - [ ] Add negative fixtures:
@@ -706,6 +712,8 @@ New files introduced by this plan:
   test-pilot-results-v2-unknown-schema.invalid.json
   lock-v2-missing-fencing-token.invalid.json
   lock-v2-unknown-schema.invalid.json
+  registry-v2-unknown-schema.invalid.json
+  registry-v2-unsupported-storage-mode.invalid.json
   ```
 
 - [ ] Add `eval/lib/tests/test_dual_host_contracts.py` that loads these fixtures.
