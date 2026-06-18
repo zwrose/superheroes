@@ -1,0 +1,662 @@
+# Dual-Host Runtime Parity Execution Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Implement first-class Claude Code and Codex packaging for the superheroes marketplace while preserving the existing Claude runtime surface and allowing both hosts to coexist in one project.
+
+**Architecture:** Build two host-native package surfaces over one shared contract layer. Claude keeps its existing root package files, skills, and bundled agents. Codex gets package-local manifests, skills, helper/runtime files, shared contract copies, and installed-package verification; shared schemas/readers enforce bidirectional artifact compatibility without moving existing writers to v2.
+
+**Tech Stack:** Python 3.12, pytest, jsonschema, Markdown skill files, JSON manifests, GitHub Actions, existing review-crew/test-pilot/the-architect helpers.
+
+---
+
+## Source Documents
+
+- `docs/superpowers/specs/2026-06-18-dual-host-first-class-design.md`
+- `docs/superpowers/plans/2026-06-18-dual-host-plugin-runtime-parity.md`
+- `CONVENTIONS.md`
+- `.github/scripts/validate_marketplace.py`
+
+## File Map
+
+Create:
+
+- `.agents/plugins/marketplace.json`
+- `.github/scripts/validate_dual_host_marketplace.py`
+- `eval/fixtures/dual-host/README.md`
+- `eval/fixtures/dual-host/manifests/*.json`
+- `eval/fixtures/dual-host/contracts/*.json`
+- `eval/fixtures/dual-host/conformance/*.json`
+- `eval/lib/schemas/dual-host/*.schema.json`
+- `eval/lib/tests/test_dual_host_marketplace.py`
+- `eval/lib/tests/test_runtime_layout.py`
+- `eval/lib/tests/test_dual_host_contracts.py`
+- `eval/lib/tests/test_dual_host_conformance.py`
+- `eval/lib/dual_host_readers.py`
+- `eval/lib/dual_host_doctor.py`
+- `plugins/review-crew/shared/README.md`
+- `plugins/review-crew/shared/REVIEWERS.md`
+- `plugins/review-crew/shared/reviewers/*-reviewer.md`
+- `plugins/review-crew/codex/.codex-plugin/plugin.json`
+- `plugins/review-crew/codex/shared/README.md`
+- `plugins/review-crew/codex/shared/rubric/review-base.md`
+- `plugins/review-crew/codex/shared/reviewers/*-reviewer.md`
+- `plugins/review-crew/codex/lib/*.py`
+- `plugins/review-crew/codex/skills/*/SKILL.md`
+- `plugins/test-pilot/shared/README.md`
+- `plugins/test-pilot/codex/.codex-plugin/plugin.json`
+- `plugins/test-pilot/codex/shared/README.md`
+- `plugins/test-pilot/codex/lib/*.py`
+- `plugins/test-pilot/codex/templates/*`
+- `plugins/test-pilot/codex/skills/*/SKILL.md`
+- `plugins/the-architect/shared/README.md`
+- `plugins/the-architect/codex/.codex-plugin/plugin.json`
+- `plugins/the-architect/codex/shared/README.md`
+- `plugins/the-architect/codex/lib/*.py`
+- `plugins/the-architect/codex/templates/*`
+- `plugins/the-architect/codex/skills/*/SKILL.md`
+- `plugins/review-crew/lib/tests/test_shared_reviewers.py`
+- `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`
+- `docs/dual-host-runtime.md`
+- `docs/dual-host-migration.md`
+
+Modify:
+
+- `.github/workflows/ci.yml`
+- `.gitignore`
+- `README.md`
+- `CONTRIBUTING.md`
+- `RELEASING.md`
+- `plugins/review-crew/agents/*-reviewer.md`
+
+Do not change:
+
+- Existing Claude plugin names, versions, or root package locations.
+- Existing workflow writer behavior for review-crew, test-pilot, or the-architect.
+- Existing runtime state locations.
+
+## Verification Command
+
+Run this after every task that changes executable code or test fixtures:
+
+```bash
+python3 .github/scripts/validate_marketplace.py && python3 .github/scripts/validate_dual_host_marketplace.py --phase metadata && python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
+```
+
+After Codex package roots, shared docs, and Codex skills exist, run strict validation:
+
+```bash
+python3 .github/scripts/validate_marketplace.py && python3 .github/scripts/validate_dual_host_marketplace.py && python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
+```
+
+## Task 1: Codex Marketplace And Dual-Host Validator
+
+**Files:**
+
+- Create: `.agents/plugins/marketplace.json`
+- Create: `.github/scripts/validate_dual_host_marketplace.py`
+- Create: `eval/fixtures/dual-host/manifests/*.json`
+- Test: `eval/lib/tests/test_dual_host_marketplace.py`
+
+- [ ] **Step 1: Add the Codex marketplace fixture**
+
+Write `.agents/plugins/marketplace.json`:
+
+```json
+{
+  "name": "superheroes",
+  "interface": {
+    "displayName": "Superheroes"
+  },
+  "plugins": [
+    {
+      "name": "the-architect",
+      "source": { "source": "local", "path": "./plugins/the-architect/codex" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "review-crew",
+      "source": { "source": "local", "path": "./plugins/review-crew/codex" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "test-pilot",
+      "source": { "source": "local", "path": "./plugins/test-pilot/codex" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
+```
+
+- [ ] **Step 2: Write failing marketplace tests**
+
+Create `eval/lib/tests/test_dual_host_marketplace.py` with subprocess tests for:
+
+```python
+STRICT_FAILING_FIXTURES = {
+    "codex-marketplace.bad-source.json": "Codex source",
+    "marketplace-name-drift.json": "marketplace name",
+    "plugin-version-drift.json": "plugin version",
+    "codex-invalid-source-object.json": "source",
+    "codex-source-traversal.json": "source path",
+    "codex-source-wrong-plugin-dir.json": "plugins/<name>/codex",
+    "codex-entry-version.json": "version",
+    "codex-invalid-policy.json": "policy",
+    "codex-missing-interface.json": "interface",
+    "codex-unsupported-host-field.json": "host",
+    "codex-invalid-semver.json": "SemVer",
+    "plugin-set-drift.json": "plugin set",
+    "author-drift.json": "author",
+    "codex-missing-shared-readme.json": "shared/README.md",
+    "codex-missing-skill.json": "skills",
+}
+```
+
+Add one metadata-phase test that runs missing shared README and missing skill fixtures with:
+
+```bash
+python3 .github/scripts/validate_dual_host_marketplace.py --phase metadata
+```
+
+Expected: exit code `0`, output contains `warning:`.
+
+- [ ] **Step 3: Implement the validator**
+
+Implement these functions in `.github/scripts/validate_dual_host_marketplace.py` with the exact names and return contracts below:
+
+- `load_json(path: Path) -> dict | None`: returns parsed JSON, appends a readable error for missing or invalid files, and never raises JSON errors to callers.
+- `validate_claude_marketplace(repo: Path, errors: list[str]) -> dict`: validates `.claude-plugin/marketplace.json`, returns `{name, plugins}` where each plugin record includes `name`, `version`, `author`, `description`, and resolved `source`.
+- `validate_codex_marketplace(repo: Path, phase: str, errors: list[str], warnings: list[str]) -> dict`: validates `.agents/plugins/marketplace.json`, returns the same normalized `{name, plugins}` shape as Claude, and uses `warnings` rather than `errors` for missing `shared/README.md` and skill files when `phase == "metadata"`.
+- `validate_cross_host_drift(claude: dict, codex: dict, errors: list[str]) -> None`: compares marketplace name, plugin set, plugin manifest version, author name, and non-empty descriptions.
+- `main(argv: list[str] | None = None) -> int`: parses `--phase metadata|strict`, prints warnings before errors, prints `dual-host marketplace + plugin manifests valid` on success, and returns `1` on any error.
+
+Rules:
+
+- Resolve Codex `source.path` with `Path.resolve()`.
+- Reject any resolved path not equal to `repo / "plugins" / entry_name / "codex"`.
+- Reject `plugins[].version` and unsupported Codex manifest fields including `host`.
+- Require Codex `policy.installation`, `policy.authentication`, `category`, `skills`, and `interface`.
+- Compare plugin versions from plugin manifests, not marketplace entries.
+
+- [ ] **Step 4: Verify Task 1**
+
+Run:
+
+```bash
+python3 .github/scripts/validate_marketplace.py
+python3 .github/scripts/validate_dual_host_marketplace.py --phase metadata
+python3 -m pytest eval/lib/tests/test_dual_host_marketplace.py -q
+```
+
+Expected: Claude validator passes; dual-host metadata phase passes with warnings for missing package-local files; marketplace tests pass.
+
+- [ ] **Step 5: Commit Task 1**
+
+```bash
+git add .agents/plugins/marketplace.json .github/scripts/validate_dual_host_marketplace.py eval/fixtures/dual-host/manifests eval/lib/tests/test_dual_host_marketplace.py
+git commit -m "feat: add codex marketplace validation"
+```
+
+## Task 2: Shared Runtime Layout Guards
+
+**Files:**
+
+- Create: `plugins/*/shared/README.md`
+- Create: `plugins/*/codex/shared/README.md`
+- Create: `plugins/review-crew/codex/shared/rubric/review-base.md`
+- Test: `eval/lib/tests/test_runtime_layout.py`
+
+- [ ] **Step 1: Write failing layout tests**
+
+Create `eval/lib/tests/test_runtime_layout.py` with exact expected sets:
+
+```python
+EXPECTED_CLAUDE_SKILLS = {
+    "review-crew": {"audit-debt", "review-code", "review-init", "review-plan", "review-spec", "review-tasks"},
+    "test-pilot": {"test-pilot-execute", "test-pilot-init", "test-pilot-plan"},
+    "the-architect": {"discovery", "plan", "tasks", "writing-specs"},
+}
+
+EXPECTED_REVIEW_CREW_AGENTS = {
+    "architecture-reviewer.md",
+    "code-reviewer.md",
+    "premortem-reviewer.md",
+    "security-reviewer.md",
+    "test-reviewer.md",
+}
+
+DENIED_RUNTIME_NAMES = {
+    "checkpoint.json",
+    "queue.json",
+    "lock.json",
+    "state.json",
+    "cache.json",
+    "meta.json",
+    "config.lock",
+    ".lock",
+}
+```
+
+Assert root Claude marketplace sources are `./plugins/<name>`, not `./plugins/<name>/codex`.
+
+- [ ] **Step 2: Add shared README files and rubric copy**
+
+Create:
+
+- `plugins/review-crew/shared/README.md`
+- `plugins/test-pilot/shared/README.md`
+- `plugins/the-architect/shared/README.md`
+
+Copy each to `plugins/<name>/codex/shared/README.md`.
+
+Copy:
+
+```text
+plugins/review-crew/rubric/review-base.md
+```
+
+to:
+
+```text
+plugins/review-crew/codex/shared/rubric/review-base.md
+```
+
+- [ ] **Step 3: Verify Task 2**
+
+Run:
+
+```bash
+python3 -m pytest eval/lib/tests/test_runtime_layout.py -q
+python3 .github/scripts/validate_dual_host_marketplace.py --phase metadata
+```
+
+Expected: runtime layout tests pass; metadata phase still passes.
+
+- [ ] **Step 4: Commit Task 2**
+
+```bash
+git add eval/lib/tests/test_runtime_layout.py plugins/*/shared plugins/*/codex/shared
+git commit -m "feat: add shared runtime layout guards"
+```
+
+## Task 3: Review-Crew Shared Reviewer Methodology
+
+**Files:**
+
+- Create: `plugins/review-crew/shared/REVIEWERS.md`
+- Create: `plugins/review-crew/shared/reviewers/*-reviewer.md`
+- Create: `plugins/review-crew/codex/shared/reviewers/*-reviewer.md`
+- Modify: `plugins/review-crew/agents/*-reviewer.md`
+- Test: `plugins/review-crew/lib/tests/test_shared_reviewers.py`
+
+- [ ] **Step 1: Write failing reviewer drift tests**
+
+Create `plugins/review-crew/lib/tests/test_shared_reviewers.py` with:
+
+```python
+REVIEWER_FILES = {
+    "architecture-reviewer.md",
+    "code-reviewer.md",
+    "premortem-reviewer.md",
+    "security-reviewer.md",
+    "test-reviewer.md",
+}
+
+CLAUDE_ONLY_TOKENS = {
+    "tools:",
+    "${CLAUDE_PLUGIN_ROOT}",
+    "subagent_type",
+}
+```
+
+Assertions:
+
+- `plugins/review-crew/shared/reviewers` contains exactly `REVIEWER_FILES`.
+- Shared reviewer files do not contain `CLAUDE_ONLY_TOKENS`.
+- Codex package-local reviewer files are byte-for-byte equal to shared reviewer files.
+- Claude agent files retain Claude-native frontmatter and reference the neutral shared reviewer file by filename.
+
+- [ ] **Step 2: Extract neutral reviewer methodology**
+
+For each file in `plugins/review-crew/agents/*-reviewer.md`, create a neutral shared file under `plugins/review-crew/shared/reviewers/` that preserves methodology, dimension calibration, verification rules, and output expectations while removing Claude-only wrapper metadata.
+
+- [ ] **Step 3: Update Claude wrappers**
+
+Keep each Claude agent in `plugins/review-crew/agents/` Claude-native. Add a short line:
+
+```markdown
+Shared methodology source: `plugins/review-crew/shared/reviewers/<name>.md`.
+```
+
+Do not remove existing Claude agent tool metadata.
+
+- [ ] **Step 4: Verify Task 3**
+
+Run:
+
+```bash
+python3 -m pytest plugins/review-crew/lib/tests/test_shared_reviewers.py plugins/review-crew/lib/tests/test_dispatch_tables.py -q
+```
+
+Expected: shared reviewer tests and existing dispatch table tests pass.
+
+- [ ] **Step 5: Commit Task 3**
+
+```bash
+git add plugins/review-crew/shared plugins/review-crew/codex/shared/reviewers plugins/review-crew/agents plugins/review-crew/lib/tests/test_shared_reviewers.py
+git commit -m "feat: add shared reviewer methodology"
+```
+
+## Task 4: Codex Package Roots, Skills, And Installed Helper Smoke Tests
+
+**Files:**
+
+- Create: `plugins/*/codex/.codex-plugin/plugin.json`
+- Create: `plugins/*/codex/skills/*/SKILL.md`
+- Create: `plugins/*/codex/lib/*.py`
+- Create: `plugins/test-pilot/codex/templates/*`
+- Create: `plugins/the-architect/codex/templates/*`
+- Test: `eval/lib/tests/test_codex_skill_markdown.py`
+- Test: `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`
+
+- [ ] **Step 1: Write failing Codex skill tests**
+
+Create `eval/lib/tests/test_codex_skill_markdown.py` with exact skill sets:
+
+```python
+EXPECTED_CODEX_SKILLS = {
+    "review-crew": {"audit-debt", "review-code", "review-init", "review-plan", "review-spec", "review-tasks"},
+    "test-pilot": {"test-pilot-execute", "test-pilot-init", "test-pilot-plan"},
+    "the-architect": {"discovery", "plan", "tasks", "writing-specs"},
+}
+```
+
+Require YAML frontmatter with `name` and `description`, required heading order, package-local `shared/README.md`, no `.github/scripts`, no `python3 -m pytest plugins/`, no Claude-only runtime tokens in `## Codex Runtime`, and at least one Codex-native marker.
+
+- [ ] **Step 2: Write failing installed-package smoke tests**
+
+Add tests that copy each `plugins/<name>/codex` root to a temp directory outside the repo and execute representative helpers:
+
+```bash
+python3 codex/lib/resolve_diff_lines.py --help
+python3 codex/lib/loop_state.py --help
+python3 codex/lib/definition_doc.py frontmatter --help
+python3 codex/lib/engine.py --help
+```
+
+Use only commands that exist for the copied package. Assert helper output exits `0` for `--help` or the tested read-only command.
+
+- [ ] **Step 3: Add Codex manifests**
+
+Create `.codex-plugin/plugin.json` in each Codex root with `name`, `version`, `description`, `author`, `skills`, and full `interface` metadata. Versions must match the existing Claude plugin manifests.
+
+- [ ] **Step 4: Add Codex skills**
+
+For every Codex skill:
+
+- Start with YAML frontmatter.
+- Include `## When To Use`, `## Codex Runtime`, `## Shared Contract`, `## Host Coexistence`, and `## Verification`.
+- In `## Codex Runtime`, use Codex terms such as `commentary`, `tool_search`, `request_user_input`, `browser MCP`, `Codex subagent`, or `worker`.
+- In `## Host Coexistence`, include: `Claude runtime files remain authoritative for Claude users`.
+- Reference package-local shared files and package-local helpers.
+
+- [ ] **Step 5: Package helper adapters**
+
+Copy or wrap:
+
+- review-crew: `review_store.py`, `loop_state.py`, `circuit_breaker.py`, `resolve_diff_lines.py`, `repo_doctor.py`, `decisions.py`, `gate_write.py`
+- test-pilot: `engine.py`, `store.py`, `state.py`, `lock.py`, `catalog.py`, `blocks.py`, `pr_comment.py`, templates
+- the-architect: `definition_doc.py`, `identifiers.py`, templates
+
+Where a source helper reads `.claude-plugin/plugin.json`, add a Codex adapter path that reads `.codex-plugin/plugin.json`.
+
+- [ ] **Step 6: Verify Task 4**
+
+Run:
+
+```bash
+python3 .github/scripts/validate_dual_host_marketplace.py
+python3 -m pytest eval/lib/tests/test_codex_skill_markdown.py plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py -q
+```
+
+Expected: strict dual-host validator passes; Codex skill tests pass.
+
+- [ ] **Step 7: Commit Task 4**
+
+```bash
+git add plugins/*/codex eval/lib/tests/test_codex_skill_markdown.py plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py
+git commit -m "feat: add codex package roots and skills"
+```
+
+## Task 5: Dual-Host Schemas, Fixtures, Readers, And Conformance
+
+**Files:**
+
+- Create: `eval/lib/schemas/dual-host/*.schema.json`
+- Create: `eval/fixtures/dual-host/contracts/*`
+- Create: `eval/fixtures/dual-host/conformance/*`
+- Create: `eval/lib/dual_host_readers.py`
+- Create: `eval/lib/dual_host_doctor.py`
+- Test: `eval/lib/tests/test_dual_host_contracts.py`
+- Test: `eval/lib/tests/test_dual_host_conformance.py`
+
+- [ ] **Step 1: Write failing schema matrix tests**
+
+Create `eval/lib/tests/test_dual_host_contracts.py` with:
+
+```python
+SHARED_ARTIFACTS = {
+    "definition-doc",
+    "checkpoint",
+    "queue",
+    "finding",
+    "review-profile",
+    "test-pilot-plan",
+    "test-pilot-results",
+    "lock",
+    "registry",
+}
+
+COMMON_PROVENANCE = {"schemaVersion", "host", "hostVersion", "pluginVersion", "runId"}
+```
+
+Require v1 fixture, v2 schema, Claude positive fixture, Codex positive fixture, and unknown-schema negative fixture for every artifact.
+
+- [ ] **Step 2: Add schemas and fixtures**
+
+Add v2 schemas with `additionalProperties: false`, `schemaVersion: 2`, common provenance, and artifact timestamps. Preserve v1 fixture shapes from current schemas, runtime templates, and markdown profile output.
+
+For review profiles, include both:
+
+- `review-profile-v1-legacy.valid.md`
+- `review-profile-v2-claude.valid.json`
+- `review-profile-v2-codex.valid.json`
+
+The v1 validator must parse markdown/provenance fields current readers depend on.
+
+- [ ] **Step 3: Add reader helpers**
+
+Create `eval/lib/dual_host_readers.py` with these interfaces:
+
+- `class ArtifactReadError(Exception)`: raised for fail-closed reader failures.
+- `read_artifact(path: Path, artifact: str) -> dict`: reads v1 or v2 artifacts, normalizes known v1 markdown/JSON records to dicts, and raises `ArtifactReadError` for unknown schema versions.
+- `read_registry(path: Path) -> dict`: reads registry/storage-mode records and returns a normalized dict with `schemaVersion`, `storageMode`, `remoteKey`, and timestamps.
+- `validate_known_schema(record: dict, artifact: str) -> dict`: validates a normalized record against the known artifact contract and returns the record when valid.
+
+Readers must fail closed on unknown schema version, unsupported plugin version, missing v2 provenance, stale fencing tokens, and host/version skew that requires doctor/reconcile.
+
+- [ ] **Step 4: Add doctor/reconcile helper**
+
+Create `eval/lib/dual_host_doctor.py` with these interfaces:
+
+- `diagnose(paths: list[Path]) -> dict`: returns a dict with `status`, `problems`, and `actions`; `status` is one of `ok`, `diverged`, or `blocked`.
+- `reconcile(paths: list[Path], *, dry_run: bool = True) -> dict`: returns a dict with `status`, `changes`, and `problems`; `status` is one of `would-change`, `changed`, or `blocked`, and the function does not write when `dry_run` is true.
+
+Return machine-readable statuses for divergence, stale locks, version skew, and missing migration markers.
+
+- [ ] **Step 5: Add conformance tests**
+
+Create `eval/lib/tests/test_dual_host_conformance.py` that executes real reader and doctor/reconcile helpers against:
+
+- Claude-authored and Codex-authored findings
+- Claude-authored and Codex-authored test-pilot plans/results
+- Claude-authored and Codex-authored definition-docs
+- held, stale, and fencing-token lock cases
+- registry/storage-mode records
+- divergence, stale-lock, and version-skew doctor fixtures
+
+- [ ] **Step 6: Verify Task 5**
+
+Run:
+
+```bash
+python3 -m pytest eval/lib/tests/test_dual_host_contracts.py eval/lib/tests/test_dual_host_conformance.py -q
+```
+
+Expected: all dual-host contract and conformance tests pass.
+
+- [ ] **Step 7: Commit Task 5**
+
+```bash
+git add eval/lib/schemas/dual-host eval/fixtures/dual-host eval/lib/dual_host_readers.py eval/lib/dual_host_doctor.py eval/lib/tests/test_dual_host_contracts.py eval/lib/tests/test_dual_host_conformance.py
+git commit -m "feat: add dual-host artifact contracts"
+```
+
+## Task 6: Docs, CI, And Release Guardrails
+
+**Files:**
+
+- Create: `docs/dual-host-runtime.md`
+- Create: `docs/dual-host-migration.md`
+- Modify: `.gitignore`
+- Modify: `.github/workflows/ci.yml`
+- Modify: `README.md`
+- Modify: `CONTRIBUTING.md`
+- Modify: `RELEASING.md`
+
+- [ ] **Step 1: Unignore public dual-host docs**
+
+Update `.gitignore` so only these docs are tracked under `docs/`:
+
+```gitignore
+!docs/dual-host-runtime.md
+!docs/dual-host-migration.md
+```
+
+- [ ] **Step 2: Add runtime and migration docs**
+
+`docs/dual-host-runtime.md` must include:
+
+- plugin-by-plugin table
+- Claude remains first-class section
+- Codex becomes first-class section
+- same project, both hosts section
+
+`docs/dual-host-migration.md` must include:
+
+- expand/migrate/contract rules
+- artifact-specific locks
+- registry/storage-mode behavior
+- doctor/reconcile recovery behavior
+
+- [ ] **Step 3: Update user-facing docs**
+
+Update `README.md`, `CONTRIBUTING.md`, and `RELEASING.md` with dual-host status, install pointers, validation commands, and release checklist. Preserve existing Claude install and usage path.
+
+- [ ] **Step 4: Add CI validator**
+
+In `.github/workflows/ci.yml`, run:
+
+```bash
+python3 .github/scripts/validate_marketplace.py
+python3 .github/scripts/validate_dual_host_marketplace.py
+python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
+```
+
+- [ ] **Step 5: Verify Task 6**
+
+Run the strict verification command from the top of this plan.
+
+- [ ] **Step 6: Commit Task 6**
+
+```bash
+git add .gitignore .github/workflows/ci.yml README.md CONTRIBUTING.md RELEASING.md docs/dual-host-runtime.md docs/dual-host-migration.md
+git commit -m "docs: add dual-host runtime and release guidance"
+```
+
+## Task 7: Final Verification And Review Handoff
+
+**Files:**
+
+- Inspect all changed files.
+
+- [ ] **Step 1: Run full verification**
+
+```bash
+python3 .github/scripts/validate_marketplace.py
+python3 .github/scripts/validate_dual_host_marketplace.py
+python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
+```
+
+Expected: both validators pass and all tests pass.
+
+- [ ] **Step 2: Run placeholder scan**
+
+```bash
+python3 - <<'PY'
+import pathlib
+
+roots = [".agents", "plugins", "docs", "eval", ".github", "README.md", "CONTRIBUTING.md", "RELEASING.md"]
+markers = ["TB" + "D", "TO" + "DO", "PLACE" + "HOLDER", "FIX" + "ME"]
+for root in roots:
+    path = pathlib.Path(root)
+    if not path.exists():
+        continue
+    paths = [path] if path.is_file() else path.rglob("*")
+    for file_path in paths:
+        if not file_path.is_file():
+            continue
+        try:
+            text = file_path.read_text()
+        except UnicodeDecodeError:
+            continue
+        for line_no, line in enumerate(text.splitlines(), 1):
+            if any(marker in line for marker in markers):
+                print(f"{file_path}:{line_no}:{line}")
+PY
+```
+
+Expected: no output.
+
+- [ ] **Step 3: Review changed files**
+
+```bash
+git status --short
+git diff --stat main...HEAD
+```
+
+Expected: only planned files changed; no runtime state files committed.
+
+- [ ] **Step 4: Commit verification note if needed**
+
+If verification changes docs or fixtures, commit them:
+
+```bash
+git add <changed-files>
+git commit -m "chore: finalize dual-host verification"
+```
+
+## Self-Review Checklist
+
+- [ ] Every source design requirement maps to a task above.
+- [ ] Claude root manifests, skills, and agents stay present.
+- [ ] Codex manifests, skills, shared files, and helper packages are package-local.
+- [ ] Marketplace drift tests compare plugin manifest versions, not marketplace entry versions.
+- [ ] Review-profile v1 compatibility uses real markdown/provenance, not synthetic JSON.
+- [ ] Registry/storage-mode is included in fixtures, schemas, readers, conformance, and migration docs.
+- [ ] Reader tests include fail-closed negatives.
+- [ ] Installed-package smoke tests execute representative helper commands.
+- [ ] CI runs both validators and the full test suite.
