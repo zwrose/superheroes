@@ -1,4 +1,5 @@
 import os
+import subprocess
 
 import band_lib
 import readout
@@ -24,6 +25,34 @@ def test_build_readout_has_merge_is_yours_and_ci_line():
     assert "Merge is yours" in body
     assert "CI not detected" in body
     assert "http://x/pr/1" in body
+
+
+def test_scrub_fails_closed_on_subprocess_nonzero_exit(monkeypatch):
+    # scrub must return ('[omitted...]', False) when the subprocess returns non-zero —
+    # never leaking the raw text.
+    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: _SCRUB)
+
+    class _FakeResult:
+        returncode = 1
+        stdout = "should never appear"
+
+    monkeypatch.setattr(readout.subprocess, "run", lambda *a, **k: _FakeResult())
+    scrubbed, ok = readout.scrub("supersecretvalue")
+    assert ok is False
+    assert "supersecretvalue" not in scrubbed
+    assert "omitted" in scrubbed
+
+
+def test_scrub_fails_closed_on_subprocess_exception(monkeypatch):
+    # scrub must return ('[omitted...]', False) when subprocess.run raises —
+    # no exception propagates and the raw text is never returned.
+    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: _SCRUB)
+    monkeypatch.setattr(readout.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    scrubbed, ok = readout.scrub("anothersecret")
+    assert ok is False
+    assert "anothersecret" not in scrubbed
+    assert "omitted" in scrubbed
 
 
 def test_build_readout_scrubs_every_freetext_field(monkeypatch):

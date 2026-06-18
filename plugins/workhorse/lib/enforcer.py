@@ -29,6 +29,7 @@ import band_lib  # noqa: E402
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ESC = ("the-architect", "lib", "escalation.py")
+_RC = ("review-crew", "lib", "escalation_resolve.py")
 _TOOLS_PATH = {"Edit", "Write", "MultiEdit"}
 
 # Concrete hard-floor command deny-list — the AUTHORITATIVE floor for Bash
@@ -130,6 +131,9 @@ def classify_path(path):
         if lib is None:
             return ("deny", "escalation lib unresolvable (fail-closed)")
         band_roots = [_PLUGIN_ROOT, os.path.dirname(os.path.dirname(lib))]
+        rc = band_lib.resolve_target(_RC, plugin_root=_PLUGIN_ROOT)
+        if rc:
+            band_roots.append(os.path.dirname(os.path.dirname(rc)))
         cli = [sys.executable, lib, "guard", "--path", path]
         for r in band_roots:
             cli += ["--band-root", r]

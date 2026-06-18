@@ -7,6 +7,8 @@ import enforcer
 # Resolve the REAL in-repo escalation.py so classify_floor / guard run for real.
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 _ESC = os.path.join(_REPO, "plugins", "the-architect", "lib", "escalation.py")
+_RC_ESC = os.path.join(_REPO, "plugins", "review-crew", "lib", "escalation_resolve.py")
+_RC_LOOP = os.path.join(_REPO, "plugins", "review-crew", "lib", "loop_state.py")
 
 
 def _point_at_real_escalation(monkeypatch):
@@ -219,5 +221,54 @@ def test_denies_merge_api_with_variable_pr_number():
     assert enforcer.classify_command("gh api -X PUT repos/o/r/pulls/$PR/merge")[0] == "deny"
     assert enforcer.classify_command(
         "gh api repos/o/r/pulls/${PR_NUMBER}/merge --method PUT")[0] == "deny"
+
+
+# --- review-crew band-root anchoring (code-code-001) ---
+def test_denies_edit_to_review_crew_safety_file(monkeypatch):
+    # Target-aware monkeypatch: return the real escalation.py for the _ESC target
+    # and the real escalation_resolve.py for the _RC target, so band_roots covers
+    # the review-crew plugin root and classify_path correctly denies loop_state.py.
+    def _target_aware(target, root=None, plugin_root=None):
+        if target == enforcer._ESC:
+            return _ESC
+        if target == enforcer._RC:
+            return _RC_ESC
+        return None
+    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    assert enforcer.classify_path(_RC_LOOP)[0] == "deny"
+
+
+# --- hook() Edit/Write dispatch branch (test-test-001) ---
+def test_hook_denies_edit_to_safety_machinery(monkeypatch, capsys):
+    # End-to-end: hook() with an Edit payload whose file_path is a safety-machinery
+    # file must emit a deny.
+    def _target_aware(target, root=None, plugin_root=None):
+        if target == enforcer._ESC:
+            return _ESC
+        if target == enforcer._RC:
+            return _RC_ESC
+        return None
+    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    enforcer.hook(json.dumps({"tool_name": "Edit",
+                              "tool_input": {"file_path": _ESC}}))
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_allows_edit_to_ordinary_file_is_silent(monkeypatch, capsys, tmp_path):
+    # End-to-end: hook() with an Edit payload for an ordinary (non-safety) file
+    # must be silent (allow).
+    def _target_aware(target, root=None, plugin_root=None):
+        if target == enforcer._ESC:
+            return _ESC
+        if target == enforcer._RC:
+            return _RC_ESC
+        return None
+    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    ordinary = tmp_path / "app.py"
+    ordinary.write_text("x = 1\n")
+    rc = enforcer.hook(json.dumps({"tool_name": "Edit",
+                                   "tool_input": {"file_path": str(ordinary)}}))
+    assert rc == 0 and capsys.readouterr().out.strip() == ""
 
 
