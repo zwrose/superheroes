@@ -99,7 +99,7 @@ runtime path.
 Codex gets first-class Codex mechanics:
 
 - `.agents/plugins/marketplace.json`
-- `plugins/<name>/.codex-plugin/plugin.json`
+- `plugins/<name>/codex/.codex-plugin/plugin.json`
 - Codex plugin install/update docs
 - Codex-native skill/runtime instructions
 - Codex tool discovery instructions

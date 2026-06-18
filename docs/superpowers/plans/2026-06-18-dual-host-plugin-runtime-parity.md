@@ -69,13 +69,17 @@ New files introduced by this plan:
 - `plugins/review-crew/shared/reviewers/*.md`
 - `plugins/review-crew/shared/README.md`
 - `plugins/review-crew/codex/.codex-plugin/plugin.json`
+- `plugins/review-crew/codex/shared/README.md`
 - `plugins/review-crew/codex/skills/*/SKILL.md`
 - `plugins/test-pilot/shared/README.md`
 - `plugins/test-pilot/codex/.codex-plugin/plugin.json`
+- `plugins/test-pilot/codex/shared/README.md`
 - `plugins/test-pilot/codex/skills/*/SKILL.md`
 - `plugins/the-architect/shared/README.md`
 - `plugins/the-architect/codex/.codex-plugin/plugin.json`
+- `plugins/the-architect/codex/shared/README.md`
 - `plugins/the-architect/codex/skills/*/SKILL.md`
+- `eval/lib/schemas/dual-host/*.schema.json`
 - `docs/dual-host-runtime.md`
 - `docs/dual-host-migration.md`
 
@@ -212,6 +216,7 @@ New files introduced by this plan:
   - [ ] Require `plugin.json.name` to match the marketplace entry.
   - [ ] Require `plugin.json.version` to be valid SemVer.
   - [ ] Require `plugin.json.host.name` to be `codex`.
+  - [ ] Require `<source>/shared/README.md` so the Codex package is self-contained.
   - [ ] Require at least one skill under `<source>/skills/*/SKILL.md`.
 
 - [ ] Add cross-host drift checks:
@@ -271,11 +276,22 @@ New files introduced by this plan:
   - Design capture remains host-native.
   - Mutable workflow state remains in existing machine-local stores.
 
+- [ ] Copy each shared README into the matching Codex package root:
+
+  ```text
+  plugins/review-crew/shared/README.md -> plugins/review-crew/codex/shared/README.md
+  plugins/test-pilot/shared/README.md -> plugins/test-pilot/codex/shared/README.md
+  plugins/the-architect/shared/README.md -> plugins/the-architect/codex/shared/README.md
+  ```
+
+- [ ] Treat those Codex-local shared README files as vendored package contents, not a second source of truth.
 - [ ] Add `eval/lib/tests/test_runtime_layout.py` with assertions:
 
   - Every plugin has a root `.claude-plugin/plugin.json`.
   - Every plugin has a `codex/.codex-plugin/plugin.json`.
   - Every plugin has a `shared/README.md`.
+  - Every plugin has a package-local `codex/shared/README.md`.
+  - Each `codex/shared/README.md` is byte-for-byte identical to the matching `shared/README.md`.
   - Every Codex package source has at least one `skills/*/SKILL.md`.
   - No file under any `plugins/*/shared/` path has a runtime-state extension or name from this denylist:
 
@@ -358,7 +374,7 @@ New files introduced by this plan:
   ```
 
 - [ ] Codex `Codex Runtime` sections may reference Codex concepts such as subagents, tool discovery, browser tools, commentary updates, and plan-mode loops.
-- [ ] Codex `Shared Contract` sections must point to the corresponding `plugins/<name>/shared/README.md`.
+- [ ] Codex `Shared Contract` sections must point to the package-local `shared/README.md` inside the Codex package root.
 - [ ] Codex `Host Coexistence` sections must state that Claude runtime files remain authoritative for Claude users and that shared artifacts must use the shared schemas.
 - [ ] Codex `Verification` sections must include the same existing repo-level verification command:
 
@@ -367,61 +383,106 @@ New files introduced by this plan:
   ```
 
 - [ ] Do not import or modify plugin runtime Python modules in this task.
+- [ ] Add `eval/lib/tests/test_codex_skill_markdown.py`.
+- [ ] The test must enumerate every `plugins/*/codex/skills/*/SKILL.md` file.
+- [ ] For every Codex skill file, assert the required headings appear in exactly this order:
 
-## Task 7: Add Shared Contract Fixtures For Host Provenance
+  ```python
+  REQUIRED_HEADINGS = [
+      "## When To Use",
+      "## Codex Runtime",
+      "## Shared Contract",
+      "## Host Coexistence",
+      "## Verification",
+  ]
+  ```
+
+- [ ] For every Codex skill file, assert:
+
+  - It references `shared/README.md`.
+  - It does not reference `../shared/README.md` or `plugins/<name>/shared/README.md`.
+  - It contains the phrase `Claude runtime files remain authoritative for Claude users`.
+  - It contains the full verification command from this task.
+
+## Task 7: Add Versioned Shared Contract Schemas And Fixtures
 
 - [ ] Create `eval/fixtures/dual-host/contracts/`.
+- [ ] Create `eval/lib/schemas/dual-host/`.
 - [ ] Add `definition-doc-v1-legacy.valid.json` using the current `definition-doc.schema.json` valid shape from `eval/lib/tests/test_schemas.py`.
-- [ ] Add `definition-doc-v2-codex.valid.json` with these fields:
+- [ ] Add `checkpoint-v1-legacy.valid.json` using the current checkpoint valid shape from `eval/lib/tests/test_schemas.py`.
+- [ ] Add `queue-v1-legacy.valid.json` using the current queue valid shape from `eval/lib/tests/test_schemas.py`.
+- [ ] Add companion v2 schemas without changing existing runtime writers:
+
+  ```text
+  eval/lib/schemas/dual-host/definition-doc-v2.schema.json
+  eval/lib/schemas/dual-host/checkpoint-v2.schema.json
+  eval/lib/schemas/dual-host/queue-v2.schema.json
+  ```
+
+- [ ] The v2 schemas must keep `additionalProperties: false`.
+- [ ] The v2 schemas must require common host provenance:
+
+  ```python
+  COMMON_PROVENANCE = {"host", "hostVersion", "pluginVersion", "runId"}
+  ```
+
+- [ ] The v2 schemas must enforce artifact-specific timestamp fields:
+
+  ```python
+  TIMESTAMP_FIELDS = {
+      "definition-doc": {"created", "updated"},
+      "checkpoint": {"createdAt", "updatedAt"},
+      "queue": {"createdAt", "updatedAt"},
+  }
+  ```
+
+- [ ] `definition-doc-v2.schema.json` must preserve the current definition-doc fields and add:
 
   ```json
   {
-    "superheroes": "doc",
     "schemaVersion": 2,
-    "docType": "plan",
-    "workItem": "add-toggle-abc123",
-    "issue": 42,
-    "parent": { "workItem": "add-toggle-abc123", "docType": "spec" },
-    "size": "medium",
-    "status": "approved",
-    "gates": { "review": "passed" },
-    "producedBy": "the-architect@0.1.0",
     "host": "codex",
     "hostVersion": "unknown",
     "pluginVersion": "0.1.0",
     "runId": "run-codex-001",
-    "created": "2026-06-18",
-    "updated": "2026-06-18",
     "designSource": { "host": "codex", "type": "conversation" }
   }
   ```
 
-- [ ] Add `definition-doc-v2-claude.valid.json` with the same shape and `"host": "claude"`.
-- [ ] Add `definition-doc-v2-missing-host.invalid.json` by removing `host`.
-- [ ] Add `checkpoint-v1-legacy.valid.json` using the current checkpoint valid shape from `eval/lib/tests/test_schemas.py`.
-- [ ] Add `checkpoint-v2-codex.valid.json` by preserving `updatedAt` and adding:
+- [ ] `checkpoint-v2.schema.json` must preserve the current `updatedAt` field, add `createdAt`, and add the common host provenance fields.
+- [ ] `queue-v2.schema.json` must preserve the current `items` shape and add `createdAt`, `updatedAt`, and the common host provenance fields at the top level.
+- [ ] Add positive fixtures:
 
-  ```json
-  {
-    "schemaVersion": 2,
-    "host": "codex",
-    "hostVersion": "unknown",
-    "pluginVersion": "0.1.0",
-    "runId": "run-codex-001"
-  }
+  ```text
+  definition-doc-v2-codex.valid.json
+  definition-doc-v2-claude.valid.json
+  checkpoint-v2-codex.valid.json
+  queue-v2-claude.valid.json
   ```
 
-- [ ] Add `queue-v1-legacy.valid.json` using the current queue valid shape from `eval/lib/tests/test_schemas.py`.
-- [ ] Add `queue-v2-claude.valid.json` by adding top-level host provenance fields to the v1 queue shape.
+- [ ] Add negative fixtures:
+
+  ```text
+  definition-doc-v2-missing-host.invalid.json
+  definition-doc-v2-invalid-host.invalid.json
+  checkpoint-v2-missing-createdAt.invalid.json
+  queue-v2-unknown-schema.invalid.json
+  queue-v2-unsupported-plugin.invalid.json
+  ```
+
 - [ ] Add `eval/lib/tests/test_dual_host_contracts.py` that loads these fixtures.
-- [ ] In the test file, validate v1 fixtures against existing schemas.
-- [ ] For v2 fixtures, assert required provenance fields are present while documenting that schema migration is a separate future runtime change:
+- [ ] In the test file, validate v1 fixtures against the existing strict schemas.
+- [ ] In the test file, validate v2 fixtures against the new companion v2 schemas.
+- [ ] The tests must prove the negative fixtures fail for the intended reason:
 
-  ```python
-  REQUIRED_PROVENANCE = {"host", "pluginVersion", "runId", "created", "updated"}
-  ```
+  - missing required host field
+  - invalid host identifier
+  - missing artifact-specific timestamp
+  - unknown schema version
+  - unsupported plugin version
 
-- [ ] Negative fixtures must fail the provenance assertion.
+- [ ] Document in the test module docstring that these v2 schemas establish schema-level reader compatibility, but no existing workflow writer switches to v2 until the migration tasks are implemented.
+- [ ] Do not modify existing plugin workflow writers in this task.
 
 ## Task 8: Document The Migration Contract Without Switching Writers
 
@@ -447,7 +508,13 @@ New files introduced by this plan:
   - Current source of truth.
   - Neutral target path.
   - Whether it is read-only, single-writer, or lock-protected.
+  - Source-of-truth precedence during expand mode.
+  - Idempotent copy/backfill command shape.
+  - Completion marker path and contents.
+  - Registry or storage-mode update performed after validation.
+  - Validation command that must pass before cutover.
   - Rollback behavior.
+  - Behavior for cached old plugins that still read legacy paths.
 
 - [ ] Include the lock contract from the design:
 
