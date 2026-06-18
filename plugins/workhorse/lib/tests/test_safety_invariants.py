@@ -5,14 +5,21 @@ import reset
 
 def test_never_merge_invariant_across_every_merge_shape():
     # The deny-list is self-contained for commands (no classify_floor consult), so
-    # every merge/release/deploy/force-push shape — incl. the gh-api / GraphQL forms —
-    # is denied without resolving any sibling lib.
+    # every merge/release/deploy/force-push shape — incl. the gh-api / GraphQL forms
+    # and the git-native push-to-default-branch paths — is denied without resolving
+    # any sibling lib.
     for cmd in ("gh pr merge 1", "gh pr merge 1 --squash --admin",
                 "gh pr merge --auto 1",
                 "gh api -X PUT repos/o/r/pulls/1/merge",
                 "gh api graphql -f query='mutation { mergePullRequest }'",
                 "gh release create v1", "gh workflow run deploy.yml",
-                "git push --force-with-lease", "git push -f origin main"):
+                "git push --force-with-lease", "git push -f origin main",
+                # git-native push-to-default-branch (security-001)
+                "git push origin main",
+                "git push origin HEAD:main",
+                "git push origin feature-branch:main",
+                "git push origin master",
+                "git push origin HEAD:master"):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 

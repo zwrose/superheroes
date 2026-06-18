@@ -106,8 +106,7 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 
 **Resolve the model tiers once (band-wide knob).** The five specialists run at the
 `reviewer` tier (`reviewer-deep` for security/architecture), and the triage + fixer
-subagents at `mechanical`. Resolve each via the shared knob so the project's
-calibration profile (if it sets a `model-tiers` block) can override the defaults:
+subagents at `mechanical`. Resolve each via the shared knob to get the band defaults:
 
 ```bash
 MT="${CLAUDE_PLUGIN_ROOT}/lib/model_tier_resolve.py"   # resolved like $RUBRIC
@@ -501,9 +500,8 @@ orchestrator embeds both absolute values into the fixer prompt's `## Input` bloc
 and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`PROFILE` paths. Before the
 fixer edits any file, it gates it with those embedded absolute values:
 `python3 "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
-If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — `escalation.py`,
-`escalation_resolve.py`, `loop_state.py`, `circuit_breaker.py`, `gate_write.py`, `architect_lib.py`,
-`definition_doc.py`, the rubrics — the authoritative membership is `escalation.py`'s `SAFETY_MACHINERY` tuple; this inline list is reader convenience and is not itself drift-guarded, so treat the tuple as the source of truth); surface it as a finding for the owner instead. A `degraded:true`
+If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — the authoritative
+membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); surface it as a finding for the owner instead. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
 > **Enforcement boundary (review-flagged residual, design-consistent).** In F5 this guard is invoked
@@ -512,9 +510,9 @@ result also refuses (fail-closed). The fixer never pushes/merges/deploys (those 
 > wiring; the **non-bypassable** enforcement at the action boundary is the F3 producer's job (§4
 > bound-2, §12). `REPO_ROOT` must be defined in setup and embedded wherever this guard is wired: an
 > *empty* `--root` does **not** fail the guard open — `_band_roots("")` still returns `[_PLUGIN_ROOT]`
-> and an empty `--root` makes the wrapper refuse (`allow:false, degraded:true`). What an empty
-> `REPO_ROOT` actually drops is the **in-repo the-architect anchor**, so a dogfood edit to
-> the-architect's own safety files might not be caught. Define `REPO_ROOT` to keep that anchor.
+> and an empty `--root` still anchors against `[_PLUGIN_ROOT, resolved the-architect root]`; it only
+> drops the **in-repo the-architect anchor**, and refuses (`allow:false, degraded:true`) only when
+> `escalation.py` is itself unresolvable. Define `REPO_ROOT` to keep that anchor.
 
 ```
 You are the fixer for one round of an auto-fix code-review loop.

@@ -48,10 +48,16 @@ DENY_COMMANDS = [
     ("merge-graphql", re.compile(r"\bmergePullRequest\b", re.I)),
     ("release",      re.compile(r"\bgh\s+release\s+create\b", re.I)),
     ("run-workflow", re.compile(r"\bgh\s+workflow\s+(run|enable|disable)\b", re.I)),
-    ("force-push",   re.compile(r"\bgit\s+push\b.*(--force\b|-f\b|--force-with-lease)", re.I)),
-    ("deploy",       re.compile(r"\b(deploy|kubectl\s+apply|terraform\s+apply)|(?:^|\s)--prod\b", re.I)),
-    ("destructive",  re.compile(r"\b(DROP\s+(TABLE|DATABASE|INDEX)|TRUNCATE|DELETE\s+FROM)\b", re.I)),
-    ("rm-rf",        re.compile(r"\brm\s+-[a-z]*r[a-z]*f", re.I)),
+    ("force-push",      re.compile(r"\bgit\s+push\b.*(--force\b|-f\b|--force-with-lease)", re.I)),
+    # Deny pushes whose destination ref is the default branch (main/master). This
+    # covers `git push origin main`, `git push origin HEAD:main`, and
+    # `git push origin <src>:main` — while still allowing the producer's own
+    # superheroes/* and other feature-branch pushes (those have no `:main`/` main`
+    # destination). The pattern anchors on the destination ref, not the source.
+    ("push-to-default", re.compile(r"\bgit\s+push\b.*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
+    ("deploy",          re.compile(r"\b(deploy|kubectl\s+apply|terraform\s+apply)|(?:^|\s)--prod\b", re.I)),
+    ("destructive",     re.compile(r"\b(DROP\s+(TABLE|DATABASE|INDEX)|TRUNCATE|DELETE\s+FROM)\b", re.I)),
+    ("rm-rf",           re.compile(r"\brm\s+-[a-z]*[rf][a-z]*[rf]", re.I)),
     # Self-check canary: a harmless shell no-op the ⓪ startup probe runs through
     # Bash to prove the hook is actually firing end-to-end (see §Task 6 / SKILL ⓪).
     ("canary",       re.compile(r"workhorse-enforcer-canary", re.I)),

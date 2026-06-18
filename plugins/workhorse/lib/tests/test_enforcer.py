@@ -22,6 +22,24 @@ def test_denies_every_merge_shape():
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
+def test_denies_push_to_default_branch():
+    # security-001: git-native push-to-default-branch paths must be denied.
+    for cmd in ("git push origin main",
+                "git push origin HEAD:main",
+                "git push origin feature-branch:main",
+                "git push origin master",
+                "git push origin HEAD:master"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_allows_push_to_feature_branch():
+    # Confirm the producer's own feature-branch pushes are still allowed (security-001).
+    for cmd in ("git push origin my-branch",
+                "git push -u origin superheroes/x-abc123",
+                "git push origin superheroes/phase-2a-core"):
+        assert enforcer.classify_command(cmd)[0] == "allow", cmd
+
+
 def test_denies_gh_release_and_workflow_run():
     assert enforcer.classify_command("gh release create v1.0.0")[0] == "deny"
     assert enforcer.classify_command("gh workflow run deploy.yml")[0] == "deny"
@@ -31,6 +49,13 @@ def test_denies_force_push_and_deploy_and_destructive():
     assert enforcer.classify_command("git push --force origin main")[0] == "deny"
     assert enforcer.classify_command("kubectl apply -f prod.yaml")[0] == "deny"
     assert enforcer.classify_command("psql -c 'DROP TABLE users'")[0] == "deny"
+
+
+def test_denies_rm_rf_flag_order_agnostic():
+    # rm-rf deny must catch both -rf AND -fr flag orderings (security-002).
+    assert enforcer.classify_command("rm -rf /tmp/build")[0] == "deny"
+    assert enforcer.classify_command("rm -fr build/")[0] == "deny"
+    assert enforcer.classify_command("rm -Rf dist/")[0] == "deny"
 
 
 def test_denies_canary():
@@ -75,6 +100,20 @@ def test_bash_write_to_target_repo_lookalike_is_allowed(monkeypatch, tmp_path):
     assert enforcer.classify_command("sed -i 's/a/b/' %s" % lookalike)[0] == "allow"
 
 
+def test_bash_write_band_anchoring_positive(monkeypatch, tmp_path):
+    # test-002: pin that the deny comes from the band-root anchoring, not the
+    # unresolvable-lib fail-closed branch. With band_lib pointing at real escalation,
+    # a write to the REAL band escalation.py denies (band-root anchored), while a
+    # same-basename file OUTSIDE the band roots allows.
+    _point_at_real_escalation(monkeypatch)
+    # Real band file → deny via anchoring
+    assert enforcer.classify_command("sed -i 's/x/y/' %s" % _ESC)[0] == "deny"
+    # Same basename outside band roots → allow (not false-positive)
+    outside = tmp_path / "escalation.py"
+    outside.write_text("# unrelated\n")
+    assert enforcer.classify_command("sed -i 's/x/y/' %s" % outside)[0] == "allow"
+
+
 def test_command_fail_closed_on_non_string():
     assert enforcer.classify_command(None)[0] == "deny"
 
@@ -96,6 +135,26 @@ def test_path_fail_closed_on_unresolvable(monkeypatch):
     monkeypatch.setattr(band_lib, "resolve_target",
                         lambda *a, **k: None)
     assert enforcer.classify_path("/anything.py")[0] == "deny"
+
+
+def test_path_fail_closed_on_guard_nonzero_returncode(monkeypatch):
+    # test-003a: subprocess guard returns non-zero → deny (fail-closed).
+    _point_at_real_escalation(monkeypatch)
+
+    class _FakeResult:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr(enforcer.subprocess, "run", lambda *a, **k: _FakeResult())
+    assert enforcer.classify_path(_ESC)[0] == "deny"
+
+
+def test_path_fail_closed_on_guard_exception(monkeypatch):
+    # test-003b: subprocess raises → deny (fail-closed).
+    _point_at_real_escalation(monkeypatch)
+    monkeypatch.setattr(enforcer.subprocess, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert enforcer.classify_path(_ESC)[0] == "deny"
 
 
 # --- hook stdin contract ---
@@ -135,9 +194,3 @@ def test_denies_merge_api_with_variable_pr_number():
         "gh api repos/o/r/pulls/${PR_NUMBER}/merge --method PUT")[0] == "deny"
 
 
-def test_selfcheck_armed(capsys, monkeypatch):
-    # hooks.json must exist for "armed"; it is created in Task 6. Assert the
-    # classifier half here; the file half is asserted post-Task-6.
-    ok = (enforcer.classify_command("gh pr merge 1")[0] == "deny"
-          and enforcer.classify_command("git commit -m x")[0] == "allow")
-    assert ok
