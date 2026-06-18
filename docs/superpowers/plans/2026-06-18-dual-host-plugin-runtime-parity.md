@@ -216,8 +216,9 @@ New files introduced by this plan:
   - [ ] Require `plugin.json.name` to match the marketplace entry.
   - [ ] Require `plugin.json.version` to be valid SemVer.
   - [ ] Require `plugin.json.host.name` to be `codex`.
-  - [ ] Require `<source>/shared/README.md` so the Codex package is self-contained.
-  - [ ] Require at least one skill under `<source>/skills/*/SKILL.md`.
+  - [ ] In `--phase metadata` mode, warn when `<source>/shared/README.md` or `<source>/skills/*/SKILL.md` is missing.
+  - [ ] In default strict mode, require `<source>/shared/README.md` so the Codex package is self-contained.
+  - [ ] In default strict mode, require at least one skill under `<source>/skills/*/SKILL.md`.
 
 - [ ] Add cross-host drift checks:
 
@@ -229,6 +230,8 @@ New files introduced by this plan:
   - [ ] Each plugin author name matches across Claude and Codex.
   - [ ] Each plugin description is non-empty on both hosts.
 
+- [ ] The validator must support `--phase metadata` for Tasks 1-3, where only marketplace files, plugin manifests, and cross-host manifest drift are blocking.
+- [ ] The validator must run in default strict mode after Tasks 4 and 6 have created the package-local shared docs and Codex skill wrappers.
 - [ ] Print a success message exactly:
 
   ```text
@@ -240,8 +243,10 @@ New files introduced by this plan:
   - [ ] Current repo fixtures pass.
   - [ ] `codex-marketplace.bad-source.json` fails with a message containing `Codex source`.
   - [ ] `cross-host-version-drift.json` fails with a message containing `metadata.version`.
+  - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`.
 
-- [ ] Add the validator to `.github/workflows/ci.yml` after the existing Claude validator:
+- [ ] Do not add the validator to `.github/workflows/ci.yml` until Task 6 has created the files strict mode requires.
+- [ ] After Task 6, add the validator to `.github/workflows/ci.yml` after the existing Claude validator:
 
   ```yaml
   - name: Validate dual-host marketplace + plugin manifests
@@ -320,8 +325,20 @@ New files introduced by this plan:
   ```
 
 - [ ] Add `plugins/review-crew/shared/reviewers/README.md` explaining that the copied reviewer files are the shared methodology source during the transition.
+- [ ] Copy the reviewer methodology into the Codex package root:
+
+  ```text
+  plugins/review-crew/shared/reviewers/architecture-reviewer.md -> plugins/review-crew/codex/shared/reviewers/architecture-reviewer.md
+  plugins/review-crew/shared/reviewers/code-reviewer.md -> plugins/review-crew/codex/shared/reviewers/code-reviewer.md
+  plugins/review-crew/shared/reviewers/premortem-reviewer.md -> plugins/review-crew/codex/shared/reviewers/premortem-reviewer.md
+  plugins/review-crew/shared/reviewers/security-reviewer.md -> plugins/review-crew/codex/shared/reviewers/security-reviewer.md
+  plugins/review-crew/shared/reviewers/test-reviewer.md -> plugins/review-crew/codex/shared/reviewers/test-reviewer.md
+  ```
+
+- [ ] Treat `plugins/review-crew/codex/shared/reviewers/*.md` as vendored package contents, not a second source of truth.
 - [ ] Add a drift test in `plugins/review-crew/lib/tests/test_dispatch_tables.py` or a new `plugins/review-crew/lib/tests/test_shared_reviewers.py`.
 - [ ] The drift test must compare each Claude agent file with the matching shared reviewer file byte-for-byte.
+- [ ] The drift test must compare each shared reviewer file with the matching Codex package-local reviewer file byte-for-byte.
 - [ ] The test must also assert that the reviewer filename set is exactly:
 
   ```python
@@ -404,6 +421,36 @@ New files introduced by this plan:
   - It contains the phrase `Claude runtime files remain authoritative for Claude users`.
   - It contains the full verification command from this task.
 
+- [ ] Add `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`.
+- [ ] For `plugins/review-crew/codex/skills/review-code/SKILL.md`, assert it references exactly these reviewer files:
+
+  ```python
+  REVIEW_CREW_REVIEWERS = {
+      "architecture-reviewer.md",
+      "code-reviewer.md",
+      "premortem-reviewer.md",
+      "security-reviewer.md",
+      "test-reviewer.md",
+  }
+  ```
+
+- [ ] For `review-plan`, `review-spec`, and `review-tasks`, assert the same reviewer set unless a skill explicitly documents a narrower scope and the existing Claude skill has the same narrower scope.
+- [ ] For `audit-debt`, assert its documented reviewer set matches the existing Claude `audit-debt` skill's intentional subset.
+- [ ] For every Codex review-crew review skill, assert the expected findings filenames appear:
+
+  ```python
+  FINDINGS_FILES = {
+      "findings-architecture.json",
+      "findings-code.json",
+      "findings-premortem.json",
+      "findings-security.json",
+      "findings-test.json",
+  }
+  ```
+
+- [ ] For every Codex review-crew review skill, assert the dimension names `Architecture`, `Code`, `Security`, `Test`, and `Failure-Mode` appear unless the corresponding Claude skill intentionally omits that dimension.
+- [ ] For every Codex review-crew review skill, assert it references the base rubric and does not restate severity tiers inline.
+
 ## Task 7: Add Versioned Shared Contract Schemas And Fixtures
 
 - [ ] Create `eval/fixtures/dual-host/contracts/`.
@@ -411,12 +458,27 @@ New files introduced by this plan:
 - [ ] Add `definition-doc-v1-legacy.valid.json` using the current `definition-doc.schema.json` valid shape from `eval/lib/tests/test_schemas.py`.
 - [ ] Add `checkpoint-v1-legacy.valid.json` using the current checkpoint valid shape from `eval/lib/tests/test_schemas.py`.
 - [ ] Add `queue-v1-legacy.valid.json` using the current queue valid shape from `eval/lib/tests/test_schemas.py`.
+- [ ] Add v1 legacy fixtures for the remaining shared artifact classes:
+
+  ```text
+  finding-v1-legacy.valid.json
+  review-profile-v1-legacy.valid.json
+  test-pilot-plan-v1-legacy.valid.json
+  test-pilot-results-v1-legacy.valid.json
+  lock-v1-legacy.valid.json
+  ```
+
 - [ ] Add companion v2 schemas without changing existing runtime writers:
 
   ```text
   eval/lib/schemas/dual-host/definition-doc-v2.schema.json
   eval/lib/schemas/dual-host/checkpoint-v2.schema.json
   eval/lib/schemas/dual-host/queue-v2.schema.json
+  eval/lib/schemas/dual-host/finding-v2.schema.json
+  eval/lib/schemas/dual-host/review-profile-v2.schema.json
+  eval/lib/schemas/dual-host/test-pilot-plan-v2.schema.json
+  eval/lib/schemas/dual-host/test-pilot-results-v2.schema.json
+  eval/lib/schemas/dual-host/lock-v2.schema.json
   ```
 
 - [ ] The v2 schemas must keep `additionalProperties: false`.
@@ -433,6 +495,11 @@ New files introduced by this plan:
       "definition-doc": {"created", "updated"},
       "checkpoint": {"createdAt", "updatedAt"},
       "queue": {"createdAt", "updatedAt"},
+      "finding": {"createdAt", "updatedAt"},
+      "review-profile": {"created", "updated"},
+      "test-pilot-plan": {"createdAt", "updatedAt"},
+      "test-pilot-results": {"createdAt", "updatedAt"},
+      "lock": {"acquiredAt", "updatedAt"},
   }
   ```
 
@@ -451,6 +518,11 @@ New files introduced by this plan:
 
 - [ ] `checkpoint-v2.schema.json` must preserve the current `updatedAt` field, add `createdAt`, and add the common host provenance fields.
 - [ ] `queue-v2.schema.json` must preserve the current `items` shape and add `createdAt`, `updatedAt`, and the common host provenance fields at the top level.
+- [ ] `finding-v2.schema.json` must preserve the review-base finding fields, require `dimension`, `severity`, `file`, `line`, `body`, and add the common host provenance fields.
+- [ ] `review-profile-v2.schema.json` must preserve the profile calibration concepts from `.claude/review-profile.md` and add the common host provenance fields.
+- [ ] `test-pilot-plan-v2.schema.json` must preserve the plan/comment fields used by `plugins/test-pilot/templates/plan-comment.md` and the engine state readers, then add the common host provenance fields.
+- [ ] `test-pilot-results-v2.schema.json` must preserve the results/comment fields used by `plugins/test-pilot/templates/results-comment.md`, then add the common host provenance fields.
+- [ ] `lock-v2.schema.json` must preserve atomic lock ownership fields and require `host`, `runId`, `pluginVersion`, `acquiredAt`, `updatedAt`, and a generation or fencing token.
 - [ ] Add positive fixtures:
 
   ```text
@@ -458,6 +530,11 @@ New files introduced by this plan:
   definition-doc-v2-claude.valid.json
   checkpoint-v2-codex.valid.json
   queue-v2-claude.valid.json
+  finding-v2-codex.valid.json
+  review-profile-v2-claude.valid.json
+  test-pilot-plan-v2-codex.valid.json
+  test-pilot-results-v2-claude.valid.json
+  lock-v2-codex.valid.json
   ```
 
 - [ ] Add negative fixtures:
@@ -468,9 +545,28 @@ New files introduced by this plan:
   checkpoint-v2-missing-createdAt.invalid.json
   queue-v2-unknown-schema.invalid.json
   queue-v2-unsupported-plugin.invalid.json
+  finding-v2-invalid-severity.invalid.json
+  test-pilot-plan-v2-missing-scrubber.invalid.json
+  lock-v2-missing-fencing-token.invalid.json
   ```
 
 - [ ] Add `eval/lib/tests/test_dual_host_contracts.py` that loads these fixtures.
+- [ ] Make `test_dual_host_contracts.py` table-driven over this exact artifact set:
+
+  ```python
+  SHARED_ARTIFACTS = {
+      "definition-doc",
+      "checkpoint",
+      "queue",
+      "finding",
+      "review-profile",
+      "test-pilot-plan",
+      "test-pilot-results",
+      "lock",
+  }
+  ```
+
+- [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks a v1 fixture, v2 schema, positive v2 fixture, or negative v2 fixture.
 - [ ] In the test file, validate v1 fixtures against the existing strict schemas.
 - [ ] In the test file, validate v2 fixtures against the new companion v2 schemas.
 - [ ] The tests must prove the negative fixtures fail for the intended reason:

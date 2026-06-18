@@ -352,7 +352,9 @@ Add validation at three levels:
      path points at a self-contained Codex package root.
    - Codex plugin manifests have valid semver and required interface metadata.
    - Claude and Codex manifests agree on plugin name, version, description intent,
-     author, repository, license, and release source path.
+     author, and source path semantics. Repository, license, and release-channel
+     fields become cross-host drift checks only when both host manifest shapes
+     actually define them.
    - Duplicate-version traps are checked for both hosts.
    - `.github/workflows/ci.yml` runs Claude validation, Codex validation, and the
      cross-host drift validator.
