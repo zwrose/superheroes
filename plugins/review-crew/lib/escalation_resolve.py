@@ -53,7 +53,7 @@ def _band_roots(root):
     if arch:
         roots.append(os.path.dirname(os.path.dirname(arch)))
     if root:
-        for p in ("review-crew", "the-architect"):
+        for p in ("review-crew", "the-architect", "workhorse"):
             cand = os.path.join(root, "plugins", p)
             if os.path.isdir(cand):
                 roots.append(cand)

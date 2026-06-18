@@ -104,6 +104,7 @@ def test_safety_machinery_set_members_are_pinned():
     assert set(ESC.SAFETY_MACHINERY) == {
         "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
         "gate_write.py", "architect_lib.py", "definition_doc.py",
+        "enforcer.py", "band_lib.py", "model_tier.py", "hooks.json",
         "escalation-base.md", "review-base.md",
     }
 
@@ -114,11 +115,18 @@ def _band_file(tmp_path, plugin, sub, name):
     return p
 
 def test_guard_refuses_each_safety_file_under_a_band_root(tmp_path):
-    roots = [str(tmp_path / "plugins" / "review-crew"), str(tmp_path / "plugins" / "the-architect")]
-    arch = {"escalation.py", "definition_doc.py", "escalation-base.md"}
+    roots = [str(tmp_path / "plugins" / "review-crew"),
+             str(tmp_path / "plugins" / "the-architect"),
+             str(tmp_path / "plugins" / "workhorse")]
+    arch = {"escalation.py", "definition_doc.py", "escalation-base.md", "model_tier.py"}
+    workhorse = {"enforcer.py", "band_lib.py", "hooks.json"}
     for name in ESC.SAFETY_MACHINERY:
-        plugin = "the-architect" if name in arch else "review-crew"
-        sub = "rubric" if name.endswith(".md") else "lib"
+        if name in workhorse:
+            plugin, sub = "workhorse", ("hooks" if name == "hooks.json" else "lib")
+        elif name in arch:
+            plugin, sub = "the-architect", ("rubric" if name.endswith(".md") else "lib")
+        else:
+            plugin, sub = "review-crew", ("rubric" if name.endswith(".md") else "lib")
         p = _band_file(tmp_path, plugin, sub, name)
         assert ESC.is_safety_machinery(str(p), roots) is True, name
 

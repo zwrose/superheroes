@@ -34,7 +34,8 @@ def test_classify_fixture_exact_match():
 
 def test_guard_fixture_exact_match():
     band = [os.path.join(_REPO_ROOT, "plugins", "review-crew"),
-            os.path.join(_REPO_ROOT, "plugins", "the-architect")]
+            os.path.join(_REPO_ROOT, "plugins", "the-architect"),
+            os.path.join(_REPO_ROOT, "plugins", "workhorse")]
     for case in _fixture()["guard"]:
         path = os.path.join(_REPO_ROOT, case["path"])
         assert (not ESC.is_safety_machinery(path, band)) == case["allow"], case

@@ -105,6 +105,10 @@ SAFETY_MACHINERY = (
     "gate_write.py",
     "architect_lib.py",
     "definition_doc.py",
+    "enforcer.py",            # workhorse action-boundary enforcer (F3)
+    "band_lib.py",            # workhorse resolver the enforcer depends on (F3)
+    "model_tier.py",          # band model-tier core — policy, protect from auto-edits
+    "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "escalation-base.md",
     "review-base.md",
 )
