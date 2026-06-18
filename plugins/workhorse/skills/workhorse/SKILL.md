@@ -12,6 +12,13 @@ owner's, and a deterministic enforcer guarantees it.
 
 Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT}/lib"`.
 
+**Prerequisites (install the band first).** Workhorse resolves its sibling band
+plugins' bundled libs at runtime, so install **the-architect ≥ 0.3.0**,
+**review-crew ≥ 0.6.0**, and **test-pilot** alongside workhorse. If they're absent,
+the ⓪ self-check reports `escalation_resolved: false` / `armed: false` and refuses
+to run — by design (never run the floor unguarded), not a mid-build failure. If you
+see `armed: false`, confirm the band siblings are installed before retrying.
+
 ## ⓪ Startup self-check + worktree (refuse to run unguarded)
 
 1. **Enforcer self-check (HARD GATE) — config + per-matcher canaries.** First run
@@ -152,9 +159,14 @@ readout says **"CI not detected"**, never a false ✓.
 
 Dev server still up on a clean baseline. Build the readout with
 `readout.build_readout(ctx)` (`readout.py`) (live URL, built-vs-acceptance, test-pilot results,
-CI status, PR link, smoke checklist). Any raw CI-log excerpt passes through the
-scrub seam (`readout.scrub`, backed by test-pilot's `pr_comment.py scrub`;
-unscrubbable → dropped). End with **"Merge is yours — Workhorse never merges."**
+CI status, PR link, smoke checklist). Pass a `ctx` dict with keys `pr_url`,
+`dev_url`, `ci_status`, `built_vs_acceptance`, `test_results`, `smoke` (list),
+`raw_ci_excerpt`, and **`root`** — set `root` to the repo root
+(`git rev-parse --show-toplevel`) so the scrub seam can resolve test-pilot's
+`pr_comment.py` in-repo; without it, scrub falls back to the installed cache only.
+Any raw CI-log excerpt passes through the scrub seam (`readout.scrub`, backed by
+test-pilot's `pr_comment.py scrub`; unscrubbable → dropped). End with
+**"Merge is yours — Workhorse never merges."**
 
 ## Escalation (F5) + the deterministic floor
 
