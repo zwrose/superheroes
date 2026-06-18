@@ -755,7 +755,7 @@ New files introduced by this plan:
   }
   ```
 
-- [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks a v1 fixture, v2 schema, positive v2 fixture, or negative v2 fixture.
+- [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` that preserves an existing runtime format lacks a v1 fixture, v2 schema, positive v2 fixture, or negative v2 fixture. `compatibility-matrix` is new and v2-only, so it must have a v2 schema, positive v2 fixture, and negative v2 fixture, but no synthetic v1 fixture.
 - [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks both `<artifact>-v2-claude.valid.json` and `<artifact>-v2-codex.valid.json`.
 - [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks an unknown-schema negative fixture.
 - [ ] In the test file, validate schema-backed v1 fixtures against the existing strict schemas:

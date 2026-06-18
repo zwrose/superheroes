@@ -377,7 +377,7 @@ git commit -m "feat: add shared reviewer methodology"
 - Create: `plugins/the-architect/codex/the-architect/templates/*`
 - Test: `eval/lib/tests/test_codex_skill_markdown.py`
 - Test: `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`
-- Test: `plugins/review-crew/lib/tests/test_codex_helper_drift.py`
+- Test: `eval/lib/tests/test_codex_helper_drift.py`
 
 - [ ] **Step 1: Write failing Codex skill tests**
 
@@ -532,11 +532,11 @@ Each host-specific skill and runtime entrypoint that reads shared artifacts must
 Implement these interfaces:
 
 - `class ArtifactReadError(Exception)`: raised for fail-closed reader failures.
-- `read_artifact(path: Path, artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict | list[dict]`: reads v1 or v2 artifacts, normalizes known v1 markdown/JSON records to dicts, preserves review-crew findings batches as lists for `finding-batch`, validates optional fencing context, and raises `ArtifactReadError` for unknown schema versions.
+- `read_artifact(path: Path, artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict | list[dict]`: reads v1 or v2 artifacts, normalizes known v1 markdown/JSON records to dicts, preserves review-crew findings batches as lists for `finding-batch`, and raises `ArtifactReadError` for unknown schema versions. For lock-protected artifacts, the reader must require non-null fencing context or route through a lock-protected API that requires it.
 - `read_registry(path: Path) -> dict`: reads registry/storage-mode records and returns a normalized dict with `schemaVersion`, `storageMode`, `remoteKey`, and timestamps.
 - `validate_known_schema(record: dict | list[dict], artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict | list[dict]`: validates a normalized record or findings batch against the known artifact contract and returns it when valid.
 
-Readers must fail closed on unknown schema version, unsupported plugin version, missing v2 provenance, stale fencing tokens, and host/version skew that requires doctor/reconcile.
+Readers must fail closed on unknown schema version, unsupported plugin version, missing v2 provenance, missing fencing context for lock-protected artifacts, stale fencing tokens, and host/version skew that requires doctor/reconcile.
 
 - [ ] **Step 3a: Wire the real runtime surfaces**
 
