@@ -288,8 +288,10 @@ New files introduced by this plan:
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`; the fixture must create matching Claude and Codex plugin manifest roots with different `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` versions, not encode a version field inside marketplace entries.
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
   - [ ] `codex-source-traversal.json` fails with a message containing `source path`.
+  - [ ] `codex-source-symlink-escape.json` fails with a message containing `source path`; the fixture must create a symlinked Codex package root or intermediate source path that resolves outside the repo and must fail before loading `.codex-plugin/plugin.json`.
   - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>/codex/<name>`.
   - [ ] `codex-source-claude-root.json` fails with a message containing `Claude root`.
+  - [ ] `codex-invalid-skills-path.json` fails with a message containing `plugin.json.skills`; the fixture must set `.codex-plugin/plugin.json` `skills` to a value other than `./skills/` and fail in both metadata and strict phases.
   - [ ] `codex-entry-version.json` fails with a message containing `version`.
   - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
   - [ ] `codex-missing-interface.json` fails with a message containing `interface`.
