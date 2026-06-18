@@ -195,6 +195,16 @@ the other host's minimum compatible plugin version must be known, or the writer
 must stay in dual-compatible mode. Unknown schema versions still fail closed, but
 the preferred failure happens before the incompatible write.
 
+Compatibility knowledge must come from an explicit shared compatibility matrix,
+not from host-specific prose. The matrix is a versioned shared artifact vendored
+into each plugin package and validated against the Claude and Codex manifests,
+the shared schema versions, and the cross-host fixture set. It records, per
+plugin and artifact class, supported schema versions, supported legacy inputs,
+minimum compatible Claude and Codex plugin versions, and whether a migration is
+still in dual-compatible mode. If the matrix is missing, stale, or disagrees
+with the installed peer host/plugin version, the preflight fails closed before
+any write.
+
 Add a dual-host `doctor` / `reconcile` command before broad rollout. It reports:
 
 - legacy-vs-neutral divergence
@@ -374,6 +384,8 @@ Add validation at three levels:
    - Negative fixtures cover missing provenance fields, unknown schema versions,
      invalid host identifiers, unsupported plugin versions, and writes attempted
      before compatibility preflight.
+   - A shared compatibility matrix validates against plugin manifests, schema
+     fixtures, and minimum peer-version bands before any new shared-schema write.
    - Queue, checkpoint, profile, definition-doc, finding, and test-pilot plan
      fixtures include v1 legacy inputs and v2 host-provenance inputs.
    - Strict schemas set `additionalProperties` intentionally, and any added field

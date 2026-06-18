@@ -174,7 +174,7 @@ Implement these functions in `.github/scripts/validate_dual_host_marketplace.py`
 - `load_json(path: Path) -> dict | None`: returns parsed JSON, appends a readable error for missing or invalid files, and never raises JSON errors to callers.
 - `validate_claude_marketplace(repo: Path, errors: list[str]) -> dict`: validates `.claude-plugin/marketplace.json`, returns `{name, plugins}` where each plugin record includes `name`, `version`, `author`, `description`, and resolved `source`.
 - `validate_codex_marketplace(repo: Path, phase: str, errors: list[str], warnings: list[str]) -> dict`: validates `.agents/plugins/marketplace.json`, returns the same normalized `{name, plugins}` shape as Claude, reads `.codex-plugin/plugin.json` from each `plugins/<entry-name>/codex/<entry-name>` package root, and uses `warnings` rather than `errors` for missing `shared/README.md` and skill files when `phase == "metadata"`.
-- `validate_cross_host_drift(claude: dict, codex: dict, errors: list[str]) -> None`: compares marketplace name, plugin set, plugin manifest version, author name, and non-empty descriptions. Descriptions remain host-native; validation enforces presence and release-review intent, not exact string equality.
+- `validate_cross_host_drift(claude: dict, codex: dict, errors: list[str]) -> None`: compares marketplace name, plugin set, plugin manifest version, author name, and non-empty descriptions. Descriptions remain host-native; validation enforces presence only. Equivalent description intent is a release-review checklist item, not a CI inference.
 - `main(argv: list[str] | None = None) -> int`: parses `--phase metadata|strict`, prints warnings before errors, prints `dual-host marketplace + plugin manifests valid` on success, and returns `1` on any error.
 
 Rules:
@@ -423,7 +423,9 @@ Copy or wrap:
 
 Where a source helper reads `.claude-plugin/plugin.json`, add a Codex adapter path that reads `.codex-plugin/plugin.json`.
 
-For copied helpers that do not currently support `--help`, create package-local Codex CLI adapters that provide a deterministic `--help` exit `0` and delegate real commands to the source helper. Do not change the Claude helper CLI contract just to satisfy Codex smoke tests.
+For copied helpers that do not currently support `--help`, create package-local Codex CLI adapters that provide a deterministic `--help` exit `0` and execute the vendored package-local helper implementation for real commands. Installed Codex package helpers must not import from, execute, or resolve helpers outside the copied package root. Do not change the Claude helper CLI contract just to satisfy Codex smoke tests.
+
+The installed-package smoke tests must copy each Codex package to a temporary directory outside the repository and fail if any skill-visible helper command resolves implementation code, templates, schemas, or shared files from the source checkout rather than the copied package root.
 
 Add `plugins/review-crew/lib/tests/test_codex_helper_drift.py` (or the existing equivalent contract-test file) to compare copied package helpers against source helpers with an explicit allowlist for intentional Codex adapter differences such as manifest lookup and `--help` wrapper code.
 
@@ -450,12 +452,18 @@ git commit -m "feat: add codex package roots and skills"
 **Files:**
 
 - Create: `eval/lib/schemas/dual-host/*.schema.json`
+- Create: `eval/lib/schemas/dual-host/compatibility-matrix.schema.json`
 - Create: `eval/fixtures/dual-host/contracts/*`
 - Create: `eval/fixtures/dual-host/conformance/*`
+- Create: `eval/fixtures/dual-host/compatibility/*`
+- Create: `plugins/*/shared/compatibility.json`
+- Create: `plugins/*/codex/*/shared/compatibility.json`
 - Create: `plugins/*/shared/dual_host_artifacts.py`
 - Create: `plugins/*/codex/*/lib/dual_host_artifacts.py`
 - Test: `eval/lib/tests/test_dual_host_contracts.py`
 - Test: `eval/lib/tests/test_dual_host_conformance.py`
+- Test: `eval/lib/tests/test_dual_host_reader_drift.py`
+- Test: `eval/lib/tests/test_dual_host_runtime_wiring.py`
 
 - [ ] **Step 1: Write failing schema matrix tests**
 
@@ -473,6 +481,7 @@ SHARED_ARTIFACTS = {
     "test-pilot-results",
     "lock",
     "registry",
+    "compatibility-matrix",
 }
 
 COMMON_PROVENANCE = {"schemaVersion", "host", "hostVersion", "pluginVersion", "runId"}
@@ -483,6 +492,8 @@ Require v1 fixture, v2 schema, Claude positive fixture, Codex positive fixture, 
 - [ ] **Step 2: Add schemas and fixtures**
 
 Add v2 schemas with `additionalProperties: false`, `schemaVersion: 2`, common provenance, and artifact timestamps. Preserve v1 fixture shapes from current schemas, runtime templates, and markdown profile output.
+
+Add a shared compatibility matrix schema and fixtures. The matrix records, per plugin and artifact class, the supported schema versions, supported legacy inputs, minimum compatible Claude plugin version, minimum compatible Codex plugin version, and whether the artifact remains in dual-compatible mode. Copy the validated matrix into each source-checkout `shared/` directory and each Codex package-local `shared/` directory so compatibility preflight has one explicit source of version truth in both hosts.
 
 For review profiles, include both:
 
@@ -505,7 +516,9 @@ plugins/the-architect/shared/dual_host_artifacts.py
 plugins/the-architect/codex/the-architect/lib/dual_host_artifacts.py
 ```
 
-Each host-specific skill must call its package-local helper: Claude/source-checkout workflows call `plugins/<name>/shared/dual_host_artifacts.py`; installed Codex packages call `plugins/<name>/codex/<name>/lib/dual_host_artifacts.py`. `eval/lib/tests` may import or execute these helpers, but must not own the implementation.
+Treat `plugins/<name>/shared/dual_host_artifacts.py` as the canonical source-checkout implementation for that plugin's artifact reader. Treat `plugins/<name>/codex/<name>/lib/dual_host_artifacts.py` as a vendored installed-package copy. Do not hand-maintain two independent algorithms. Add reader drift tests that compare the canonical and vendored implementations, with an explicit allowlist for intentional package-root discovery differences.
+
+Each host-specific skill and runtime entrypoint that reads shared artifacts must call its package-local helper: Claude/source-checkout workflows call `plugins/<name>/shared/dual_host_artifacts.py`; installed Codex packages call `plugins/<name>/codex/<name>/lib/dual_host_artifacts.py`. `eval/lib/tests` may import or execute these helpers, but must not own the implementation.
 
 Implement these interfaces:
 
@@ -515,6 +528,10 @@ Implement these interfaces:
 - `validate_known_schema(record: dict | list[dict], artifact: str, *, expected_fencing_token: str | None = None, lock_record: dict | None = None) -> dict | list[dict]`: validates a normalized record or findings batch against the known artifact contract and returns it when valid.
 
 Readers must fail closed on unknown schema version, unsupported plugin version, missing v2 provenance, stale fencing tokens, and host/version skew that requires doctor/reconcile.
+
+- [ ] **Step 3a: Wire the real runtime surfaces**
+
+Update or verify the actual Claude skill instructions, Codex skill instructions, and helper entrypoints that read shared artifacts so they route through the package-local reader helpers above. Add `eval/lib/tests/test_dual_host_runtime_wiring.py` to fail if a workflow still bypasses the reader helper or points at `eval/lib` as the implementation. The test must cover at least review-crew findings batches and profiles, test-pilot plans/results, and the-architect definition-docs.
 
 - [ ] **Step 4: Add doctor/reconcile helper**
 
@@ -545,7 +562,7 @@ Create `eval/lib/tests/test_dual_host_conformance.py` that executes real reader 
 Run:
 
 ```bash
-python3 -m pytest eval/lib/tests/test_dual_host_contracts.py eval/lib/tests/test_dual_host_conformance.py -q
+python3 -m pytest eval/lib/tests/test_dual_host_contracts.py eval/lib/tests/test_dual_host_conformance.py eval/lib/tests/test_dual_host_reader_drift.py eval/lib/tests/test_dual_host_runtime_wiring.py -q
 ```
 
 Expected: all dual-host contract and conformance tests pass.
@@ -553,7 +570,7 @@ Expected: all dual-host contract and conformance tests pass.
 - [ ] **Step 7: Commit Task 5**
 
 ```bash
-git add eval/lib/schemas/dual-host eval/fixtures/dual-host plugins/*/shared/dual_host_artifacts.py plugins/*/codex/*/lib/dual_host_artifacts.py eval/lib/tests/test_dual_host_contracts.py eval/lib/tests/test_dual_host_conformance.py
+git add eval/lib/schemas/dual-host eval/fixtures/dual-host plugins/*/shared/compatibility.json plugins/*/codex/*/shared/compatibility.json plugins/*/shared/dual_host_artifacts.py plugins/*/codex/*/lib/dual_host_artifacts.py eval/lib/tests/test_dual_host_contracts.py eval/lib/tests/test_dual_host_conformance.py eval/lib/tests/test_dual_host_reader_drift.py eval/lib/tests/test_dual_host_runtime_wiring.py
 git commit -m "feat: add dual-host artifact contracts"
 ```
 
@@ -578,6 +595,11 @@ Update `.gitignore` so only these docs are tracked under `docs/`:
 docs/*
 !docs/dual-host-runtime.md
 !docs/dual-host-migration.md
+!docs/superpowers/
+!docs/superpowers/specs/
+!docs/superpowers/specs/*.md
+!docs/superpowers/plans/
+!docs/superpowers/plans/*.md
 ```
 
 - [ ] **Step 2: Add runtime and migration docs**
@@ -598,7 +620,7 @@ docs/*
 
 - [ ] **Step 3: Update user-facing docs**
 
-Update `README.md`, `CONTRIBUTING.md`, and `RELEASING.md` with dual-host status, install pointers, validation commands, and release checklist. Preserve existing Claude install and usage path.
+Update `README.md`, `CONTRIBUTING.md`, and `RELEASING.md` with dual-host status, install pointers, validation commands, and release checklist. Preserve existing Claude install and usage path. The Codex install pointers must explain that a repo-local marketplace requires `codex plugin marketplace add <path-to-repo>` before `codex plugin add <plugin-name>@<marketplace-name>`, and the release checklist must include a manual review that Claude and Codex descriptions remain host-native but equivalent in intent.
 
 - [ ] **Step 4: Add CI validator**
 
@@ -617,7 +639,7 @@ Run the strict verification command from the top of this plan.
 - [ ] **Step 6: Commit Task 6**
 
 ```bash
-git add .gitignore .github/workflows/ci.yml README.md CONTRIBUTING.md RELEASING.md docs/dual-host-runtime.md docs/dual-host-migration.md
+git add .gitignore .github/workflows/ci.yml README.md CONTRIBUTING.md RELEASING.md docs/dual-host-runtime.md docs/dual-host-migration.md docs/superpowers/specs/*.md docs/superpowers/plans/*.md
 git commit -m "docs: add dual-host runtime and release guidance"
 ```
 

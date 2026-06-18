@@ -370,8 +370,7 @@ New files introduced by this plan:
   - Each `codex/<name>/shared/README.md` is byte-for-byte identical to the matching `shared/README.md`.
   - The review-crew Codex package has `codex/review-crew/shared/rubric/review-base.md`.
   - The review-crew Codex package-local rubric is byte-for-byte identical to `plugins/review-crew/rubric/review-base.md`.
-  - Every Codex package source has at least one `skills/*/SKILL.md`.
-  - No Codex skill references shared runtime dependencies outside its package root.
+  - Do not yet assert Codex `skills/*/SKILL.md` presence or Codex skill dependency references in this Task 4 layout test. Task 6 introduces those assertions after the Codex skill wrappers exist.
   - No file under any `plugins/*/shared/` path has a runtime-state extension or name from this denylist:
 
     ```python
@@ -527,6 +526,7 @@ New files introduced by this plan:
   ```
 
 - [ ] The test must enumerate every `plugins/*/codex/*/skills/*/SKILL.md` file after proving the discovered set equals `EXPECTED_CODEX_SKILLS`.
+- [ ] This is the first task that asserts every Codex package has the expected `skills/*/SKILL.md` files.
 - [ ] For every Codex skill file, assert it starts with YAML frontmatter containing non-empty `name` and `description` fields.
 - [ ] For every Codex skill file, assert the required headings appear in exactly this order:
 
@@ -544,6 +544,7 @@ New files introduced by this plan:
 
   - It references `shared/README.md`.
   - It does not reference `../shared/README.md` or `plugins/<name>/shared/README.md`.
+  - It does not reference shared runtime dependencies outside its installed Codex package root.
   - It contains the phrase `Claude runtime files remain authoritative for Claude users`.
   - It does not contain `.github/scripts`.
   - It does not contain `python3 -m pytest plugins/`.
@@ -885,9 +886,14 @@ New files introduced by this plan:
 
 - [ ] Update `README.md` to mention that superheroes is becoming a dual-host marketplace for Claude Code and Codex.
 - [ ] Preserve the existing Claude-oriented install and usage path.
-- [ ] Add a Codex install/status section that points to `.agents/plugins/marketplace.json`.
+- [ ] Add a Codex install/status section that explains `.agents/plugins/marketplace.json` is the repo-local marketplace file and documents the complete non-default marketplace flow:
+
+  - Add the repo marketplace root with `codex plugin marketplace add <path-to-repo>` when Codex has not already been configured for this local marketplace.
+  - Read the marketplace `name` from `.agents/plugins/marketplace.json`.
+  - Install with `codex plugin add <plugin-name>@<marketplace-name>`.
+
 - [ ] Link to `docs/dual-host-runtime.md`.
-- [ ] Update `.gitignore` and repo conventions as needed so `docs/dual-host-runtime.md` and `docs/dual-host-migration.md` are explicitly tracked public docs, while existing scratch/design docs under `docs/` remain local-only unless separately unignored.
+- [ ] Update `.gitignore` and repo conventions as needed so `docs/dual-host-runtime.md`, `docs/dual-host-migration.md`, and the tracked source planning docs under `docs/superpowers/specs/*.md` and `docs/superpowers/plans/*.md` are explicitly unignored, while other scratch/design docs under `docs/` remain local-only unless separately unignored.
 - [ ] Update `CONTRIBUTING.md` with a `Dual-host changes` section:
 
   - Change shared contracts in `shared/` or schema files.
