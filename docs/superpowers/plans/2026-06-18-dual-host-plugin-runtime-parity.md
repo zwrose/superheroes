@@ -68,22 +68,22 @@ New files introduced by this plan:
 - `eval/lib/tests/test_runtime_layout.py`
 - `plugins/review-crew/shared/reviewers/*.md`
 - `plugins/review-crew/shared/README.md`
-- `plugins/review-crew/.codex-plugin/plugin.json`
-- `plugins/review-crew/codex/lib/*.py`
-- `plugins/review-crew/codex/shared/README.md`
-- `plugins/review-crew/codex/skills/*/SKILL.md`
+- `plugins/review-crew/codex/review-crew/.codex-plugin/plugin.json`
+- `plugins/review-crew/codex/review-crew/lib/*.py`
+- `plugins/review-crew/codex/review-crew/shared/README.md`
+- `plugins/review-crew/codex/review-crew/skills/*/SKILL.md`
 - `plugins/test-pilot/shared/README.md`
-- `plugins/test-pilot/.codex-plugin/plugin.json`
-- `plugins/test-pilot/codex/lib/*.py`
-- `plugins/test-pilot/codex/templates/*`
-- `plugins/test-pilot/codex/shared/README.md`
-- `plugins/test-pilot/codex/skills/*/SKILL.md`
+- `plugins/test-pilot/codex/test-pilot/.codex-plugin/plugin.json`
+- `plugins/test-pilot/codex/test-pilot/lib/*.py`
+- `plugins/test-pilot/codex/test-pilot/templates/*`
+- `plugins/test-pilot/codex/test-pilot/shared/README.md`
+- `plugins/test-pilot/codex/test-pilot/skills/*/SKILL.md`
 - `plugins/the-architect/shared/README.md`
-- `plugins/the-architect/.codex-plugin/plugin.json`
-- `plugins/the-architect/codex/lib/*.py`
-- `plugins/the-architect/codex/templates/*`
-- `plugins/the-architect/codex/shared/README.md`
-- `plugins/the-architect/codex/skills/*/SKILL.md`
+- `plugins/the-architect/codex/the-architect/.codex-plugin/plugin.json`
+- `plugins/the-architect/codex/the-architect/lib/*.py`
+- `plugins/the-architect/codex/the-architect/templates/*`
+- `plugins/the-architect/codex/the-architect/shared/README.md`
+- `plugins/the-architect/codex/the-architect/skills/*/SKILL.md`
 - `eval/lib/schemas/dual-host/*.schema.json`
 - `docs/dual-host-runtime.md`
 - `docs/dual-host-migration.md`
@@ -105,19 +105,19 @@ New files introduced by this plan:
     "plugins": [
       {
         "name": "the-architect",
-        "source": { "source": "local", "path": "./plugins/the-architect" },
+        "source": { "source": "local", "path": "./plugins/the-architect/codex/the-architect" },
         "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
         "category": "Productivity"
       },
       {
         "name": "review-crew",
-        "source": { "source": "local", "path": "./plugins/review-crew" },
+        "source": { "source": "local", "path": "./plugins/review-crew/codex/review-crew" },
         "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
         "category": "Productivity"
       },
       {
         "name": "test-pilot",
-        "source": { "source": "local", "path": "./plugins/test-pilot" },
+        "source": { "source": "local", "path": "./plugins/test-pilot/codex/test-pilot" },
         "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
         "category": "Productivity"
       }
@@ -127,7 +127,8 @@ New files introduced by this plan:
 
 - [ ] Add `eval/fixtures/dual-host/manifests/claude-marketplace.valid.json` by copying the current Claude marketplace shape.
 - [ ] Add `eval/fixtures/dual-host/manifests/codex-marketplace.valid.json` by copying the new Codex marketplace shape.
-- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-marketplace.bad-source.json` where one Codex source points at `./plugins/review-crew/codex` instead of the package root.
+- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-marketplace.bad-source.json` where one Codex source points at `./plugins/review-crew/codex` instead of the named package root.
+- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-source-claude-root.json` where one Codex source points at `./plugins/review-crew`, proving the validator rejects the mixed Claude/Codex root.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/marketplace-name-drift.json` where the Claude and Codex marketplace names differ.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/plugin-version-drift.json` where one Codex plugin manifest version differs from the matching Claude plugin manifest version.
 - [ ] Run the existing Claude marketplace validator to confirm this task has not regressed Claude:
@@ -147,15 +148,15 @@ New files introduced by this plan:
 - [ ] Create these package-root directories:
 
   ```text
-  plugins/review-crew/.codex-plugin/
-  plugins/review-crew/codex/skills/
-  plugins/test-pilot/.codex-plugin/
-  plugins/test-pilot/codex/skills/
-  plugins/the-architect/.codex-plugin/
-  plugins/the-architect/codex/skills/
+  plugins/review-crew/codex/review-crew/.codex-plugin/
+  plugins/review-crew/codex/review-crew/skills/
+  plugins/test-pilot/codex/test-pilot/.codex-plugin/
+  plugins/test-pilot/codex/test-pilot/skills/
+  plugins/the-architect/codex/the-architect/.codex-plugin/
+  plugins/the-architect/codex/the-architect/skills/
   ```
 
-- [ ] Add `plugins/review-crew/.codex-plugin/plugin.json`:
+- [ ] Add `plugins/review-crew/codex/review-crew/.codex-plugin/plugin.json`:
 
   ```json
   {
@@ -176,7 +177,7 @@ New files introduced by this plan:
   }
   ```
 
-- [ ] Add `plugins/test-pilot/.codex-plugin/plugin.json`:
+- [ ] Add `plugins/test-pilot/codex/test-pilot/.codex-plugin/plugin.json`:
 
   ```json
   {
@@ -197,7 +198,7 @@ New files introduced by this plan:
   }
   ```
 
-- [ ] Add `plugins/the-architect/.codex-plugin/plugin.json`:
+- [ ] Add `plugins/the-architect/codex/the-architect/.codex-plugin/plugin.json`:
 
   ```json
   {
@@ -246,7 +247,7 @@ New files introduced by this plan:
 
   - [ ] Require `source` to be an object with `"source": "local"` and a non-empty `path`.
   - [ ] Resolve `source.path` relative to repo root.
-  - [ ] Require the resolved real path to stay inside the repo and equal `plugins/<entry-name>`, so the marketplace entry name, package-root directory, and `.codex-plugin/plugin.json` `name` all match the Codex plugin contract.
+  - [ ] Require the resolved real path to stay inside the repo and equal `plugins/<entry-name>/codex/<entry-name>`, so the marketplace entry name, Codex package-root directory basename, and `.codex-plugin/plugin.json` `name` all match the Codex plugin contract while staying isolated from the Claude root.
   - [ ] Reject path traversal and symlink escapes before loading the Codex manifest.
   - [ ] Require `policy.installation` to be one of `NOT_AVAILABLE`, `AVAILABLE`, or `INSTALLED_BY_DEFAULT`.
   - [ ] Require `policy.authentication` to be one of `ON_INSTALL` or `ON_USE`.
@@ -287,7 +288,8 @@ New files introduced by this plan:
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`; the fixture must create matching Claude and Codex plugin manifest roots with different `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` versions, not encode a version field inside marketplace entries.
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
   - [ ] `codex-source-traversal.json` fails with a message containing `source path`.
-  - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>`.
+  - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>/codex/<name>`.
+  - [ ] `codex-source-claude-root.json` fails with a message containing `Claude root`.
   - [ ] `codex-entry-version.json` fails with a message containing `version`.
   - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
   - [ ] `codex-missing-interface.json` fails with a message containing `interface`.
@@ -342,19 +344,19 @@ New files introduced by this plan:
 - [ ] Copy each shared README into the matching Codex package root:
 
   ```text
-  plugins/review-crew/shared/README.md -> plugins/review-crew/codex/shared/README.md
-  plugins/test-pilot/shared/README.md -> plugins/test-pilot/codex/shared/README.md
-  plugins/the-architect/shared/README.md -> plugins/the-architect/codex/shared/README.md
+  plugins/review-crew/shared/README.md -> plugins/review-crew/codex/review-crew/shared/README.md
+  plugins/test-pilot/shared/README.md -> plugins/test-pilot/codex/test-pilot/shared/README.md
+  plugins/the-architect/shared/README.md -> plugins/the-architect/codex/the-architect/shared/README.md
   ```
 
 - [ ] Treat those Codex-local shared README files as vendored package contents, not a second source of truth.
 - [ ] Copy the base rubric into the review-crew Codex package root:
 
   ```text
-  plugins/review-crew/rubric/review-base.md -> plugins/review-crew/codex/shared/rubric/review-base.md
+  plugins/review-crew/rubric/review-base.md -> plugins/review-crew/codex/review-crew/shared/rubric/review-base.md
   ```
 
-- [ ] Treat `plugins/review-crew/codex/shared/rubric/review-base.md` as vendored package content, not a second source of truth.
+- [ ] Treat `plugins/review-crew/codex/review-crew/shared/rubric/review-base.md` as vendored package content, not a second source of truth.
 - [ ] Add `eval/lib/tests/test_runtime_layout.py` with assertions:
 
   - Every plugin has a root `.claude-plugin/plugin.json`.
@@ -362,11 +364,11 @@ New files introduced by this plan:
   - Every Claude plugin root has the exact expected `skills/*/SKILL.md` set for that plugin.
   - The review-crew Claude plugin root has the exact expected `agents/*-reviewer.md` set.
   - Existing Claude runtime directories remain present for all three plugins, including `plugins/review-crew/agents/`, `plugins/test-pilot/skills/`, and `plugins/the-architect/skills/`.
-  - Every plugin has a root `.codex-plugin/plugin.json` whose `skills` path points at `./codex/skills/`.
+  - Every plugin has an isolated Codex package root at `plugins/<name>/codex/<name>/` with `.codex-plugin/plugin.json` whose `skills` path points at `./skills/`.
   - Every plugin has a `shared/README.md`.
-  - Every plugin has a package-local `codex/shared/README.md`.
-  - Each `codex/shared/README.md` is byte-for-byte identical to the matching `shared/README.md`.
-  - The review-crew Codex package has `codex/shared/rubric/review-base.md`.
+  - Every plugin has a package-local `codex/<name>/shared/README.md`.
+  - Each `codex/<name>/shared/README.md` is byte-for-byte identical to the matching `shared/README.md`.
+  - The review-crew Codex package has `codex/review-crew/shared/rubric/review-base.md`.
   - The review-crew Codex package-local rubric is byte-for-byte identical to `plugins/review-crew/rubric/review-base.md`.
   - Every Codex package source has at least one `skills/*/SKILL.md`.
   - No Codex skill references shared runtime dependencies outside its package root.
@@ -403,17 +405,17 @@ New files introduced by this plan:
 - [ ] Copy the reviewer methodology into the Codex package root:
 
   ```text
-  plugins/review-crew/shared/reviewers/architecture-reviewer.md -> plugins/review-crew/codex/shared/reviewers/architecture-reviewer.md
-  plugins/review-crew/shared/reviewers/code-reviewer.md -> plugins/review-crew/codex/shared/reviewers/code-reviewer.md
-  plugins/review-crew/shared/reviewers/premortem-reviewer.md -> plugins/review-crew/codex/shared/reviewers/premortem-reviewer.md
-  plugins/review-crew/shared/reviewers/security-reviewer.md -> plugins/review-crew/codex/shared/reviewers/security-reviewer.md
-  plugins/review-crew/shared/reviewers/test-reviewer.md -> plugins/review-crew/codex/shared/reviewers/test-reviewer.md
+  plugins/review-crew/shared/reviewers/architecture-reviewer.md -> plugins/review-crew/codex/review-crew/shared/reviewers/architecture-reviewer.md
+  plugins/review-crew/shared/reviewers/code-reviewer.md -> plugins/review-crew/codex/review-crew/shared/reviewers/code-reviewer.md
+  plugins/review-crew/shared/reviewers/premortem-reviewer.md -> plugins/review-crew/codex/review-crew/shared/reviewers/premortem-reviewer.md
+  plugins/review-crew/shared/reviewers/security-reviewer.md -> plugins/review-crew/codex/review-crew/shared/reviewers/security-reviewer.md
+  plugins/review-crew/shared/reviewers/test-reviewer.md -> plugins/review-crew/codex/review-crew/shared/reviewers/test-reviewer.md
   ```
 
-- [ ] Treat `plugins/review-crew/codex/shared/reviewers/*.md` as vendored package contents, not a second source of truth.
+- [ ] Treat `plugins/review-crew/codex/review-crew/shared/reviewers/*.md` as vendored package contents, not a second source of truth.
 - [ ] Add a drift test in `plugins/review-crew/lib/tests/test_dispatch_tables.py` or a new `plugins/review-crew/lib/tests/test_shared_reviewers.py`.
 - [ ] The drift test must assert the neutral shared reviewer files contain no Claude-only wrapper metadata or tool declarations.
-- [ ] The drift test must assert each Claude agent wrapper references or preserves the matching neutral shared reviewer methodology while remaining Claude-native.
+- [ ] The drift test must assert each Claude agent wrapper either explicitly loads and applies the matching neutral shared reviewer file at runtime or embeds a generated methodology body whose normalized hash matches that shared file while remaining Claude-native. A filename-only reference must fail.
 - [ ] The drift test must compare each shared reviewer file with the matching Codex package-local reviewer file byte-for-byte.
 - [ ] The test must enumerate only `*-reviewer.md` files and assert that the reviewer filename set is exactly:
 
@@ -434,19 +436,19 @@ New files introduced by this plan:
 - [ ] Add Codex skill directories:
 
   ```text
-  plugins/review-crew/codex/skills/review-code/
-  plugins/review-crew/codex/skills/review-plan/
-  plugins/review-crew/codex/skills/review-spec/
-  plugins/review-crew/codex/skills/review-tasks/
-  plugins/review-crew/codex/skills/audit-debt/
-  plugins/review-crew/codex/skills/review-init/
-  plugins/test-pilot/codex/skills/test-pilot-init/
-  plugins/test-pilot/codex/skills/test-pilot-plan/
-  plugins/test-pilot/codex/skills/test-pilot-execute/
-  plugins/the-architect/codex/skills/discovery/
-  plugins/the-architect/codex/skills/plan/
-  plugins/the-architect/codex/skills/tasks/
-  plugins/the-architect/codex/skills/writing-specs/
+  plugins/review-crew/codex/review-crew/skills/review-code/
+  plugins/review-crew/codex/review-crew/skills/review-plan/
+  plugins/review-crew/codex/review-crew/skills/review-spec/
+  plugins/review-crew/codex/review-crew/skills/review-tasks/
+  plugins/review-crew/codex/review-crew/skills/audit-debt/
+  plugins/review-crew/codex/review-crew/skills/review-init/
+  plugins/test-pilot/codex/test-pilot/skills/test-pilot-init/
+  plugins/test-pilot/codex/test-pilot/skills/test-pilot-plan/
+  plugins/test-pilot/codex/test-pilot/skills/test-pilot-execute/
+  plugins/the-architect/codex/the-architect/skills/discovery/
+  plugins/the-architect/codex/the-architect/skills/plan/
+  plugins/the-architect/codex/the-architect/skills/tasks/
+  plugins/the-architect/codex/the-architect/skills/writing-specs/
   ```
 
 - [ ] For each Codex `SKILL.md`, hand-author host-native instructions.
@@ -482,7 +484,7 @@ New files introduced by this plan:
 
 - [ ] Package the runtime helpers the Codex skills need inside each Codex package root, without changing the existing source-checkout helper behavior:
 
-  - [ ] Add package-local helper directories such as `plugins/review-crew/codex/lib/`, `plugins/test-pilot/codex/lib/`, and `plugins/the-architect/codex/lib/`.
+  - [ ] Add package-local helper directories such as `plugins/review-crew/codex/review-crew/lib/`, `plugins/test-pilot/codex/test-pilot/lib/`, and `plugins/the-architect/codex/the-architect/lib/`.
   - [ ] Copy or wrap the current helpers referenced by the corresponding workflows, including review-crew review storage, loop-state, circuit-breaker, line-resolution, escalation, and decision helpers; test-pilot engine/store/scrubber helpers and templates; and the-architect definition-doc, gate, queue, and template helpers.
   - [ ] Codex skill instructions must resolve helpers and templates relative to their installed package root, not `.github/scripts`, repo-root `plugins/*/lib`, or `${CLAUDE_PLUGIN_ROOT}`.
   - [ ] Add drift tests that fail when package-local helper copies diverge from the source helpers unless the divergence is documented in an explicit allowlist with a reason.
@@ -524,7 +526,7 @@ New files introduced by this plan:
   }
   ```
 
-- [ ] The test must enumerate every `plugins/*/codex/skills/*/SKILL.md` file after proving the discovered set equals `EXPECTED_CODEX_SKILLS`.
+- [ ] The test must enumerate every `plugins/*/codex/*/skills/*/SKILL.md` file after proving the discovered set equals `EXPECTED_CODEX_SKILLS`.
 - [ ] For every Codex skill file, assert it starts with YAML frontmatter containing non-empty `name` and `description` fields.
 - [ ] For every Codex skill file, assert the required headings appear in exactly this order:
 
@@ -563,7 +565,7 @@ New files introduced by this plan:
 - [ ] For every Codex skill file, assert the `## Codex Runtime` section resolves package-local helper paths under the installed `codex/` package root when the skill needs executable helpers.
 
 - [ ] Add `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`.
-- [ ] For `plugins/review-crew/codex/skills/review-code/SKILL.md`, assert it references exactly these reviewer files:
+- [ ] For `plugins/review-crew/codex/review-crew/skills/review-code/SKILL.md`, assert it references exactly these reviewer files:
 
   ```python
   REVIEW_CREW_REVIEWERS = {
