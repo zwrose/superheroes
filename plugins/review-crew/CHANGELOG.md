@@ -6,6 +6,24 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-18
+
+### Added
+
+- **Model-tier wrapper.** `lib/model_tier_resolve.py` — resolves role→dispatch-model
+  via the shared the-architect core (fail-OPEN to an embedded default). review-code
+  now dispatches its five specialists, triage, and fixer at the resolved tiers.
+- **Machine-readable review terminal state.** `lib/review_result.py` + review-code's
+  optional `--result-file` — writes the loop's terminal `loop_state` decision
+  (`action`/`round`/`reason`) as JSON so a programmatic caller (e.g. the workhorse
+  producer's ② gate) can branch deterministically; the reader fails CLOSED
+  (missing/garbled → `halt` → GATE).
+
+### Changed
+
+- **`escalation_resolve` band-roots now include `workhorse`**, so an in-repo dogfood
+  anchors the safety-machinery guard against the workhorse plugin dir too.
+
 ## [0.5.0] — 2026-06-16
 
 ### Changed

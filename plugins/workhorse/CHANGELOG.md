@@ -6,6 +6,8 @@ All notable changes to the `workhorse` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-18
+
 ### Added
 
 - Initial release: the `workhorse` orchestrator skill (the per-issue
