@@ -547,7 +547,7 @@ Update or verify the actual Claude skill instructions, Codex skill instructions,
 Create doctor/reconcile helpers beside the readers in the same package-local files or package-local companion modules. The helpers must be callable from installed Codex packages without importing `eval/lib`.
 
 - `diagnose(paths: list[Path]) -> dict`: returns a dict with `status`, `problems`, and `actions`; `status` is one of `ok`, `diverged`, or `blocked`.
-- `reconcile(paths: list[Path], *, dry_run: bool = True) -> dict`: returns a dict with `status`, `changes`, and `problems`; `status` is one of `would-change`, `changed`, or `blocked`, and the function does not write when `dry_run` is true.
+- `reconcile(paths: list[Path], *, dry_run: bool = True) -> dict`: returns a dict with `status`, `changes`, and `problems`; `status` is one of `would-change`, `changed`, or `blocked`. For this release, reconciliation is report-only: `dry_run=False` must return `blocked` with an action explaining that write reconciliation is deferred to the migration implementation. A future write-capable reconcile must acquire the artifact-specific lock, validate all inputs before writing, write through atomic temp-file-and-rename steps, record an idempotent marker after validation, and be resumable or safely rolled back after interruption.
 
 Return machine-readable statuses for divergence, stale locks, version skew, and missing migration markers.
 
