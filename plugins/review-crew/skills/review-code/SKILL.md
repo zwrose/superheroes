@@ -27,6 +27,7 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 | `/review-crew:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
 | `/review-crew:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
 | `/review-crew:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
+| `/review-crew:review-code --result-file <path>` | Write the terminal loop_state decision (`action`, `round`, `reason`) to `<path>` as JSON when the loop exits, for a programmatic caller (e.g. Workhorse ②). Combinable with any form; absent → no file written (backward-compatible). |
 
 The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
 
@@ -563,6 +564,18 @@ Report it under "escalated" with the id and why.
 ```
 
 ### End-of-Loop Summary
+
+**If `--result-file` was passed**, write the terminal loop_state decision before printing the summary (atomic write via temp file):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_result.py" write \
+  --path "$RESULT_FILE" \
+  --action "$ACTION" \
+  --round "$ROUND" \
+  --reason "$REASON"
+```
+
+(`$ACTION`, `$ROUND`, and `$REASON` are the `action`, `round`, and `reason` fields from `loop_state.py`'s JSON output at step 14. `$RESULT_FILE` is the path supplied via `--result-file`. When `--result-file` is absent, skip this step entirely — no file written, no behavior change.)
 
 Print: final verdict, rounds run, commits created (one per round), findings fixed by severity, any blocking findings deliberately skipped, **the Minor/Nit findings auto-handled without asking** (a short list — `auto-fixed` vs `auto-skipped` — so the non-blocking work the loop did silently is visible, not hidden), and any new findings the fixer noticed/introduced along the way (informational). If the verify story was `unverified`, state that fixes were committed **without a verify gate**. Because fixes are local-only, offer to push the branch (or, if this was a PR you don't own, point to `--post`). Do not push without explicit confirmation.
 
