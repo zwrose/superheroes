@@ -284,7 +284,7 @@ New files introduced by this plan:
   - [ ] Current repo fixtures pass.
   - [ ] `codex-marketplace.bad-source.json` fails with a message containing `Codex source`.
   - [ ] `marketplace-name-drift.json` fails with a message containing `marketplace name`.
-  - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`.
+  - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`; the fixture must create matching Claude and Codex plugin manifest roots with different `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` versions, not encode a version field inside marketplace entries.
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
   - [ ] `codex-source-traversal.json` fails with a message containing `source path`.
   - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>/codex`.
@@ -383,7 +383,7 @@ New files introduced by this plan:
     }
     ```
 
-  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, and `docs/superheroes/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
+  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, `docs/superheroes/**`, and existing control-plane state names from `CONVENTIONS.md` such as `queue.json`, `checkpoint.json`, `meta.json`, `config.lock`, `events/`, `issues/*/checkpoint.json`, and `refs/superheroes/locks/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
 
 ## Task 5: Establish Review-Crew Shared Reviewer Methodology
 
@@ -593,6 +593,7 @@ New files introduced by this plan:
 
 - [ ] For every Codex review-crew review skill, assert the dimension names `Architecture`, `Code`, `Security`, `Test`, and `Failure-Mode` appear unless the corresponding Claude skill intentionally omits that dimension.
 - [ ] For every Codex review-crew review skill, assert it references the package-local base rubric at `shared/rubric/review-base.md` and does not restate severity tiers inline.
+- [ ] For every Codex review-crew review skill, assert the skill contains explicit runtime instructions to load each expected package-local reviewer methodology file before dispatching or simulating that reviewer; filename references alone are not sufficient.
 
 ## Task 7: Add Versioned Shared Contract Schemas And Fixtures
 
@@ -601,6 +602,7 @@ New files introduced by this plan:
 - [ ] Add `definition-doc-v1-legacy.valid.json` using the current `definition-doc.schema.json` valid shape from `eval/lib/tests/test_schemas.py`.
 - [ ] Add `checkpoint-v1-legacy.valid.json` using the current checkpoint valid shape from `eval/lib/tests/test_schemas.py`.
 - [ ] Add `queue-v1-legacy.valid.json` using the current queue valid shape from `eval/lib/tests/test_schemas.py`.
+- [ ] Add `registry-v1-legacy.valid.json` using the current registry valid shape from `eval/lib/schemas/registry.schema.json` and current registry readers.
 - [ ] Add v1 legacy fixtures for the remaining shared artifact classes:
 
   ```text
@@ -624,6 +626,7 @@ New files introduced by this plan:
   eval/lib/schemas/dual-host/test-pilot-plan-v2.schema.json
   eval/lib/schemas/dual-host/test-pilot-results-v2.schema.json
   eval/lib/schemas/dual-host/lock-v2.schema.json
+  eval/lib/schemas/dual-host/registry-v2.schema.json
   ```
 
 - [ ] The v2 schemas must keep `additionalProperties: false`.
@@ -666,7 +669,7 @@ New files introduced by this plan:
 - [ ] `checkpoint-v2.schema.json` must preserve the current `updatedAt` field, add `createdAt`, and add the common host provenance fields.
 - [ ] `queue-v2.schema.json` must preserve the current `items` shape and add `createdAt`, `updatedAt`, and the common host provenance fields at the top level.
 - [ ] `finding-v2.schema.json` must preserve the full review-base finding contract needed by the runtime, require `id`, `title`, `dimension`, `severity`, `file`, `line`, `body`, and `suggestion`, preserve optional taxonomy and `tradeoff`, require `confidence` and evidence fields for Critical/Important findings according to the rubric, allow Minor/Nit findings to omit `confidence` with the rubric's default-High interpretation, and add the common host provenance fields.
-- [ ] `review-profile-v2.schema.json` must preserve the profile calibration concepts from `.claude/review-profile.md` and add the common host provenance fields.
+- [ ] `review-profile-v2.schema.json` must preserve the profile calibration concepts from `.claude/review-profile.md`, including the markdown/provenance artifact contract current readers parse, and add the common host provenance fields without requiring existing markdown profiles to be rewritten.
 - [ ] `test-pilot-plan-v2.schema.json` must preserve the plan/comment fields used by `plugins/test-pilot/templates/plan-comment.md` and the engine state readers, then add the common host provenance fields.
 - [ ] `test-pilot-results-v2.schema.json` must preserve the results/comment fields used by `plugins/test-pilot/templates/results-comment.md`, then add the common host provenance fields.
 - [ ] `lock-v2.schema.json` must preserve atomic lock ownership fields and require `host`, `runId`, `pluginVersion`, `acquiredAt`, `updatedAt`, and a generation or fencing token.
@@ -769,10 +772,11 @@ New files introduced by this plan:
 
 - [ ] Add shared artifact reader helpers that the host-native skills can call before any workflow writer switches to v2:
 
-  - [ ] The readers must accept legacy v1 artifacts and v2 artifacts for every artifact in `SHARED_ARTIFACTS`.
-  - [ ] The readers must live in package-local locations usable by installed Codex packages and source-checkout Claude workflows.
-  - [ ] The readers must resolve the same registry/storage-mode state for Claude and Codex before any migration cutover.
-  - [ ] The conformance tests in Task 11 must invoke these real readers, not test-only parsers.
+- [ ] The readers must accept legacy v1 artifacts and v2 artifacts for every artifact in `SHARED_ARTIFACTS`.
+- [ ] The readers must live in package-local locations usable by installed Codex packages and source-checkout Claude workflows.
+- [ ] The readers must resolve the same registry/storage-mode state for Claude and Codex before any migration cutover.
+- [ ] The conformance tests in Task 11 must invoke these real readers, not test-only parsers.
+  - [ ] Add fail-closed negative reader tests for every artifact class: unknown schema version, unsupported plugin version, missing required provenance on v2, stale or mismatched fencing token for lock-protected records, and host/version skew that should trigger doctor/reconcile rather than a permissive read.
   - [ ] Existing writers must continue writing their current legacy formats in this task.
 
 - [ ] Document in the test module docstring that these v2 schemas establish schema-level reader compatibility, but no existing workflow writer switches to v2 until the migration tasks are implemented.
