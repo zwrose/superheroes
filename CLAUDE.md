@@ -63,7 +63,7 @@ Run both locally before pushing:
 
 ```bash
 python3 .github/scripts/validate_marketplace.py
-python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
+python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ plugins/workhorse/lib/tests/ eval/lib/tests/ -q
 ```
 
 ## Branch protection
