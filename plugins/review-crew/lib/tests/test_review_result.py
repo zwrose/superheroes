@@ -39,6 +39,18 @@ def test_read_garbled_is_gate_fail_closed(tmp_path):
     assert RR.read_result(str(bad))["action"] == "halt"
 
 
+def test_read_wrong_shape_is_gate_fail_closed(tmp_path):
+    # Valid JSON but wrong shape must also fail CLOSED (not just garbled text).
+    # A JSON list is not a dict.
+    list_file = tmp_path / "list.json"
+    list_file.write_text("[1, 2, 3]")
+    assert RR.read_result(str(list_file))["action"] == "halt"
+    # A dict whose action is not in the allow-list.
+    bogus_file = tmp_path / "bogus.json"
+    bogus_file.write_text('{"action": "bogus"}')
+    assert RR.read_result(str(bogus_file))["action"] == "halt"
+
+
 def test_cli_write(capsys, tmp_path):
     out = tmp_path / "r.json"
     rc = RR.main(["review_result.py", "write", "--path", str(out),

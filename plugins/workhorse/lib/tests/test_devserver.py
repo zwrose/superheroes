@@ -32,6 +32,22 @@ def test_port_in_use_detects_a_bound_socket():
     assert devserver.port_in_use(port) is False
 
 
+def test_start_raises_port_in_use_error():
+    # Pin that start() refuses loudly (PortInUseError) when the port is already bound,
+    # before ever reaching Popen. Mirror test_port_in_use_detects_a_bound_socket's
+    # socket setup so no real server is spawned.
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    s.listen(1)
+    port = s.getsockname()[1]
+    try:
+        import pytest
+        with pytest.raises(devserver.PortInUseError):
+            devserver.start("true", port)
+    finally:
+        s.close()
+
+
 def test_teardown_kills_a_live_pid():
     # Spawn the victim in ITS OWN session, exactly like production devserver.start,
     # so teardown's os.killpg targets the child's group — NOT the pytest runner's.

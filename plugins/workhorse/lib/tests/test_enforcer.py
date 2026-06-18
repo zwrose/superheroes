@@ -40,6 +40,17 @@ def test_allows_push_to_feature_branch():
         assert enforcer.classify_command(cmd)[0] == "allow", cmd
 
 
+def test_allows_push_compound_commands_with_main_after_separator():
+    # REGRESSION guard (premortem-001): a later `main`/`master` token in a COMPOUND
+    # command (after &&, ;, |) must NOT cause the push segment to be denied.
+    for cmd in (
+        "git push -u origin superheroes/x && git checkout main",
+        "git commit -m 'sync main' && git push origin superheroes/y",
+        "git push origin superheroes/x ; echo on main",
+    ):
+        assert enforcer.classify_command(cmd)[0] == "allow", cmd
+
+
 def test_denies_gh_release_and_workflow_run():
     assert enforcer.classify_command("gh release create v1.0.0")[0] == "deny"
     assert enforcer.classify_command("gh workflow run deploy.yml")[0] == "deny"
@@ -80,6 +91,22 @@ def test_denies_bash_write_to_safety_machinery():
                 "echo '{}' >hooks.json",          # no space — must still deny
                 ">enforcer.py",                    # bare no-space redirect
                 "cp /tmp/x.py escalation.py"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_denies_bash_write_to_safety_machinery_all_ops():
+    # Pin every _WRITE_OPS alternative so dropping any one op fails the suite.
+    # band_lib unresolved in the test env → classify_path fail-closes to deny,
+    # so the point is that each operator is RECOGNIZED (the pre-filter fires).
+    for cmd in (
+        "echo x >> enforcer.py",           # >> append
+        "tee enforcer.py < /tmp/x",        # tee
+        "mv /tmp/x enforcer.py",           # mv
+        "dd if=/dev/null > enforcer.py",   # dd (redirect form — of= syntax not tokenised)
+        "truncate -s0 enforcer.py",        # truncate
+        "chmod 777 enforcer.py",           # chmod
+        "ln -sf /tmp/x enforcer.py",       # ln
+    ):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 

@@ -54,7 +54,7 @@ DENY_COMMANDS = [
     # `git push origin <src>:main` — while still allowing the producer's own
     # superheroes/* and other feature-branch pushes (those have no `:main`/` main`
     # destination). The pattern anchors on the destination ref, not the source.
-    ("push-to-default", re.compile(r"\bgit\s+push\b.*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
+    ("push-to-default", re.compile(r"\bgit\s+push\b[^;&|\n]*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
     ("deploy",          re.compile(r"\b(deploy|kubectl\s+apply|terraform\s+apply)|(?:^|\s)--prod\b", re.I)),
     ("destructive",     re.compile(r"\b(DROP\s+(TABLE|DATABASE|INDEX)|TRUNCATE|DELETE\s+FROM)\b", re.I)),
     ("rm-rf",           re.compile(r"\brm\s+-[a-z]*[rf][a-z]*[rf]", re.I)),
