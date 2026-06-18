@@ -68,18 +68,18 @@ New files introduced by this plan:
 - `eval/lib/tests/test_runtime_layout.py`
 - `plugins/review-crew/shared/reviewers/*.md`
 - `plugins/review-crew/shared/README.md`
-- `plugins/review-crew/codex/.codex-plugin/plugin.json`
+- `plugins/review-crew/.codex-plugin/plugin.json`
 - `plugins/review-crew/codex/lib/*.py`
 - `plugins/review-crew/codex/shared/README.md`
 - `plugins/review-crew/codex/skills/*/SKILL.md`
 - `plugins/test-pilot/shared/README.md`
-- `plugins/test-pilot/codex/.codex-plugin/plugin.json`
+- `plugins/test-pilot/.codex-plugin/plugin.json`
 - `plugins/test-pilot/codex/lib/*.py`
 - `plugins/test-pilot/codex/templates/*`
 - `plugins/test-pilot/codex/shared/README.md`
 - `plugins/test-pilot/codex/skills/*/SKILL.md`
 - `plugins/the-architect/shared/README.md`
-- `plugins/the-architect/codex/.codex-plugin/plugin.json`
+- `plugins/the-architect/.codex-plugin/plugin.json`
 - `plugins/the-architect/codex/lib/*.py`
 - `plugins/the-architect/codex/templates/*`
 - `plugins/the-architect/codex/shared/README.md`
@@ -105,19 +105,19 @@ New files introduced by this plan:
     "plugins": [
       {
         "name": "the-architect",
-        "source": { "source": "local", "path": "./plugins/the-architect/codex" },
+        "source": { "source": "local", "path": "./plugins/the-architect" },
         "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
         "category": "Productivity"
       },
       {
         "name": "review-crew",
-        "source": { "source": "local", "path": "./plugins/review-crew/codex" },
+        "source": { "source": "local", "path": "./plugins/review-crew" },
         "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
         "category": "Productivity"
       },
       {
         "name": "test-pilot",
-        "source": { "source": "local", "path": "./plugins/test-pilot/codex" },
+        "source": { "source": "local", "path": "./plugins/test-pilot" },
         "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
         "category": "Productivity"
       }
@@ -127,7 +127,7 @@ New files introduced by this plan:
 
 - [ ] Add `eval/fixtures/dual-host/manifests/claude-marketplace.valid.json` by copying the current Claude marketplace shape.
 - [ ] Add `eval/fixtures/dual-host/manifests/codex-marketplace.valid.json` by copying the new Codex marketplace shape.
-- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-marketplace.bad-source.json` where one Codex source points at `./plugins/review-crew`.
+- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-marketplace.bad-source.json` where one Codex source points at `./plugins/review-crew/codex` instead of the package root.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/marketplace-name-drift.json` where the Claude and Codex marketplace names differ.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/plugin-version-drift.json` where one Codex plugin manifest version differs from the matching Claude plugin manifest version.
 - [ ] Run the existing Claude marketplace validator to confirm this task has not regressed Claude:
@@ -147,15 +147,15 @@ New files introduced by this plan:
 - [ ] Create these package-root directories:
 
   ```text
-  plugins/review-crew/codex/.codex-plugin/
+  plugins/review-crew/.codex-plugin/
   plugins/review-crew/codex/skills/
-  plugins/test-pilot/codex/.codex-plugin/
+  plugins/test-pilot/.codex-plugin/
   plugins/test-pilot/codex/skills/
-  plugins/the-architect/codex/.codex-plugin/
+  plugins/the-architect/.codex-plugin/
   plugins/the-architect/codex/skills/
   ```
 
-- [ ] Add `plugins/review-crew/codex/.codex-plugin/plugin.json`:
+- [ ] Add `plugins/review-crew/.codex-plugin/plugin.json`:
 
   ```json
   {
@@ -176,7 +176,7 @@ New files introduced by this plan:
   }
   ```
 
-- [ ] Add `plugins/test-pilot/codex/.codex-plugin/plugin.json`:
+- [ ] Add `plugins/test-pilot/.codex-plugin/plugin.json`:
 
   ```json
   {
@@ -197,7 +197,7 @@ New files introduced by this plan:
   }
   ```
 
-- [ ] Add `plugins/the-architect/codex/.codex-plugin/plugin.json`:
+- [ ] Add `plugins/the-architect/.codex-plugin/plugin.json`:
 
   ```json
   {
@@ -246,7 +246,7 @@ New files introduced by this plan:
 
   - [ ] Require `source` to be an object with `"source": "local"` and a non-empty `path`.
   - [ ] Resolve `source.path` relative to repo root.
-  - [ ] Require the resolved real path to stay inside the repo and equal `plugins/<entry-name>/codex`.
+  - [ ] Require the resolved real path to stay inside the repo and equal `plugins/<entry-name>`, so the marketplace entry name, package-root directory, and `.codex-plugin/plugin.json` `name` all match the Codex plugin contract.
   - [ ] Reject path traversal and symlink escapes before loading the Codex manifest.
   - [ ] Require `policy.installation` to be one of `NOT_AVAILABLE`, `AVAILABLE`, or `INSTALLED_BY_DEFAULT`.
   - [ ] Require `policy.authentication` to be one of `ON_INSTALL` or `ON_USE`.
@@ -287,7 +287,7 @@ New files introduced by this plan:
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`; the fixture must create matching Claude and Codex plugin manifest roots with different `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` versions, not encode a version field inside marketplace entries.
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
   - [ ] `codex-source-traversal.json` fails with a message containing `source path`.
-  - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>/codex`.
+  - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>`.
   - [ ] `codex-entry-version.json` fails with a message containing `version`.
   - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
   - [ ] `codex-missing-interface.json` fails with a message containing `interface`.
@@ -362,7 +362,7 @@ New files introduced by this plan:
   - Every Claude plugin root has the exact expected `skills/*/SKILL.md` set for that plugin.
   - The review-crew Claude plugin root has the exact expected `agents/*-reviewer.md` set.
   - Existing Claude runtime directories remain present for all three plugins, including `plugins/review-crew/agents/`, `plugins/test-pilot/skills/`, and `plugins/the-architect/skills/`.
-  - Every plugin has a `codex/.codex-plugin/plugin.json`.
+  - Every plugin has a root `.codex-plugin/plugin.json` whose `skills` path points at `./codex/skills/`.
   - Every plugin has a `shared/README.md`.
   - Every plugin has a package-local `codex/shared/README.md`.
   - Each `codex/shared/README.md` is byte-for-byte identical to the matching `shared/README.md`.
@@ -383,7 +383,7 @@ New files introduced by this plan:
     }
     ```
 
-  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, `docs/superheroes/**`, and existing control-plane state names from `CONVENTIONS.md` such as `queue.json`, `checkpoint.json`, `meta.json`, `config.lock`, `events/`, `issues/*/checkpoint.json`, and `refs/superheroes/locks/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
+  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, `docs/superheroes/**`, and existing control-plane state names from `CONVENTIONS.md` such as `queue.json`, `checkpoint.json`, `meta.json`, `config.lock`, `events/`, `events.jsonl`, `issues/*/checkpoint.json`, and `refs/superheroes/locks/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
 
 ## Task 5: Establish Review-Crew Shared Reviewer Methodology
 
