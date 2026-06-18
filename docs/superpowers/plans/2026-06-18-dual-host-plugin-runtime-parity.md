@@ -251,6 +251,7 @@ New files introduced by this plan:
   - [ ] Require `policy.installation` to be one of `NOT_AVAILABLE`, `AVAILABLE`, or `INSTALLED_BY_DEFAULT`.
   - [ ] Require `policy.authentication` to be one of `ON_INSTALL` or `ON_USE`.
   - [ ] Require a non-empty `category`.
+  - [ ] Reject unsupported Codex marketplace plugin-entry fields such as `version`; `plugin.json` remains the single source of truth for plugin versions on both hosts.
   - [ ] Require `<source>/.codex-plugin/plugin.json`.
   - [ ] Require `plugin.json.name` to match the marketplace entry.
   - [ ] Require `plugin.json.version` to be valid SemVer.
@@ -287,6 +288,7 @@ New files introduced by this plan:
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
   - [ ] `codex-source-traversal.json` fails with a message containing `source path`.
   - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>/codex`.
+  - [ ] `codex-entry-version.json` fails with a message containing `version`.
   - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
   - [ ] `codex-missing-interface.json` fails with a message containing `interface`.
   - [ ] `codex-unsupported-host-field.json` fails with a message containing `host`.
@@ -295,6 +297,11 @@ New files introduced by this plan:
   - [ ] `author-drift.json` fails with a message containing `author`.
   - [ ] In default strict mode, `codex-missing-shared-readme.json` fails with a message containing `shared/README.md`.
   - [ ] In default strict mode, `codex-missing-skill.json` fails with a message containing `skills`.
+  - [ ] In metadata phase, the same missing shared README and missing skill fixtures pass with warnings:
+
+    ```bash
+    python3 .github/scripts/validate_dual_host_marketplace.py --phase metadata
+    ```
 
 - [ ] Do not add the validator to `.github/workflows/ci.yml` until Task 6 has created the files strict mode requires.
 - [ ] After Task 6, add the validator to `.github/workflows/ci.yml` after the existing Claude validator:
@@ -480,6 +487,8 @@ New files introduced by this plan:
   - [ ] Codex skill instructions must resolve helpers and templates relative to their installed package root, not `.github/scripts`, repo-root `plugins/*/lib`, or `${CLAUDE_PLUGIN_ROOT}`.
   - [ ] Add drift tests that fail when package-local helper copies diverge from the source helpers unless the divergence is documented in an explicit allowlist with a reason.
   - [ ] Add an installed-package smoke test parametrized over every Codex package root and every Codex skill that references executable helpers or templates. For each package, copy it to a temporary directory outside the repo and prove all skill-visible package-local helper and template paths resolve there.
+  - [ ] The installed-package smoke test must execute representative package-local helper commands from the copied temp package, not only check paths. Cover at least the-architect definition-doc frontmatter or gate rendering, review-crew loop/line-resolution helper CLIs, and test-pilot engine/template rendering.
+  - [ ] Codex helper adapters must read package-local `.codex-plugin/plugin.json` when source helpers currently assume `.claude-plugin/plugin.json`.
 
 - [ ] Keep the source-checkout verification command in `docs/dual-host-runtime.md`, `CONTRIBUTING.md`, `RELEASING.md`, and Task 11:
 
@@ -712,6 +721,7 @@ New files introduced by this plan:
       "test-pilot-plan",
       "test-pilot-results",
       "lock",
+      "registry",
   }
   ```
 
@@ -721,7 +731,7 @@ New files introduced by this plan:
 - [ ] In the test file, validate schema-backed v1 fixtures against the existing strict schemas:
 
   ```python
-  SCHEMA_BACKED_V1 = {"definition-doc", "checkpoint", "queue"}
+  SCHEMA_BACKED_V1 = {"definition-doc", "checkpoint", "queue", "registry"}
   ```
 
 - [ ] For v1 artifacts without existing schemas, add current-shape validators in `test_dual_host_contracts.py` instead of pretending a schema exists:
@@ -740,6 +750,7 @@ New files introduced by this plan:
 - [ ] The `review-profile` v1 shape validator must parse the real markdown/provenance fixture and assert the fields current readers depend on, including verify mode or command, profile status/provenance, and review calibration sections.
 - [ ] In the test file, validate v2 fixtures against the new companion v2 schemas.
 - [ ] Generate required-field negative cases in the test, not only fixture files: for every positive v2 fixture, remove each field in `COMMON_PROVENANCE` and the artifact's `TIMESTAMP_FIELDS` entry, then assert the matching v2 schema rejects it with a missing-required-field error.
+- [ ] Add `finding-v2-important-missing-evidence.invalid.json` and generated cases proving Important and Critical findings require non-empty evidence while Minor and Nit findings remain valid without evidence.
 - [ ] The tests must prove the negative fixtures fail for the intended reason:
 
   - missing required host field
@@ -752,6 +763,7 @@ New files introduced by this plan:
 
   - [ ] The readers must accept legacy v1 artifacts and v2 artifacts for every artifact in `SHARED_ARTIFACTS`.
   - [ ] The readers must live in package-local locations usable by installed Codex packages and source-checkout Claude workflows.
+  - [ ] The readers must resolve the same registry/storage-mode state for Claude and Codex before any migration cutover.
   - [ ] The conformance tests in Task 11 must invoke these real readers, not test-only parsers.
   - [ ] Existing writers must continue writing their current legacy formats in this task.
 
@@ -779,6 +791,7 @@ New files introduced by this plan:
   - Queues
   - Profiles and calibration
   - Locks
+  - Registry/storage-mode records
 
 - [ ] For each artifact class, document:
 

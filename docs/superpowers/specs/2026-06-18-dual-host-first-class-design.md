@@ -171,8 +171,12 @@ The migration must be expand/migrate/contract:
 
 1. **Expand.** Add readers that can see both legacy and neutral paths. Keep writes
    on the existing authoritative path.
-2. **Migrate.** Under the project config lock, copy each artifact class to the
-   neutral location, validate it, and write an authoritative migration marker.
+2. **Migrate.** Under the appropriate lock for each artifact class, copy the
+   artifact to the neutral location, validate it, and write an authoritative
+   migration marker. Use the project config lock only for registry,
+   calibration, and config-mode updates. Mutable runtime artifacts must acquire
+   their runtime lock or quiesce the workflow and preserve fencing or generation
+   tokens.
 3. **Contract.** Switch writes to the neutral location only after both hosts'
    minimum compatible plugin versions can read it. Legacy paths become read-only
    compatibility inputs.
