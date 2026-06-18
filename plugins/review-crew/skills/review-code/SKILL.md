@@ -103,6 +103,23 @@ PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_R
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
+**Resolve the model tiers once (band-wide knob).** The five specialists run at the
+`reviewer` tier (`reviewer-deep` for security/architecture), and the triage + fixer
+subagents at `mechanical`. Resolve each via the shared knob so the project's
+calibration profile (if it sets a `model-tiers` block) can override the defaults:
+
+```bash
+MT="${CLAUDE_PLUGIN_ROOT}/lib/model_tier_resolve.py"   # resolved like $RUBRIC
+REVIEWER_MODEL=$(python3 "$MT" --role reviewer | jq -r '.model // empty')
+DEEP_MODEL=$(python3 "$MT" --role reviewer-deep | jq -r '.model // empty')
+MECH_MODEL=$(python3 "$MT" --role mechanical | jq -r '.model // empty')
+```
+
+When dispatching the specialists via the Agent tool, pass `model: $DEEP_MODEL` for
+`security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
+other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
+value means "inherit the session model" — omit the `model` arg in that case.
+
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
