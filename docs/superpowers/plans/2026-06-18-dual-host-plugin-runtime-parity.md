@@ -245,6 +245,12 @@ New files introduced by this plan:
   - [ ] `codex-marketplace.bad-source.json` fails with a message containing `Codex source`.
   - [ ] `cross-host-version-drift.json` fails with a message containing `metadata.version`.
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`.
+  - [ ] `codex-invalid-host.json` fails with a message containing `host.name`.
+  - [ ] `codex-invalid-semver.json` fails with a message containing `SemVer`.
+  - [ ] `plugin-set-drift.json` fails with a message containing `plugin set`.
+  - [ ] `author-drift.json` fails with a message containing `author`.
+  - [ ] In default strict mode, `codex-missing-shared-readme.json` fails with a message containing `shared/README.md`.
+  - [ ] In default strict mode, `codex-missing-skill.json` fails with a message containing `skills`.
 
 - [ ] Do not add the validator to `.github/workflows/ci.yml` until Task 6 has created the files strict mode requires.
 - [ ] After Task 6, add the validator to `.github/workflows/ci.yml` after the existing Claude validator:
@@ -404,7 +410,13 @@ New files introduced by this plan:
 - [ ] Codex `Codex Runtime` sections may reference Codex concepts such as subagents, tool discovery, browser tools, commentary updates, and plan-mode loops.
 - [ ] Codex `Shared Contract` sections must point to the package-local `shared/README.md` inside the Codex package root.
 - [ ] Codex `Host Coexistence` sections must state that Claude runtime files remain authoritative for Claude users and that shared artifacts must use the shared schemas.
-- [ ] Codex `Verification` sections must include the same existing repo-level verification command:
+- [ ] Codex `Verification` sections must be package-runtime safe:
+
+  - They may describe package-local checks such as validating generated artifacts against package-local shared schemas.
+  - They must not require `.github/scripts`, repo-root `plugins/*/lib/tests`, or other source-checkout-only paths.
+  - They may include a short note that contributor verification lives in the source checkout docs, not inside the installed runtime surface.
+
+- [ ] Keep the source-checkout verification command in `docs/dual-host-runtime.md`, `CONTRIBUTING.md`, `RELEASING.md`, and Task 11:
 
   ```bash
   python3 .github/scripts/validate_marketplace.py && python3 .github/scripts/validate_dual_host_marketplace.py && python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
@@ -430,7 +442,9 @@ New files introduced by this plan:
   - It references `shared/README.md`.
   - It does not reference `../shared/README.md` or `plugins/<name>/shared/README.md`.
   - It contains the phrase `Claude runtime files remain authoritative for Claude users`.
-  - It contains the full verification command from this task.
+  - It does not contain `.github/scripts`.
+  - It does not contain `python3 -m pytest plugins/`.
+  - It states that source-checkout verification lives in contributor docs.
 
 - [ ] Add `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`.
 - [ ] For `plugins/review-crew/codex/skills/review-code/SKILL.md`, assert it references exactly these reviewer files:
@@ -595,8 +609,27 @@ New files introduced by this plan:
 - [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks a v1 fixture, v2 schema, positive v2 fixture, or negative v2 fixture.
 - [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks both `<artifact>-v2-claude.valid.json` and `<artifact>-v2-codex.valid.json`.
 - [ ] The test must fail if any artifact in `SHARED_ARTIFACTS` lacks an unknown-schema negative fixture.
-- [ ] In the test file, validate v1 fixtures against the existing strict schemas.
+- [ ] In the test file, validate schema-backed v1 fixtures against the existing strict schemas:
+
+  ```python
+  SCHEMA_BACKED_V1 = {"definition-doc", "checkpoint", "queue"}
+  ```
+
+- [ ] For v1 artifacts without existing schemas, add current-shape validators in `test_dual_host_contracts.py` instead of pretending a schema exists:
+
+  ```python
+  SHAPE_BACKED_V1 = {
+      "finding",
+      "review-profile",
+      "test-pilot-plan",
+      "test-pilot-results",
+      "lock",
+  }
+  ```
+
+- [ ] The shape validators must assert only fields that are already produced or documented by the current runtime/templates.
 - [ ] In the test file, validate v2 fixtures against the new companion v2 schemas.
+- [ ] Generate required-field negative cases in the test, not only fixture files: for every positive v2 fixture, remove each field in `COMMON_PROVENANCE` and the artifact's `TIMESTAMP_FIELDS` entry, then assert the matching v2 schema rejects it with a missing-required-field error.
 - [ ] The tests must prove the negative fixtures fail for the intended reason:
 
   - missing required host field
