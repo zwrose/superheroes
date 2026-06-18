@@ -655,6 +655,7 @@ New files introduced by this plan:
       "test-pilot-results": {"createdAt", "updatedAt"},
       "lock": {"acquiredAt", "updatedAt"},
       "registry": {"createdAt", "updatedAt"},
+      "compatibility-matrix": {"createdAt", "updatedAt"},
   }
   ```
 
@@ -680,6 +681,7 @@ New files introduced by this plan:
 - [ ] `test-pilot-results-v2.schema.json` must preserve the results/comment fields used by `plugins/test-pilot/templates/results-comment.md`, then add the common host provenance fields.
 - [ ] `lock-v2.schema.json` must preserve atomic lock ownership fields and require `host`, `runId`, `pluginVersion`, `acquiredAt`, `updatedAt`, and a generation or fencing token.
 - [ ] `registry-v2.schema.json` must preserve the current `eval/lib/schemas/registry.schema.json` storage-mode contract, add the common host provenance fields, and require `createdAt` and `updatedAt`.
+- [ ] `compatibility-matrix-v2.schema.json` is a new v2-only artifact contract. It must record supported schema versions, supported legacy inputs, minimum compatible Claude plugin version, minimum compatible Codex plugin version, `createdAt`, and `updatedAt`. Do not invent a legacy v1 compatibility matrix fixture.
 - [ ] Add positive fixtures:
 
   ```text
@@ -772,7 +774,6 @@ New files introduced by this plan:
       "test-pilot-plan",
       "test-pilot-results",
       "lock",
-      "compatibility-matrix",
   }
   ```
 

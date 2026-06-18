@@ -436,7 +436,7 @@ For copied helpers that do not currently support `--help`, create package-local 
 
 The installed-package smoke tests must copy each Codex package to a temporary directory outside the repository and fail if any skill-visible helper command resolves implementation code, templates, schemas, or shared files from the source checkout rather than the copied package root or an explicitly declared installed sibling plugin root. Include a temporary installed marketplace/cache containing both review-crew and the-architect packages to prove gate-write dependency resolution works without source-checkout access.
 
-Add `plugins/review-crew/lib/tests/test_codex_helper_drift.py` (or the existing equivalent contract-test file) to compare copied package helpers against source helpers with an explicit allowlist for intentional Codex adapter differences such as manifest lookup and `--help` wrapper code.
+Add `eval/lib/tests/test_codex_helper_drift.py` (or equivalent per-plugin contract-test files) parameterized over every copied package-local helper family: review-crew, test-pilot, and the-architect. The drift tests compare copied package helpers against source helpers with an explicit allowlist for intentional Codex adapter differences such as manifest lookup, installed sibling resolution, and `--help` wrapper code.
 
 - [ ] **Step 6: Verify Task 4**
 
@@ -444,15 +444,15 @@ Run:
 
 ```bash
 python3 .github/scripts/validate_dual_host_marketplace.py
-python3 -m pytest eval/lib/tests/test_codex_skill_markdown.py plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py plugins/review-crew/lib/tests/test_codex_helper_drift.py -q
+python3 -m pytest eval/lib/tests/test_codex_skill_markdown.py plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py eval/lib/tests/test_codex_helper_drift.py -q
 ```
 
-Expected: strict dual-host validator passes; Codex skill, review-crew contract, and helper-drift tests pass.
+Expected: strict dual-host validator passes; Codex skill, review-crew contract, and all-plugin helper-drift tests pass.
 
 - [ ] **Step 7: Commit Task 4**
 
 ```bash
-git add plugins/*/codex/*/.codex-plugin/plugin.json plugins/*/codex eval/lib/tests/test_codex_skill_markdown.py plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py plugins/review-crew/lib/tests/test_codex_helper_drift.py
+git add plugins/*/codex/*/.codex-plugin/plugin.json plugins/*/codex eval/lib/tests/test_codex_skill_markdown.py plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py eval/lib/tests/test_codex_helper_drift.py
 git commit -m "feat: add codex package roots and skills"
 ```
 
@@ -461,7 +461,7 @@ git commit -m "feat: add codex package roots and skills"
 **Files:**
 
 - Create: `eval/lib/schemas/dual-host/*.schema.json`
-- Create: `eval/lib/schemas/dual-host/compatibility-matrix.schema.json`
+- Create: `eval/lib/schemas/dual-host/compatibility-matrix-v2.schema.json`
 - Create: `eval/fixtures/dual-host/contracts/*`
 - Create: `eval/fixtures/dual-host/conformance/*`
 - Create: `eval/fixtures/dual-host/compatibility/*`
@@ -496,13 +496,13 @@ SHARED_ARTIFACTS = {
 COMMON_PROVENANCE = {"schemaVersion", "host", "hostVersion", "pluginVersion", "runId"}
 ```
 
-Require v1 fixture, v2 schema, Claude positive fixture, Codex positive fixture, and unknown-schema negative fixture for every artifact.
+Require v1 fixture, v2 schema, Claude positive fixture, Codex positive fixture, and unknown-schema negative fixture for every artifact that preserves an existing runtime format. `compatibility-matrix` is new and starts at v2, so require its v2 schema, Claude positive fixture, Codex positive fixture, and unknown-schema negative fixture, but do not require or synthesize a v1 fixture.
 
 - [ ] **Step 2: Add schemas and fixtures**
 
 Add v2 schemas with `additionalProperties: false`, `schemaVersion: 2`, common provenance, and artifact timestamps. Preserve v1 fixture shapes from current schemas, runtime templates, and markdown profile output.
 
-Add a shared compatibility matrix schema and fixtures. The matrix records, per plugin and artifact class, the supported schema versions, supported legacy inputs, minimum compatible Claude plugin version, minimum compatible Codex plugin version, and whether the artifact remains in dual-compatible mode. Name one canonical compatibility matrix source, validate it against manifests and schemas, then copy it into each source-checkout `shared/` directory and each Codex package-local `shared/` directory so compatibility preflight has one explicit source of version truth in both hosts. Add CI that compares every packaged `plugins/*/shared/compatibility.json` and `plugins/*/codex/*/shared/compatibility.json` copy to the canonical matrix byte-for-byte or by normalized hash.
+Add `compatibility-matrix-v2.schema.json` and fixtures. The matrix is a new v2-only artifact that records, per plugin and artifact class, the supported schema versions, supported legacy inputs, minimum compatible Claude plugin version, minimum compatible Codex plugin version, and whether the artifact remains in dual-compatible mode. Name one canonical compatibility matrix source, validate it against manifests and schemas, then copy it into each source-checkout `shared/` directory and each Codex package-local `shared/` directory so compatibility preflight has one explicit source of version truth in both hosts. Add CI that compares every packaged `plugins/*/shared/compatibility.json` and `plugins/*/codex/*/shared/compatibility.json` copy to the canonical matrix byte-for-byte or by normalized hash.
 
 For review profiles, include both:
 
@@ -527,7 +527,7 @@ plugins/the-architect/codex/the-architect/lib/dual_host_artifacts.py
 
 Treat `plugins/<name>/shared/dual_host_artifacts.py` as the canonical source-checkout implementation for that plugin's artifact reader. Treat `plugins/<name>/codex/<name>/lib/dual_host_artifacts.py` as a vendored installed-package copy. Do not hand-maintain two independent algorithms. Add reader drift tests that compare the canonical and vendored implementations, with an explicit allowlist for intentional package-root discovery differences.
 
-Each host-specific skill and runtime entrypoint that reads shared artifacts must call its package-local helper: Claude/source-checkout workflows call `plugins/<name>/shared/dual_host_artifacts.py`; installed Codex packages call `plugins/<name>/codex/<name>/lib/dual_host_artifacts.py`. `eval/lib/tests` may import or execute these helpers, but must not own the implementation.
+Each host-specific skill and runtime entrypoint that reads shared artifacts must call its package-local helper. Claude source-checkout workflows call `plugins/<name>/shared/dual_host_artifacts.py`; installed Claude packages call `${CLAUDE_PLUGIN_ROOT}/shared/dual_host_artifacts.py`; installed Codex packages call `plugins/<name>/codex/<name>/lib/dual_host_artifacts.py` inside the copied Codex package root. `eval/lib/tests` may import or execute these helpers, but must not own the implementation. Add smoke/path tests for both installed Claude package layout and installed Codex package layout.
 
 Implement these interfaces:
 
