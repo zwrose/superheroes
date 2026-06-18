@@ -87,33 +87,34 @@ New files introduced by this plan:
 
 ## Task 1: Add Codex Marketplace Skeleton And Manifest Fixtures
 
-- [ ] Create `.agents/plugins/marketplace.json` with the same marketplace owner and three plugin entries as `.claude-plugin/marketplace.json`.
+- [ ] Create `.agents/plugins/marketplace.json` with the same three plugin names as `.claude-plugin/marketplace.json`, using the Codex-native marketplace shape from `plugin-creator/references/plugin-json-spec.md`.
 
   Required shape:
 
   ```json
   {
     "name": "superheroes",
-    "owner": { "name": "zwrose" },
-    "metadata": {
-      "description": "Your team of superheroes, powered by superpowers - host-native plugins for Claude Code and Codex.",
-      "version": "0.2.0"
+    "interface": {
+      "displayName": "Superheroes"
     },
     "plugins": [
       {
         "name": "the-architect",
-        "source": "./plugins/the-architect/codex",
-        "description": "Turns a fuzzy idea into a reviewed spec, plan, and tasks - the requirements-first front half of the loop."
+        "source": { "source": "local", "path": "./plugins/the-architect/codex" },
+        "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+        "category": "Productivity"
       },
       {
         "name": "review-crew",
-        "source": "./plugins/review-crew/codex",
-        "description": "Multi-agent code, plan, and tech-debt review, calibrated per-project."
+        "source": { "source": "local", "path": "./plugins/review-crew/codex" },
+        "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+        "category": "Productivity"
       },
       {
         "name": "test-pilot",
-        "source": "./plugins/test-pilot/codex",
-        "description": "Seeded manual test plans on PRs plus autonomous browser execution before human spot-check."
+        "source": { "source": "local", "path": "./plugins/test-pilot/codex" },
+        "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+        "category": "Productivity"
       }
     ]
   }
@@ -157,7 +158,16 @@ New files introduced by this plan:
     "version": "0.4.0",
     "description": "Multi-agent review of code, plans, and technical debt - calibrated per-project, with Codex-native runtime guidance.",
     "author": { "name": "zwrose" },
-    "host": { "name": "codex", "interface": "skills" }
+    "skills": "./skills/",
+    "interface": {
+      "displayName": "Review Crew",
+      "shortDescription": "Multi-agent code, plan, and technical-debt review.",
+      "longDescription": "Review Crew provides Codex-native review skills backed by the shared superheroes review contract.",
+      "developerName": "zwrose",
+      "category": "Productivity",
+      "capabilities": ["Review", "Write"],
+      "defaultPrompt": ["Review this branch with review-crew."]
+    }
   }
   ```
 
@@ -169,7 +179,16 @@ New files introduced by this plan:
     "version": "0.1.0",
     "description": "Seeded manual test plans on PRs plus autonomous browser execution - with Codex-native browser and verification guidance.",
     "author": { "name": "zwrose" },
-    "host": { "name": "codex", "interface": "skills" }
+    "skills": "./skills/",
+    "interface": {
+      "displayName": "Test Pilot",
+      "shortDescription": "Seeded test plans and browser execution guidance.",
+      "longDescription": "Test Pilot provides Codex-native planning and browser-verification skills backed by shared test-pilot contracts.",
+      "developerName": "zwrose",
+      "category": "Productivity",
+      "capabilities": ["Test", "Interactive"],
+      "defaultPrompt": ["Create a seeded manual test plan."]
+    }
   }
   ```
 
@@ -181,7 +200,16 @@ New files introduced by this plan:
     "version": "0.1.0",
     "description": "Requirements-first discovery, planning, and task authoring - with Codex-native design capture guidance.",
     "author": { "name": "zwrose" },
-    "host": { "name": "codex", "interface": "skills" }
+    "skills": "./skills/",
+    "interface": {
+      "displayName": "The Architect",
+      "shortDescription": "Requirements-first discovery, planning, and task authoring.",
+      "longDescription": "The Architect provides Codex-native discovery, plan, and task skills backed by shared definition-doc contracts.",
+      "developerName": "zwrose",
+      "category": "Productivity",
+      "capabilities": ["Plan", "Write"],
+      "defaultPrompt": ["Turn this idea into a reviewed implementation plan."]
+    }
   }
   ```
 
@@ -211,12 +239,18 @@ New files introduced by this plan:
 
 - [ ] For each Codex plugin entry:
 
-  - [ ] Resolve `source` relative to repo root.
-  - [ ] Require the source path to end in `/codex`.
+  - [ ] Require `source` to be an object with `"source": "local"` and a non-empty `path`.
+  - [ ] Resolve `source.path` relative to repo root.
+  - [ ] Require the resolved source path to end in `/codex`.
+  - [ ] Require `policy.installation` to be one of `NOT_AVAILABLE`, `AVAILABLE`, or `INSTALLED_BY_DEFAULT`.
+  - [ ] Require `policy.authentication` to be one of `ON_INSTALL` or `ON_USE`.
+  - [ ] Require a non-empty `category`.
   - [ ] Require `<source>/.codex-plugin/plugin.json`.
   - [ ] Require `plugin.json.name` to match the marketplace entry.
   - [ ] Require `plugin.json.version` to be valid SemVer.
-  - [ ] Require `plugin.json.host.name` to be `codex`.
+  - [ ] Require `plugin.json.skills` to be `./skills/`.
+  - [ ] Require `plugin.json.interface.displayName`, `shortDescription`, `longDescription`, `developerName`, `category`, `capabilities`, and `defaultPrompt`.
+  - [ ] Reject unsupported Codex manifest fields, including `host`.
   - [ ] In `--phase metadata` mode, warn when `<source>/shared/README.md` or `<source>/skills/*/SKILL.md` is missing.
   - [ ] In default strict mode, require `<source>/shared/README.md` so the Codex package is self-contained.
   - [ ] In default strict mode, require at least one skill under `<source>/skills/*/SKILL.md`.
@@ -245,7 +279,10 @@ New files introduced by this plan:
   - [ ] `codex-marketplace.bad-source.json` fails with a message containing `Codex source`.
   - [ ] `cross-host-version-drift.json` fails with a message containing `metadata.version`.
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`.
-  - [ ] `codex-invalid-host.json` fails with a message containing `host.name`.
+  - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
+  - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
+  - [ ] `codex-missing-interface.json` fails with a message containing `interface`.
+  - [ ] `codex-unsupported-host-field.json` fails with a message containing `host`.
   - [ ] `codex-invalid-semver.json` fails with a message containing `SemVer`.
   - [ ] `plugin-set-drift.json` fails with a message containing `plugin set`.
   - [ ] `author-drift.json` fails with a message containing `author`.
@@ -394,6 +431,11 @@ New files introduced by this plan:
 - [ ] Each Codex skill must include these sections in this order:
 
   ```markdown
+  ---
+  name: skill-name
+  description: One-sentence Codex-native trigger description.
+  ---
+
   # Skill Name
 
   ## When To Use
@@ -424,7 +466,34 @@ New files introduced by this plan:
 
 - [ ] Do not import or modify plugin runtime Python modules in this task.
 - [ ] Add `eval/lib/tests/test_codex_skill_markdown.py`.
-- [ ] The test must enumerate every `plugins/*/codex/skills/*/SKILL.md` file.
+- [ ] The test must assert the exact expected skill set per plugin before checking file contents:
+
+  ```python
+  EXPECTED_CODEX_SKILLS = {
+      "review-crew": {
+          "audit-debt",
+          "review-code",
+          "review-init",
+          "review-plan",
+          "review-spec",
+          "review-tasks",
+      },
+      "test-pilot": {
+          "test-pilot-execute",
+          "test-pilot-init",
+          "test-pilot-plan",
+      },
+      "the-architect": {
+          "discovery",
+          "plan",
+          "tasks",
+          "writing-specs",
+      },
+  }
+  ```
+
+- [ ] The test must enumerate every `plugins/*/codex/skills/*/SKILL.md` file after proving the discovered set equals `EXPECTED_CODEX_SKILLS`.
+- [ ] For every Codex skill file, assert it starts with YAML frontmatter containing non-empty `name` and `description` fields.
 - [ ] For every Codex skill file, assert the required headings appear in exactly this order:
 
   ```python
