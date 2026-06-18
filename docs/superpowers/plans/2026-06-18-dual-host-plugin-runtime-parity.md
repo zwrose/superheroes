@@ -384,7 +384,7 @@ New files introduced by this plan:
     }
     ```
 
-  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, `docs/superheroes/**`, and existing control-plane state names from `CONVENTIONS.md` such as `queue.json`, `checkpoint.json`, `meta.json`, `config.lock`, `events/`, `events.jsonl`, `issues/*/checkpoint.json`, and `refs/superheroes/locks/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
+  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, `docs/superheroes/**`, and existing control-plane state names from `CONVENTIONS.md` such as `queue.json`, `checkpoint.json`, `meta.json`, `config.lock`, `registry.json`, `resume-brief.md`, `events/`, `events.jsonl`, `issues/*/checkpoint.json`, and `refs/superheroes/locks/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
 
 ## Task 5: Establish Review-Crew Shared Reviewer Methodology
 
@@ -704,6 +704,8 @@ New files introduced by this plan:
   lock-v2-claude.valid.json
   registry-v2-codex.valid.json
   registry-v2-claude.valid.json
+  compatibility-matrix-v2-codex.valid.json
+  compatibility-matrix-v2-claude.valid.json
   ```
 
 - [ ] Add negative fixtures:
@@ -728,6 +730,8 @@ New files introduced by this plan:
   lock-v2-unknown-schema.invalid.json
   registry-v2-unknown-schema.invalid.json
   registry-v2-unsupported-storage-mode.invalid.json
+  compatibility-matrix-v2-unknown-schema.invalid.json
+  compatibility-matrix-v2-unsupported-plugin.invalid.json
   ```
 
 - [ ] Add `eval/lib/tests/test_dual_host_contracts.py` that loads these fixtures.
@@ -745,6 +749,7 @@ New files introduced by this plan:
       "test-pilot-results",
       "lock",
       "registry",
+      "compatibility-matrix",
   }
   ```
 
@@ -767,6 +772,7 @@ New files introduced by this plan:
       "test-pilot-plan",
       "test-pilot-results",
       "lock",
+      "compatibility-matrix",
   }
   ```
 
@@ -951,13 +957,18 @@ New files introduced by this plan:
   python3 - <<'PY'
   import pathlib
 
-  roots = [".agents", "plugins", "docs", "eval", ".github"]
+  roots = [".agents", "plugins", "docs", "eval", ".github", "README.md", "CONTRIBUTING.md", "RELEASING.md"]
   markers = ["TB" + "D", "TO" + "DO", "PLACE" + "HOLDER", "FIX" + "ME"]
+  allowed_existing = {
+      ("plugins/the-architect/skills/tasks/SKILL.md", 25),
+      ("plugins/review-crew/skills/audit-debt/SKILL.md", 9),
+  }
   for root in roots:
       path = pathlib.Path(root)
       if not path.exists():
           continue
-      for file_path in path.rglob("*"):
+      paths = [path] if path.is_file() else path.rglob("*")
+      for file_path in paths:
           if not file_path.is_file():
               continue
           try:
@@ -966,9 +977,13 @@ New files introduced by this plan:
               continue
           for line_no, line in enumerate(text.splitlines(), 1):
               if any(marker in line for marker in markers):
+                  if (str(file_path), line_no) in allowed_existing:
+                      continue
                   print(f"{file_path}:{line_no}:{line}")
   PY
   ```
+
+  Expected: no output other than the explicit `allowed_existing` baseline.
 
 - [ ] Inspect git changes:
 

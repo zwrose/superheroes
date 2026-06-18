@@ -240,7 +240,16 @@ DENIED_RUNTIME_NAMES = {
     "cache.json",
     "meta.json",
     "config.lock",
+    "registry.json",
+    "resume-brief.md",
+    "events.jsonl",
     ".lock",
+}
+
+DENIED_RUNTIME_PATTERNS = {
+    "events/",
+    "issues/*/checkpoint.json",
+    "refs/superheroes/locks/**",
 }
 ```
 
@@ -423,9 +432,9 @@ Copy or wrap:
 
 Where a source helper reads `.claude-plugin/plugin.json`, add a Codex adapter path that reads `.codex-plugin/plugin.json`.
 
-For copied helpers that do not currently support `--help`, create package-local Codex CLI adapters that provide a deterministic `--help` exit `0` and execute the vendored package-local helper implementation for real commands. Installed Codex package helpers must not import from, execute, or resolve helpers outside the copied package root. Do not change the Claude helper CLI contract just to satisfy Codex smoke tests.
+For copied helpers that do not currently support `--help`, create package-local Codex CLI adapters that provide a deterministic `--help` exit `0` and execute the vendored package-local helper implementation for real commands. Installed Codex package helpers must not import from, execute, or resolve implementation code from the source checkout. Declared band dependencies may resolve package-local files from installed sibling plugin roots in the same marketplace/cache, such as review-crew resolving the installed the-architect package for gate writes. Do not change the Claude helper CLI contract just to satisfy Codex smoke tests.
 
-The installed-package smoke tests must copy each Codex package to a temporary directory outside the repository and fail if any skill-visible helper command resolves implementation code, templates, schemas, or shared files from the source checkout rather than the copied package root.
+The installed-package smoke tests must copy each Codex package to a temporary directory outside the repository and fail if any skill-visible helper command resolves implementation code, templates, schemas, or shared files from the source checkout rather than the copied package root or an explicitly declared installed sibling plugin root. Include a temporary installed marketplace/cache containing both review-crew and the-architect packages to prove gate-write dependency resolution works without source-checkout access.
 
 Add `plugins/review-crew/lib/tests/test_codex_helper_drift.py` (or the existing equivalent contract-test file) to compare copied package helpers against source helpers with an explicit allowlist for intentional Codex adapter differences such as manifest lookup and `--help` wrapper code.
 
@@ -493,7 +502,7 @@ Require v1 fixture, v2 schema, Claude positive fixture, Codex positive fixture, 
 
 Add v2 schemas with `additionalProperties: false`, `schemaVersion: 2`, common provenance, and artifact timestamps. Preserve v1 fixture shapes from current schemas, runtime templates, and markdown profile output.
 
-Add a shared compatibility matrix schema and fixtures. The matrix records, per plugin and artifact class, the supported schema versions, supported legacy inputs, minimum compatible Claude plugin version, minimum compatible Codex plugin version, and whether the artifact remains in dual-compatible mode. Copy the validated matrix into each source-checkout `shared/` directory and each Codex package-local `shared/` directory so compatibility preflight has one explicit source of version truth in both hosts.
+Add a shared compatibility matrix schema and fixtures. The matrix records, per plugin and artifact class, the supported schema versions, supported legacy inputs, minimum compatible Claude plugin version, minimum compatible Codex plugin version, and whether the artifact remains in dual-compatible mode. Name one canonical compatibility matrix source, validate it against manifests and schemas, then copy it into each source-checkout `shared/` directory and each Codex package-local `shared/` directory so compatibility preflight has one explicit source of version truth in both hosts. Add CI that compares every packaged `plugins/*/shared/compatibility.json` and `plugins/*/codex/*/shared/compatibility.json` copy to the canonical matrix byte-for-byte or by normalized hash.
 
 For review profiles, include both:
 
@@ -667,6 +676,10 @@ import pathlib
 
 roots = [".agents", "plugins", "docs", "eval", ".github", "README.md", "CONTRIBUTING.md", "RELEASING.md"]
 markers = ["TB" + "D", "TO" + "DO", "PLACE" + "HOLDER", "FIX" + "ME"]
+allowed_existing = {
+    ("plugins/the-architect/skills/tasks/SKILL.md", 25),
+    ("plugins/review-crew/skills/audit-debt/SKILL.md", 9),
+}
 for root in roots:
     path = pathlib.Path(root)
     if not path.exists():
@@ -681,11 +694,13 @@ for root in roots:
             continue
         for line_no, line in enumerate(text.splitlines(), 1):
             if any(marker in line for marker in markers):
+                if (str(file_path), line_no) in allowed_existing:
+                    continue
                 print(f"{file_path}:{line_no}:{line}")
 PY
 ```
 
-Expected: no output.
+Expected: no output other than the explicit `allowed_existing` baseline. Any new placeholder-like marker in the generated Codex package roots, dual-host docs, schema/fixture work, CI, or updated top-level docs fails the scan.
 
 - [ ] **Step 3: Review changed files**
 
