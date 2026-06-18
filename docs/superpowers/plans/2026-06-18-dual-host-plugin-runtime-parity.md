@@ -69,14 +69,19 @@ New files introduced by this plan:
 - `plugins/review-crew/shared/reviewers/*.md`
 - `plugins/review-crew/shared/README.md`
 - `plugins/review-crew/codex/.codex-plugin/plugin.json`
+- `plugins/review-crew/codex/lib/*.py`
 - `plugins/review-crew/codex/shared/README.md`
 - `plugins/review-crew/codex/skills/*/SKILL.md`
 - `plugins/test-pilot/shared/README.md`
 - `plugins/test-pilot/codex/.codex-plugin/plugin.json`
+- `plugins/test-pilot/codex/lib/*.py`
+- `plugins/test-pilot/codex/templates/*`
 - `plugins/test-pilot/codex/shared/README.md`
 - `plugins/test-pilot/codex/skills/*/SKILL.md`
 - `plugins/the-architect/shared/README.md`
 - `plugins/the-architect/codex/.codex-plugin/plugin.json`
+- `plugins/the-architect/codex/lib/*.py`
+- `plugins/the-architect/codex/templates/*`
 - `plugins/the-architect/codex/shared/README.md`
 - `plugins/the-architect/codex/skills/*/SKILL.md`
 - `eval/lib/schemas/dual-host/*.schema.json`
@@ -123,7 +128,7 @@ New files introduced by this plan:
 - [ ] Add `eval/fixtures/dual-host/manifests/claude-marketplace.valid.json` by copying the current Claude marketplace shape.
 - [ ] Add `eval/fixtures/dual-host/manifests/codex-marketplace.valid.json` by copying the new Codex marketplace shape.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/codex-marketplace.bad-source.json` where one Codex source points at `./plugins/review-crew`.
-- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/cross-host-version-drift.json` where one host reports a different marketplace metadata version.
+- [ ] Add negative fixture `eval/fixtures/dual-host/manifests/marketplace-name-drift.json` where the Claude and Codex marketplace names differ.
 - [ ] Add negative fixture `eval/fixtures/dual-host/manifests/plugin-version-drift.json` where one Codex plugin manifest version differs from the matching Claude plugin manifest version.
 - [ ] Run the existing Claude marketplace validator to confirm this task has not regressed Claude:
 
@@ -258,12 +263,11 @@ New files introduced by this plan:
 - [ ] Add cross-host drift checks:
 
   - [ ] Marketplace `name` matches.
-  - [ ] Marketplace `owner.name` matches.
-  - [ ] Marketplace `metadata.version` matches.
   - [ ] Plugin sets match exactly by plugin name.
   - [ ] Each plugin version matches across Claude and Codex.
   - [ ] Each plugin author name matches across Claude and Codex.
   - [ ] Each plugin description is non-empty on both hosts.
+  - [ ] Do not require Claude marketplace-only fields such as `owner.name` or `metadata.version` in the Codex marketplace. Version parity belongs to plugin manifests or a future shared metadata artifact, not the host-specific marketplace root.
 
 - [ ] The validator must support `--phase metadata` for Tasks 1-3, where only marketplace files, plugin manifests, and cross-host manifest drift are blocking.
 - [ ] The validator must run in default strict mode after Tasks 4 and 6 have created the package-local shared docs and Codex skill wrappers.
@@ -277,7 +281,7 @@ New files introduced by this plan:
 
   - [ ] Current repo fixtures pass.
   - [ ] `codex-marketplace.bad-source.json` fails with a message containing `Codex source`.
-  - [ ] `cross-host-version-drift.json` fails with a message containing `metadata.version`.
+  - [ ] `marketplace-name-drift.json` fails with a message containing `marketplace name`.
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`.
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
   - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
@@ -458,13 +462,21 @@ New files introduced by this plan:
   - They must not require `.github/scripts`, repo-root `plugins/*/lib/tests`, or other source-checkout-only paths.
   - They may include a short note that contributor verification lives in the source checkout docs, not inside the installed runtime surface.
 
+- [ ] Package the runtime helpers the Codex skills need inside each Codex package root, without changing the existing source-checkout helper behavior:
+
+  - [ ] Add package-local helper directories such as `plugins/review-crew/codex/lib/`, `plugins/test-pilot/codex/lib/`, and `plugins/the-architect/codex/lib/`.
+  - [ ] Copy or wrap the current helpers referenced by the corresponding workflows, including review-crew review storage, loop-state, circuit-breaker, line-resolution, escalation, and decision helpers; test-pilot engine/store/scrubber helpers and templates; and the-architect definition-doc, gate, queue, and template helpers.
+  - [ ] Codex skill instructions must resolve helpers and templates relative to their installed package root, not `.github/scripts`, repo-root `plugins/*/lib`, or `${CLAUDE_PLUGIN_ROOT}`.
+  - [ ] Add drift tests that fail when package-local helper copies diverge from the source helpers unless the divergence is documented in an explicit allowlist with a reason.
+  - [ ] Add an installed-package smoke test that copies one Codex package to a temporary directory outside the repo and proves the skill-visible helper paths it references exist there.
+
 - [ ] Keep the source-checkout verification command in `docs/dual-host-runtime.md`, `CONTRIBUTING.md`, `RELEASING.md`, and Task 11:
 
   ```bash
   python3 .github/scripts/validate_marketplace.py && python3 .github/scripts/validate_dual_host_marketplace.py && python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ eval/lib/tests/ -q
   ```
 
-- [ ] Do not import or modify plugin runtime Python modules in this task.
+- [ ] Do not change existing plugin runtime Python behavior in this task; copied package-local helpers must preserve the current behavior or document any host-adapter-only difference.
 - [ ] Add `eval/lib/tests/test_codex_skill_markdown.py`.
 - [ ] The test must assert the exact expected skill set per plugin before checking file contents:
 
@@ -515,6 +527,21 @@ New files introduced by this plan:
   - It does not contain `python3 -m pytest plugins/`.
   - It states that source-checkout verification lives in contributor docs.
 
+- [ ] For every Codex skill file, parse only the `## Codex Runtime` section and assert it does not contain Claude-only runtime primitives unless they appear in an explicit host-coexistence warning outside that section:
+
+  ```python
+  CLAUDE_ONLY_RUNTIME_TOKENS = {
+      "AskUserQuestion",
+      "TodoWrite",
+      "${CLAUDE_PLUGIN_ROOT}",
+      "subagent_type",
+      "Claude Design",
+  }
+  ```
+
+- [ ] For every Codex skill file, assert the `## Codex Runtime` section contains at least one Codex-native runtime marker appropriate to the skill, such as `commentary`, `request_user_input`, `plan mode`, `tool_search`, `browser MCP`, `Codex subagent`, or `worker`.
+- [ ] For every Codex skill file, assert the `## Codex Runtime` section resolves package-local helper paths under the installed `codex/` package root when the skill needs executable helpers.
+
 - [ ] Add `plugins/review-crew/lib/tests/test_codex_review_crew_contracts.py`.
 - [ ] For `plugins/review-crew/codex/skills/review-code/SKILL.md`, assert it references exactly these reviewer files:
 
@@ -556,11 +583,13 @@ New files introduced by this plan:
 
   ```text
   finding-v1-legacy.valid.json
-  review-profile-v1-legacy.valid.json
+  review-profile-v1-legacy.valid.md
   test-pilot-plan-v1-legacy.valid.json
   test-pilot-results-v1-legacy.valid.json
   lock-v1-legacy.valid.json
   ```
+
+- [ ] `review-profile-v1-legacy.valid.md` must be copied from the real markdown/provenance profile shape produced by `review-init` and resolved by `review_store.py`; a synthetic JSON profile fixture alone is not sufficient evidence of legacy profile compatibility.
 
 - [ ] Add companion v2 schemas without changing existing runtime writers:
 
@@ -613,7 +642,7 @@ New files introduced by this plan:
 
 - [ ] `checkpoint-v2.schema.json` must preserve the current `updatedAt` field, add `createdAt`, and add the common host provenance fields.
 - [ ] `queue-v2.schema.json` must preserve the current `items` shape and add `createdAt`, `updatedAt`, and the common host provenance fields at the top level.
-- [ ] `finding-v2.schema.json` must preserve the review-base finding fields, require `dimension`, `severity`, `file`, `line`, `body`, and add the common host provenance fields.
+- [ ] `finding-v2.schema.json` must preserve the full review-base finding contract needed by the runtime, require `id`, `title`, `dimension`, `severity`, `file`, `line`, `body`, `suggestion`, and `confidence`, preserve optional taxonomy and `tradeoff`, require evidence fields for Important/Critical findings according to the rubric, and add the common host provenance fields.
 - [ ] `review-profile-v2.schema.json` must preserve the profile calibration concepts from `.claude/review-profile.md` and add the common host provenance fields.
 - [ ] `test-pilot-plan-v2.schema.json` must preserve the plan/comment fields used by `plugins/test-pilot/templates/plan-comment.md` and the engine state readers, then add the common host provenance fields.
 - [ ] `test-pilot-results-v2.schema.json` must preserve the results/comment fields used by `plugins/test-pilot/templates/results-comment.md`, then add the common host provenance fields.
@@ -697,6 +726,7 @@ New files introduced by this plan:
   ```
 
 - [ ] The shape validators must assert only fields that are already produced or documented by the current runtime/templates.
+- [ ] The `review-profile` v1 shape validator must parse the real markdown/provenance fixture and assert the fields current readers depend on, including verify mode or command, profile status/provenance, and review calibration sections.
 - [ ] In the test file, validate v2 fixtures against the new companion v2 schemas.
 - [ ] Generate required-field negative cases in the test, not only fixture files: for every positive v2 fixture, remove each field in `COMMON_PROVENANCE` and the artifact's `TIMESTAMP_FIELDS` entry, then assert the matching v2 schema rejects it with a missing-required-field error.
 - [ ] The tests must prove the negative fixtures fail for the intended reason:
@@ -819,6 +849,22 @@ New files introduced by this plan:
 
 ## Task 11: Verify The Full Contract
 
+- [ ] Add `eval/fixtures/dual-host/conformance/` with bidirectional coexistence fixtures:
+
+  - [ ] Claude-authored review finding batch read by the Codex contract reader.
+  - [ ] Codex-authored review finding batch read by the Claude contract reader.
+  - [ ] Claude-authored test-pilot plan and results read by the Codex contract reader.
+  - [ ] Codex-authored test-pilot plan and results read by the Claude contract reader.
+  - [ ] Claude-authored definition-doc read by the Codex contract reader.
+  - [ ] Codex-authored definition-doc read by the Claude contract reader.
+  - [ ] Held lock, stale lock, and fencing-token lock cases for both hosts.
+  - [ ] Doctor/reconcile output fixtures for both host directions.
+
+- [ ] Add `eval/lib/tests/test_dual_host_conformance.py`.
+- [ ] The conformance tests must prove that each host can read the other host's shared artifacts without rewriting host-native runtime files.
+- [ ] The conformance tests must cover held-lock behavior, stale-lock recovery behavior, doctor output, reconcile output, and all three workflow families: review-crew, test-pilot, and the-architect.
+- [ ] The conformance tests must fail if either host direction is absent; do not count schema-only fixture validation as operational coexistence.
+
 - [ ] Run marketplace validators:
 
   ```bash
@@ -870,6 +916,7 @@ New files introduced by this plan:
   - New dual-host validator passes.
   - Existing plugin tests pass.
   - New dual-host tests pass.
+  - Bidirectional conformance tests pass for Claude-authored and Codex-authored artifacts.
   - No core plugin Python behavior changed except tests or validation helpers.
   - Claude package files still exist at their current paths.
   - Codex package roots are self-contained enough for validation.
