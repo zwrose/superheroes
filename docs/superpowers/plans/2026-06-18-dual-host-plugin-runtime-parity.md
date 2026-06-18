@@ -246,7 +246,8 @@ New files introduced by this plan:
 
   - [ ] Require `source` to be an object with `"source": "local"` and a non-empty `path`.
   - [ ] Resolve `source.path` relative to repo root.
-  - [ ] Require the resolved source path to end in `/codex`.
+  - [ ] Require the resolved real path to stay inside the repo and equal `plugins/<entry-name>/codex`.
+  - [ ] Reject path traversal and symlink escapes before loading the Codex manifest.
   - [ ] Require `policy.installation` to be one of `NOT_AVAILABLE`, `AVAILABLE`, or `INSTALLED_BY_DEFAULT`.
   - [ ] Require `policy.authentication` to be one of `ON_INSTALL` or `ON_USE`.
   - [ ] Require a non-empty `category`.
@@ -284,6 +285,8 @@ New files introduced by this plan:
   - [ ] `marketplace-name-drift.json` fails with a message containing `marketplace name`.
   - [ ] `plugin-version-drift.json` fails with a message containing the plugin name and `plugin version`.
   - [ ] `codex-invalid-source-object.json` fails with a message containing `source`.
+  - [ ] `codex-source-traversal.json` fails with a message containing `source path`.
+  - [ ] `codex-source-wrong-plugin-dir.json` fails with a message containing `plugins/<name>/codex`.
   - [ ] `codex-invalid-policy.json` fails with a message containing `policy`.
   - [ ] `codex-missing-interface.json` fails with a message containing `interface`.
   - [ ] `codex-unsupported-host-field.json` fails with a message containing `host`.
@@ -348,6 +351,10 @@ New files introduced by this plan:
 - [ ] Add `eval/lib/tests/test_runtime_layout.py` with assertions:
 
   - Every plugin has a root `.claude-plugin/plugin.json`.
+  - Every root Claude marketplace `source` still points at `plugins/<name>` and not `plugins/<name>/codex`.
+  - Every Claude plugin root has the exact expected `skills/*/SKILL.md` set for that plugin.
+  - The review-crew Claude plugin root has the exact expected `agents/*-reviewer.md` set.
+  - Existing Claude runtime directories remain present for all three plugins, including `plugins/review-crew/agents/`, `plugins/test-pilot/skills/`, and `plugins/the-architect/skills/`.
   - Every plugin has a `codex/.codex-plugin/plugin.json`.
   - Every plugin has a `shared/README.md`.
   - Every plugin has a package-local `codex/shared/README.md`.
@@ -369,20 +376,23 @@ New files introduced by this plan:
     }
     ```
 
+  - The same denylist must scan committed neutral or host-control paths that could be mistaken for shared runtime state, including `.superheroes/**`, `.claude/superheroes/**`, and `docs/superheroes/**`, while explicitly allowing schema, fixture, plan, and spec documentation directories.
+
 ## Task 5: Establish Review-Crew Shared Reviewer Methodology
 
 - [ ] Create `plugins/review-crew/shared/reviewers/`.
-- [ ] Copy these files into that directory without changing their content:
+- [ ] Extract host-neutral reviewer methodology into these shared files. The shared files must not contain Claude agent frontmatter, Claude tool declarations, `${CLAUDE_PLUGIN_ROOT}`, `.claude/review-profile.md` as the only profile path, or other Claude-only runtime instructions:
 
   ```text
-  plugins/review-crew/agents/architecture-reviewer.md
-  plugins/review-crew/agents/code-reviewer.md
-  plugins/review-crew/agents/premortem-reviewer.md
-  plugins/review-crew/agents/security-reviewer.md
-  plugins/review-crew/agents/test-reviewer.md
+  plugins/review-crew/shared/reviewers/architecture-reviewer.md
+  plugins/review-crew/shared/reviewers/code-reviewer.md
+  plugins/review-crew/shared/reviewers/premortem-reviewer.md
+  plugins/review-crew/shared/reviewers/security-reviewer.md
+  plugins/review-crew/shared/reviewers/test-reviewer.md
   ```
 
-- [ ] Add `plugins/review-crew/shared/reviewers/README.md` explaining that the copied reviewer files are the shared methodology source during the transition.
+- [ ] Add `plugins/review-crew/shared/REVIEWERS.md` explaining that `shared/reviewers/*-reviewer.md` is the neutral methodology source and that Claude agents and Codex skills are host-native wrappers around it.
+- [ ] Update existing Claude reviewer agent files only as needed to reference or preserve the neutral methodology while retaining Claude-native agent metadata and Claude tool declarations.
 - [ ] Copy the reviewer methodology into the Codex package root:
 
   ```text
@@ -395,9 +405,10 @@ New files introduced by this plan:
 
 - [ ] Treat `plugins/review-crew/codex/shared/reviewers/*.md` as vendored package contents, not a second source of truth.
 - [ ] Add a drift test in `plugins/review-crew/lib/tests/test_dispatch_tables.py` or a new `plugins/review-crew/lib/tests/test_shared_reviewers.py`.
-- [ ] The drift test must compare each Claude agent file with the matching shared reviewer file byte-for-byte.
+- [ ] The drift test must assert the neutral shared reviewer files contain no Claude-only wrapper metadata or tool declarations.
+- [ ] The drift test must assert each Claude agent wrapper references or preserves the matching neutral shared reviewer methodology while remaining Claude-native.
 - [ ] The drift test must compare each shared reviewer file with the matching Codex package-local reviewer file byte-for-byte.
-- [ ] The test must also assert that the reviewer filename set is exactly:
+- [ ] The test must enumerate only `*-reviewer.md` files and assert that the reviewer filename set is exactly:
 
   ```python
   {
@@ -468,7 +479,7 @@ New files introduced by this plan:
   - [ ] Copy or wrap the current helpers referenced by the corresponding workflows, including review-crew review storage, loop-state, circuit-breaker, line-resolution, escalation, and decision helpers; test-pilot engine/store/scrubber helpers and templates; and the-architect definition-doc, gate, queue, and template helpers.
   - [ ] Codex skill instructions must resolve helpers and templates relative to their installed package root, not `.github/scripts`, repo-root `plugins/*/lib`, or `${CLAUDE_PLUGIN_ROOT}`.
   - [ ] Add drift tests that fail when package-local helper copies diverge from the source helpers unless the divergence is documented in an explicit allowlist with a reason.
-  - [ ] Add an installed-package smoke test that copies one Codex package to a temporary directory outside the repo and proves the skill-visible helper paths it references exist there.
+  - [ ] Add an installed-package smoke test parametrized over every Codex package root and every Codex skill that references executable helpers or templates. For each package, copy it to a temporary directory outside the repo and prove all skill-visible package-local helper and template paths resolve there.
 
 - [ ] Keep the source-checkout verification command in `docs/dual-host-runtime.md`, `CONTRIBUTING.md`, `RELEASING.md`, and Task 11:
 
@@ -681,7 +692,7 @@ New files introduced by this plan:
   finding-v2-invalid-severity.invalid.json
   finding-v2-unknown-schema.invalid.json
   review-profile-v2-unknown-schema.invalid.json
-  test-pilot-plan-v2-missing-scrubber.invalid.json
+  test-pilot-plan-v2-missing-steps.invalid.json
   test-pilot-plan-v2-unknown-schema.invalid.json
   test-pilot-results-v2-unknown-schema.invalid.json
   lock-v2-missing-fencing-token.invalid.json
@@ -737,6 +748,13 @@ New files introduced by this plan:
   - unknown schema version
   - unsupported plugin version
 
+- [ ] Add shared artifact reader helpers that the host-native skills can call before any workflow writer switches to v2:
+
+  - [ ] The readers must accept legacy v1 artifacts and v2 artifacts for every artifact in `SHARED_ARTIFACTS`.
+  - [ ] The readers must live in package-local locations usable by installed Codex packages and source-checkout Claude workflows.
+  - [ ] The conformance tests in Task 11 must invoke these real readers, not test-only parsers.
+  - [ ] Existing writers must continue writing their current legacy formats in this task.
+
 - [ ] Document in the test module docstring that these v2 schemas establish schema-level reader compatibility, but no existing workflow writer switches to v2 until the migration tasks are implemented.
 - [ ] Do not modify existing plugin workflow writers in this task.
 
@@ -746,7 +764,9 @@ New files introduced by this plan:
 - [ ] Include an `Expand / Migrate / Contract` section with these rules:
 
   - Expand: both hosts may read legacy and neutral paths, but existing writers keep writing legacy paths.
-  - Migrate: a future migration command copies artifacts under a project config lock, validates them, and writes a marker.
+  - Migrate: a future migration command copies artifacts under the correct lock for each artifact class, validates them, and writes a marker.
+  - Mutable runtime artifact migration must acquire the artifact's runtime lock or quiesce the workflow, preserve and validate fencing or generation tokens, and write the marker atomically.
+  - The project config lock is only sufficient for registry, calibration, and config-mode updates.
   - Contract: neutral paths become write targets only after both hosts' minimum compatible plugin versions can read them.
 
 - [ ] Include artifact classes:
@@ -830,6 +850,7 @@ New files introduced by this plan:
 - [ ] Preserve the existing Claude-oriented install and usage path.
 - [ ] Add a Codex install/status section that points to `.agents/plugins/marketplace.json`.
 - [ ] Link to `docs/dual-host-runtime.md`.
+- [ ] Update `.gitignore` and repo conventions as needed so `docs/dual-host-runtime.md` and `docs/dual-host-migration.md` are explicitly tracked public docs, while existing scratch/design docs under `docs/` remain local-only unless separately unignored.
 - [ ] Update `CONTRIBUTING.md` with a `Dual-host changes` section:
 
   - Change shared contracts in `shared/` or schema files.
@@ -864,6 +885,9 @@ New files introduced by this plan:
 - [ ] The conformance tests must prove that each host can read the other host's shared artifacts without rewriting host-native runtime files.
 - [ ] The conformance tests must cover held-lock behavior, stale-lock recovery behavior, doctor output, reconcile output, and all three workflow families: review-crew, test-pilot, and the-architect.
 - [ ] The conformance tests must fail if either host direction is absent; do not count schema-only fixture validation as operational coexistence.
+- [ ] Implement a dual-host doctor/reconcile helper or CLI before writing the doctor/reconcile conformance assertions.
+- [ ] The doctor/reconcile tests must execute the helper against divergence, stale-lock, and version-skew fixtures and assert the recovery guidance and machine-readable status, not only compare static output files.
+- [ ] The conformance tests must invoke the shared artifact readers from Task 7 for v1 and v2 Claude-authored and Codex-authored fixtures.
 
 - [ ] Run marketplace validators:
 
