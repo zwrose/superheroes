@@ -9,12 +9,24 @@ def _store(tmp_path):
     return control_plane.ensure_store(str(tmp_path), root=str(tmp_path / "store"))
 
 
-def test_startup_acquire_then_second_fails(tmp_path):
+def test_startup_reacquire_same_process_is_reentrant(tmp_path):
+    # A compaction-resume re-runs ⓪ in the SAME OS process, which still holds its own
+    # startup.lock — that must read as re-entrant success, NOT "another loop holds this".
     s = _store(tmp_path)
     ok, _ = lock.acquire_startup(s)
     assert ok is True
-    ok2, holder = lock.acquire_startup(s)       # same live process holds it
-    assert ok2 is False and holder.get("pid") == os.getpid()
+    ok2, _ = lock.acquire_startup(s)            # same live process re-enters
+    assert ok2 is True
+
+
+def test_startup_different_live_process_fails_closed(tmp_path):
+    # A DIFFERENT live holder (alive pid that isn't us, same host+boot) still fails closed.
+    s = _store(tmp_path)
+    with open(lock._startup_path(s), "w") as fh:
+        json.dump({"pid": os.getppid(), "host": lock._host(),
+                   "bootId": lock.hostinfo.boot_id()}, fh)
+    ok, holder = lock.acquire_startup(s)
+    assert ok is False and holder.get("pid") == os.getppid()
 
 
 def test_startup_steals_stale_holder(tmp_path):

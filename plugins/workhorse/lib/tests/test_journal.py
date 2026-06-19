@@ -67,3 +67,33 @@ def test_render_brief_has_required_sections(tmp_path, monkeypatch):
     body = open(brief).read()
     for section in ("## Run", "## Where it was", "## Confirmed done", "## Next", "## Notices"):
         assert section in body
+
+
+def test_append_open_failure_surfaces_durable_write(tmp_path, monkeypatch):
+    # os.open (not just fsync) failing must also park, not crash uncaught.
+    import pytest
+    monkeypatch.setattr(journal.os, "open",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("EACCES")))
+    with pytest.raises(journal.DurableWriteError):
+        journal.append(str(tmp_path / "events.jsonl"), "run_started", root=str(tmp_path))
+
+
+def test_render_brief_scrubs_world_facts(tmp_path, monkeypatch):
+    # World facts are durable free-text -> scrubbed fail-closed before landing in the brief.
+    monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: ("[redacted]", False))
+    brief = str(tmp_path / "resume-brief.md")
+    journal.render_brief(brief, {"workItem": "wi"},
+                         {"ci": "TOKEN=sekret", "dev_server": "up"},
+                         str(tmp_path / "events.jsonl"), root=str(tmp_path))
+    body = open(brief).read()
+    assert "TOKEN" not in body and "[redacted]" in body
+
+
+def test_render_brief_absent_world_uses_sentinel(tmp_path, monkeypatch):
+    # Empty world (the PreCompact path) shows the absent sentinel, not literal "None".
+    monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
+    brief = str(tmp_path / "resume-brief.md")
+    journal.render_brief(brief, {"workItem": "wi"}, {}, str(tmp_path / "events.jsonl"),
+                         root=str(tmp_path))
+    body = open(brief).read()
+    assert "- PR: —" in body          # the world PR field uses the sentinel, not literal "None"

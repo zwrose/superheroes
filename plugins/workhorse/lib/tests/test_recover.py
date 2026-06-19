@@ -57,4 +57,5 @@ def test_pr_action_adopt_create_gate():
 def test_rearm_action_proceeds_retries_then_parks():
     assert recover.rearm_action(1, True) == "proceed"
     assert recover.rearm_action(1, False) == "retry"
+    assert recover.rearm_action(2, False) == "retry"   # inner boundary: < vs <= mutant guard
     assert recover.rearm_action(3, False) == "park_gate"

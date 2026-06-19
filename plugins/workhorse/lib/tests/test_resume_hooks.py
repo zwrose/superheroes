@@ -34,3 +34,22 @@ def test_precompact_is_nonfatal_without_state(tmp_path):
     env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
     r = _run("precompact.py", {"cwd": str(tmp_path)}, env)
     assert r.returncode == 0          # never fails the session
+
+
+def test_precompact_refreshes_brief_with_state(tmp_path):
+    # The load-bearing success path: with a current work-item + checkpoint + events,
+    # the hook actually writes resume-brief.md.
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    root = str(tmp_path / "store")
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=root)
+    import control_plane as cp
+    import checkpoint as ck
+    import journal
+    cp.set_current(str(tmp_path), "wi", root=root)
+    p = cp.paths(str(tmp_path), "wi", root=root)
+    ck.write(p["checkpoint"], ck.new("wi", "superheroes/wi-abc"))
+    journal.append(p["events"], "run_started", root=str(tmp_path))
+    r = _run("precompact.py", {"cwd": str(tmp_path)}, env)
+    assert r.returncode == 0
+    assert os.path.exists(p["resume_brief"])          # success path wrote the brief
+    assert "# Workhorse resume brief" in open(p["resume_brief"]).read()

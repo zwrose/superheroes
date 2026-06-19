@@ -40,20 +40,14 @@ def _scrub(text, root):
 
 
 def _next_seq(events_path):
-    n = 0
-    try:
-        with open(events_path, encoding="utf-8") as fh:
-            for line in fh:
-                if line.strip():
-                    n += 1
-    except OSError:
-        pass
-    return n + 1
+    # Dense, monotonic seq = (successfully-parsed events) + 1. Counting via read_events
+    # (which skips a torn trailing line) keeps the sequence GAPLESS after a crash, rather
+    # than consuming a number for the discarded torn partial.
+    return len(read_events(events_path)) + 1
 
 
 def append(events_path, event_type, *, step=None, detail=None, world=None,
            payload=None, root=None, ts=None):
-    os.makedirs(os.path.dirname(os.path.abspath(events_path)), exist_ok=True)
     ev = {"ts": _stamp(ts), "seq": _next_seq(events_path), "type": event_type}
     if step is not None:
         ev["step"] = step
@@ -65,17 +59,20 @@ def append(events_path, event_type, *, step=None, detail=None, world=None,
     if payload is not None:
         ev["payload"] = payload
     line = (json.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8")
-    fd = os.open(events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    # The ENTIRE durable write — makedirs, open, write, fsync — is fail-closed: ANY OSError
+    # (ENOSPC during inode/dir allocation, EACCES, a vanished dir) surfaces as
+    # DurableWriteError so the orchestrator PARKS (Task 11) instead of crashing uncaught
+    # mid-step. append is write-ahead (before the ⑧ push), so parking -> no under-count.
     try:
-        os.write(fd, line)
-        os.fsync(fd)          # durable: the write-ahead ci_fix_attempt must survive a crash
+        os.makedirs(os.path.dirname(os.path.abspath(events_path)), exist_ok=True)
+        fd = os.open(events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, line)
+            os.fsync(fd)          # durable: the write-ahead ci_fix_attempt must survive a crash
+        finally:
+            os.close(fd)
     except OSError as exc:
-        # A failed durable write (e.g. ENOSPC) must NOT crash the orchestrator mid-step.
-        # append is write-ahead (before the ⑧ push), so surfacing it -> the orchestrator
-        # PARKS before the push -> no under-count. Caller catches this (Task 11).
         raise DurableWriteError("event append failed: %s" % exc) from exc
-    finally:
-        os.close(fd)
 
 
 def read_events(events_path, *, want_torn_tail=False):
@@ -125,6 +122,16 @@ def render_brief(brief_path, checkpoint, world, events_path, *, root=None):
     resumes = sum(1 for e in evs if e.get("type") == "resumed")
     notices = [e for e in evs if e.get("type") in ("notify", "gate", "parked")]
     pr = c.get("pr") or {}
+
+    def _wf(v, default):
+        # World facts are a durable free-text field (design §4.2/§8.1): scrub string
+        # values fail-closed before they land in the brief; None -> the absent sentinel.
+        if v is None:
+            return default
+        if isinstance(v, str):
+            return _scrub(v, root) or default
+        return v
+
     lines = [
         "# Workhorse resume brief", "",
         "## Run",
@@ -135,11 +142,11 @@ def render_brief(brief_path, checkpoint, world, events_path, *, root=None):
         "## Where it was",
         "- phase **%s**, last good step **%s**" % (c.get("phase", "?"), c.get("lastGoodStep")), "",
         "## Confirmed done",
-        "- PR: %s" % (w.get("pr") if not isinstance(w.get("pr"), dict)
-                      else ("ready" if not w["pr"].get("isDraft") else "draft")),
-        "- CI: %s" % w.get("ci", "not detected"),
-        "- dev server: %s" % w.get("dev_server", "—"),
-        "- seeded baseline empty: %s" % w.get("seeded_empty", "—"), "",
+        "- PR: %s" % (("ready" if not w["pr"].get("isDraft") else "draft")
+                      if isinstance(w.get("pr"), dict) else _wf(w.get("pr"), "—")),
+        "- CI: %s" % _wf(w.get("ci"), "not detected"),
+        "- dev server: %s" % _wf(w.get("dev_server"), "—"),
+        "- seeded baseline empty: %s" % _wf(w.get("seeded_empty"), "—"), "",
         "## Next",
         "- resume from step after **%s**" % c.get("lastGoodStep"), "",
         "## Notices",

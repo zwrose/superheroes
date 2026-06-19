@@ -28,8 +28,11 @@ def main():
         if c is None:
             return 0
         journal.render_brief(p["resume_brief"], c, {}, p["events"], root=cwd)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort + non-fatal (always exit 0 — a crashing hook must not fail the
+        # session; the cold reconcile is the fallback). But emit a one-line stderr
+        # breadcrumb so a silently-stale brief is at least diagnosable in the hook log.
+        sys.stderr.write("workhorse precompact: brief refresh skipped (%s)\n" % exc)
     return 0
 
 

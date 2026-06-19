@@ -172,10 +172,21 @@ Write `checkpoint.write(…, phase="verify", lastGoodStep=3, pr=<number>, lockGe
 Emit step_entered/step_completed journal events.
 
 Detect the dev-server command: `python3 "$LIB/detect.py"` (`detect_dev_server`).
-None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise start it
-managed via `devserver.start(command, port)` (`devserver.py`), health-poll `devserver.health_url`,
-capture the handle. **Tear it down (`devserver.teardown`) on every terminal
-state, GATE, or error** — no zombie. One server serves ⑤ and the ⑨ spot-check.
+None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
+
+- **Reclaim first (resume / orphan-after-crash).** Before starting, try
+  `devserver.reclaim(sidecar, port, command)` (`devserver.py`): if it corroborates
+  (port + scrubbed-command + bootId), adopt the returned teardown handle — a managed
+  server from a prior run is still up, don't double-start. If `reclaim` is `None` but
+  `devserver.port_in_use(port)`, **GATE** (an unrecognized process holds the port — do
+  not kill what we can't prove is ours). Else start fresh.
+- **Start managed:** `devserver.start(command, port)`, then bound the readiness wait
+  with `devserver.poll_healthy(devserver.health_url(port), timeout=…, interval=…)`
+  (never an unbounded poll). On a fresh start, persist the identity for a later
+  reclaim: `devserver.write_sidecar(sidecar, handle, command, root=ROOT)` (the
+  `command` is scrubbed fail-closed).
+- Capture the handle. **Tear it down (`devserver.teardown`) on every terminal state,
+  GATE, or error** — no zombie. One server serves ⑤ and the ⑨ spot-check.
 
 ## ⑤ Behavioral — test-pilot (two skills) — runnable surface only
 

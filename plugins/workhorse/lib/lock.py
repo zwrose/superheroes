@@ -189,8 +189,14 @@ def acquire_startup(store):
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         holder = _startup_holder(store)
+        # Re-entrant for THIS very process (same pid + host + boot): a compaction-resume
+        # re-runs ⓪ in the SAME OS process, which still holds its own startup.lock —
+        # treat that as already-held, not a rival loop, or every resume would fail closed.
+        if (holder.get("pid") == os.getpid() and holder.get("host") == _host()
+                and holder.get("bootId") == hostinfo.boot_id()):
+            return (True, {})                    # we already hold it (re-entry)
         if not _pid_dead(holder):                # reuse §4.4's dead-on-this-boot check
-            return (False, holder)               # live holder -> fail closed
+            return (False, holder)               # a DIFFERENT live holder -> fail closed
         try:
             os.unlink(path)                      # stale -> clear it
         except FileNotFoundError:
