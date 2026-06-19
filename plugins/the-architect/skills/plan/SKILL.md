@@ -8,7 +8,7 @@ description: Use after a `spec` is approved, to turn it into the technical `plan
 Turn the approved **`spec`** into the **`plan`** definition-doc: the technical *how* —
 approach, architecture, components, data flow, the key decisions and their alternatives.
 This is the middle of the superheroes loop (Discovery → **Plan** → Tasks → Build →
-Verify → Integrate).
+Verify → Ship).
 
 **Plan runs autonomously.** Discovery is owner-co-authored (the *what*); Plan is the
 opposite — you decide the *how* on the owner's behalf and **automate it away**, pausing

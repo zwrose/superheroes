@@ -40,7 +40,7 @@ deferred, §7.)*
 The development loop:
 
 ```
-Discovery → Plan → Tasks → Build → Verify → Integrate
+Discovery → Plan → Tasks → Build → Verify → Ship
 ```
 
 Each of the first three phases emits one **definition-doc**, and each definition-doc gets one
@@ -367,7 +367,7 @@ explicit (`order`), not array position. Item lifecycle is
   "workItem": "...",
   "issue": 42,
   "size": "medium",
-  "phase": "discovery | plan | tasks | build | verify | integrate",
+  "phase": "discovery | plan | tasks | build | verify | ship",
   "gates": { "spec": "passed", "plan": "passed", "tasks": "pending | changes-requested" },
   "patternsPin": "<content-hash of the frozen patterns-pin.md>",
   "branch": "superheroes/<work-item>-<content-hash>",
@@ -425,7 +425,7 @@ and low.
 **Exactly-once — the remote work branch is the idempotency anchor**, with an explicit
 resume recovery procedure (not just a happy path):
 
-1. On entering Integrate (or resuming into it): does the remote branch
+1. On entering Ship (or resuming into it): does the remote branch
    `superheroes/<work-item>-<content-hash>` exist?
 2. If it exists, **always query for an open PR by head branch** (never trust only the
    local checkpoint) → if one exists, **adopt** it (record `pr` in checkpoint); else

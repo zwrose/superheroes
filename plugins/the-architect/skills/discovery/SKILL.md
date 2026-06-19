@@ -8,7 +8,7 @@ description: Use at the START of any new piece of work in a superheroes project 
 Turn a fuzzy idea into an owner-approved **`spec`** definition-doc: the requirements
 for one piece of work, in plain language, with **no technical *how***. This is the
 front half of the superheroes loop (Discovery → Plan → Tasks → Build → Verify →
-Integrate). You own the **what**; the `plan` skill owns the **how**.
+Ship). You own the **what**; the `plan` skill owns the **how**.
 
 The audience is a product-minded owner who may not be technical. Speak their
 language. Translate every non-functional concern into a plain-language outcome.

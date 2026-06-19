@@ -1,7 +1,7 @@
 # Phase-1 gate — "one issue, evals-gated"
 
 Phase 1 (see [ROADMAP.md](../ROADMAP.md)) takes a single work-item through the full loop
-— Discovery → Plan → Tasks → Build → Verify → Integrate — with a human watching. This is
+— Discovery → Plan → Tasks → Build → Verify → Ship — with a human watching. This is
 what must pass before that run counts as **correct**. Checks marked **[live]** are
 enforceable today (deterministic conformance); **[Phase 1]** checks are behavioral and
 get their fixtures as the loop is built.
@@ -21,7 +21,7 @@ get their fixtures as the loop is built.
 
 ## Behavioral — the loop does the right thing
 
-- **[Phase 1] End-to-end completion.** The work-item reaches Integrate and produces a PR
+- **[Phase 1] End-to-end completion.** The work-item reaches Ship and produces a PR
   whose diff satisfies the `spec`'s acceptance criteria.
 - **[Phase 1] Gates actually block.** Each review gate (review-spec / review-plan /
   review-tasks) is shown to **stop** a seeded-bad artifact (a deliberately flawed
