@@ -193,23 +193,37 @@ whether `review-tasks` ran:**
 
 Self-certification is safe **only** because Tasks is autonomous (no owner approves the *how*;
 the real human gate is the final PR) — the deliberate asymmetry with `spec`. Record it
-idempotently — **set `passed` only when the gate is still `pending`** (no `review-tasks`
-wrote it), so a `review-tasks` verdict is never clobbered:
+idempotently, and **only in genuine degraded mode**. A still-`pending` gate is *ambiguous*: it
+can mean "`review-tasks` is not installed here" (self-certify is correct) **or** "`review-tasks`
+ran but could not record its verdict" — e.g. it could not resolve review-crew ↔ the-architect, so
+`gate_write` exits non-zero with `skipped:lib-absent`/`failed:set-gate` and leaves the gate
+`pending`. Self-certifying that second case would bless a review that never landed. So branch on
+**whether you actually ran `review-tasks` in step 5**, not on the gate value alone — a
+`review-tasks` verdict is never clobbered, and a *failed* `review-tasks` write never gets
+laundered into `passed`:
 
 ```bash
 set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
+# Did you invoke review-tasks in step 5? "no" = it is not installed (genuine degraded mode);
+# "yes" = it ran and OWNS the gate write.
+REVIEW_TASKS_RAN="<yes|no>"
 CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
   --doc tasks --work-item "$WORK_ITEM" --root "$ROOT") \
   || { echo "could not read the tasks gate (missing/malformed frontmatter) — not self-certifying; fix the tasks doc first" >&2; exit 1; }
-if [ "$CURRENT" = pending ]; then
-  # degraded mode: review-tasks didn't run — self-certify after a clean self-review
-  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
-    --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
-else
+if [ "$CURRENT" != pending ]; then
   echo "gate already recorded by review-tasks ($CURRENT) — not overwriting"
   [ "$CURRENT" = passed ] || { echo "review-tasks requested changes — address them and re-run review-tasks; do not advance" >&2; exit 1; }
+elif [ "$REVIEW_TASKS_RAN" = yes ]; then
+  # review-tasks ran yet the gate is still pending → it produced a verdict it could NOT record.
+  # This is NOT degraded mode — do NOT self-certify (that would bless an unrecorded review).
+  echo "review-tasks ran but did not record the gate (see its skipped:/failed: outcome) — NOT self-certifying; resolve the-architect alongside review-crew and re-run review-tasks" >&2
+  exit 1
+else
+  # degraded mode: review-tasks is not installed — self-certify after a clean self-review
+  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+    --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
 fi
 ```
 

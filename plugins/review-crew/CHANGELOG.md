@@ -6,6 +6,15 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gate-integrity — `gate_write.py` certify now fails loud.** A `certify` that produces a
+  verdict but cannot record it (`skipped:lib-absent`, `skipped:noncanonical`, `failed:set-gate`)
+  now exits **non-zero (3)** instead of 0. Leaving the gate at `pending` is indistinguishable
+  from "no review ran", which the-architect's self-certify branch would otherwise upgrade to
+  `passed` — a green gate with no real review. `reset` mode is unchanged (advisory revoke-only;
+  always exits 0). Regression coverage in `test_gate_write.py`.
+
 ## [0.6.0] — 2026-06-18
 
 ### Added

@@ -6,6 +6,15 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gate-integrity — Plan/Tasks no longer self-certify an unrecorded review.** The `plan` and
+  `tasks` self-certify branches now distinguish "review tool not installed" (genuine degraded
+  mode → self-certify) from "review tool ran but could not record its verdict" (gate left
+  `pending` by a failed `gate_write` → STOP, do not self-certify). The branch keys off whether
+  `review-(plan|tasks)` actually ran, not the gate value alone — closing a hole where a
+  silently-failed review write could be laundered into a `passed` gate.
+
 ## [0.3.0] — 2026-06-18
 
 ### Added

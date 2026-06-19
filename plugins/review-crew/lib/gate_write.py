@@ -19,9 +19,17 @@ The handshake:
     `passed`, `set-gate pending`; otherwise no-op. It **never** writes `passed` (the
     advisory invariant: review-spec revokes, the owner grants).
 
-It **degrades, it does not crash**: every failure path prints a clear message to stderr and
-exits 0 with a short outcome token on stdout (the calling skill surfaces it in its terminal
-summary). It never hand-edits YAML — the-architect's CLI is the single frontmatter writer.
+It **degrades, it does not crash**: every path prints a clear message to stderr and a short
+outcome token on stdout (the calling skill surfaces it in its terminal summary). It never
+hand-edits YAML — the-architect's CLI is the single frontmatter writer.
+
+**Exit codes carry gate-integrity intent, not just crashed-or-not.** A `certify` that produced a
+verdict but could NOT record it (`skipped:lib-absent`, `skipped:noncanonical`, `failed:set-gate`)
+exits **non-zero (3)**: it leaves the gate at `pending`, which is indistinguishable from "no
+review ran" — and the-architect's self-certify branch would otherwise upgrade that `pending` to
+`passed`, a green gate with no real review. `recorded:*` exits 0. `reset` mode always exits 0: it
+is advisory revoke-only and never grants `passed`, so a skipped reset is a warning, not a
+gate-integrity failure.
 
 stdlib only (the band convention). Outcome tokens (stdout): `recorded:passed`,
 `recorded:changes-requested`, `reset:pending`, `noop:not-approved`, `skipped:lib-absent`,
@@ -89,12 +97,17 @@ def _set_gate(lib, doc, work_item, review, root):
 
 def certify(doc, work_item, reviewed_path, review, parent_doc, root, lib):
     """review-plan / review-tasks: record `review` on `doc`, downgrading to
-    changes-requested if the parent isn't approved. Canonical-path guarded."""
+    changes-requested if the parent isn't approved. Canonical-path guarded.
+
+    Returns an exit code: 0 only when the verdict was RECORDED (`recorded:*`); 3 when a
+    verdict was produced but could not be recorded (`skipped:noncanonical`, `failed:set-gate`)
+    — see the module docstring's gate-integrity note."""
     if not _same_file(reviewed_path, _canonical(root, work_item, doc)):
         _say("reviewed doc (%s) is outside the canonical docs/superheroes/%s/ layout — gate "
              "NOT recorded (refusing to stamp a different file). The %s was still reviewed/"
              "revised." % (reviewed_path, work_item, doc))
-        return _emit("skipped:noncanonical")
+        _emit("skipped:noncanonical")
+        return 3
     # Parent precondition: never certify <doc> as passed if its parent isn't approved.
     if parent_doc and review == "passed":
         ok, parent = _read_gate(lib, parent_doc, work_item, root)
@@ -107,10 +120,12 @@ def certify(doc, work_item, reviewed_path, review, parent_doc, root, lib):
             review = "changes-requested"
     ok, err = _set_gate(lib, doc, work_item, review, root)
     if ok:
-        return _emit("recorded:" + review)
+        _emit("recorded:" + review)
+        return 0
     _say("set-gate failed — gate NOT recorded (the %s doc may be missing/malformed despite "
          "reaching this step): %s" % (doc, err))
-    return _emit("failed:set-gate")
+    _emit("failed:set-gate")
+    return 3
 
 
 def reset(doc, work_item, reviewed_path, root, lib):
@@ -156,26 +171,27 @@ def main(argv):
     if lib is None:
         if args.mode == "certify":
             _say("the-architect lib not resolvable (not in-repo, not an installed sibling) — "
-                 "gate NOT recorded. ⚠ the-architect's %s will then SELF-CERTIFY, so "
-                 "review-crew's verdict will NOT gate the build until the-architect is "
-                 "installed alongside review-crew. The %s was still reviewed/revised."
-                 % (args.doc, args.doc))
-        else:
-            _say("⚠ spec was revised but the-architect lib is not resolvable to reset the gate "
-                 "— if it was approved, warn the owner: the 'passed' gate may be STALE; the "
-                 "spec needs re-approval.")
+                 "gate NOT recorded. ⚠ a verdict was produced but could not be recorded; this "
+                 "exits non-zero so the-architect does NOT mistake the still-`pending` gate for "
+                 "\"no review ran\" and self-certify it to passed. Resolve the-architect "
+                 "alongside review-crew and re-run. The %s was still reviewed/revised."
+                 % args.doc)
+            _emit("skipped:lib-absent")
+            return 3
+        _say("⚠ spec was revised but the-architect lib is not resolvable to reset the gate "
+             "— if it was approved, warn the owner: the 'passed' gate may be STALE; the "
+             "spec needs re-approval.")
         _emit("skipped:lib-absent")
-        return 0
+        return 0  # reset is advisory revoke-only — a skipped reset is a warning, never a passed grant
 
     if args.mode == "certify":
         if not args.review:
             _say("certify mode requires --review")
             _emit("error:bad-args")
             return 2
-        certify(args.doc, args.work_item, args.reviewed_path, args.review,
-                args.parent_doc, args.root, lib)
-    else:
-        reset(args.doc, args.work_item, args.reviewed_path, args.root, lib)
+        return certify(args.doc, args.work_item, args.reviewed_path, args.review,
+                       args.parent_doc, args.root, lib)
+    reset(args.doc, args.work_item, args.reviewed_path, args.root, lib)
     return 0
 
 
