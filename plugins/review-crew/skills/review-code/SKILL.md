@@ -122,7 +122,7 @@ DEEP_MODEL=$(python3 "$MT" --role reviewer-deep | jq -r '.model // empty')
 MECH_MODEL=$(python3 "$MT" --role mechanical | jq -r '.model // empty')
 ```
 
-When dispatching the specialists when dispatching specialists, pass `model: $DEEP_MODEL` for
+When dispatching specialists, pass `model: $DEEP_MODEL` for
 `security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
 other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
 value means "inherit the session model" — omit the `model` arg in that case.
@@ -280,7 +280,7 @@ Do **not** tier or skip specialists based on which files changed. Coverage unifo
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools. On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map.md`). Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
+Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools.md`). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
@@ -441,7 +441,7 @@ Each round:
 14. **Continuation gate — the next action is decided by a script, not by you.** Whether to run another round is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run the deterministic gate and **obey its `action`** (it derives the blocking counts from the round artifacts, so they are not yours to self-report either):
 
     ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
     python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
       --breaker-halt "$BREAKER_HALT" \
       --fix-batch "$SESSION_DIR/round-<N>/fix-batch.json" \
