@@ -6,6 +6,10 @@ All notable changes to the `workhorse` plugin. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- Codex host support: `.codex-plugin` manifest (with hooks pointer), `hosts/` tool maps, neutral-language skill, and a fail-closed `PreToolUse` enforcer hook (`hooks-codex.json`).
+
 ## [0.1.0] — 2026-06-18
 
 ### Added

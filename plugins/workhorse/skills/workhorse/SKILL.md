@@ -3,6 +3,8 @@ name: workhorse
 description: Use when an approved tasks doc (gates.review == passed) should be BUILT and shipped to a ready-for-review PR — "run the producer", "build this work item", "take this to a PR", "workhorse it". The per-issue back-half engine: it builds (subagent-driven-development), reviews (review-crew:review-code), opens a draft PR, exercises the change (test-pilot), resets seeded data, gets CI green, and hands you a live dev server + a plain-language readout. It NEVER merges — that is always yours.
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Workhorse — the producer (back-half engine)
 
 You are the **producer**: you take ONE approved work item from `tasks` to a
@@ -10,7 +12,7 @@ You are the **producer**: you take ONE approved work item from `tasks` to a
 readout**. You **never merge, deploy, release, or force-push** — those are the
 owner's, and a deterministic enforcer guarantees it.
 
-Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT}/lib"`.
+Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`.
 
 **Prerequisites (install the band first).** Workhorse resolves its sibling band
 plugins' bundled libs at runtime, so install **the-architect ≥ 0.3.0**,
@@ -34,7 +36,7 @@ see `armed: false`, confirm the band siblings are installed before retrying.
      is firing the call is **blocked**.
    - **Edit surface:** attempt to **Write a sentinel canary path whose basename is a
      safety-machinery member but which does NOT exist** —
-     `${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py` (workhorse has no such file; its basename
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/loop_state.py` (workhorse has no such file; its basename
      is in `SAFETY_MACHINERY` and it resolves under the workhorse band root, so the
      enforcer must deny it). If firing, it's **blocked**. Targeting a non-existent path
      (rather than rewriting the real `hooks.json`) means that even if the matcher is dead
@@ -180,6 +182,8 @@ guarantees the floor regardless of judgment — `gh pr merge` (incl. the `gh api
 GraphQL forms) / `gh release create` / `gh workflow run` / `git push --force` /
 deploy / destructive are **denied**, and edits to band safety-machinery are
 **refused**.
+
+On Codex, the enforcer is a `PreToolUse` hook; Codex does not run plugin-bundled hooks until trusted. **Verify the enforcer hook is trusted before relying on it; if not, refuse/warn.** Codex `PreToolUse` is a guardrail, not a hard boundary.
 
 **Scope of the deterministic floor (explicit).** The enforcer's command deny-list
 covers the named *irreversible, repo-shaping* classes above — deliberately NOT the
