@@ -13,7 +13,9 @@ def boot_id():
         with open("/proc/stat", encoding="utf-8") as fh:
             for line in fh:
                 if line.startswith("btime "):
-                    return "btime:" + line.split()[1]
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return "btime:" + parts[1]
     except OSError:
         pass
     # darwin/BSD: sysctl kern.boottime -> "{ sec = 171..., usec = ... } ..."

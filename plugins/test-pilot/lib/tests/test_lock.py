@@ -37,9 +37,43 @@ def test_dead_pid_lock_is_stale(tmp_path):
     lock.acquire(p)
     h = lock.read_holder(p)
     h["pid"] = 99999999     # not a live pid
+    h["acquiredAt"] = "1970-01-01T00:00:00Z"   # ancient -> expired by TTL (new stale = expired AND dead)
     json.dump(h, open(p, "w"))
     assert lock.is_stale(p) is True
 
 
 def test_release_missing_is_noop(tmp_path):
     lock.release(str(tmp_path / "nope.lock"))  # must not raise
+
+
+import json
+import os
+import socket
+import lock as tp_lock
+
+
+def test_acquire_steals_stale_dead_pid_holder(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    with open(p, "w") as fh:
+        json.dump({"pid": 999999, "host": socket.gethostname(),
+                   "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None}, fh)
+    tp_lock.acquire(p)                                  # stale -> stolen, no raise
+    assert json.load(open(p))["pid"] == os.getpid()
+
+
+def test_acquire_steals_on_bootid_mismatch(tmp_path, monkeypatch):
+    p = str(tmp_path / "engine.lock")
+    monkeypatch.setattr(tp_lock, "_boot_id", lambda: "boot-A")
+    with open(p, "w") as fh:
+        json.dump({"pid": os.getpid(), "host": socket.gethostname(),
+                   "acquiredAt": "1970-01-01T00:00:00Z", "bootId": "boot-OLD"}, fh)
+    tp_lock.acquire(p)                                  # rebooted -> stale -> stolen
+    assert json.load(open(p))["bootId"] == "boot-A"
+
+
+def test_live_holder_still_raises(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    tp_lock.acquire(p)                                  # we hold it, freshly, live pid
+    import pytest
+    with pytest.raises(tp_lock.LockHeld):
+        tp_lock.acquire(p)
