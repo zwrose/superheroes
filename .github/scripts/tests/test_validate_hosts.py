@@ -98,6 +98,14 @@ def test_map_crlf_drift_rejected(tmp_path, monkeypatch, capsys):
     assert _run_main(tmp_path, monkeypatch) == 1
     assert "drifts from canonical" in capsys.readouterr().err
 
+def test_codex_marketplace_name_mismatch_rejected(tmp_path, monkeypatch, capsys):
+    """The Codex marketplace name must match the Claude marketplace name."""
+    _scaffold(tmp_path)
+    mp = tmp_path / ".agents" / "plugins" / "marketplace.json"
+    d = json.loads(mp.read_text()); d["name"] = "not-superheroes"; mp.write_text(json.dumps(d))
+    assert _run_main(tmp_path, monkeypatch) == 1
+    assert "codex marketplace name" in capsys.readouterr().err
+
 def test_codex_entry_missing_name_guard(tmp_path, monkeypatch, capsys):
     """Guard against Codex marketplace entries with missing 'name' field."""
     _scaffold(tmp_path)
