@@ -6,6 +6,10 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- **Codex host support:** `.codex-plugin` manifest, `hosts/` tool maps, neutral-language skills + design-capture peer.
+
 ### Fixed
 
 - **Gate-integrity — Plan/Tasks no longer self-certify an unrecorded review.** The `plan` and

@@ -3,6 +3,8 @@ name: plan
 description: Use after a `spec` is approved, to turn it into the technical `plan` (the *how*) for a work-item — overall approach, architecture, components & interfaces, data flow, key decisions, risks. This is superheroes' Plan phase: it runs LARGELY AUTONOMOUSLY (the owner lives in the *what*; the *how* is automated away), pausing ONLY to escalate genuinely consequential decisions in plain-language pros/cons. Produces the `plan` definition-doc and runs review-plan. Not for requirements (that is `discovery`) or step-by-step tasks (that is `tasks`).
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Plan
 
 Turn the approved **`spec`** into the **`plan`** definition-doc: the technical *how* —
@@ -80,11 +82,12 @@ Ground before you design — **bake in the durable, look up the volatile.**
 
   ```bash
   set -euo pipefail
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   ROOT=$(git rev-parse --show-toplevel) || { echo "not in a git repo" >&2; exit 1; }
   WORK_ITEM="<the work-item directory name>"
   # read-gate parses gates.review from the spec frontmatter via the lib (robust to
   # formatting; errors clearly if the spec is missing or malformed)
-  REVIEW=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+  REVIEW=$(python3 "$ROOT_DIR/lib/definition_doc.py" read-gate \
     --doc spec --work-item "$WORK_ITEM" --root "$ROOT") \
     || { echo "no readable spec for $WORK_ITEM — run discovery first" >&2; exit 1; }
   [ "$REVIEW" = passed ] || { echo "spec not approved (gates.review=$REVIEW) — stop; it needs the owner's approval (or review-spec) first" >&2; exit 1; }
@@ -228,15 +231,16 @@ its `size`. Resolve the path at the repo root and emit the §3.1 frontmatter via
 
 ```bash
 set -euo pipefail
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 SIZE=$(grep -m1 '^size:' "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" | sed 's/^size: *//')
-PLAN=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc plan --root "$ROOT")
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" frontmatter \
+PLAN=$(python3 "$ROOT_DIR/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc plan --root "$ROOT")
+python3 "$ROOT_DIR/lib/definition_doc.py" frontmatter \
   --doc plan --work-item "$WORK_ITEM" --size "$SIZE" --parent-item "$WORK_ITEM"
 ```
 
-Fill `${CLAUDE_PLUGIN_ROOT}/templates/plan.md`: replace `{{frontmatter}}` with the emitted
+Fill `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/plan.md`: replace `{{frontmatter}}` with the emitted
 block, set the title, fill the sections, and **strip the `<!-- AUTHOR GUIDANCE … -->`
 comments**. Map every spec requirement in *How the requirements are met*; log every
 significant decision (escalated or not) with its reversibility in *Key decisions*. Write to
@@ -344,12 +348,13 @@ gets laundered into `passed`:
 
 ```bash
 set -euo pipefail
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 # Did you invoke review-plan in step 6? "no" = it is not installed (genuine degraded mode);
 # "yes" = it ran and OWNS the gate write.
 REVIEW_PLAN_RAN="<yes|no>"
-CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+CURRENT=$(python3 "$ROOT_DIR/lib/definition_doc.py" read-gate \
   --doc plan --work-item "$WORK_ITEM" --root "$ROOT") \
   || { echo "could not read the plan gate (missing/malformed frontmatter) — not self-certifying; fix the plan doc first" >&2; exit 1; }
 if [ "$CURRENT" != pending ]; then
@@ -362,7 +367,7 @@ elif [ "$REVIEW_PLAN_RAN" = yes ]; then
   exit 1
 else
   # degraded mode: review-plan is not installed — self-certify after a clean self-review
-  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+  python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
     --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
 fi
 ```
