@@ -339,6 +339,25 @@ def test_hook_apply_patch_to_ordinary_file_is_silent(monkeypatch, capsys, tmp_pa
     assert rc == 0 and capsys.readouterr().out.strip() == ""
 
 
+def test_hook_apply_patch_add_and_move_to_safety_machinery_deny(monkeypatch, capsys):
+    # The patch-target guard must catch every header variant that names a safety file,
+    # not just `*** Update File:` — `*** Add File:` and `*** Move to:` too (moving an
+    # arbitrary file ONTO a safety basename is the security-interesting one).
+    def _target_aware(target, root=None, plugin_root=None):
+        if target == enforcer._ESC:
+            return _ESC
+        if target == enforcer._RC:
+            return _RC_ESC
+        return None
+    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    for header in ("*** Add File: %s" % _ESC, "*** Move to: %s" % _ESC):
+        patch = "*** Begin Patch\n%s\n@@\n+x\n*** End Patch\n" % header
+        enforcer.hook(json.dumps({"tool_name": "apply_patch",
+                                  "tool_input": {"input": patch}}), host="codex")
+        out = json.loads(capsys.readouterr().out)
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny", header
+
+
 def test_hook_compound_safety_write_plus_gated_never_enters_allowance(capsys, tmp_path, monkeypatch):
     # A command that is BOTH a safety-machinery write AND a gated action must stay an
     # UNCONDITIONAL deny — it must not enter the Codex allowance overlay (else an owner

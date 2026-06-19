@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import tempfile
 import time
 
@@ -162,6 +163,10 @@ def consume(command, cwd=None, now=None, ttl=DEFAULT_TTL):
     at = rec.get("approved_ts")
     if not isinstance(at, (int, float)) or ts - at > ttl:
         _unlink(path)  # approved but stale → clean up, do not honor
+        # Breadcrumb so a confusing "approve again" (a TTL-expired approval) is
+        # diagnosable in the hook log, distinct from "never approved".
+        sys.stderr.write(
+            "workhorse allowance: a prior approval expired (>%ds) — re-approval required\n" % ttl)
         return False
     claim = path + ".claim." + secrets.token_hex(8)
     try:

@@ -374,7 +374,7 @@ def main(argv):
         ap.add_argument("--command")
         ap.add_argument("--path")
         ap.add_argument("--host", default="codex")
-        ap.add_argument("--in-scope", action="store_true", default=True)
+        # in_scope defaults True (store_false's implicit default); pass --out-of-scope to flip it.
         ap.add_argument("--out-of-scope", dest="in_scope", action="store_false")
         args = ap.parse_args(argv[2:])
         if args.command is not None:

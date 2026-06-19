@@ -106,6 +106,18 @@ def test_fresh_challenge_resets_prior_approval():
     assert allowance.consume(CMD, now=1001, ttl=TTL) is False
 
 
+def test_clear_all_reclaims_orphaned_claim_files():
+    # A process killed between consume's rename and unlink leaves a `<hash>.json.claim.*`
+    # orphan; clear_all must reclaim it (not just `.json` records).
+    allowance.challenge(CMD, "merge-pr", now=1000)
+    orphan = allowance._path(allowance.command_hash(CMD), None) + ".claim.deadbeef"
+    with open(orphan, "w") as fh:
+        fh.write("{}")
+    assert os.path.exists(orphan)
+    allowance.clear_all()
+    assert not os.path.exists(orphan)
+
+
 def test_clear_all_safe_when_empty():
     allowance.clear_all()
     allowance.clear_all()  # idempotent / no raise
