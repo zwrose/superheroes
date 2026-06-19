@@ -6,6 +6,15 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-19
+
+### Changed
+
+- Add `allowance.py` (workhorse's Codex approval-allowance store) to the
+  `SAFETY_MACHINERY` set in `escalation.py`, so the escalation guard refuses edits to
+  it — closing the Edit/`apply_patch`-surface self-protection of the workhorse
+  owner-approval gate (issue #14). Pairs with workhorse 0.4.0.
+
 ## [0.4.0] — 2026-06-19
 
 ### Added
