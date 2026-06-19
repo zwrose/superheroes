@@ -246,9 +246,13 @@ superheroes build contract (CONVENTIONS §3.2). It is sound when:
   re-decide the architecture. A task that re-architects (vs the plan) is a finding:
   it belongs in the plan, or it is drift.
 - **Build contract present.** The doc carries the superheroes wrapper (size, the
-  SDD clips) and the writing-plans body verbatim (Goal/Architecture/Tech-Stack +
-  `### Task N`), with the agentic-worker handoff replaced by the build contract and
-  no orphan superpowers/plans artifact.
+  SDD clips) and the writing-plans body verbatim (Goal/Architecture/Tech-Stack, the
+  **Global Constraints** block, and `### Task N` steps with their per-task **Interfaces**
+  blocks where `writing-plans` ≥ 6.0 emits them), with the agentic-worker handoff replaced
+  by the build contract and no orphan superpowers/plans artifact. The Global Constraints
+  and Interfaces blocks are a quality SIGNAL — do not flag their presence; flag their
+  absence only when the plan clearly needed them (cross-task contracts, a version/dependency
+  floor) and they're missing.
 
 ## Per-dimension framing (you are reviewing executable steps)
 - Test-reviewer (heaviest here): TDD ordering (failing test precedes implementation);
@@ -339,7 +343,38 @@ Each round:
 4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited step in `$SESSION_DIR/tasks.md` (and any cited project file), emit for each finding a **recommendation** (`Fix` = revise the tasks doc; `Defer` = real but fine to settle during Build; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. filling in a placeholder with the concrete code/command; `judgment` = a real choice among options, e.g. how to decompose a step). A **placeholder** or a **missing-coverage** finding is almost always `Fix` + `mechanical` — the tasks bar forbids placeholders.
 5. **Print findings in chat** — grouped by task/step, each with its POV line. Do **not** write these to a file.
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the tasks document at `$TASKS_PATH` directly to address it. Make these edits without asking. **If a finding exposes a real gap in the PLAN** (a requirement the plan never covered, so no task can faithfully cover it), do **not** invent a task — flag it for the user as a loop-back to `review-plan`/`plan` (a `judgment` intervention), since tasks must not re-decide design.
-7. **Interventions — escalate only blockers.** `present-set` = **Critical/Important** effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`) — only a blocking finding carries a decision worth the owner's attention (skipping it makes the gate `changes-requested`; a judgment-fix on it picks among real tradeoffs). **Minor/Nit findings are never escalated:** apply the triage recommendation automatically — `Fix` → revise `$TASKS_PATH` as the POV suggests (like a step-6 auto-revise); `Skip`/`Defer` → add the identity to the `skip-set` — reported in the terminal summary (auto-revised / auto-skipped), not asked. If `present-set` is non-empty, present ONE consolidated `AskUserQuestion`: lead with each finding's POV; offer **Apply as suggested** / **Apply with my guidance** (free text) / **Skip** in this neutral order. Apply the user's chosen revisions to `$TASKS_PATH`. Add every `Skip` identity to the `skip-set`.
+7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each
+   **Critical/Important** effective finding, route its disposition with the shared rubric (modes
+   PROCEED/NOTIFY/GATE). **GATE** (one consolidated `AskUserQuestion`) only the blockers whose
+   skip-or-fix is genuinely the owner's call — a product/scope/risk trade-off. For the rest,
+   **verify and proceed**, recording the disposition so `loop_state` still sees it:
+   - **Fix, one right answer per the project's conventions** → auto-revise `$TASKS_PATH` (a step-6
+     auto-revise).
+   - **Verifiably-safe skip / believed false-positive** → record a **skip** (add the identity to the
+     `skip-set`) **with a verification trace** (cite the spec line / source you checked). A skip with
+     no citable ground truth is **not** eligible — it GATEs. **Never silently drop a blocker.**
+   - Minor/Nit → apply the triage recommendation automatically (auto-revise or skip-set), reported
+     in the terminal summary, never asked (the F4 win, preserved).
+   Add every skipped identity (owner-skip or autonomous-skip) to the `skip-set`; it feeds
+   `SKIPPED_BLOCKING` (step 8) so the gate reflects it. Record GATE outcomes and NOTIFY decisions in
+   the terminal summary with their reverse-path/expiry, per `escalation-base.md`.
+
+   Resolve the rubric for this dispatch once via the wrapper — with
+   `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` (the project's canonical
+   safe-capture pattern) defined in setup:
+
+   ```bash
+   RUBRIC_RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")
+   ```
+
+   Read its `path` and embed the rubric (if `degraded` is true, apply the embedded fail-closed
+   posture: apply the hard floor and GATE anything owner-weighable). **Keep step-8's `loop_state.py`
+   invocation unchanged** (`--compiled "$SESSION_DIR/compiled.json" --skipped-blocking
+   <SKIPPED_BLOCKING>`, the present-∩-skip-set integer per the `arch-r2-001` cumulative-PRESENT
+   contract). The trio's `SKIPPED_BLOCKING` stays a prose-computed present-∩-skip-set integer and is
+   deliberately **not** externalized to a cumulative `resolutions.json` — doing so drops the
+   present-set intersection (the resolutions entries carry no finding identity) and reintroduces the
+   loop-skipping bug.
    **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
 8. **Refresh + continuation gate.** Re-copy the revised doc: `cp "$TASKS_PATH" "$SESSION_DIR/tasks.md"`. Whether to re-review is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `SKIPPED_BLOCKING` = the count of Critical/Important findings in this round's `compiled.findings` whose identity is in the `skip-set` — the *present* skipped blockers (equivalently: blocking findings minus blocking **effective** findings from step 3). Count this **cumulatively every round**, not just the ones you added this round — the specialists re-flag a skipped finding each round, so a once-skipped blocker stays present and must keep being counted as skipped, else it reads as "present and addressed" forever and the loop can never reach `exit_skipped`. The gate **derives the number of blockers addressed from this round's `compiled.json`** (blockers present minus the present-and-skipped), so the addressed count is **not yours to self-report**. Run it and obey its `action`:
 
@@ -466,7 +501,7 @@ Agents flag departures from these — every one is in the writing-plans + CONVEN
 - **TDD discipline** — behavior is introduced test-first; the spec's significant unhappy paths have test steps.
 - **Type/name consistency** — symbols defined in early tasks are referenced identically later.
 - **Right altitude** — executable steps, not the plan's strategy restated; no task re-decides the design.
-- **Build contract present** — size + the SDD clips + the writing-plans body verbatim; no orphan superpowers/plans artifact.
+- **Build contract present** — size + the SDD clips + the writing-plans body verbatim (incl. the Global Constraints + per-task Interfaces blocks where `writing-plans` ≥ 6.0 emits them); no orphan superpowers/plans artifact.
 
 ## Out of Scope at Tasks Time
 

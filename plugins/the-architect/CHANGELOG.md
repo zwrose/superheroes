@@ -6,6 +6,31 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-18
+
+### Added
+
+- **Band-wide model-tier knob.** `lib/model_tier.py` — the shared, pure, fail-OPEN
+  role→model-tier policy core (the cost/perf knob). review-crew wraps it and
+  workhorse is the first consumer.
+
+### Changed
+
+- **`SAFETY_MACHINERY` extended (F3 self-protection).** Added `enforcer.py`,
+  `band_lib.py`, `model_tier.py`, and `hooks.json` so the workhorse action-boundary
+  enforcer, its resolver, the model-tier core, and the hook registration are
+  protected from auto-edits — the CI fixer can't disable the floor.
+
+## [0.2.0] — 2026-06-16
+
+### Added
+
+- **Escalation rubric (F5).** `lib/escalation.py` (deterministic floor action-classifier + pure
+  `route()` + fixer file-scope guard) and `rubric/escalation-base.md` (the shared PROCEED/NOTIFY/GATE
+  policy — the escalation analogue of `review-base.md`). `plan` and `tasks` now instantiate the
+  shared rubric and gain the NOTIFY tier (owner-relevant-but-reversible decisions surface as undoable
+  heads-ups instead of silent record-only).
+
 ## [0.1.0] — 2026-06-16
 
 ### Added

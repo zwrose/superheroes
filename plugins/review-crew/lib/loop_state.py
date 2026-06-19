@@ -30,6 +30,7 @@ import json
 import sys
 
 _BLOCKING = ("Critical", "Important")
+_ALL_SEVERITIES = ("Critical", "Important", "Minor", "Nit")
 
 
 def _count_blocking(findings):
@@ -45,11 +46,20 @@ def _blocking_fixed_from_fix_batch(path):
 
 
 def _skipped_blocking_from_resolutions(path):
-    """resolutions.json: { resolutions: [{action, severity}] }; count skipped blockers."""
+    """resolutions.json: { resolutions: [{action, severity}] }; count skipped blockers.
+    FAIL-SAFE: a skip record whose severity is missing/unrecognized counts as blocking
+    (a real blocker recorded without severity must not silently uncount -> false exit_clean).
+    """
     with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
-    return sum(1 for r in data.get("resolutions", [])
-               if r.get("action") == "skip" and r.get("severity") in _BLOCKING)
+    n = 0
+    for r in data.get("resolutions", []):
+        if r.get("action") != "skip":
+            continue
+        sev = r.get("severity")
+        if sev in _BLOCKING or sev not in _ALL_SEVERITIES:   # blocking, or malformed -> conservative
+            n += 1
+    return n
 
 
 def _blocking_present_from_compiled(path):

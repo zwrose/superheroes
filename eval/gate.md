@@ -1,7 +1,7 @@
 # Phase-1 gate — "one issue, evals-gated"
 
 Phase 1 (see [ROADMAP.md](../ROADMAP.md)) takes a single work-item through the full loop
-— Discovery → Plan → Tasks → Build → Verify → Integrate — with a human watching. This is
+— Discovery → Plan → Tasks → Build → Verify → Ship — with a human watching. This is
 what must pass before that run counts as **correct**. Checks marked **[live]** are
 enforceable today (deterministic conformance); **[Phase 1]** checks are behavioral and
 get their fixtures as the loop is built.
@@ -21,7 +21,7 @@ get their fixtures as the loop is built.
 
 ## Behavioral — the loop does the right thing
 
-- **[Phase 1] End-to-end completion.** The work-item reaches Integrate and produces a PR
+- **[Phase 1] End-to-end completion.** The work-item reaches Ship and produces a PR
   whose diff satisfies the `spec`'s acceptance criteria.
 - **[Phase 1] Gates actually block.** Each review gate (review-spec / review-plan /
   review-tasks) is shown to **stop** a seeded-bad artifact (a deliberately flawed
@@ -48,3 +48,17 @@ get their fixtures as the loop is built.
 
 Don't weaken a fixture or relax a schema to make a run pass — the fixtures and schemas
 are the frozen ground truth. Fix the implementation, or add a new fixture.
+
+### [Phase 2a-core] Escalation calibration
+
+- **Layer 1 — routing-logic (deterministic, HARD GATE).** `escalation.py`'s floor-classifier,
+  `route()` truth-table, `route()` fail-closed, the fixer file-scope guard, and the loop_state
+  disposition-pipeline property must match the frozen fixture
+  `plugins/review-crew/eval/escalation/expected.json` exactly (see
+  `plugins/review-crew/eval/tests/test_escalation_eval.py` and `…/lib/tests/test_loop_state.py`).
+  A change must clear this before it lands. The fixture is frozen ground truth — fix the code, never
+  weaken the fixture.
+- **Layer 2 — axis-assignment calibration (model-in-loop, TRACKED).** The model's ability to assign
+  the rubric's axes on realistic scenarios (`…/eval/escalation/calibration.json`) is tracked as an
+  escalation-accuracy measure (false-negative + false-positive escalations), not a deterministic
+  blocking gate; it deepens with the producer/test-pilot harness.

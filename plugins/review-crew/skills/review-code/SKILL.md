@@ -27,6 +27,7 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 | `/review-crew:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
 | `/review-crew:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
 | `/review-crew:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
+| `/review-crew:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse ②). Combinable with any form; absent → no file written (backward-compatible). |
 
 The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
 
@@ -76,6 +77,13 @@ Decide mode (auto-detected or explicit, per `## Invocation`). Create the session
 RUBRIC="${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
+**Resolve the escalation guard wrapper and repo root once.** Subagents do not inherit `${CLAUDE_PLUGIN_ROOT}` or `$REPO_ROOT`, so compute both absolute values here (in the orchestrator's context, where they expand) for embedding into the fixer prompt's `## Input` block — the same way `RUBRIC`/`PROFILE` are embedded as expanded absolute paths:
+
+```bash
+ESC_WRAPPER="${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py"   # absolute; embed the expanded value in the fixer prompt
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
+```
+
 **Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
 
 ```bash
@@ -95,6 +103,22 @@ Also resolve the engine versions the staleness self-check (next) needs — the *
 PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json'))['version'])")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
+
+**Resolve the model tiers once (band-wide knob).** The five specialists run at the
+`reviewer` tier (`reviewer-deep` for security/architecture), and the triage + fixer
+subagents at `mechanical`. Resolve each via the shared knob to get the band defaults:
+
+```bash
+MT="${CLAUDE_PLUGIN_ROOT}/lib/model_tier_resolve.py"   # resolved like $RUBRIC
+REVIEWER_MODEL=$(python3 "$MT" --role reviewer | jq -r '.model // empty')
+DEEP_MODEL=$(python3 "$MT" --role reviewer-deep | jq -r '.model // empty')
+MECH_MODEL=$(python3 "$MT" --role mechanical | jq -r '.model // empty')
+```
+
+When dispatching the specialists via the Agent tool, pass `model: $DEEP_MODEL` for
+`security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
+other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
+value means "inherit the session model" — omit the `model` arg in that case.
 
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
@@ -380,25 +404,30 @@ Each round:
 2. **Review.** Dispatch the five specialists in parallel by `subagent_type` (same prompt template as `## Dispatch Specialists in Parallel`), writing `round-<round>/findings-<agent>.json`. Point them at `round-<round>/diff.txt`.
 3. **Compile + dedupe** into `round-<round>/compiled.json` with verdict (same pipeline as `## Compile + Dedupe`).
 4. **Effective findings** = `compiled.findings` whose identity is NOT in the skip-set.
-5. If `effective` is empty → **EXIT SUCCESS** (jump to End-of-Loop Summary).
+5. If `effective` is empty → **EXIT SUCCESS** (jump to End-of-Loop Summary with `ACTION=exit_clean`, `ROUND=<round>`, `REASON="no effective findings"`).
 6. **Triage.** Dispatch the triage subagent (template below) over `effective`, writing `round-<round>/triage.json`.
-7. **Interventions — escalate only blockers.** `present-set` = **Critical/Important** effective findings where `recommendation` is `Skip` or `Defer`, OR (`recommendation` is `Fix` AND `classification` is `judgment`). Only a *blocking* finding carries a decision worth interrupting the user for — skipping it changes the verdict/gate, and a judgment-fix on it picks among real tradeoffs. **Minor/Nit findings are never escalated:** apply the triage recommendation automatically — `Skip`/`Defer` → add the identity to the skip-set; `Fix` → fold into the fix batch (step 8), using the POV's suggested approach for a judgment-fix — then record each via `decisions.py` and surface them in the End-of-Loop Summary (auto-skipped / auto-fixed). Nothing is hidden, just not asked; everything the agent recommends fixing mechanically (any severity) is handled in step 8 without asking.
-   - If non-empty: present ONE consolidated `AskUserQuestion`. For each finding, **lead with the orchestrator POV** from `triage.json` (per the base rubric's "Orchestrator POV") — show the recommendation, rationale, and confidence right under the finding, e.g. `→ POV: Skip (Low confidence) — correct in theory but this path is never hit concurrently under the profile's threat model`. Then offer **Fix as suggested** / **Fix with my guidance** (free text) / **Skip** — keep the options in this neutral order regardless of the POV; the POV informs, it does not pre-select. List the auto-fix findings (`recommendation` Fix AND `classification` mechanical) in the same prompt as an FYI (no per-item action; they are fixed automatically). Write `round-<round>/resolutions.json`:
+7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each **Critical/Important** effective finding, route its disposition with the shared rubric (modes PROCEED/NOTIFY/GATE). **GATE** (the consolidated `AskUserQuestion` below) only the blockers whose skip-or-fix is genuinely the owner's call — a product/scope/risk trade-off. For the rest, **verify and proceed**, recording the disposition so `loop_state` still sees it:
+   - **Fix, one right answer per the project's conventions** → fold into the fix batch (step 8) using the POV's suggested approach (a step-8 auto-fix).
+   - **Verifiably-safe skip / believed false-positive** → record a **skip** in `resolutions.json` (`action: "skip"`, **carrying the finding's `severity`**) and add the identity to the skip-set, **with a verification trace** (cite the source / test you checked). A skip with no citable ground truth is **not** eligible — it GATEs. **Never silently drop a blocker** — a skipped blocker is recorded with its severity, so `loop_state` counts it.
+   - **NOTIFY (the rubric's middle mode on a blocker)** → act on the best default (the auto-fix when there is one right answer, else the verifiably-safe skip) and record it via `decisions.py` and in the End-of-Loop Summary with its reverse-path/expiry — surfaced, not asked. (Mirrors the trio: record GATE outcomes and NOTIFY decisions in the summary with their reverse-path/expiry, per `escalation-base.md`.)
+   - Minor/Nit → never escalated: apply the triage recommendation automatically — `Skip`/`Defer` → add the identity to the skip-set; `Fix` → fold into the fix batch (step 8), using the POV's suggested approach for a judgment-fix — then record each via `decisions.py` and surface them in the End-of-Loop Summary (auto-skipped / auto-fixed).
+   Resolve the rubric for this dispatch once via the wrapper (with `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` defined in setup): `RUBRIC_RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")` — read its `path` and embed it (apply the embedded fail-closed posture if `degraded`: apply the hard floor and GATE anything owner-weighable). Nothing is hidden, just not asked; everything the agent recommends fixing mechanically (any severity) is handled in step 8 without asking.
+   - **Write `round-<round>/resolutions.json` whenever this round records ANY disposition** — every autonomous verifiably-safe skip (the bullet above), every NOTIFY-skip, AND every gated answer below. This is the only channel by which step 14 sees a skipped blocker, so it is written even when no `AskUserQuestion` is presented:
      ```json
      { "round": <N>, "resolutions": [
        { "id": "<finding id>", "file": "<file>", "title": "<title>", "severity": "<severity>", "action": "fix" | "fix-with-guidance" | "skip", "guidance": "<text or omitted>" }
      ] }
      ```
-     Add every `skip` identity to the skip-set; if a skipped finding is Critical or Important, also remember it as a **skipped-blocking** finding (its `severity` is recorded in `resolutions.json` so this survives compaction). `approved` = `present-set` entries with action `fix`/`fix-with-guidance` (carry `guidance`).
+     Add every `skip` identity to the skip-set; a skipped Critical/Important finding is recorded with its `severity` so `loop_state` counts it (this survives compaction). `approved` = entries with action `fix`/`fix-with-guidance` (carry `guidance`).
+   - **Present the GATE only for the present-set (owner-weighable blockers).** If the present-set is non-empty: present ONE consolidated `AskUserQuestion`. For each finding, **lead with the orchestrator POV** from `triage.json` (per the base rubric's "Orchestrator POV") — show the recommendation, rationale, and confidence right under the finding, e.g. `→ POV: Skip (Low confidence) — correct in theory but this path is never hit concurrently under the profile's threat model`. Then offer **Fix as suggested** / **Fix with my guidance** (free text) / **Skip** — keep the options in this neutral order regardless of the POV; the POV informs, it does not pre-select. List the auto-fix findings (`recommendation` Fix AND `classification` mechanical) in the same prompt as an FYI (no per-item action; they are fixed automatically). Fold each answer into the `resolutions.json` written above. If the present-set is empty, present no `AskUserQuestion` — but `resolutions.json` is still written (above) whenever the round recorded any skip; only a round with no skip at all omits the file.
      **Record decisions (learning loop):** after writing `resolutions.json`, append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (`action`: `skip` → `skip`, `fix-with-guidance` → `guidance`, `fix` → `fix`), per `## Learning Loop & Staleness Nudge` → "Recording decisions". Also append a `fix` record for each `auto-fix-set` finding fixed silently this round. This append is non-blocking and never gates the loop.
-   - If empty: `approved = []`, write no resolutions file.
 8. **Fix batch.** `auto-fix-set` = effective findings where `recommendation` is `Fix` AND (`classification` is `mechanical` **OR** severity is `Minor`/`Nit`) — mechanical fixes at any severity, plus non-blocking judgment-fixes applied as the POV suggests (a non-blocking judgment call isn't worth an interrupt). `fix-batch` = `auto-fix-set ∪ approved`. Write `round-<round>/fix-batch.json` (full finding objects; attach `userGuidance` to any with guidance). (Blocking — Critical/Important — judgment-fixes are not auto-added; they arrive via `approved` from step 7.)
 9. **Blocking-to-fix** = count of `fix-batch` findings with severity Critical or Important.
-10. If `fix-batch` is empty (everything this round was skipped) → **EXIT** with a "remaining findings deliberately skipped" note (list them). (This all-skipped shortcut pre-empts the step-14 gate, which would return the same `exit_skipped` for these facts. The gate still reaches `exit_skipped` normally at step 14 when a round fixes only Minor/Nit findings but skips a blocker.)
+10. If `fix-batch` is empty (everything this round was skipped) → **EXIT** with a "remaining findings deliberately skipped" note (list them) (`ACTION=exit_skipped`, `ROUND=<round>`, `REASON="all findings skipped"`). (This all-skipped shortcut pre-empts the step-14 gate, which would return the same `exit_skipped` for these facts. The gate still reaches `exit_skipped` normally at step 14 when a round fixes only Minor/Nit findings but skips a blocker.)
 11. **Fix.** Dispatch the fixer subagent (template below) with `fix-batch.json`.
-    - Status `CHECK_FAILED` → **HALT**; surface the failing `VERIFY_CMD` output. (When the profile is `mode: unverified`, the fixer runs no checks and cannot return `CHECK_FAILED`.)
+    - Status `CHECK_FAILED` → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="fixer CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface the failing `VERIFY_CMD` output. (When the profile is `mode: unverified`, the fixer runs no checks and cannot return `CHECK_FAILED`.)
     - Status `ESCALATED` → for each escalated finding, present it as a `present-set` intervention now (same prompt shape as step 7), then re-dispatch the fixer with the user's decisions folded in. The follow-up dispatch uses this same `CHECK_FAILED`/`ESCALATED` contract; a finding the user has already decided on is no longer eligible to escalate, so it cannot ping-pong. Do NOT add an escalated finding to the skip-set unless the user skips it. After escalation handling resolves the final `fix-batch`, recompute **blocking-to-fix** (step 9) before evaluating step 14.
-12. **Verify.** If a `VERIFY_CMD` is set, the orchestrator independently runs it from the user's own working tree (never the PR head), non-interactively, with a timeout. Fail (non-zero exit) → **HALT** with `CHECK_FAILED`; surface output. (Do not re-review on a broken tree.) If the profile's verify story is `mode: unverified`, **SKIP this gate** — there is no command to run; the round's commit stands ungated.
+12. **Verify.** If a `VERIFY_CMD` is set, the orchestrator independently runs it from the user's own working tree (never the PR head), non-interactively, with a timeout. Fail (non-zero exit) → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="verify CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface output. (Do not re-review on a broken tree.) If the profile's verify story is `mode: unverified`, **SKIP this gate** — there is no command to run; the round's commit stands ungated.
 13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON; **capture `halt`** as `BREAKER_HALT` (`yes`/`no`). Do NOT read or `cat` the diff into the orchestrator context. (Don't act on it yet — step 14 feeds it to the continuation gate so the next action is decided in one place.)
 14. **Continuation gate — the next action is decided by a script, not by you.** Whether to run another round is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run the deterministic gate and **obey its `action`** (it derives the blocking counts from the round artifacts, so they are not yours to self-report either):
 
@@ -409,11 +438,11 @@ Each round:
       --resolutions "$SESSION_DIR/round-<N>/resolutions.json"
     ```
 
-    (Omit `--resolutions` if no resolutions file was written this round.) Parse its JSON `{action, reason}` and **do exactly what `action` says — you may not substitute your own judgment for it**:
+    (A `resolutions.json` is written whenever the round recorded any skip — autonomous, NOTIFY, or gated; omit `--resolutions` only when no skip occurred at all this round.) Parse its JSON `{action, reason}` and **do exactly what `action` says — you may not substitute your own judgment for it**:
     - **`review`** → `round += 1` and **repeat from step 1**. This is **MANDATORY**: you applied a blocking fix and the loop must re-review to verify it. Do **not** exit, declare success, or present the next round as optional. (The classic skip is to stop here believing it's clean — that belief is exactly what this gate overrides; the last time it was trusted, the "obviously clean" re-review found two real bugs in the fix.)
-    - **`exit_clean`** → **EXIT SUCCESS** (no blocking fix applied this round and none skipped; any Minor/Nit are now fixed).
-    - **`exit_skipped`** → **EXIT — CLEAN EXCEPT FOR SKIPPED**: list the deliberately-skipped blocking finding(s); do **not** report a plain SUCCESS verdict.
-    - **`halt`** → **HALT**: surface the gate's `reason` (plus the breaker's `reason`/`detail` if it halted) + the still-open findings + the commit range (`git log <baseRef>..HEAD --oneline`).
+    - **`exit_clean`** → set `ACTION=exit_clean`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT SUCCESS** (no blocking fix applied this round and none skipped; any Minor/Nit are now fixed).
+    - **`exit_skipped`** → set `ACTION=exit_skipped`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT — CLEAN EXCEPT FOR SKIPPED**: list the deliberately-skipped blocking finding(s); do **not** report a plain SUCCESS verdict.
+    - **`halt`** → set `ACTION=halt`, `ROUND=<round>`, `REASON=<gate reason>` and **HALT**: surface the gate's `reason` (plus the breaker's `reason`/`detail` if it halted) + the still-open findings + the commit range (`git log <baseRef>..HEAD --oneline`).
 
     On `ESCALATED` re-handling (step 11), recompute the fix-batch first, then run this gate on the final `round-<N>/fix-batch.json`. **Red flags that mean you are about to skip the loop** — if you catch yourself thinking any of these, run the gate and obey it instead: "it's a trivial/one-line fix" · "round N+1 will obviously be clean" · "I have full context, I can tell it's done" · "a re-review is diminishing returns / not worth the tokens" · "I'll *offer* another round as optional." None of these is yours to act on; `loop_state.py` decides.
 
@@ -465,6 +494,26 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 
 ### Fixer subagent prompt
 
+**Fixer file-scope guard (`escalation-base.md` hard floor — runtime self-modification).** The guard runs
+in the **fixer subagent** context, which does NOT inherit `${CLAUDE_PLUGIN_ROOT}` or `$REPO_ROOT`. So the
+orchestrator embeds both absolute values into the fixer prompt's `## Input` block (the expanded `ESC_WRAPPER`
+and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`PROFILE` paths. Before the
+fixer edits any file, it gates it with those embedded absolute values:
+`python3 "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`.
+If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery — the authoritative
+membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); surface it as a finding for the owner instead. A `degraded:true`
+result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
+
+> **Enforcement boundary (review-flagged residual, design-consistent).** In F5 this guard is invoked
+> by skill prose — a subagent *could* skip it, the same rationalize-past-prose risk `loop_state` was
+> built to remove. F5 deliberately ships the deterministic guard *function* (tested, §8) + this
+> wiring; the **non-bypassable** enforcement at the action boundary is the F3 producer's job (§4
+> bound-2, §12). `REPO_ROOT` must be defined in setup and embedded wherever this guard is wired: an
+> *empty* `--root` does **not** fail the guard open — `_band_roots("")` still returns `[_PLUGIN_ROOT]`
+> and an empty `--root` still anchors against `[_PLUGIN_ROOT, resolved the-architect root]`; it only
+> drops the **in-repo the-architect anchor**, and refuses (`allow:false, degraded:true`) only when
+> `escalation.py` is itself unresolvable. Define `REPO_ROOT` to keep that anchor.
+
 ```
 You are the fixer for one round of an auto-fix code-review loop.
 
@@ -475,12 +524,20 @@ You are the fixer for one round of an auto-fix code-review loop.
 - Conventions: CLAUDE.md and the project profile (<PROFILE_PATH>);
   severity/format from the base rubric (<absolute RUBRIC path>)
 - Work in the current branch's working tree at <cwd>
+- Repo root: <absolute REPO_ROOT>
+- Escalation guard: <absolute ESC_WRAPPER path>
 - Verify command: <VERIFY_CMD, or the literal "none" when the profile is mode: unverified>
 
 ## Your job
 1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
    canonical patterns. When a finding has userGuidance, follow it over the
-   original suggestion.
+   original suggestion. BEFORE editing any file, gate it with the fixer
+   file-scope guard, using the absolute "Escalation guard" and "Repo root"
+   values from ## Input:
+   `python3 "<absolute ESC_WRAPPER path>" guard --root "<absolute REPO_ROOT>" --path "<file>"`
+   — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
+   safety machinery); report it under "escalated" for the owner instead. Never
+   push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
 3. If a verify command was provided, run it. If it fails, fix the failure and
    retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
@@ -505,6 +562,18 @@ Report it under "escalated" with the id and why.
 ```
 
 ### End-of-Loop Summary
+
+**If `--result-file` was passed**, write the terminal loop_state decision before printing the summary (atomic write via temp file):
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_result.py" write \
+  --path "$RESULT_FILE" \
+  --action "$ACTION" \
+  --round "$ROUND" \
+  --reason "$REASON"
+```
+
+(`$ACTION`, `$ROUND`, and `$REASON` are set on **every** terminal exit path: step-5 → `exit_clean`; step-10 → `exit_skipped`; step-11/12 HALT → `halt`; step-14 → the gate's returned action. Each exit path sets these variables before jumping to the End-of-Loop Summary, so the write always has defined values. `$RESULT_FILE` is the path supplied via `--result-file`. When `--result-file` is absent, skip this step entirely — no file written, no behavior change.)
 
 Print: final verdict, rounds run, commits created (one per round), findings fixed by severity, any blocking findings deliberately skipped, **the Minor/Nit findings auto-handled without asking** (a short list — `auto-fixed` vs `auto-skipped` — so the non-blocking work the loop did silently is visible, not hidden), and any new findings the fixer noticed/introduced along the way (informational). If the verify story was `unverified`, state that fixes were committed **without a verify gate**. Because fixes are local-only, offer to push the branch (or, if this was a PR you don't own, point to `--post`). Do not push without explicit confirmation.
 

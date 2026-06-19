@@ -3,7 +3,7 @@
   "owner": { "name": "zwrose" },
   "metadata": {
     "description": "Your team of superheroes, powered by superpowers — Claude Code plugins that team up to run largely-autonomous development.",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "plugins": [
     {
@@ -20,6 +20,11 @@
       "name": "test-pilot",
       "source": "./plugins/test-pilot",
       "description": "Seeded manual test plans on PRs plus autonomous browser execution before human spot-check."
+    },
+    {
+      "name": "workhorse",
+      "source": "./plugins/workhorse",
+      "description": "The per-issue back-half producer: approved tasks → a CI-green, ready-for-review PR + live dev server, with a non-bypassable never-merge floor."
     }
   ]
 }

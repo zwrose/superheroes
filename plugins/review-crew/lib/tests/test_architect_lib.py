@@ -80,3 +80,21 @@ def test_cli_resolves_in_repo_and_fails_closed(tmp_path, capsys):
     assert AL.main(["architect_lib.py", "--root", _REPO_ROOT]) == 0
     assert capsys.readouterr().out.strip().endswith(_SUFFIX)
     assert AL.main(["architect_lib.py", "--root", str(tmp_path), "--plugin-root", str(tmp_path)]) == 1
+
+
+def test_resolves_escalation_lib_in_repo():
+    p = AL.resolve_target(("the-architect", "lib", "escalation.py"), root=_REPO_ROOT)
+    assert p and p.endswith(os.path.join("the-architect", "lib", "escalation.py")) and os.path.isfile(p)
+
+def test_resolves_escalation_rubric_in_repo():
+    p = AL.resolve_target(("the-architect", "rubric", "escalation-base.md"), root=_REPO_ROOT)
+    assert p and p.endswith(os.path.join("the-architect", "rubric", "escalation-base.md")) and os.path.isfile(p)
+
+def test_default_resolve_still_targets_definition_doc():
+    # back-compat: the existing resolve() keeps resolving definition_doc.py
+    p = AL.resolve(root=_REPO_ROOT)
+    assert p and p.endswith(os.path.join("the-architect", "lib", "definition_doc.py"))
+
+def test_resolve_target_fails_closed_when_absent(tmp_path):
+    assert AL.resolve_target(("the-architect", "lib", "escalation.py"),
+                             root=str(tmp_path), plugin_root=str(tmp_path)) is None
