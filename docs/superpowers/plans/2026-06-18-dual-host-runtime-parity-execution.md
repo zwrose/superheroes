@@ -1,6 +1,8 @@
-# Dual-Host Runtime Parity Execution Plan
+# Dual-Host First-Class Runtime Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> This is the single executable implementation plan for subagent-driven development. The design/spec below is reference material; if this plan and the spec disagree, stop and reconcile before implementation.
 
 **Goal:** Implement first-class Claude Code and Codex packaging for the superheroes marketplace while preserving the existing Claude runtime surface and allowing both hosts to coexist in one project.
 
@@ -13,9 +15,18 @@
 ## Source Documents
 
 - `docs/superpowers/specs/2026-06-18-dual-host-first-class-design.md`
-- `docs/superpowers/plans/2026-06-18-dual-host-plugin-runtime-parity.md`
 - `CONVENTIONS.md`
 - `.github/scripts/validate_marketplace.py`
+
+## Implementation Principles
+
+- Do not prefer Claude over Codex, or Codex over Claude.
+- Do not weaken Claude-native instructions to make them generic.
+- Do not phrase Codex support as Claude compatibility mode.
+- Do not change review-crew, test-pilot, or the-architect core workflow behavior.
+- Do not introduce committed runtime state under `.superheroes/`.
+- Generate only stable metadata after the hand-authored host-native patterns exist.
+- Treat this file as the plan to execute; do not combine it with another plan document during subagent-driven development.
 
 ## File Map
 
@@ -719,6 +730,42 @@ If verification changes docs or fixtures, commit them:
 git add <changed-files>
 git commit -m "chore: finalize dual-host verification"
 ```
+
+## Review Checkpoints
+
+After Task 1:
+
+- Review whether the Codex manifest shape is host-native without claiming unsupported runtime capabilities.
+- Review whether the drift validator catches version, source-root, symlink-escape, and skills-path mistakes.
+
+After Task 4:
+
+- Review Codex skill wrappers for host-native quality.
+- Confirm Codex skill wrappers do not read like Claude instructions with renamed nouns.
+- Confirm Codex skill wrappers do not weaken or contradict Claude skills.
+
+After Task 5:
+
+- Review migration and compatibility behavior against `CONVENTIONS.md`.
+- Confirm no committed runtime path is introduced for mutable state.
+- Confirm doctor/reconcile remains report-only until write-capable migration is explicitly implemented.
+
+After Task 7:
+
+- Request a full review using review-crew.
+- Fix any findings that identify concrete compatibility, validation, or documentation risks.
+
+## Acceptance Criteria
+
+- Claude users still have the same first-class manifest, skill, and agent surface they had before.
+- Codex users have first-class marketplace metadata, plugin manifests, and host-native skill wrappers.
+- Both host surfaces agree on plugin identity, versions, author, and shared contracts.
+- CI fails if Codex package roots point at Claude package roots.
+- CI fails if plugin versions drift across hosts.
+- CI fails if shared reviewer methodology drifts from Claude reviewer agents during the transition.
+- Shared contract fixtures cover Claude-produced and Codex-produced artifacts.
+- Migration docs define expand, migrate, contract, rollback, lock semantics, and doctor/reconcile behavior.
+- No existing plugin workflow behavior is changed by this implementation.
 
 ## Self-Review Checklist
 
