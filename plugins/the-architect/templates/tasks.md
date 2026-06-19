@@ -13,7 +13,10 @@
     the plan's frozen slug reused, its size inherited). Set the title (reframing
     writing-plans' "# … Implementation Plan" heading as "— Tasks").
   - Keep the writing-plans body VERBATIM below the build contract: its **Goal /
-    Architecture / Tech Stack** lines, then every `### Task N` checkbox TDD step.
+    Architecture / Tech Stack** lines, the **Global Constraints** block, then every
+    `### Task N` checkbox TDD step (each carrying its **Interfaces** block where
+    writing-plans emits one). Capture all of these verbatim — do not drop the new
+    Global Constraints / Interfaces blocks (superpowers `writing-plans` ≥ 6.0).
   - REPLACE writing-plans' agentic-worker line ("> **For agentic workers:** REQUIRED
     SUB-SKILL: …subagent-driven-development…") with the build contract below — the SDD clips
     are the producer's Build to invoke, recorded here as contract, not launched here.
@@ -29,5 +32,7 @@
 > only once `gates.review: passed`.
 
 {{The superpowers `writing-plans` body, captured verbatim: the **Goal / Architecture /
-Tech Stack** header, then the bite-sized `### Task N` checkbox TDD steps (exact file paths,
-complete code per step, exact test commands + expected output, frequent commits).}}
+Tech Stack** header, the **Global Constraints** block (writing-plans ≥ 6.0 emits one), then
+the bite-sized `### Task N` checkbox TDD steps — each with its **Interfaces** block
+(consumes / produces) where present — with exact file paths, complete code per step, exact
+test commands + expected output, frequent commits.}}

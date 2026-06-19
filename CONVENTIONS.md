@@ -259,11 +259,15 @@ updated: <date>
   alternatives considered. References the spec's UI/UX outcome when describing how it
   is built.
 - **`tasks`** — the frontmatter above, then the superpowers `writing-plans` body
-  **verbatim** (its Goal/Architecture/Tech-Stack header + checkbox TDD tasks). Our
-  header adds the **build contract**: `size`, `gates`, and the SDD clips —
-  subagent-driven-development is invoked with the worktree **pre-verified, not created**,
-  and **without** `finishing-a-development-branch`; the **producer enforces** both clips
-  at invocation.
+  **verbatim** (its Goal/Architecture/Tech-Stack header, the **Global Constraints**
+  block, and the checkbox TDD tasks — each with a per-task **Interfaces** block where
+  `writing-plans` emits one). Our header adds the **build contract**: `size`, `gates`,
+  and the SDD clips — subagent-driven-development is invoked with the worktree
+  **pre-verified, not created**, and **without** `finishing-a-development-branch`; the
+  **producer enforces** both clips at invocation. We target **superpowers ≥ 6.0** (6.0
+  added the Global Constraints / per-task Interfaces blocks to `writing-plans` and the
+  single-`task-reviewer` SDD flow); the wrap captures the body verbatim, so a newer
+  `writing-plans` body flows through unchanged.
 
 ### 3.3 Location and convertibility
 

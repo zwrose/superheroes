@@ -246,9 +246,13 @@ superheroes build contract (CONVENTIONS §3.2). It is sound when:
   re-decide the architecture. A task that re-architects (vs the plan) is a finding:
   it belongs in the plan, or it is drift.
 - **Build contract present.** The doc carries the superheroes wrapper (size, the
-  SDD clips) and the writing-plans body verbatim (Goal/Architecture/Tech-Stack +
-  `### Task N`), with the agentic-worker handoff replaced by the build contract and
-  no orphan superpowers/plans artifact.
+  SDD clips) and the writing-plans body verbatim (Goal/Architecture/Tech-Stack, the
+  **Global Constraints** block, and `### Task N` steps with their per-task **Interfaces**
+  blocks where `writing-plans` ≥ 6.0 emits them), with the agentic-worker handoff replaced
+  by the build contract and no orphan superpowers/plans artifact. The Global Constraints
+  and Interfaces blocks are a quality SIGNAL — do not flag their presence; flag their
+  absence only when the plan clearly needed them (cross-task contracts, a version/dependency
+  floor) and they're missing.
 
 ## Per-dimension framing (you are reviewing executable steps)
 - Test-reviewer (heaviest here): TDD ordering (failing test precedes implementation);
@@ -497,7 +501,7 @@ Agents flag departures from these — every one is in the writing-plans + CONVEN
 - **TDD discipline** — behavior is introduced test-first; the spec's significant unhappy paths have test steps.
 - **Type/name consistency** — symbols defined in early tasks are referenced identically later.
 - **Right altitude** — executable steps, not the plan's strategy restated; no task re-decides the design.
-- **Build contract present** — size + the SDD clips + the writing-plans body verbatim; no orphan superpowers/plans artifact.
+- **Build contract present** — size + the SDD clips + the writing-plans body verbatim (incl. the Global Constraints + per-task Interfaces blocks where `writing-plans` ≥ 6.0 emits them); no orphan superpowers/plans artifact.
 
 ## Out of Scope at Tasks Time
 
