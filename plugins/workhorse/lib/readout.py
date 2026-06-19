@@ -25,7 +25,7 @@ def scrub(text, root=None):
         return ("[omitted — scrubber unavailable]", False)
     try:
         p = subprocess.run([sys.executable, lib, "scrub"], input=text,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, timeout=15)
         if p.returncode != 0:
             return ("[omitted — scrub failed]", False)
         return (p.stdout, True)

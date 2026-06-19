@@ -137,7 +137,7 @@ def classify_path(path):
         cli = [sys.executable, lib, "guard", "--path", path]
         for r in band_roots:
             cli += ["--band-root", r]
-        p = subprocess.run(cli, capture_output=True, text=True)
+        p = subprocess.run(cli, capture_output=True, text=True, timeout=10)
         if p.returncode != 0:
             return ("deny", "guard error (fail-closed)")
         res = json.loads(p.stdout.strip())
