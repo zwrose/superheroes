@@ -339,6 +339,7 @@ config-vs-state line, because the two have opposite sharing needs:
       resume-brief.md
       patterns-pin.md                   # the per-run snapshot of patterns.md (§2.1)
       events.jsonl                      # append-only audit log
+      devserver.json                    # managed dev-server sidecar (pid/pgid/port/command/bootId) for orphan reclaim
 ```
 
 The project store exists in **both** modes (it is the machine-local home of

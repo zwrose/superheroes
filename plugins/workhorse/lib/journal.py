@@ -70,7 +70,10 @@ def append(events_path, event_type, *, step=None, detail=None, world=None,
             os.write(fd, line)
             os.fsync(fd)          # durable: the write-ahead ci_fix_attempt must survive a crash
         finally:
-            os.close(fd)
+            try:
+                os.close(fd)      # don't let a close error mask the original write/fsync OSError
+            except OSError:
+                pass
     except OSError as exc:
         raise DurableWriteError("event append failed: %s" % exc) from exc
 

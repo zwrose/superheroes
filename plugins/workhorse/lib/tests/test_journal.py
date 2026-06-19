@@ -97,3 +97,15 @@ def test_render_brief_absent_world_uses_sentinel(tmp_path, monkeypatch):
                          root=str(tmp_path))
     body = open(brief).read()
     assert "- PR: —" in body          # the world PR field uses the sentinel, not literal "None"
+
+
+def test_render_brief_pr_dict_ready_vs_draft(tmp_path, monkeypatch):
+    # The world-PR-dict branch: isDraft False -> "ready", True -> "draft".
+    monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
+    e = str(tmp_path / "events.jsonl")
+    ready = str(tmp_path / "ready.md")
+    journal.render_brief(ready, {}, {"pr": {"isDraft": False}}, e, root=str(tmp_path))
+    assert "- PR: ready" in open(ready).read()
+    draft = str(tmp_path / "draft.md")
+    journal.render_brief(draft, {}, {"pr": {"isDraft": True}}, e, root=str(tmp_path))
+    assert "- PR: draft" in open(draft).read()

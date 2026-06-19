@@ -174,8 +174,11 @@ Emit step_entered/step_completed journal events.
 Detect the dev-server command: `python3 "$LIB/detect.py"` (`detect_dev_server`).
 None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
 
+  The sidecar path is `SIDECAR = paths["devserver"]` (`control_plane.paths` →
+  `<issue_dir>/devserver.json`) — the **same** stable path on the first run and on
+  every resume, so reclaim finds what the prior run wrote.
 - **Reclaim first (resume / orphan-after-crash).** Before starting, try
-  `devserver.reclaim(sidecar, port, command)` (`devserver.py`): if it corroborates
+  `devserver.reclaim(SIDECAR, port, command)` (`devserver.py`): if it corroborates
   (port + scrubbed-command + bootId), adopt the returned teardown handle — a managed
   server from a prior run is still up, don't double-start. If `reclaim` is `None` but
   `devserver.port_in_use(port)`, **GATE** (an unrecognized process holds the port — do
@@ -183,7 +186,7 @@ None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
 - **Start managed:** `devserver.start(command, port)`, then bound the readiness wait
   with `devserver.poll_healthy(devserver.health_url(port), timeout=…, interval=…)`
   (never an unbounded poll). On a fresh start, persist the identity for a later
-  reclaim: `devserver.write_sidecar(sidecar, handle, command, root=ROOT)` (the
+  reclaim: `devserver.write_sidecar(SIDECAR, handle, command, root=ROOT)` (the
   `command` is scrubbed fail-closed).
 - Capture the handle. **Tear it down (`devserver.teardown`) on every terminal state,
   GATE, or error** — no zombie. One server serves ⑤ and the ⑨ spot-check.

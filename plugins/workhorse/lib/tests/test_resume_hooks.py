@@ -27,7 +27,7 @@ def test_session_start_compact_emits_resume_context(tmp_path):
 def test_session_start_noncompact_is_noop(tmp_path):
     env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
     r = _run("session_start.py", {"source": "startup", "cwd": str(tmp_path)}, env)
-    assert r.returncode == 0 and r.stdout.strip() in ("", "{}")
+    assert r.returncode == 0 and r.stdout.strip() == ""   # non-compact emits NOTHING
 
 
 def test_precompact_is_nonfatal_without_state(tmp_path):

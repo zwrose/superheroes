@@ -31,6 +31,7 @@ def test_paths_shape(tmp_path):
     assert p["checkpoint"].endswith("/issues/my-item/checkpoint.json")
     assert p["events"].endswith("/issues/my-item/events.jsonl")
     assert p["resume_brief"].endswith("/issues/my-item/resume-brief.md")
+    assert p["devserver"].endswith("/issues/my-item/devserver.json")
 
 
 def test_ensure_store_creates_git_repo_and_meta(tmp_path):
