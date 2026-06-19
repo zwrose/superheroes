@@ -86,7 +86,9 @@ def resolve(root=None, plugin_root=None):
 def main(argv):
     ap = argparse.ArgumentParser(description="resolve the-architect's definition_doc.py (CONVENTIONS §7)")
     ap.add_argument("--root", default=None, help="target-repo root (the in-repo case)")
-    ap.add_argument("--plugin-root", default=None, help="override $CLAUDE_PLUGIN_ROOT (installed-sibling case)")
+    ap.add_argument("--plugin-root", default=None,
+                    help="the plugin root for the installed-sibling case; on Codex pass this "
+                         "instead of relying on $CLAUDE_PLUGIN_ROOT (Codex does not export it)")
     args = ap.parse_args(argv[1:])
     path = resolve(args.root, args.plugin_root)
     if not path:
