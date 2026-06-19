@@ -59,7 +59,7 @@ def test_expired_challenge_cannot_be_approved():
                              now=1000 + TTL + 1, ttl=TTL) is False
 
 
-def test_consume_ttl_boundary_inclusive_then_expired():
+def test_consume_ttl_boundary_is_inclusive():
     nonce = allowance.challenge(CMD, "merge-pr", now=1000)
     allowance.approve(allowance.command_hash(CMD), nonce, now=1000, ttl=TTL)
     # exactly at the boundary still consumes...

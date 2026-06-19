@@ -37,7 +37,12 @@ import tempfile
 import time
 
 DEFAULT_STORE_ROOT = "~/.claude/workhorse"
-DEFAULT_TTL = 90  # seconds — owner-chosen (issue #14)
+# seconds — owner-chosen (issue #14). Applied independently to each transition:
+# challenge→approve (owner deliberation window) and approve→consume (the "act now"
+# window), so the worst-case challenge→action lifetime is up to 2×TTL. Intentional —
+# the approve→consume freshness is what bounds "approved means now"; single-use +
+# per-checkout namespace + PreCompact-wipe bound the rest.
+DEFAULT_TTL = 90
 
 
 def store_root():
@@ -175,7 +180,9 @@ def clear_all(cwd=None):
     for d in roots:
         try:
             for name in os.listdir(d):
-                if name.endswith(".json"):
+                # `.json` records AND any orphaned `.claim.*` files (a process killed
+                # between consume's rename and unlink leaves one behind — reclaim it).
+                if name.endswith(".json") or ".claim." in name:
                     _unlink(os.path.join(d, name))
         except OSError:
             pass

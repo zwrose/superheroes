@@ -285,9 +285,10 @@ def test_hook_allows_gated_on_codex_after_valid_allowance(capsys, tmp_path, monk
 
 def test_hook_allows_gated_out_of_scope_is_silent(capsys):
     # No cwd → not a superheroes repo → gated action allowed (silent), both hosts.
-    rc = enforcer.hook(json.dumps({"tool_name": "Bash",
-                                   "tool_input": {"command": "gh pr merge 1"}}), host="claude")
-    assert rc == 0 and capsys.readouterr().out.strip() == ""
+    for host in ("claude", "codex"):
+        rc = enforcer.hook(json.dumps({"tool_name": "Bash",
+                                       "tool_input": {"command": "gh pr merge 1"}}), host=host)
+        assert rc == 0 and capsys.readouterr().out.strip() == "", host
 
 
 # --- host-agnostic dispatch: Codex tool names (shell / apply_patch) (issue #14 review) ---
@@ -351,8 +352,11 @@ def test_hook_compound_safety_write_plus_gated_never_enters_allowance(capsys, tm
                               "tool_input": {"command": cmd}}), host="codex")
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    # No allowance challenge was issued, so it can never be approved/consumed.
-    assert allowance.command_hash(cmd) and allowance.consume(cmd, cwd=scoped) is False
+    # No challenge RECORD was written (the overlay was never entered) — proving the
+    # safety-write deny didn't leak into the allowance flow. Read the record directly;
+    # a bare consume()==False would also pass if a challenge HAD been wrongly written.
+    assert allowance._read(allowance._path(allowance.command_hash(cmd), scoped)) is None
+    assert allowance.consume(cmd, cwd=scoped) is False
 
 
 def test_hook_allows_bash_safe_is_silent(capsys):

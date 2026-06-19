@@ -21,7 +21,7 @@ def main():
     # must re-ask. Best-effort, never fatal.
     try:
         import allowance
-        allowance.clear_all()
+        allowance.clear_all(cwd)   # scope to THIS checkout — don't revoke a concurrent loop's approval
     except Exception as exc:
         sys.stderr.write("workhorse precompact: allowance wipe skipped (%s)\n" % exc)
     try:
