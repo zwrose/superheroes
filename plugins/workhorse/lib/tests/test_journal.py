@@ -109,3 +109,14 @@ def test_render_brief_pr_dict_ready_vs_draft(tmp_path, monkeypatch):
     draft = str(tmp_path / "draft.md")
     journal.render_brief(draft, {}, {"pr": {"isDraft": True}}, e, root=str(tmp_path))
     assert "- PR: draft" in open(draft).read()
+
+
+def test_append_rejects_unknown_event_type(tmp_path):
+    # The EVENT_TYPES guard fails closed: a typo'd type would otherwise under-count the
+    # ci_fix_attempt bound. It must raise (park) before any write.
+    import pytest
+    e = str(tmp_path / "events.jsonl")
+    with pytest.raises(journal.DurableWriteError):
+        journal.append(e, "ci_fix_attemp", root=str(tmp_path))   # typo
+    import os
+    assert not os.path.exists(e)          # raised before any I/O — nothing written

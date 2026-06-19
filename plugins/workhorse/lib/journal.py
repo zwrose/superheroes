@@ -150,7 +150,7 @@ def render_brief(brief_path, checkpoint, world, events_path, *, root=None):
         "## Where it was",
         "- phase **%s**, last good step **%s**" % (c.get("phase", "?"), c.get("lastGoodStep")), "",
         "## Confirmed done",
-        "- PR: %s" % (("ready" if not w["pr"].get("isDraft") else "draft")
+        "- PR: %s" % (("ready" if w["pr"].get("isDraft") is False else "draft")
                       if isinstance(w.get("pr"), dict) else _wf(w.get("pr"), "—")),
         "- CI: %s" % _wf(w.get("ci"), "not detected"),
         "- dev server: %s" % _wf(w.get("dev_server"), "—"),
