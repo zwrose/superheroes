@@ -160,3 +160,52 @@ def fence_ok(store, work_item, generation):
     """Our generation still current? (call before any external write — §4.4 fence)."""
     _, lease = read_lease(store, work_item)
     return bool(lease) and lease.get("generation") == generation
+
+
+# --- §4.5 startup per-checkout lock (append to plugins/workhorse/lib/lock.py) ---
+
+def _startup_path(store):
+    return os.path.join(store, "startup.lock")
+
+
+def _startup_holder(store):
+    try:
+        with open(_startup_path(store), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _startup_obj():
+    return {"pid": os.getpid(), "host": _host(), "bootId": hostinfo.boot_id()}
+
+
+def acquire_startup(store):
+    """One active loop per checkout (§4.5). O_EXCL create; if held, steal iff the
+    holder is stale (pid dead-on-this-boot), else fail closed. Returns
+    (ok, holder_if_failed)."""
+    path = _startup_path(store)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        holder = _startup_holder(store)
+        if not _pid_dead(holder):                # reuse §4.4's dead-on-this-boot check
+            return (False, holder)               # live holder -> fail closed
+        try:
+            os.unlink(path)                      # stale -> clear it
+        except FileNotFoundError:
+            pass
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            return (False, _startup_holder(store))   # lost a concurrent steal
+    with os.fdopen(fd, "w") as fh:
+        json.dump(_startup_obj(), fh)
+    return (True, {})
+
+
+def release_startup(store):
+    try:
+        os.unlink(_startup_path(store))
+    except FileNotFoundError:
+        pass
