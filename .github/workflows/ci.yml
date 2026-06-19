@@ -32,4 +32,21 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Run plugin + band-eval tests
-        run: python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ plugins/workhorse/lib/tests/ eval/lib/tests/ .github/scripts/tests/ -q
+        # Each plugin's lib/ is put on sys.path by its tests/conftest.py, so plugins
+        # that share a module basename (e.g. workhorse and test-pilot both have a
+        # lock.py) would collide in a single shared pytest process. Plugins load in
+        # isolation at runtime; mirror that by testing each suite in its own process.
+        run: |
+          fail=0
+          for suite in \
+            .github/scripts/tests/ \
+            plugins/review-crew/lib/tests/ \
+            plugins/review-crew/eval/tests/ \
+            plugins/test-pilot/lib/tests/ \
+            plugins/the-architect/lib/tests/ \
+            plugins/workhorse/lib/tests/ \
+            eval/lib/tests/; do
+            echo "== pytest $suite =="
+            python3 -m pytest "$suite" -q || fail=1
+          done
+          exit $fail

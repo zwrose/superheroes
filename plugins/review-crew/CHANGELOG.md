@@ -6,6 +6,8 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-19
+
 ### Added
 
 - **Codex host support.** `.codex-plugin` manifest, `hosts/` tool maps (`claude-tools.md` and `codex-tools.md`), and neutral-language skills — all six `SKILL.md` files swept to remove Claude-specific dispatch tokens (`subagent_type`, "the Agent tool") and replace bare `${CLAUDE_PLUGIN_ROOT}` with the portable seam `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. Each skill now includes a host-map pointer and a Codex dispatch note so the plugin runs first-class on both Claude Code and Codex.
@@ -18,6 +20,13 @@ All notable changes to the `review-crew` plugin. Versions follow
   from "no review ran", which the-architect's self-certify branch would otherwise upgrade to
   `passed` — a green gate with no real review. `reset` mode is unchanged (advisory revoke-only;
   always exits 0). Regression coverage in `test_gate_write.py`.
+
+## [0.6.1] — 2026-06-19
+
+### Fixed
+
+- `model_tier_resolve` gains a subprocess timeout, failing open to the default tier
+  on a hung resolver (band-seam hardening).
 
 ## [0.6.0] — 2026-06-18
 

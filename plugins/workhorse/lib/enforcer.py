@@ -75,7 +75,8 @@ DENY_COMMANDS = [
 _SAFETY_BASENAMES = (
     "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
     "gate_write.py", "architect_lib.py", "definition_doc.py", "enforcer.py",
-    "model_tier.py", "band_lib.py", "hooks.json", "escalation-base.md", "review-base.md",
+    "model_tier.py", "band_lib.py", "hooks.json", "precompact.py", "session_start.py",
+    "escalation-base.md", "review-base.md",
 )
 _WRITE_OPS = re.compile(
     r"(>>?|\btee\b|\bsed\s+-i|\bcp\b|\bmv\b|\bdd\b|\btruncate\b|\bchmod\b|\bln\b)", re.I)
@@ -137,7 +138,7 @@ def classify_path(path):
         cli = [sys.executable, lib, "guard", "--path", path]
         for r in band_roots:
             cli += ["--band-root", r]
-        p = subprocess.run(cli, capture_output=True, text=True)
+        p = subprocess.run(cli, capture_output=True, text=True, timeout=10)
         if p.returncode != 0:
             return ("deny", "guard error (fail-closed)")
         res = json.loads(p.stdout.strip())

@@ -29,7 +29,7 @@ get their fixtures as the loop is built.
 - **[Phase 1] Behavioral proof.** test-pilot exercises the change and the run leads with
   "here's it working" before the human spot-check.
 
-## Resume / idempotency — a taste now, the rest in Phase 2a
+## Resume / idempotency — full resume landed in 2a-core (resilience)
 
 - **[live] Content-hash determinism.** The same approved tasks doc hashes identically
   across runs and hosts (so two resumers mint the same branch), ignores volatile
@@ -40,9 +40,11 @@ get their fixtures as the loop is built.
   a breaking change to the §6.3 canonicalization must bump the definition-doc `schemaVersion`,
   and decide whether to also embed an explicit canon-version in the stored branch key.
   (The `DEFERRED` comment in `lib/identifiers.py` marks the spot.)
-- **[Phase 2a] Full resume.** Killing the loop mid-phase and resuming reads the same
-  branch from `checkpoint.json`, re-acquires the lease, and neither loses nor duplicates
-  work. (Phase 2a-core; the crash/compaction spike.)
+- **[live — 2a-core] Full resume.** Killing the loop mid-phase and resuming reads the
+  durable cursor from `checkpoint.json`, re-acquires the lease, reconciles against reality
+  (reality-wins), and neither loses nor duplicates work. Pinned by the kill-resume
+  exactly-once spike (`plugins/workhorse/lib/tests/test_kill_resume_spike.py`) plus the
+  `recover` / `journal` / `lock` unit tests.
 
 ## Rule
 

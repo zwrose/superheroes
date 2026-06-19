@@ -6,9 +6,20 @@ All notable changes to the `test-pilot` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-19
+
 ### Added
 
 - Codex host support: `.codex-plugin` manifest, `hosts/` tool maps, neutral-language skills.
+
+## [0.1.1] — 2026-06-19
+
+### Fixed
+
+- Durable engine-lock staleness: `acquire()` now reclaims a stale holder (expired by
+  TTL **and** pid dead-on-this-boot, or a boot-id mismatch) instead of always
+  raising; a live holder still raises `LockHeld`. Hardened `boot_id` against a
+  malformed `/proc/stat` line (CONVENTIONS §4.4).
 
 ## [0.1.0] — 2026-06-11
 

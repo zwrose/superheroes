@@ -69,8 +69,9 @@ review (review-crew owns all three review gates):
 The **cast** referenced below: **producer** (the controller / loop driver),
 **the-architect** (produces the definition-docs — spec/plan/tasks), **review-crew** (all
 review gates + code review), **test-pilot** (behavioral/browser verification),
-**coordinator** (owns all GitHub-issue writes). review-crew and test-pilot are
-complete today; the-architect is in progress (Phase 1). (The spec/plan/tasks
+**coordinator** (owns all GitHub-issue writes). the-architect, review-crew, test-pilot,
+and the producer (**Workhorse**) are shipped today; the coordinator is upcoming
+(Phase 2a-plus). (The spec/plan/tasks
 artifact family is called **definition-docs** — the docs that *define* a work item —
 independent of the producing plugin's name.)
 
@@ -312,7 +313,7 @@ config-vs-state line, because the two have opposite sharing needs:
   **distinct per linked worktree and per clone**. Holds the runtime: queue, checkpoints,
   per-issue state. Each checkout gets its **own** control-plane store.
 
-> **Divergence note — this is NEW code, like the lock.py and resolver-unification notes.**
+> **Implemented by the resilience slice** (workhorse `control_plane.py`). *(Originally a divergence note: the control-plane key must differ from the config key.)*
 > The cited `store.py get_gitdir()` today prefers `--git-common-dir`, which is *shared*
 > across a clone's linked worktrees — so two worktrees resolve to the **same** entry
 > (confirmed empirically). That is correct for the *config* key and **wrong** for the
@@ -339,6 +340,7 @@ config-vs-state line, because the two have opposite sharing needs:
       resume-brief.md
       patterns-pin.md                   # the per-run snapshot of patterns.md (§2.1)
       events.jsonl                      # append-only audit log
+      devserver.json                    # managed dev-server sidecar (pid/pgid/port/command/bootId) for orphan reclaim
 ```
 
 The project store exists in **both** modes (it is the machine-local home of
@@ -389,8 +391,7 @@ explicit (`order`), not array position. Item lifecycle is
 - `patternsPin` ties the run to its frozen patterns snapshot, so a resume reads the same
   opinions it started with.
 
-(`resume-brief.md` and `events.jsonl` have schemas of their own — deferred to §8, since
-the producer that reads/writes them does not exist yet.)
+(`resume-brief.md` and `events.jsonl` have schemas of their own — **now specified in §4.6**, authored by the resilience slice.)
 
 ### 4.4 Coordination = git refs and a config lock, not file polling
 
@@ -412,11 +413,7 @@ the producer that reads/writes them does not exist yet.)
   or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
   full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
-- The existing file-based [`lock.py`](plugins/test-pilot/lib/lock.py) is a *narrower,
-  same-host* lock; its `is_stale()` already exists but is pid-only (unsound under
-  reboot/pid-recycle) and never wired into `acquire()`. The **ref-lease above is the
-  cross-session / cross-host primitive**; where the file lock is retained it gets a
-  TTL fallback + host-boot-id check, otherwise it is superseded by the ref-lease.
+- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (workhorse `lock.py`, §4.5 adds the startup per-checkout lock). The existing file-based [`lock.py`](plugins/test-pilot/lib/lock.py) — a *narrower, same-host* engine lock — now has the TTL + host-boot-id staleness wired into `acquire()` (test-pilot `v0.1.1`), superseding its old pid-only `is_stale()`.
 
 **Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
 shared across a project's checkouts (§4.2), so it is **not** guarded by the per-checkout
@@ -473,6 +470,70 @@ backstop (§4.4) still prevents a double-merge, and shared config writes are ser
 the config lock. If cross-loop work-item overlap ever becomes a real pattern, the
 escalation is to host the work-item lock ref on the *shared target remote* instead of
 the per-checkout store (correct, but a network round-trip per lock — so not the default).
+
+### 4.6 `events.jsonl` and `resume-brief.md` schemas (authored — resilience slice)
+
+**`events.jsonl`** — the per-issue append-only audit log (workhorse `journal.py`), one
+JSON object per line, written under the single-writer model (§4.5) via an atomic
+`O_APPEND` + `fsync`. Each line carries:
+
+- `ts` — UTC `YYYY-MM-DDTHH:MM:SSZ`.
+- `seq` — monotonic, 1-based.
+- `type` — one of `run_started`, `step_entered`, `step_completed`, `notify`, `gate`,
+  `error`, `resumed`, `lease_acquired`, `lease_reclaimed`, `ci_fix_attempt`, `parked`,
+  `run_completed`.
+- optional `step` — the ⓪–⑨ step the event belongs to.
+- optional `detail` — free-text, **scrubbed fail-closed** (`readout.scrub`) before write.
+- optional `world` — a dict of reality facts; string values scrubbed fail-closed.
+- optional `payload` — structured non-secret data (e.g. `ci_fix_attempt` →
+  `{round, failing: [signatures]}`), written as-is.
+
+Readers tolerate a single torn trailing line (a crash mid-append). The ⑧ CI-fix bound
+is reconstructed by replaying `ci_fix_attempt` events, written **write-ahead** (before
+the fix push); a torn trailing line counts **+1** — a conservative over-count, so the
+bound trips earlier and is never bypassed by a crash-loop (it never under-counts). A
+failed durable append raises `DurableWriteError` and the orchestrator parks (fail-closed).
+
+**`resume-brief.md`** — the rehydration brief (workhorse `journal.render_brief`),
+refreshed at the compaction boundary (the PreCompact hook) and on every park. Required
+sections:
+
+- `## Run` — work-item, branch, PR, started timestamp, resume count.
+- `## Where it was` — phase (build/verify/ship) + last good step.
+- `## Confirmed done` — reality reads: PR state, CI, dev server, seeded baseline.
+- `## Next` — the step to resume from (after `lastGoodStep`).
+- `## Notices` — the `notify` / `gate` / `parked` events (scrubbed).
+
+### 4.7 Loop failure / retry / cascade contract (authored — resilience slice)
+
+The producer's back-half loop (workhorse ⓪–⑨) is **reality-wins, reconcile-on-entry**
+(`recover.py`). On every entry (first run or resume):
+
+- **Reconcile against reality.** The durable `checkpoint.json` only *speeds* a resume;
+  it never authorizes an action. A read the loop would act on that **cannot be
+  determined** (a transient/unknown PR or seeded-state read) → **GATE**, never treated
+  as "absent" (which under auto-continue could redo a mutating step). A lost/unparseable
+  checkpoint → **world-derive**. A **wedged control-plane store or unacquirable lock →
+  park-GATE** (fail-closed; never run lockless — the lock lives in the store).
+- **Floor re-arm.** Every entry re-arms the ⓪ enforcer self-check + per-matcher canaries;
+  a transient miss retries (bounded, `recover.rearm_action`, ≤3) then **parks** (visible,
+  never resume unguarded, never silent-wedge).
+- **`changes-requested` / failed review.** review-crew owns its internal auto-fix loop;
+  the producer reads the terminal review action and, on a non-pass, **parks-GATE** (PR
+  left draft, live resources torn down).
+- **Failed build / verify.** Park safely — draft PR, dev-server teardown, GATE to the owner.
+- **⑧ CI bound (bounded fix loop).** `ci_loop.decide` halts after `max_rounds` or on a
+  **recurring failing set** (`revert_and_gate`). The bound **survives restarts** via the
+  write-ahead `ci_fix_attempt` events — a crash-loop cannot reset it.
+- **Stale-spec cascade (§6.3).** When the approved `tasks` doc changes under an in-flight
+  branch (the recorded `<content-hash>` no longer matches the recomputed one), the resume
+  **GATEs** — a downstream run is invalidated when its upstream definition-doc changes.
+- **Escalation to the owner** follows the F5 policy (`escalation-base.md`): act
+  autonomously on agent-verifiable / reversible decisions; escalate on owner-authority or
+  high-stakes-irreversible ones. **Merge is always the owner's** — the producer never merges.
+
+(The fuller walk-away approval-gate contract — defer-vs-block, where approvals are
+recorded — remains deferred to §7, Phase 2a-plus.)
 
 ---
 
@@ -640,10 +701,8 @@ that plugin means specifying its conventions here first. (Surfaced by the review
 
 | Deferred convention | What it must define | Owner · phase |
 | --- | --- | --- |
-| **Loop failure / retry / cascade semantics** | the central control-flow contract: what happens on `changes-requested`, a failed build, a failed verify; who re-runs which phase; how downstream gates are invalidated when an upstream doc changes; retry/backoff limits; when to escalate to the owner | **producer · Phase 2a** |
 | **GitHub issue ↔ work-item schema** | issue body / labels / state conventions; `<work-item>`→issue mapping; the "rendered index/summary" format; how producer & coordinator coordinate writes to one issue | **coordinator · Phase 2a-plus** |
 | **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **producer + coordinator · Phase 2a-plus** |
-| **`resume-brief.md` + `events.jsonl` schemas** | required sections of the resume brief (what a resumer reads to rehydrate); event types/fields of the audit log | **producer · Phase 2a-core** |
 | **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | **producer / coordinator · Phase 2a-plus / 4** |
 | **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **producer · Phase 2a-plus** |
 | **Plugin-version / band-compatibility** | cross-plugin `schemaVersion` skew handling; whether a minimum-compatible-band matrix exists (minimal fail-closed-on-unknown is already specified in §6.4) | **band-wide · later** |

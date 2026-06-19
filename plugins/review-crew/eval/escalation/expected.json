@@ -34,6 +34,8 @@
     {"path": "plugins/workhorse/lib/band_lib.py", "allow": false},
     {"path": "plugins/the-architect/lib/model_tier.py", "allow": false},
     {"path": "plugins/workhorse/hooks/hooks.json", "allow": false},
+    {"path": "plugins/workhorse/hooks/precompact.py", "allow": false},
+    {"path": "plugins/workhorse/hooks/session_start.py", "allow": false},
     {"path": "plugins/review-crew/lib/decisions.py", "allow": true},
     {"path": "their_app/loop_state.py", "allow": true}
   ]

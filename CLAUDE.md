@@ -59,11 +59,20 @@ Every PR and push to `main` runs `.github/workflows/ci.yml`:
    `eval/lib/` (identifier reference impls + artifact schemas). Schema tests need
    `jsonschema`.
 
-Run both locally before pushing:
+Run both locally before pushing. Each suite runs in its **own pytest process** —
+plugins load in isolation at runtime, and two plugins may share a module basename
+(e.g. workhorse and test-pilot both have a `lock.py`), which would collide on
+`sys.path` in a single shared process. Test each suite separately to mirror runtime:
 
 ```bash
 python3 .github/scripts/validate_marketplace.py
-python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ plugins/workhorse/lib/tests/ eval/lib/tests/ -q
+fail=0
+for suite in plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ \
+             plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ \
+             plugins/workhorse/lib/tests/ eval/lib/tests/; do
+  python3 -m pytest "$suite" -q || fail=1
+done
+exit $fail
 ```
 
 ## Branch protection
