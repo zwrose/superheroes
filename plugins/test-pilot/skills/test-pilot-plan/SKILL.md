@@ -3,6 +3,8 @@ name: test-pilot-plan
 description: Use when a PR/branch needs a manual test plan with seeded data — "write a test plan", "seed test data for this PR", "set up manual testing". Seeds scenarios via the test-pilot engine and posts a checkbox plan to the PR. Does NOT execute the plan (that is test-pilot-execute).
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # test-pilot-plan
 
 Produce seeded test data + a machine-readable plan record + a PR comment for
@@ -23,7 +25,7 @@ test-pilot-execute.
 
 ## Flow
 
-1. **Resolve.** `python3 "${CLAUDE_PLUGIN_ROOT}/lib/store.py" resolve` →
+1. **Resolve.** `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/store.py" resolve` →
    `location: none` means run the test-pilot-init skill first, then return.
 2. **Read the CATALOG** at `<blocks_dir>/CATALOG.md` IN FULL (blocking).
 3. **Analyze the diff.** `gh pr diff` (else
@@ -34,14 +36,14 @@ test-pilot-execute.
    module in `<blocks_dir>` from `templates/starter-block.py` (non-empty
    `targets`, pinned PEP 723 deps — check `uv` first; without it use
    stdlib/run-command designs), then regenerate:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/lib/catalog.py" --blocks-dir <blocks_dir>`
+   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
 5. **Write/merge the manifest** at `<manifests_dir>/<key>.json` where
-   `key=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/store.py" key --branch B [--slot S])`.
+   `key=$(python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/store.py" key --branch B [--slot S])`.
    `branch`/`slot` go INSIDE the JSON (schemaVersion 1). On re-invocation
    MERGE: preserve unchanged scenarios, update `updatedAt`. Use slots for
    independent flows on one PR. Validate:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/lib/engine.py" apply --branch B [--slot S] --dry-run --json`
-6. **Apply.** `python3 "${CLAUDE_PLUGIN_ROOT}/lib/engine.py" apply --branch B [--slot S] --json`
+   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" apply --branch B [--slot S] --dry-run --json`
+6. **Apply.** `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" apply --branch B [--slot S] --json`
    — on `ok: false`, report the failing block + scenarioId and fix the
    manifest/block; never work around the engine.
 7. **Write the plan record** (source of truth) at
@@ -50,7 +52,7 @@ test-pilot-execute.
    manifest).
 8. **Render + post the comment.** Fill `templates/plan-comment.md` from the
    plan record; marker comes from the key. Post:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" upsert --pr N --family plan --key K --body-file F --plans-dir <plans_dir>`
+   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" upsert --pr N --family plan --key K --body-file F --plans-dir <plans_dir>`
    (edits in place; preserves the human's checked boxes). No PR or gh
    failure → write the rendered plan to `<plans_dir>/<key>.md` and tell the
    user the path.

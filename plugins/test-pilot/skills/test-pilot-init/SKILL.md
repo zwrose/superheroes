@@ -3,6 +3,8 @@ name: test-pilot-init
 description: Use when a project has no test-pilot profile yet (before the first test-pilot plan/execute in a repo), or to refresh a project's testing calibration after the app changed. Sets up the profile, seeding blocks, and browser tooling.
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # test-pilot-init
 
 Create or reconcile a project's **test-pilot profile** plus its starter
@@ -12,7 +14,8 @@ seeding blocks. Two modes: **create** (nothing resolves) and **reconcile**
 ## Step 1 — Resolve
 
 ```bash
-RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/store.py" resolve)
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RES=$(python3 "$ROOT_DIR/lib/store.py" resolve)
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 ```
 
@@ -39,10 +42,11 @@ Record the preference order for the profile.
 ## Step 4 — Decide location
 
 ```bash
-LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/store.py" decide-location --interactive true)
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+LOC=$(python3 "$ROOT_DIR/lib/store.py" decide-location --interactive true)
 # "ask" -> AskUserQuestion: in-repo (committed, team-shared) vs global
 # (~/.claude/test-pilot/, zero git footprint). Headless runs get "global".
-PATHS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/store.py" create --location "$LOC")
+PATHS=$(python3 "$ROOT_DIR/lib/store.py" create --location "$LOC")
 ```
 
 ## Step 5 — Interview only the gaps
@@ -72,7 +76,7 @@ trade-offs AND a recommendation derived from what you detected.
 
 ## Step 6 — Scaffold
 
-1. Fill `${CLAUDE_PLUGIN_ROOT}/templates/profile.md` (prose AND the
+1. Fill `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/profile.md` (prose AND the
    `json test-pilot-config` block — keep them consistent) and write it to
    the resolved profile path. Set provenance `status=stable` when the user
    answered the interview, `status=provisional` on headless defaults.
@@ -82,7 +86,7 @@ trade-offs AND a recommendation derived from what you detected.
    seed script. Every block declares non-empty `targets` and pins PEP 723
    dependency versions.
 3. Generate the catalog:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/lib/catalog.py" --blocks-dir <blocks_dir>`
+   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
 
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.

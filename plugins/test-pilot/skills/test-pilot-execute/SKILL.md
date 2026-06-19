@@ -3,6 +3,8 @@ name: test-pilot-execute
 description: Use when a test-pilot plan should be exercised before human spot-check — "run the test plan", "pilot this PR", "verify the branch in the browser". Drives the app via a browser MCP, fixes bugs it finds, and posts a results comment.
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # test-pilot-execute
 
 Exercise the branch's test-pilot plan in a real browser, fix what breaks,
@@ -19,7 +21,7 @@ post a results comment, and leave the PR ready for human spot-check.
 3. **Navigation is constrained** to origins matching the profile's
    `baseUrl` (plus `allowedOrigins`). Anywhere else is off-limits.
 4. **Every quoted diagnostic is scrubbed** before it reaches a comment:
-   `python3 "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" scrub` (stdin→stdout).
+   `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub` (stdin→stdout).
    Never quote raw request headers.
 5. The plan comment's checkboxes belong to the human — never check them.
 
@@ -30,7 +32,7 @@ post a results comment, and leave the PR ready for human spot-check.
    branch — default: every slot in sequence; an explicit slot argument
    narrows to one. None → run the test-pilot-plan skill first, then return.
    The PR comment is NEVER parsed as the plan source.
-   Validate each before executing: `python3 "${CLAUDE_PLUGIN_ROOT}/lib/engine.py" validate-plan --branch B [--slot S] --json` — a validation error means regenerate the plan, never an app bug.
+   Validate each before executing: `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" validate-plan --branch B [--slot S] --json` — a validation error means regenerate the plan, never an app bug.
 2. **Seed check.** `engine.py status --json`; apply the manifest if drift or
    nothing applied (`engine.py apply --branch B [--slot S] --json`).
 3. **App up.** Per the profile: if `mayManageServer`, start `devCommand` in
