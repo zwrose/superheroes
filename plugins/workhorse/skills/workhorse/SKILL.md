@@ -9,8 +9,9 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 You are the **producer**: you take ONE approved work item from `tasks` to a
 **CI-green, ready-for-review PR** + a **live dev server** + a **"your turn"
-readout**. You **never merge, deploy, release, or force-push** — those are the
-owner's, and a deterministic enforcer guarantees it.
+readout**. You **never merge, deploy, release, or force-push** on your own — those
+are the owner's: a deterministic enforcer **gates** them behind the owner's live,
+in-turn approval (and with no owner present, the loop **parks**).
 
 Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`.
 
@@ -18,7 +19,7 @@ Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib
 plugins' bundled libs at runtime, so install **the-architect ≥ 0.3.0**,
 **review-crew ≥ 0.6.0**, and **test-pilot** alongside workhorse. If they're absent,
 the ⓪ self-check reports `escalation_resolved: false` / `armed: false` and refuses
-to run — by design (never run the floor unguarded), not a mid-build failure. If you
+to run — by design (never run the gate unguarded), not a mid-build failure. If you
 see `armed: false`, confirm the band siblings are installed before retrying.
 
 ## ⓪ Startup self-check + store bootstrap + resume reconcile (every run — first or resume)
@@ -49,17 +50,17 @@ exclusive ownership; do not run two loops on one work-item).
 
 `control_plane.set_current(ROOT, WORK_ITEM)`.
 
-### ⓪.2 Re-arm the floor (bounded retry → parked-GATE)
+### ⓪.2 Re-arm the gate (bounded retry → parked-GATE)
 
 Run the enforcer self-check and both per-matcher canaries. This runs on **every**
 entry because resumes frequently re-enter adjacent to a guarded step (③/⑤/⑥/⑦/⑧)
-and the floor must be live before any write.
+and the gate must be live before any write.
 
 1. **Enforcer self-check (HARD GATE).** `python3 "$LIB/enforcer.py" selfcheck`;
    non-zero (`armed: false`) → STOP. Read the JSON to say WHY:
-   `classifier_ok:false` (deny-list broken), `escalation_resolved:false` (Edit guard
-   can't find escalation.py — broken install), or `hook_config:false` (hooks.json
-   missing).
+   `classifier_ok:false` (the host/scope gate matrix is broken),
+   `escalation_resolved:false` (Edit guard can't find escalation.py — broken
+   install), or `hook_config:false` (hooks.json missing).
 2. **Bash surface canary.** Issue the harmless no-op `: workhorse-enforcer-canary`
    through the **Bash** tool. The enforcer's deny-list includes that sentinel; if the
    hook is firing the call is **blocked**.
@@ -70,7 +71,7 @@ and the floor must be live before any write.
 
 Drive the disposition with **`recover.rearm_action(attempt, armed)`**
 (`recover.py`): returns `proceed` / `retry` (attempts 1–2) / `park_gate` (the 3rd
-attempt). A persistent floor-arm failure is a **parked-GATE** — tear down cleanly and
+attempt). A persistent gate-arm failure is a **parked-GATE** — tear down cleanly and
 surface; never resume unguarded, never silent-wedge.
 
 ### ⓪.3 Reconcile world → resume or start fresh
@@ -281,27 +282,38 @@ Any raw CI-log excerpt passes through the scrub seam (`readout.scrub`, backed by
 test-pilot's `pr_comment.py scrub`; unscrubbable → dropped). End with
 **"Merge is yours — Workhorse never merges."**
 
-## Escalation (F5) + the deterministic floor
+## Escalation (F5) + the deterministic owner-approval gate
 
 Route every seam through F5 (review-crew's `escalation_resolve.py`): **PROCEED**
 (routine+reversible), **NOTIFY** (reversible, surfaced in the readout), **GATE**
-(owner-weighable / irreversible-or-uncertain / hard-floor). The cooperative layer
-routes the UX; the **PreToolUse enforcer** (`enforcer.py`, self-checked in ⓪)
-guarantees the floor regardless of judgment — `gh pr merge` (incl. the `gh api`/
-GraphQL forms) / `gh release create` / `gh workflow run` / `git push --force` /
-deploy / destructive are **denied**, and edits to band safety-machinery are
-**refused**.
+(owner-weighable / irreversible-or-uncertain / owner-authority). The cooperative
+layer routes the UX; the **PreToolUse enforcer** (`enforcer.py`, self-checked in ⓪)
+is the deterministic backstop. The owner-authority set — `gh pr merge` (incl. the
+`gh api`/GraphQL forms) / `gh release create` / `gh workflow run` / `git push
+--force` / push-to-default / deploy / destructive — is **GATED on the owner's live,
+in-turn approval** (issue #14), not hard-denied, and only **inside a superheroes
+repo** (outside one, the gate doesn't fire). Two things stay an **unconditional
+deny** regardless of host or scope: edits/Bash-writes to band safety-machinery, and
+the self-check canary.
 
-On Codex, the enforcer is a `PreToolUse` hook; Codex does not run plugin-bundled hooks until trusted. **Verify the enforcer hook is trusted before relying on it; if not, refuse/warn.** Codex `PreToolUse` is a guardrail, not a hard boundary.
+**Host-aware mechanism, same functionality (approve → proceed; no owner → park):**
+- **Claude Code** — the hook emits `permissionDecision: ask`: a native live prompt
+  the owner answers (the agent cannot answer it itself). Approve → it proceeds.
+- **Codex** (honors only `deny`) — the hook denies and issues a one-time **nonce**.
+  Stop and GATE the owner; on approval, mint a single-use 90s allowance
+  (`enforcer.py approve --command-hash <H> --nonce <N>`, both in the deny reason) and
+  re-run the command once. The allowance is single-use, command-scoped, and wiped on
+  compaction. **Never self-approve**; with no owner the loop parks. See
+  `hosts/codex-tools.md`. Codex runs plugin-bundled hooks only once trusted —
+  **verify the enforcer hook is trusted before relying on it; if not, refuse/warn.**
 
-**Scope of the deterministic floor (explicit).** The enforcer's command deny-list
-covers the named *irreversible, repo-shaping* classes above — deliberately NOT the
-softer `spend`/`egress` heuristics F5's `classify_floor` also carries (those are
-broad and false-positive-prone on a build agent: a command merely mentioning
-`stripe`/`upload` isn't an action). Those classes stay on the **cooperative F5
-layer** (a GATE via `escalation_resolve`), not the hard hook. This is the design's
-two-layer split, made explicit here so the boundary is a deliberate choice, not a
-gap.
+**Scope of the deterministic gate (explicit).** The enforcer's command set covers the
+named *irreversible, repo-shaping* classes above — deliberately NOT the softer
+`spend`/`egress` heuristics F5's `classify_floor` also carries (those are broad and
+false-positive-prone on a build agent: a command merely mentioning `stripe`/`upload`
+isn't an action). Those classes stay on the **cooperative F5 layer** (a GATE via
+`escalation_resolve`), not the hook. This is the design's two-layer split, made
+explicit here so the boundary is a deliberate choice, not a gap.
 
 ## Supervised assumption — park safely on a GATE
 
@@ -325,7 +337,7 @@ journal entry is *write-ahead* (before the push), parking on its failure means t
 push never happens → no under-count.
 
 **SessionStart(compact)** is handled by the hook injecting context (the compact
-hook); the orchestrator, on its next turn, re-runs the ⓪ reconcile + floor re-arm
+hook); the orchestrator, on its next turn, re-runs the ⓪ reconcile + gate re-arm
 (the cold path is the gated invariant). The control-plane's `control_plane.get_current`
 gives the resumed work item; the journal brief gives the last step, so the reconcile
 can hand back the right `from_step`.

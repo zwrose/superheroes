@@ -186,12 +186,173 @@ def test_path_fail_closed_on_guard_exception(monkeypatch):
     assert enforcer.classify_path(_ESC)[0] == "deny"
 
 
-# --- hook stdin contract ---
-def test_hook_denies_bash_floor(capsys):
-    enforcer.hook(json.dumps({"tool_name": "Bash",
-                              "tool_input": {"command": "gh pr merge 1"}}))
+# --- host- and scope-aware gate (issue #14) ---
+def _scoped_cwd(tmp_path):
+    # A cwd that resolves inside a superheroes repo (has docs/superheroes/).
+    (tmp_path / "docs" / "superheroes").mkdir(parents=True, exist_ok=True)
+    return str(tmp_path)
+
+
+def test_gated_is_ask_on_claude_in_scope():
+    for cmd in ("gh pr merge 42 --squash", "gh release create v1",
+                "git push --force origin main", "kubectl apply -f prod.yaml"):
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "ask", cmd
+
+
+def test_gated_is_deny_on_codex_in_scope():
+    # Deny-only host: the deny is the backstop that forces the ask (the hook overlays the
+    # single-use allowance flow on top).
+    for cmd in ("gh pr merge 42", "gh release create v1", "rm -rf build/"):
+        assert enforcer.classify_command(cmd, host="codex", in_scope=True)[0] == "deny", cmd
+
+
+def test_gated_is_allowed_outside_a_superheroes_repo():
+    # Flaw #1: outside a superheroes repo the gate does not fire, on EITHER host.
+    for host in ("claude", "codex"):
+        for cmd in ("gh pr merge 42", "gh release create v1", "git push -f origin main"):
+            assert enforcer.classify_command(cmd, host=host, in_scope=False)[0] == "allow", (host, cmd)
+
+
+def test_canary_and_safety_writes_are_unconditional_deny():
+    # Host/scope NEVER relax the unconditional surfaces.
+    for host in ("claude", "codex"):
+        for scope in (True, False):
+            assert enforcer.classify_command(": workhorse-enforcer-canary",
+                                             host=host, in_scope=scope)[0] == "deny"
+            assert enforcer.classify_command("sed -i 's/x/y/' enforcer.py",
+                                             host=host, in_scope=scope)[0] == "deny"
+
+
+def test_gated_action_names_the_action():
+    assert enforcer.gated_action("gh pr merge 1") == "merge-pr"
+    assert enforcer.gated_action("gh release create v1") == "release"
+    assert enforcer.gated_action("git commit -m x") is None
+    assert enforcer.gated_action(": workhorse-enforcer-canary") is None  # not gated
+
+
+def test_in_superheroes_repo_walks_up(tmp_path):
+    root = tmp_path
+    (root / "docs" / "superheroes").mkdir(parents=True)
+    nested = root / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+    assert enforcer._in_superheroes_repo(str(nested)) is True
+    assert enforcer._in_superheroes_repo(str(root)) is True
+
+
+def test_in_superheroes_repo_false_without_marker(tmp_path):
+    assert enforcer._in_superheroes_repo(str(tmp_path)) is False
+    assert enforcer._in_superheroes_repo(None) is False
+    assert enforcer._in_superheroes_repo("") is False
+
+
+# --- hook stdin contract (host- and scope-aware) ---
+def test_hook_asks_on_claude_in_scope(capsys, tmp_path):
+    enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": _scoped_cwd(tmp_path),
+                              "tool_input": {"command": "gh pr merge 1"}}), host="claude")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_hook_denies_gated_on_codex_in_scope_and_issues_nonce(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": _scoped_cwd(tmp_path),
+                              "tool_input": {"command": "gh pr merge 1"}}), host="codex")
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # The deny issued a challenge the agent can relay to `approve` after owner sign-off.
+    assert "approve" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_allows_gated_on_codex_after_valid_allowance(capsys, tmp_path, monkeypatch):
+    import allowance
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    scoped = _scoped_cwd(tmp_path)
+    allowance.clear_all(scoped)
+    cmd = "gh pr merge 1"
+    # Mint the allowance in the SAME checkout the hook runs in (per-checkout namespace).
+    nonce = allowance.challenge(cmd, "merge-pr", cwd=scoped)
+    assert allowance.approve(allowance.command_hash(cmd), nonce, cwd=scoped) is True
+    # The very next matching call is allowed once (silent), and the allowance is consumed.
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": scoped,
+                                   "tool_input": {"command": cmd}}), host="codex")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""
+    # Consumed: a second identical call is denied again (single-use).
+    enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": scoped,
+                              "tool_input": {"command": cmd}}), host="codex")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_allows_gated_out_of_scope_is_silent(capsys):
+    # No cwd → not a superheroes repo → gated action allowed (silent), both hosts.
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash",
+                                   "tool_input": {"command": "gh pr merge 1"}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""
+
+
+# --- host-agnostic dispatch: Codex tool names (shell / apply_patch) (issue #14 review) ---
+def test_hook_gates_codex_shell_tool_name(capsys, tmp_path, monkeypatch):
+    # Codex names its command tool `shell`, not `Bash`. The gate MUST still fire — else
+    # the whole Codex mechanism falls through to allow.
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    enforcer.hook(json.dumps({"tool_name": "shell", "cwd": _scoped_cwd(tmp_path),
+                              "tool_input": {"command": "gh pr merge 1"}}), host="codex")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_codex_shell_argv_list_command(capsys, tmp_path, monkeypatch):
+    # Codex shell may pass an argv LIST; the gate must read it too.
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    enforcer.hook(json.dumps({"tool_name": "shell", "cwd": _scoped_cwd(tmp_path),
+                              "tool_input": {"command": ["bash", "-lc", "gh pr merge 1"]}}),
+                  host="codex")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_apply_patch_to_safety_machinery_denies(monkeypatch, capsys):
+    # Codex's native edit tool is `apply_patch`; an edit to band safety-machinery must be
+    # refused (the path lives in the patch body, not a file_path field).
+    def _target_aware(target, root=None, plugin_root=None):
+        if target == enforcer._ESC:
+            return _ESC
+        if target == enforcer._RC:
+            return _RC_ESC
+        return None
+    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    patch = "*** Begin Patch\n*** Update File: %s\n@@\n-x\n+y\n*** End Patch\n" % _ESC
+    enforcer.hook(json.dumps({"tool_name": "apply_patch",
+                              "tool_input": {"input": patch}}), host="codex")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_apply_patch_to_ordinary_file_is_silent(monkeypatch, capsys, tmp_path):
+    _point_at_real_escalation(monkeypatch)
+    ordinary = tmp_path / "app.py"
+    ordinary.write_text("x = 1\n")
+    patch = "*** Begin Patch\n*** Update File: %s\n@@\n-x\n+y\n*** End Patch\n" % ordinary
+    rc = enforcer.hook(json.dumps({"tool_name": "apply_patch",
+                                   "tool_input": {"input": patch}}), host="codex")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""
+
+
+def test_hook_compound_safety_write_plus_gated_never_enters_allowance(capsys, tmp_path, monkeypatch):
+    # A command that is BOTH a safety-machinery write AND a gated action must stay an
+    # UNCONDITIONAL deny — it must not enter the Codex allowance overlay (else an owner
+    # approving the merge would also wave the safety-write through). And no challenge is
+    # issued for it.
+    import allowance
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    scoped = _scoped_cwd(tmp_path)
+    cmd = "cp /tmp/evil.py enforcer.py && gh pr merge 1"
+    enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": scoped,
+                              "tool_input": {"command": cmd}}), host="codex")
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # No allowance challenge was issued, so it can never be approved/consumed.
+    assert allowance.command_hash(cmd) and allowance.consume(cmd, cwd=scoped) is False
 
 
 def test_hook_allows_bash_safe_is_silent(capsys):
