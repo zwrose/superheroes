@@ -67,8 +67,8 @@ and the floor must be live before any write.
    file created by a dead hook is deleted immediately.
 
 Drive the disposition with **`recover.rearm_action(attempt, armed)`**
-(`recover.py`): returns `proceed` / `retry` (up to 3 attempts) / `park_gate`. A
-persistent failure after 3 rounds is a **parked-GATE** — tear down cleanly and
+(`recover.py`): returns `proceed` / `retry` (attempts 1–2) / `park_gate` (the 3rd
+attempt). A persistent floor-arm failure is a **parked-GATE** — tear down cleanly and
 surface; never resume unguarded, never silent-wedge.
 
 ### ⓪.3 Reconcile world → resume or start fresh
@@ -165,7 +165,8 @@ the PR-action decision is a code gate, not free-form judgment. Reversible → **
 (report the link in the readout). The enforcer permits `gh pr create`/`git push`
 (non-force); it refuses `gh pr merge`.
 
-Write `checkpoint.write(…, phase="verify", lastGoodStep=3, pr=<number>, lockGeneration=generation)`.
+Write `checkpoint.write(…, phase="verify", lastGoodStep=3, pr=<pr-object: {number, url, isDraft}>, lockGeneration=generation)`
+(a dict, not a bare number — `render_brief` reads `pr.get("url")` and the reconcile reads `pr.get("state")`/`number`).
 
 ## ④ Dev server (managed) — only when there's a runnable surface
 
@@ -179,8 +180,12 @@ None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
   every resume, so reclaim finds what the prior run wrote.
 - **Reclaim first (resume / orphan-after-crash).** Before starting, try
   `devserver.reclaim(SIDECAR, port, command)` (`devserver.py`): if it corroborates
-  (port + scrubbed-command + bootId), adopt the returned teardown handle — a managed
-  server from a prior run is still up, don't double-start. If `reclaim` is `None` but
+  (port + scrubbed-command + bootId), the handle is only an *identity* match — confirm
+  it's actually **alive** with `devserver.poll_healthy(devserver.health_url(port),
+  timeout=…, interval=…)` before adopting. Alive → adopt the teardown handle (a managed
+  server from a prior run is still up; don't double-start). **Corroborated-but-dead**
+  (poll fails — the orphan died between sessions) → tear it down and start fresh, so ⑤
+  never runs against a non-responding server. If `reclaim` is `None` but
   `devserver.port_in_use(port)`, **GATE** (an unrecognized process holds the port — do
   not kill what we can't prove is ours). Else start fresh.
 - **Start managed:** `devserver.start(command, port)`, then bound the readiness wait

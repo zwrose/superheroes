@@ -48,6 +48,11 @@ def _next_seq(events_path):
 
 def append(events_path, event_type, *, step=None, detail=None, world=None,
            payload=None, root=None, ts=None):
+    # Fail closed on an unknown event type: a typo'd "ci_fix_attempt" would be silently
+    # ignored by ci_attempts() and UNDER-count the ⑧ bound (inverting the over-count
+    # fail-safe). Parking on it (the orchestrator catches DurableWriteError) is safe.
+    if event_type not in EVENT_TYPES:
+        raise DurableWriteError("unknown event type: %r" % event_type)
     ev = {"ts": _stamp(ts), "seq": _next_seq(events_path), "type": event_type}
     if step is not None:
         ev["step"] = step

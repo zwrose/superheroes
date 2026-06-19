@@ -85,8 +85,9 @@ FLOOR_RETRY_MAX = 3
 
 def rearm_action(attempt, armed, *, max_retry=FLOOR_RETRY_MAX):
     """The ⓪ floor re-arm disposition (design §5 step 3): armed -> 'proceed'; a
-    transient miss -> 'retry' up to max_retry; then 'park_gate' (fail-closed, visible —
-    never resume unguarded, never silent-wedge). `attempt` is 1-based."""
+    transient miss -> 'retry' while attempt < max_retry (attempts 1..max_retry-1 retry),
+    then the max_retry-th attempt -> 'park_gate' (fail-closed, visible — never resume
+    unguarded, never silent-wedge). `attempt` is 1-based (max_retry=3 → 2 retries then park)."""
     if armed:
         return "proceed"
     if attempt < max_retry:

@@ -21,7 +21,8 @@ def test_session_start_compact_emits_resume_context(tmp_path):
     r = _run("session_start.py", {"source": "compact", "cwd": str(tmp_path)}, env)
     assert r.returncode == 0
     out = json.loads(r.stdout)
-    assert "re-arm" in json.dumps(out).lower() or "reconcile" in json.dumps(out).lower()
+    ctx = json.dumps(out).lower()
+    assert "re-arm" in ctx and "reconcile" in ctx   # the compact context names BOTH actions
 
 
 def test_session_start_noncompact_is_noop(tmp_path):
