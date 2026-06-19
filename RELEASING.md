@@ -19,9 +19,15 @@ wins silently and the duplicate would mask it. (CI fails on this.)
    - `fix:` → patch (x.y.**Z**)
    - `feat:` → minor (x.**Y**.0)
    - breaking (`!` / `BREAKING CHANGE:`) → major (**X**.0.0)
-2. **Bump** `plugins/<name>/.claude-plugin/plugin.json` → `version`.
+2. **Bump** `plugins/<name>/.claude-plugin/plugin.json` → `version`, and bump
+   `plugins/<name>/.codex-plugin/plugin.json` → `version` to the **same value**.
+   The validator (`validate_hosts.py`) fails when the two `plugin.json` versions
+   drift. Ship them together every time, even if the Codex side is unchanged.
 3. **Update** `plugins/<name>/CHANGELOG.md` (move Unreleased items under the new
-   version + date).
+   version + date). If the plugin has host-native descriptions (the `description`
+   field in `.claude-plugin/plugin.json` vs `.codex-plugin/plugin.json` may use
+   host-native phrasing), verify they remain **equivalent in meaning** — phrasing may
+   differ, but they must describe the same capability.
 4. **Open a PR**, let CI pass, merge to `main`.
 5. **Tag and release** from `main`:
    ```bash

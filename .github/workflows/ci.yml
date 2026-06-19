@@ -22,6 +22,9 @@ jobs:
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py
 
+      - name: Validate dual-host manifests + tool maps
+        run: python3 .github/scripts/validate_hosts.py
+
       - name: Install pytest
         run: python3 -m pip install --upgrade pytest jsonschema pyyaml
 
@@ -29,4 +32,4 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Run plugin + band-eval tests
-        run: python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ plugins/workhorse/lib/tests/ eval/lib/tests/ -q
+        run: python3 -m pytest plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ plugins/workhorse/lib/tests/ eval/lib/tests/ .github/scripts/tests/ -q

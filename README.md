@@ -102,6 +102,31 @@ Then, in any project:
 
 ---
 
+## Multi-host harness
+
+The marketplace runs on both **Claude Code** and **Codex**. The plugins are the same;
+only the install command differs.
+
+**Claude Code** (existing flow):
+
+```
+/plugin marketplace add zwrose/superheroes
+/plugin install review-crew@superheroes
+```
+
+**Codex:**
+
+```
+codex plugin marketplace add zwrose/superheroes
+codex plugin add review-crew@superheroes
+```
+
+Skills speak in host-neutral actions and resolve them per host via a thin tool-map
+(`hosts/claude-tools.md` / `hosts/codex-tools.md` inside each plugin). No behavior
+changes — the same methodology runs on both.
+
+---
+
 ## Where this is going
 
 superheroes is growing into a band that runs much of a project's development loop for
