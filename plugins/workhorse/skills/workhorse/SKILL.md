@@ -225,10 +225,10 @@ Regardless of ⑤ pass/fail, reset the seeded data via test-pilot's engine (`res
 4. `gate` (live lock held, or unreadable status) → GATE; never claim a clean
    baseline you didn't achieve. **Never pass `--allow-protected`** — that is the
    owner's call (the engine's protected-target gate refuses production-shaped
-   targets, by design). *(Residual, deferred: test-pilot's stale-lock detection
-   uses `os.kill(pid, 0)`, which a reused PID can spoof, so a lock orphaned by a
-   hard kill could read live-and-GATE. Surfacing it honestly to the owner is correct
-   here; the durable stale-lock reclaim is the resilience slice — §5.)*
+   targets, by design). *(test-pilot's engine lock now uses durable TTL + boot-id
+   staleness (`v0.1.1`, the resilience slice), so a lock orphaned by a hard kill or a
+   reboot is reclaimed instead of reading live-and-GATE on a reused PID; a genuinely
+   live holder is still surfaced honestly to the owner.)*
 
 ## ⑦ Ready — world-read before world-write (idempotent)
 

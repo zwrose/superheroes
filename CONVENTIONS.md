@@ -69,8 +69,9 @@ review (review-crew owns all three review gates):
 The **cast** referenced below: **producer** (the controller / loop driver),
 **the-architect** (produces the definition-docs — spec/plan/tasks), **review-crew** (all
 review gates + code review), **test-pilot** (behavioral/browser verification),
-**coordinator** (owns all GitHub-issue writes). review-crew and test-pilot are
-complete today; the-architect is in progress (Phase 1). (The spec/plan/tasks
+**coordinator** (owns all GitHub-issue writes). the-architect, review-crew, test-pilot,
+and the producer (**Workhorse**) are shipped today; the coordinator is upcoming
+(Phase 2a-plus). (The spec/plan/tasks
 artifact family is called **definition-docs** — the docs that *define* a work item —
 independent of the producing plugin's name.)
 
