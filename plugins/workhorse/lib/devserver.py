@@ -4,11 +4,16 @@ zombie outlives the run. One server serves both ⑤ (test-pilot) and the ⑨
 spot-check. The start+health-poll path is integration-exercised; the bookkeeping
 (port resolve, PID liveness, teardown) is unit-tested here.
 """
+import json
 import os
 import signal
 import socket
 import subprocess
 import time
+import urllib.request
+import control_plane
+import hostinfo
+import readout
 
 DEFAULT_PORT = 3000
 
@@ -91,3 +96,58 @@ def teardown(handle):
             except (OSError, ProcessLookupError):
                 return
         time.sleep(0.2)
+
+
+def _pgid(pid):
+    try:
+        return os.getpgid(int(pid))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def poll_healthy(url, *, timeout, interval, opener=None):
+    """Bounded health poll. Returns True on the first 2xx-4xx, else False at the
+    deadline (design §8.1 — never hangs)."""
+    opener = opener or (lambda u: urllib.request.urlopen(u, timeout=2))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            r = opener(url)
+            code = getattr(r, "status", None) or (r.getcode() if hasattr(r, "getcode") else None)
+            if code is not None and 200 <= code < 500:
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
+def write_sidecar(sidecar_path, handle, command, *, root=None):
+    """Persist the managed-server identity so a later session can reclaim an orphan.
+    `command` is scrubbed fail-closed (a durable free-text field, design §8.1/§4.2)."""
+    cmd, _ok = readout.scrub(str(command), root=root)
+    control_plane.atomic_write(sidecar_path, json.dumps({
+        "pid": handle.get("pid"), "pgid": _pgid(handle.get("pid")),
+        "port": handle.get("port"), "command": cmd, "bootId": hostinfo.boot_id()}))
+
+
+def reclaim(sidecar_path, port, command, *, root=None):
+    """Adopt a teardown handle for an orphaned managed server iff it corroborates:
+    port AND scrubbed-command AND bootId all match (degrade to pid+port+command when
+    bootId is unobtainable on either side — the named residual). None => unrecognized
+    (caller GATEs); never adopt on bare pid liveness (a recycled PID would mis-kill)."""
+    try:
+        with open(sidecar_path, encoding="utf-8") as fh:
+            sc = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if sc.get("port") != port:
+        return None
+    cmd, _ok = readout.scrub(str(command), root=root)
+    if sc.get("command") != cmd:
+        return None
+    rec_boot, cur_boot = sc.get("bootId"), hostinfo.boot_id()
+    if rec_boot is not None and cur_boot is not None and rec_boot != cur_boot:
+        return None   # rebooted -> recorded pgid is meaningless -> do not adopt
+    return {"pid": sc.get("pid"), "pgid": sc.get("pgid"), "port": port,
+            "command": sc.get("command")}

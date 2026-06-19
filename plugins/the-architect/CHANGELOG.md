@@ -6,6 +6,13 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-06-19
+
+### Changed
+
+- `escalation.SAFETY_MACHINERY` now protects the two workhorse resume-hook scripts
+  (`precompact.py`, `session_start.py`) — resilience self-protection.
+
 ## [0.3.0] — 2026-06-18
 
 ### Added

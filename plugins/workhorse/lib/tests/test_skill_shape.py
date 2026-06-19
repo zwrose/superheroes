@@ -31,3 +31,13 @@ def test_states_never_merge_and_startup_selfcheck():
     assert "never merge" in t or "merge is yours" in t
     assert "selfcheck" in t or "self-check" in t
     assert "gates.review" in _text() and "passed" in _text()  # input precondition
+
+
+def test_skill_documents_resume_substrate():
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    skill = os.path.join(os.path.dirname(os.path.dirname(here)), "skills", "workhorse", "SKILL.md")
+    body = open(skill, encoding="utf-8").read().lower()
+    for needle in ("reconcile", "ref-lease", "fence", "ci_fix_attempt",
+                   "re-arm", "startup lock", "control-plane"):
+        assert needle in body, needle

@@ -31,8 +31,11 @@ def _resolve(root):
 
 
 def _subprocess_json(lib, cli_args):
-    p = subprocess.run([sys.executable, lib, *cli_args],
-                       capture_output=True, text=True)
+    try:
+        p = subprocess.run([sys.executable, lib, *cli_args],
+                           capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return None
     if p.returncode != 0:
         return None
     try:

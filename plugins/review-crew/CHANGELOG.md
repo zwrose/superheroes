@@ -6,6 +6,13 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-19
+
+### Fixed
+
+- `model_tier_resolve` gains a subprocess timeout, failing open to the default tier
+  on a hung resolver (band-seam hardening).
+
 ## [0.6.0] — 2026-06-18
 
 ### Added

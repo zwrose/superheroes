@@ -10,9 +10,13 @@ import sys
 
 
 def engine_json(engine, args, cwd=None):
-    """Run test-pilot's engine.py with --json; return (returncode, parsed|None)."""
-    p = subprocess.run([sys.executable, engine, *args, "--json"],
-                       capture_output=True, text=True, cwd=cwd)
+    """Run test-pilot's engine.py with --json; return (returncode, parsed|None).
+    A hung engine times out -> (124, None) -> plan_reset GATEs (fail-closed)."""
+    try:
+        p = subprocess.run([sys.executable, engine, *args, "--json"],
+                           capture_output=True, text=True, cwd=cwd, timeout=30)
+    except subprocess.TimeoutExpired:
+        return (124, None)
     try:
         return p.returncode, json.loads(p.stdout.strip())
     except (ValueError, json.JSONDecodeError):
