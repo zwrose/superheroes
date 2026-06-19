@@ -86,8 +86,9 @@ Skills must work on both Claude Code and Codex. A few hard rules:
 - **Speak in actions, not tool names.** A skill says "read the file" or "run the
   verify command" — not `Read` (Claude Code) or `shell` (Codex). Tool names belong in
   the per-host tool-map (`hosts/<host>-tools.md`), nowhere else. The validate_hosts.py
-  neutral-language check enforces a ban on four host-specific tokens in skill prose:
-  `mcp__`, `bash_tool`, `computer_use`, and `claude_tool`.
+  neutral-language check bans four host-coupled tokens — dispatch/invocation phrasings
+  that name one runtime's API rather than the action — anywhere in a `SKILL.md`:
+  `subagent_type`, `the Agent tool`, `the Skill tool`, and `the Task tool`.
 - **Every `SKILL.md` carries the host-map pointer line.** The boilerplate reads:
   > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
   > via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude
