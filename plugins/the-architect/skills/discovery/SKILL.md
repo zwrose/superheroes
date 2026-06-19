@@ -145,7 +145,7 @@ If the owner doesn't have or doesn't want to use Claude Design, **don't block** 
 capture the UI/UX as a plain-language description of the key screens and states in
 the spec instead.
 
-**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `design-source` field so the artifact is traceable regardless of host.
+**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
 
 `mcp__visualize__show_widget` (inline SVG/HTML) may help for a quick option
 comparison **on graphical clients only** — it does **not** render in a terminal, so
