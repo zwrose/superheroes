@@ -8,6 +8,13 @@ plugin's hosts/<host>-tools.md is byte-identical to the repo-root canonical.
 """
 import argparse, json, os, re, sys
 
+# Ensure the scripts directory is in sys.path so validate_marketplace can be imported.
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from validate_marketplace import SEMVER
+
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PLUGINS = os.path.join(REPO, "plugins")
 SEAM = '${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}'
@@ -57,7 +64,11 @@ def _validate_codex(claude_name, claude_plugins, errors):
         return
     seen = set()
     for e in mp["plugins"]:
-        name = e.get("name"); seen.add(name)
+        name = e.get("name")
+        if not name:
+            errors.append("codex marketplace entry missing name")
+            continue
+        seen.add(name)
         if "version" in e:
             errors.append(f"{name}: codex marketplace entry must not carry version")
         src = (e.get("source") or {}).get("path") or (e.get("source") or {}).get("url")
@@ -71,7 +82,7 @@ def _validate_codex(claude_name, claude_plugins, errors):
         for field in ("skills", "interface"):
             if field not in man:
                 errors.append(f"{name}: .codex-plugin missing {field!r}")
-        if not re.match(r"^\d+\.\d+\.\d+$", str(man.get("version", ""))):
+        if not SEMVER.match(str(man.get("version", ""))):
             errors.append(f"{name}: codex version not SemVer")
         cl = claude_plugins.get(name, {})
         for field in ("name", "version", "author"):
