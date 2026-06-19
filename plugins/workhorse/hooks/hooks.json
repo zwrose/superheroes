@@ -4,13 +4,13 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook --host claude || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" }
         ]
       },
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" }
+          { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook --host claude || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" }
         ]
       }
     ],
