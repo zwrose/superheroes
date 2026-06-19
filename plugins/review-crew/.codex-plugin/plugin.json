@@ -2,5 +2,11 @@
   "name": "review-crew",
   "version": "0.7.0",
   "description": "Multi-agent review of code, plans, and tech debt — a panel of architecture/code/security/test/failure-mode reviewers, calibrated per-project via a generated review profile.",
-  "author": { "name": "zwrose" }
+  "author": { "name": "zwrose" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Review Crew",
+    "shortDescription": "Multi-agent review of code, plans, and tech debt",
+    "category": "Developer Tools"
+  }
 }

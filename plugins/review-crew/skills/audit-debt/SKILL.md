@@ -4,13 +4,15 @@ description: Use when periodically sweeping a whole repository for accumulated t
 user-invocable: true
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Audit Debt
 
 Periodic full-repo sweep for accumulated technical, security, and architectural debt. The main context is an orchestrator: it gathers sweep-prep artifacts (an ecosystem-aware dependency audit, a TODO census, a file list, recent dependency churn), dispatches four of the five specialist agents `/review-crew:review-code` uses in **sweep mode** (no diff scope) in parallel (all but `premortem-reviewer` — the Failure-Mode whole-repo sweep is deferred), computes three additional dimensions itself (dependency staleness/vulns, TODO/FIXME accumulation, documentation drift), loops the sweep until it stops surfacing new blocking debt, compiles the results into a backlog sorted by severity × inverse-effort, attaches its own point of view to each Critical/Important finding, and consolidates the findings into a proposed set of GitHub issues to file. It **never edits code** — its only output is the report and the issues.
 
 This skill is **not a sibling of `/review-crew:review-code`**. `/review-crew:review-code` finds bugs in new code; `/review-crew:audit-debt` finds bugs in old code that has rotted. The diff-scope rule does NOT apply — every line in the project's source is in scope. The trade-off is that it is **slow and thorough by design** — meant to be run occasionally (suggest monthly), not before every PR. Running it weekly will drown you in nits you have already triaged; running it never will let real debt accumulate to "rewrite this feature" levels.
 
-Read the base rubric (`${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`) first for the severity rubric, verification rules, findings schema, triage, POV, and verdict mapping — those are not restated here. The base rubric's tier definitions get a debt-context recalibration in §Severity Recalibration for Debt Context below; if anything in this skill contradicts the base rubric, the base rubric wins.
+Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`) first for the severity rubric, verification rules, findings schema, triage, POV, and verdict mapping — those are not restated here. The base rubric's tier definitions get a debt-context recalibration in §Severity Recalibration for Debt Context below; if anything in this skill contradicts the base rubric, the base rubric wins.
 
 ## Invocation
 
@@ -44,37 +46,41 @@ SESSION_DIR=$(mktemp -d /tmp/audit-debt-XXXXXXXX)
 
 ### 1. Sweep Prep
 
-**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
 
 ```bash
-RUBRIC="${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
 **Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
 
 ```bash
-RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind profile) \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
 PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 EXISTS=$(printf '%s' "$RES" | jq -r .exists)
-DRES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind decisions) \
+DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
   || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 ```
 
-Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
+Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
 
 ```bash
-PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json'))['version'])")
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
 **Staleness self-check (first action).** Before the profile bootstrap and before generating artifacts or dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the sweep** on drift — it only produces a non-blocking nudge surfaced at end of run. audit-debt sweeps the working tree (default root), so no `--root` is passed. Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$EXISTS" = "true" ]; then
-  DOCTOR_JSON=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/repo_doctor.py" \
+  DOCTOR_JSON=$(python3 "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
 fi
 ```
@@ -84,12 +90,13 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 **Profile bootstrap (run before generating artifacts or dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
 ```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask", STOP — present the in-repo-vs-global AskUserQuestion, set LOC, then run the create calls below.
-  PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
-  DECISIONS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind decisions --location "$LOC")
+  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
@@ -194,7 +201,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all four specialists in a **single message with four `Agent` tool calls** so they run in parallel, each dispatched by its `subagent_type` (the agent's name). Each gets the same sweep-mode prompt template, parameterized by `subagent_type`, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
+Launch all four specialists in a **single message with four parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools. On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map.md`). Each gets the same sweep-mode prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
 
 ```
 You are sweeping the codebase for accumulated debt, NOT reviewing a diff.
@@ -260,7 +267,7 @@ file.
 
 Per-agent substitutions:
 
-| Agent slug / `subagent_type` | `<agent>` (findings filename) | `<dimension>` |
+| reviewer | `<agent>` (findings filename) | `<dimension>` |
 | ---------------------------- | ----------------------------- | ------------- |
 | architecture-reviewer        | architecture                  | Architecture  |
 | code-reviewer                | code                          | Code          |
@@ -380,7 +387,8 @@ These four behaviors are **non-blocking**, run **at end of run** (after filing i
 audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-included Fix/Defer). Append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/decisions.py" \
   append "$DECISIONS" '<record-json>'
 ```
 
@@ -401,7 +409,8 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 After the staleness nudge, analyze the decision store for a repeated signal:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
@@ -466,5 +475,5 @@ The `severity × inverse-effort` sort means an `Important + Quick` finding ranks
 | Running this before every PR                                       | This skill is slow and broad by design. Run it monthly. For PR review, use `/review-crew:review-code`.                                                                     |
 | Filing noisy findings the owner won't action                       | Issue-filing is NOTIFY — findings are filed by default and reported back; use the **File** / **Drop** deselect pass to trim, and hard-floor trackers (public/shared/paid) still GATE.                           |
 | Running a deps pass when no audit tool ran                         | The deps audit is ecosystem-aware and skips gracefully (no manifest, or tool absent). If §1 wrote no audit artifact, emit no deps findings — don't invent advisories.     |
-| Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch each by its `subagent_type` (its name). The methodology is the agent's own system prompt.                          |
+| Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).                          |
 | Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                 |

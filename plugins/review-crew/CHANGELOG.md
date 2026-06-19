@@ -6,6 +6,10 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- **Codex host support.** `.codex-plugin` manifest, `hosts/` tool maps (`claude-tools.md` and `codex-tools.md`), and neutral-language skills — all six `SKILL.md` files swept to remove Claude-specific dispatch tokens (`subagent_type`, "the Agent tool") and replace bare `${CLAUDE_PLUGIN_ROOT}` with the portable seam `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. Each skill now includes a host-map pointer and a Codex dispatch note so the plugin runs first-class on both Claude Code and Codex.
+
 ### Fixed
 
 - **Gate-integrity — `gate_write.py` certify now fails loud.** A `certify` that produces a

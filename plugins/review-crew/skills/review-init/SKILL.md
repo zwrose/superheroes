@@ -3,6 +3,8 @@ name: review-init
 description: Use when a project has no .claude/review-profile.md yet (e.g. before the first review-crew review in a repo), or when you want to regenerate or refresh a project's review calibration after the project has changed.
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # review-init
 
 Generate or refresh a project's **review profile** — `.claude/review-profile.md` —
@@ -47,8 +49,9 @@ conventions/threat context it already states.
 Read the engine versions for provenance:
 
 ```bash
-sed -n '1p' "${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"          # -> <!-- rubric-version: N -->
-python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json'))['version'])"
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+sed -n '1p' "$ROOT_DIR/rubric/review-base.md"          # -> <!-- rubric-version: N -->
+python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])"
 ```
 
 ## Step 2 — Choose mode
@@ -58,7 +61,8 @@ global per-repo store). `review_store.py resolve` returns the resolved path, or
 `location: none` when no profile exists yet:
 
 ```bash
-RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind profile) \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || RES='{"location":"none","exists":false,"path":null}'
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
@@ -69,11 +73,12 @@ If `$LOCATION` is not `none` (a profile resolved at `$PROFILE`) → **Reconcile*
 storage location and mint the path before writing:
 
 ```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask", present the in-repo vs global AskUserQuestion, set LOC.
-  PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
+  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
 ```
 

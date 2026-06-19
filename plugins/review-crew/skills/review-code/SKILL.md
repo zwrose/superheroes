@@ -4,6 +4,8 @@ description: Use when reviewing code changes on a local branch or an open pull r
 user-invocable: true
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Review Code
 
 Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches five specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies fixes via a fixer subagent, and re-reviews — looping until no Critical/Important findings remain or a circuit breaker halts. It never loads the full diff or any agent's raw output into its own conversation; subagents do all heavy reading and write structured results to disk.
@@ -16,7 +18,7 @@ There are three top-level paths, chosen at invocation:
 - **`--review-only`** → one review pass, then a read-only interactive terminal presentation. No commits.
 - **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
 
-The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each by name via the Agent tool. Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project profile (`.claude/review-profile.md`), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator does not chain a "verifier agent" or run a specialist twice within a round, because multi-turn agentic review within a single pass degrades F1 and fabricates findings as real ones get exhausted (base rubric, "In-pass verification & single-pass discipline"). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
+The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via `hosts/<your-host>-tools.md`). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project profile (`.claude/review-profile.md`), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator does not chain a "verifier agent" or run a specialist twice within a round, because multi-turn agentic review within a single pass degrades F1 and fabricates findings as real ones get exhausted (base rubric, "In-pass verification & single-pass discipline"). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
 
 ## Invocation
 
@@ -71,36 +73,40 @@ Files written during the review. **Per-round artifacts live under `$SESSION_DIR/
 
 Decide mode (auto-detected or explicit, per `## Invocation`). Create the session directory.
 
-**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT}`):
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
 
 ```bash
-RUBRIC="${CLAUDE_PLUGIN_ROOT}/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
-**Resolve the escalation guard wrapper and repo root once.** Subagents do not inherit `${CLAUDE_PLUGIN_ROOT}` or `$REPO_ROOT`, so compute both absolute values here (in the orchestrator's context, where they expand) for embedding into the fixer prompt's `## Input` block — the same way `RUBRIC`/`PROFILE` are embedded as expanded absolute paths:
+**Resolve the escalation guard wrapper and repo root once.** Subagents do not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` or `$REPO_ROOT`, so compute both absolute values here (in the orchestrator's context, where they expand) for embedding into the fixer prompt's `## Input` block — the same way `RUBRIC`/`PROFILE` are embedded as expanded absolute paths:
 
 ```bash
-ESC_WRAPPER="${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py"   # absolute; embed the expanded value in the fixer prompt
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ESC_WRAPPER="$ROOT_DIR/lib/escalation_resolve.py"   # absolute; embed the expanded value in the fixer prompt
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
 ```
 
 **Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
 
 ```bash
-RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind profile) \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
 PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 EXISTS=$(printf '%s' "$RES" | jq -r .exists)
-DRES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" resolve --kind decisions) \
+DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
   || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 ```
 
-Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
+Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
 
 ```bash
-PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json'))['version'])")
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
@@ -109,13 +115,14 @@ RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" 
 subagents at `mechanical`. Resolve each via the shared knob to get the band defaults:
 
 ```bash
-MT="${CLAUDE_PLUGIN_ROOT}/lib/model_tier_resolve.py"   # resolved like $RUBRIC
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+MT="$ROOT_DIR/lib/model_tier_resolve.py"   # resolved like $RUBRIC
 REVIEWER_MODEL=$(python3 "$MT" --role reviewer | jq -r '.model // empty')
 DEEP_MODEL=$(python3 "$MT" --role reviewer-deep | jq -r '.model // empty')
 MECH_MODEL=$(python3 "$MT" --role mechanical | jq -r '.model // empty')
 ```
 
-When dispatching the specialists via the Agent tool, pass `model: $DEEP_MODEL` for
+When dispatching the specialists when dispatching specialists, pass `model: $DEEP_MODEL` for
 `security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
 other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
 value means "inherit the session model" — omit the `model` arg in that case.
@@ -123,9 +130,10 @@ value means "inherit the session model" — omit the `model` arg in that case.
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$EXISTS" = "true" ]; then
   # --post path: --root "$SESSION_DIR/repo" (PR-head worktree). branch/default: omit --root (working tree).
-  DOCTOR_JSON=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/repo_doctor.py" \
+  DOCTOR_JSON=$(python3 "$ROOT_DIR/lib/repo_doctor.py" \
     "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION" ${DOCTOR_ROOT_ARG})
 fi
 ```
@@ -135,13 +143,14 @@ fi
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
 ```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   # Decide location: env override > ask (interactive) > global (headless).
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask", present the in-repo vs global AskUserQuestion now and set LOC.
-  PROFILE=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind profile --location "$LOC")
-  DECISIONS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_store.py" create --kind decisions --location "$LOC")
+  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
   # Then run review-init's create procedure inline, writing the profile to $PROFILE.
 fi
 ```
@@ -271,7 +280,7 @@ Do **not** tier or skip specialists based on which files changed. Coverage unifo
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all five specialists in a **single message with five `Agent` tool calls** so they run in parallel, each dispatched by its `subagent_type` (the agent's name). Each gets the same prompt template, parameterized by `subagent_type`, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
+Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools. On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map.md`). Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
@@ -344,7 +353,7 @@ most 5 reported per agent). If you have nothing to flag, write an empty array
 
 Per-agent substitutions:
 
-| Agent slug / `subagent_type` | `<agent>` (findings filename) | `<dimension>` |
+| reviewer | `<agent>` (findings filename) | `<dimension>` |
 | ---------------------------- | ----------------------------- | ------------- |
 | architecture-reviewer        | architecture                  | Architecture  |
 | code-reviewer                | code                          | Code          |
@@ -401,7 +410,7 @@ Runs when neither `--post` nor `--review-only` is set, and the profile's verify 
 Each round:
 
 1. `mkdir -p $SESSION_DIR/round-<round>`. Regenerate the diff locally: `git diff <baseRef>...HEAD > $SESSION_DIR/round-<round>/diff.txt`. Size it with `wc -l` only — never `cat` it.
-2. **Review.** Dispatch the five specialists in parallel by `subagent_type` (same prompt template as `## Dispatch Specialists in Parallel`), writing `round-<round>/findings-<agent>.json`. Point them at `round-<round>/diff.txt`.
+2. **Review.** Dispatch the five specialists in parallel by reviewer name (resolve dispatch via `hosts/<your-host>-tools.md`) (same prompt template as `## Dispatch Specialists in Parallel`), writing `round-<round>/findings-<agent>.json`. Point them at `round-<round>/diff.txt`.
 3. **Compile + dedupe** into `round-<round>/compiled.json` with verdict (same pipeline as `## Compile + Dedupe`).
 4. **Effective findings** = `compiled.findings` whose identity is NOT in the skip-set.
 5. If `effective` is empty → **EXIT SUCCESS** (jump to End-of-Loop Summary with `ACTION=exit_clean`, `ROUND=<round>`, `REASON="no effective findings"`).
@@ -411,7 +420,7 @@ Each round:
    - **Verifiably-safe skip / believed false-positive** → record a **skip** in `resolutions.json` (`action: "skip"`, **carrying the finding's `severity`**) and add the identity to the skip-set, **with a verification trace** (cite the source / test you checked). A skip with no citable ground truth is **not** eligible — it GATEs. **Never silently drop a blocker** — a skipped blocker is recorded with its severity, so `loop_state` counts it.
    - **NOTIFY (the rubric's middle mode on a blocker)** → act on the best default (the auto-fix when there is one right answer, else the verifiably-safe skip) and record it via `decisions.py` and in the End-of-Loop Summary with its reverse-path/expiry — surfaced, not asked. (Mirrors the trio: record GATE outcomes and NOTIFY decisions in the summary with their reverse-path/expiry, per `escalation-base.md`.)
    - Minor/Nit → never escalated: apply the triage recommendation automatically — `Skip`/`Defer` → add the identity to the skip-set; `Fix` → fold into the fix batch (step 8), using the POV's suggested approach for a judgment-fix — then record each via `decisions.py` and surface them in the End-of-Loop Summary (auto-skipped / auto-fixed).
-   Resolve the rubric for this dispatch once via the wrapper (with `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` defined in setup): `RUBRIC_RES=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")` — read its `path` and embed it (apply the embedded fail-closed posture if `degraded`: apply the hard floor and GATE anything owner-weighable). Nothing is hidden, just not asked; everything the agent recommends fixing mechanically (any severity) is handled in step 8 without asking.
+   Resolve the rubric for this dispatch once via the wrapper (with `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` defined in setup): `RUBRIC_RES=$(python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")` — read its `path` and embed it (apply the embedded fail-closed posture if `degraded`: apply the hard floor and GATE anything owner-weighable). Nothing is hidden, just not asked; everything the agent recommends fixing mechanically (any severity) is handled in step 8 without asking.
    - **Write `round-<round>/resolutions.json` whenever this round records ANY disposition** — every autonomous verifiably-safe skip (the bullet above), every NOTIFY-skip, AND every gated answer below. This is the only channel by which step 14 sees a skipped blocker, so it is written even when no `AskUserQuestion` is presented:
      ```json
      { "round": <N>, "resolutions": [
@@ -428,11 +437,12 @@ Each round:
     - Status `CHECK_FAILED` → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="fixer CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface the failing `VERIFY_CMD` output. (When the profile is `mode: unverified`, the fixer runs no checks and cannot return `CHECK_FAILED`.)
     - Status `ESCALATED` → for each escalated finding, present it as a `present-set` intervention now (same prompt shape as step 7), then re-dispatch the fixer with the user's decisions folded in. The follow-up dispatch uses this same `CHECK_FAILED`/`ESCALATED` contract; a finding the user has already decided on is no longer eligible to escalate, so it cannot ping-pong. Do NOT add an escalated finding to the skip-set unless the user skips it. After escalation handling resolves the final `fix-batch`, recompute **blocking-to-fix** (step 9) before evaluating step 14.
 12. **Verify.** If a `VERIFY_CMD` is set, the orchestrator independently runs it from the user's own working tree (never the PR head), non-interactively, with a timeout. Fail (non-zero exit) → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="verify CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface output. (Do not re-review on a broken tree.) If the profile's verify story is `mode: unverified`, **SKIP this gate** — there is no command to run; the round's commit stands ungated.
-13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON; **capture `halt`** as `BREAKER_HALT` (`yes`/`no`). Do NOT read or `cat` the diff into the orchestrator context. (Don't act on it yet — step 14 feeds it to the continuation gate so the next action is decided in one place.)
+13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON; **capture `halt`** as `BREAKER_HALT` (`yes`/`no`). Do NOT read or `cat` the diff into the orchestrator context. (Don't act on it yet — step 14 feeds it to the continuation gate so the next action is decided in one place.)
 14. **Continuation gate — the next action is decided by a script, not by you.** Whether to run another round is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run the deterministic gate and **obey its `action`** (it derives the blocking counts from the round artifacts, so they are not yours to self-report either):
 
     ```bash
-    python3 "${CLAUDE_PLUGIN_ROOT}/lib/loop_state.py" --round <N> --max-rounds 7 \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+    python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
       --breaker-halt "$BREAKER_HALT" \
       --fix-batch "$SESSION_DIR/round-<N>/fix-batch.json" \
       --resolutions "$SESSION_DIR/round-<N>/resolutions.json"
@@ -495,7 +505,7 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 ### Fixer subagent prompt
 
 **Fixer file-scope guard (`escalation-base.md` hard floor — runtime self-modification).** The guard runs
-in the **fixer subagent** context, which does NOT inherit `${CLAUDE_PLUGIN_ROOT}` or `$REPO_ROOT`. So the
+in the **fixer subagent** context, which does NOT inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` or `$REPO_ROOT`. So the
 orchestrator embeds both absolute values into the fixer prompt's `## Input` block (the expanded `ESC_WRAPPER`
 and `REPO_ROOT` resolved in setup), exactly as it embeds the absolute `RUBRIC`/`PROFILE` paths. Before the
 fixer edits any file, it gates it with those embedded absolute values:
@@ -566,7 +576,8 @@ Report it under "escalated" with the id and why.
 **If `--result-file` was passed**, write the terminal loop_state decision before printing the summary (atomic write via temp file):
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/review_result.py" write \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/review_result.py" write \
   --path "$RESULT_FILE" \
   --action "$ACTION" \
   --round "$ROUND" \
@@ -634,7 +645,8 @@ EOF
 Run `resolve_diff_lines.py` to validate every comment anchor against the diff. This is non-optional — GitHub returns 422 "Line could not be resolved" for any inline comment whose `(file, line)` doesn't land on a `+` or context line inside a hunk, and the script moves out-of-hunk comments to the nearest valid line (prefixing the body with `(Re: line N)`) and drops comments for files not in the diff:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/resolve_diff_lines.py" \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/resolve_diff_lines.py" \
   "$SESSION_DIR/round-1/diff.txt" \
   "$SESSION_DIR/round-1/review.json" \
   --output "$SESSION_DIR/round-1/review-resolved.json"
@@ -681,7 +693,8 @@ These four behaviors are **non-blocking**, run **at end of run** (after the revi
 Wherever the user resolves a finding (this skill: the §7 interventions and any escalation re-prompt — i.e. when an `AskUserQuestion` resolution is recorded), append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/decisions.py" \
   append "$DECISIONS" '<record-json>'
 ```
 
@@ -702,7 +715,8 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 After the staleness nudge, analyze the decision store for a repeated signal:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/decisions.py" \
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
@@ -766,5 +780,5 @@ These are the base rubric's binding verification rules; they are restated in eve
 | Eyeballing "are we stuck?" by hand                      | Always call `circuit_breaker.py`. Finding-identity comparison across rounds is deterministic; manual judgment drifts after compaction.                             |
 | Exiting the loop early because a fix "looks done"       | The continue decision is `loop_state.py`'s, not yours (step 14). A blocking fix → another round is **mandatory**. "Trivial fix / it'll be clean / save the tokens / I'll offer it as optional" are the rationalizations it overrides — unverified fixes ship exactly this way. |
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
-| Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch each by its `subagent_type` (its name). The methodology is the agent's own system prompt.                  |
+| Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).                  |
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |
