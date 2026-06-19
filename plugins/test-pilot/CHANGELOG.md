@@ -6,8 +6,6 @@ All notable changes to the `test-pilot` plugin. Versions follow
 
 ## [Unreleased]
 
-## [0.2.0] — 2026-06-19
-
 ### Added
 
 - Codex host support: `.codex-plugin` manifest, `hosts/` tool maps, neutral-language skills.
