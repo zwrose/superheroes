@@ -105,6 +105,7 @@ def test_safety_machinery_set_members_are_pinned():
         "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
         "gate_write.py", "architect_lib.py", "definition_doc.py",
         "enforcer.py", "band_lib.py", "model_tier.py", "hooks.json",
+        "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",
     }
 
@@ -119,10 +120,10 @@ def test_guard_refuses_each_safety_file_under_a_band_root(tmp_path):
              str(tmp_path / "plugins" / "the-architect"),
              str(tmp_path / "plugins" / "workhorse")]
     arch = {"escalation.py", "definition_doc.py", "escalation-base.md", "model_tier.py"}
-    workhorse = {"enforcer.py", "band_lib.py", "hooks.json"}
+    workhorse = {"enforcer.py", "band_lib.py", "hooks.json", "precompact.py", "session_start.py"}
     for name in ESC.SAFETY_MACHINERY:
         if name in workhorse:
-            plugin, sub = "workhorse", ("hooks" if name == "hooks.json" else "lib")
+            plugin, sub = "workhorse", ("hooks" if name in ("hooks.json", "precompact.py", "session_start.py") else "lib")
         elif name in arch:
             plugin, sub = "the-architect", ("rubric" if name.endswith(".md") else "lib")
         else:

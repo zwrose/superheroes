@@ -94,3 +94,19 @@ def ensure_store(cwd, root=None):
         return d
     except (OSError, subprocess.SubprocessError):
         return None
+
+
+def _current_path(cwd, root=None):
+    return os.path.join(checkout_dir(cwd, root), "current.json")
+
+
+def set_current(cwd, work_item, root=None):
+    atomic_write(_current_path(cwd, root), json.dumps({"workItem": work_item}))
+
+
+def get_current(cwd, root=None):
+    try:
+        with open(_current_path(cwd, root), encoding="utf-8") as fh:
+            return json.load(fh).get("workItem")
+    except (OSError, ValueError):
+        return None

@@ -109,6 +109,8 @@ SAFETY_MACHINERY = (
     "band_lib.py",            # workhorse resolver the enforcer depends on (F3)
     "model_tier.py",          # band model-tier core — policy, protect from auto-edits
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
+    "precompact.py",          # workhorse resume hooks (resilience)
+    "session_start.py",       # workhorse resume hooks (resilience)
     "escalation-base.md",
     "review-base.md",
 )

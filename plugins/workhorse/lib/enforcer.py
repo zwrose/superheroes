@@ -75,7 +75,8 @@ DENY_COMMANDS = [
 _SAFETY_BASENAMES = (
     "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
     "gate_write.py", "architect_lib.py", "definition_doc.py", "enforcer.py",
-    "model_tier.py", "band_lib.py", "hooks.json", "escalation-base.md", "review-base.md",
+    "model_tier.py", "band_lib.py", "hooks.json", "precompact.py", "session_start.py",
+    "escalation-base.md", "review-base.md",
 )
 _WRITE_OPS = re.compile(
     r"(>>?|\btee\b|\bsed\s+-i|\bcp\b|\bmv\b|\bdd\b|\btruncate\b|\bchmod\b|\bln\b)", re.I)

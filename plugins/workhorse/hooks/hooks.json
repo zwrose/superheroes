@@ -13,6 +13,12 @@
           { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/lib/enforcer.py\" hook || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" }
         ]
       }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact.py\" || true" } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\" || true" } ] }
     ]
   }
 }
