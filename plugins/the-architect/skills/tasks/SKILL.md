@@ -3,6 +3,8 @@ name: tasks
 description: Use after a `plan` is approved, to turn it into the bite-sized, test-first executable `tasks` for a work-item — the checkbox TDD steps the build follows. This is superheroes' Tasks phase: it WRAPS superpowers `writing-plans` (the engine that decomposes the plan into steps) and owns the superheroes definition-doc around it. In a superheroes project, route plan-decomposition HERE rather than invoking `writing-plans` standalone, so the output is captured into `docs/superheroes/<work-item>/tasks.md` and execution stays with the producer's Build. Runs LARGELY AUTONOMOUSLY (like Plan) and produces the `tasks` definition-doc, then runs review-tasks. Not for requirements (that is `discovery`) or technical approach (that is `plan`); it does NOT execute the steps (that is Build).
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Tasks
 
 Turn the approved **`plan`** into the **`tasks`** definition-doc: the bite-sized,
@@ -67,9 +69,10 @@ Create a TodoWrite item for each step:
 
   ```bash
   set -euo pipefail
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   ROOT=$(git rev-parse --show-toplevel) || { echo "not in a git repo" >&2; exit 1; }
   WORK_ITEM="<the work-item directory name>"
-  REVIEW=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+  REVIEW=$(python3 "$ROOT_DIR/lib/definition_doc.py" read-gate \
     --doc plan --work-item "$WORK_ITEM" --root "$ROOT") \
     || { echo "no readable plan for $WORK_ITEM — run plan first" >&2; exit 1; }
   [ "$REVIEW" = passed ] || { echo "plan not approved (gates.review=$REVIEW) — stop; it needs review-plan, or the plan's own self-certification, first" >&2; exit 1; }
@@ -119,15 +122,16 @@ plan) and wrap the captured body:
 
 ```bash
 set -euo pipefail
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 SIZE=$(grep -m1 '^size:' "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" | sed 's/^size: *//')
-TASKS=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc tasks --root "$ROOT")
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" frontmatter \
+TASKS=$(python3 "$ROOT_DIR/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc tasks --root "$ROOT")
+python3 "$ROOT_DIR/lib/definition_doc.py" frontmatter \
   --doc tasks --work-item "$WORK_ITEM" --size "$SIZE" --parent-item "$WORK_ITEM"
 ```
 
-Assemble `$TASKS` from `${CLAUDE_PLUGIN_ROOT}/templates/tasks.md`:
+Assemble `$TASKS` from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/tasks.md`:
 
 - Replace `{{frontmatter}}` with the emitted block; set the `# {{Title}} — Tasks` title
   (this **reframes** `writing-plans`' `# … Implementation Plan` heading).
@@ -193,23 +197,38 @@ whether `review-tasks` ran:**
 
 Self-certification is safe **only** because Tasks is autonomous (no owner approves the *how*;
 the real human gate is the final PR) — the deliberate asymmetry with `spec`. Record it
-idempotently — **set `passed` only when the gate is still `pending`** (no `review-tasks`
-wrote it), so a `review-tasks` verdict is never clobbered:
+idempotently, and **only in genuine degraded mode**. A still-`pending` gate is *ambiguous*: it
+can mean "`review-tasks` is not installed here" (self-certify is correct) **or** "`review-tasks`
+ran but could not record its verdict" — e.g. it could not resolve review-crew ↔ the-architect, so
+`gate_write` exits non-zero with `skipped:lib-absent`/`failed:set-gate` and leaves the gate
+`pending`. Self-certifying that second case would bless a review that never landed. So branch on
+**whether you actually ran `review-tasks` in step 5**, not on the gate value alone — a
+`review-tasks` verdict is never clobbered, and a *failed* `review-tasks` write never gets
+laundered into `passed`:
 
 ```bash
 set -euo pipefail
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
-CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+# Did you invoke review-tasks in step 5? "no" = it is not installed (genuine degraded mode);
+# "yes" = it ran and OWNS the gate write.
+REVIEW_TASKS_RAN="<yes|no>"
+CURRENT=$(python3 "$ROOT_DIR/lib/definition_doc.py" read-gate \
   --doc tasks --work-item "$WORK_ITEM" --root "$ROOT") \
   || { echo "could not read the tasks gate (missing/malformed frontmatter) — not self-certifying; fix the tasks doc first" >&2; exit 1; }
-if [ "$CURRENT" = pending ]; then
-  # degraded mode: review-tasks didn't run — self-certify after a clean self-review
-  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
-    --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
-else
+if [ "$CURRENT" != pending ]; then
   echo "gate already recorded by review-tasks ($CURRENT) — not overwriting"
   [ "$CURRENT" = passed ] || { echo "review-tasks requested changes — address them and re-run review-tasks; do not advance" >&2; exit 1; }
+elif [ "$REVIEW_TASKS_RAN" = yes ]; then
+  # review-tasks ran yet the gate is still pending → it produced a verdict it could NOT record.
+  # This is NOT degraded mode — do NOT self-certify (that would bless an unrecorded review).
+  echo "review-tasks ran but did not record the gate (see its skipped:/failed: outcome) — NOT self-certifying; resolve the-architect alongside review-crew and re-run review-tasks" >&2
+  exit 1
+else
+  # degraded mode: review-tasks is not installed — self-certify after a clean self-review
+  python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
+    --doc tasks --work-item "$WORK_ITEM" --review passed --root "$ROOT"
 fi
 ```
 

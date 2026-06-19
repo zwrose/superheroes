@@ -1,0 +1,10 @@
+{
+  "name": "superheroes",
+  "interface": { "displayName": "Superheroes" },
+  "plugins": [
+    { "name": "review-crew",  "source": { "source": "local", "path": "./plugins/review-crew" },  "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" }, "category": "Developer Tools" },
+    { "name": "the-architect","source": { "source": "local", "path": "./plugins/the-architect" },"policy": { "installation": "AVAILABLE", "authentication": "ON_USE" }, "category": "Developer Tools" },
+    { "name": "test-pilot",   "source": { "source": "local", "path": "./plugins/test-pilot" },   "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" }, "category": "Developer Tools" },
+    { "name": "workhorse",    "source": { "source": "local", "path": "./plugins/workhorse" },    "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" }, "category": "Developer Tools" }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "shell", "hooks": [ { "type": "command", "command": "python3 \"${PLUGIN_ROOT}/lib/enforcer.py\" hook || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" } ] },
+      { "matcher": "apply_patch", "hooks": [ { "type": "command", "command": "python3 \"${PLUGIN_ROOT}/lib/enforcer.py\" hook || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"workhorse enforcer unavailable (fail-closed)\"}}'" } ] }
+    ]
+  }
+}

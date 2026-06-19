@@ -108,7 +108,7 @@ def test_certify_noncanonical_skips_and_leaves_canonical_untouched(tmp_path, cap
     external = _write(root, "plan", where=str(tmp_path / "elsewhere" / WI))  # same WI, different file
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
                    "--reviewed-path", external, "--review", "passed", "--parent-doc", "spec", "--root", root)
-    assert rc == 0 and out == "skipped:noncanonical"
+    assert rc == 3 and out == "skipped:noncanonical"  # certify produced a verdict but did NOT record it → non-zero
     assert _gate(root, "plan") == "changes-requested"  # the wrong-file hole: canonical doc untouched
 
 
@@ -133,16 +133,23 @@ def test_certify_set_gate_failure_reports(tmp_path, capsys):
         fh.write("# malformed — no frontmatter\n")  # passes the -ef guard, fails set-gate
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
                    "--reviewed-path", canon, "--review", "changes-requested", "--parent-doc", "plan", "--root", root)
-    assert rc == 0 and out == "failed:set-gate"
+    assert rc == 3 and out == "failed:set-gate"  # certify could not record the verdict → non-zero
 
 
 def test_certify_lib_absent_fails_closed(tmp_path, capsys):
+    # GATE-INTEGRITY (the self-certify hole): when the-architect's lib can't be resolved,
+    # certify produces a verdict it cannot record and leaves the gate at 'pending'. That
+    # 'pending' is INDISTINGUISHABLE from "review-plan never ran", so the-architect's
+    # self-certify branch would upgrade it to 'passed' — a green gate with no real review.
+    # certify must therefore exit NON-ZERO so the failure cannot be silently swallowed as
+    # if it were a graceful skip. (reset mode stays exit-0 — it is advisory and never
+    # grants passed; see test_reset_lib_absent_fails_closed, the control.)
     root = _docs_root(tmp_path, with_architect=False)  # no the-architect resolvable
     plan = _write(root, "plan")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
                    "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
-    assert rc == 0 and out == "skipped:lib-absent"
-    assert _gate(root, "plan") == "pending"  # nothing recorded
+    assert rc == 3 and out == "skipped:lib-absent"
+    assert _gate(root, "plan") == "pending"  # nothing recorded — and now the caller sees a non-zero exit
 
 
 # --- reset (review-spec stale approval) -----------------------------------

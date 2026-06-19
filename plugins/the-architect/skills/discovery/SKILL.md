@@ -3,6 +3,8 @@ name: discovery
 description: Use at the START of any new piece of work in a superheroes project — when the owner has a fuzzy idea, feature request, bug, or "let's build / add / change / fix X" and it needs to become an owner-approved requirements spec. This is superheroes' Discovery phase: it OWNS the requirements front-half — the *what*, in plain language, no technical implementation — and supersedes generic brainstorming here. Elicits requirements (incl. significant unhappy paths) with the owner, optionally researches prior art, captures UI/UX via Claude Design, produces the `spec` definition-doc, runs it through review-spec, and ends with the owner's approval. Not for technical approach (that is `plan`) or steps (that is `tasks`).
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Discovery
 
 Turn a fuzzy idea into an owner-approved **`spec`** definition-doc: the requirements
@@ -143,6 +145,8 @@ If the owner doesn't have or doesn't want to use Claude Design, **don't block** 
 capture the UI/UX as a plain-language description of the key screens and states in
 the spec instead.
 
+**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
+
 `mcp__visualize__show_widget` (inline SVG/HTML) may help for a quick option
 comparison **on graphical clients only** — it does **not** render in a terminal, so
 never rely on it; always have a plain-text description as the fallback.
@@ -203,8 +207,9 @@ automated review ran** — never claim a review that didn't happen:
   autonomous Plan phase can begin:
 
   ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   ROOT=$(git rev-parse --show-toplevel)
-  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
+  python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
     --doc spec --work-item "<work-item>" --review passed --root "$ROOT"
   ```
 

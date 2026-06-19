@@ -79,6 +79,29 @@ manifest ones):
 - A new plugin must be listed in `.claude-plugin/marketplace.json` with a `source`
   path that exists.
 
+## Multi-host rules
+
+Skills must work on both Claude Code and Codex. A few hard rules:
+
+- **Speak in actions, not tool names.** A skill says "read the file" or "run the
+  verify command" — not `Read` (Claude Code) or `shell` (Codex). Tool names belong in
+  the per-host tool-map (`hosts/<host>-tools.md`), nowhere else. The validate_hosts.py
+  neutral-language check bans four host-coupled tokens — dispatch/invocation phrasings
+  that name one runtime's API rather than the action — anywhere in a `SKILL.md`:
+  `subagent_type`, `the Agent tool`, `the Skill tool`, and `the Task tool`.
+- **Every `SKILL.md` carries the host-map pointer line.** The boilerplate reads:
+  > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
+  > via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude
+  > Code, `codex-tools.md` on Codex.
+- **Use the portable root seam.** Assign it once per bash block:
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  ```
+  Then use `$ROOT_DIR` for all bundled-helper paths. Never write a bare
+  `${CLAUDE_PLUGIN_ROOT}` — it breaks on Codex. The validator fails on bare usage.
+- **Both `hosts/` maps must stay byte-identical to the repo-root canonical** —
+  see RELEASING.md for the release checklist.
+
 ## Be decent
 
 Be respectful and assume good faith. That's the whole code of conduct.

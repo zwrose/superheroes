@@ -12,7 +12,19 @@ monorepo.
 Resolution order (first hit wins):
   1. **In-repo** (monorepo / dogfooding): ``<root>/plugins/the-architect/lib/definition_doc.py``.
   2. **Installed sibling**: a sibling of review-crew under the same marketplace cache —
-     ``<CLAUDE_PLUGIN_ROOT>/../../the-architect/*/lib/definition_doc.py`` (highest version).
+     ``<plugin_root>/../../the-architect/*/lib/definition_doc.py`` (highest version).
+
+**Host-agnostic (Claude + Codex).** The installed-sibling cache layout is the SAME shape on
+both hosts — ``<cache>/<marketplace>/<plugin>/<version>/`` — verified empirically against a
+real Codex install (``~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`` mirrors
+Claude's ``~/.claude/plugins/cache/...``). So the two-levels-up glob resolves the-architect
+under both caches with no host-specific branch, and the existing
+``test_resolves_installed_sibling`` already covers it. The Codex path works because the real
+caller (``gate_write.py``) passes ``plugin_root`` derived from ``__file__`` — NOT from
+``$CLAUDE_PLUGIN_ROOT`` (which Codex does not export; Codex exposes ``$PLUGIN_ROOT``). The
+``CLAUDE_PLUGIN_ROOT`` env fallback below is only a Claude-side convenience for direct CLI
+use; a future caller that leans on that env var instead of passing ``plugin_root`` would
+silently fail to resolve on Codex.
 
 Prints the resolved absolute path and exits 0; **fails closed** (exits 1, message on
 stderr) when neither resolves — the caller then reports "gate not recorded" rather than
@@ -52,6 +64,10 @@ def resolve_target(target, root=None, plugin_root=None):
         cand = os.path.join(root, "plugins", *target)
         if os.path.isfile(cand):
             return os.path.abspath(cand)
+    # Claude-only convenience: read $CLAUDE_PLUGIN_ROOT when no plugin_root was passed.
+    # Codex does not export it (it uses $PLUGIN_ROOT), so on Codex callers MUST pass
+    # plugin_root explicitly — gate_write.py does, deriving it from __file__. See the
+    # module docstring's "Host-agnostic" note.
     plugin_root = plugin_root or os.environ.get("CLAUDE_PLUGIN_ROOT")
     if plugin_root:
         marketplace = os.path.abspath(os.path.join(plugin_root, os.pardir, os.pardir))
@@ -70,7 +86,9 @@ def resolve(root=None, plugin_root=None):
 def main(argv):
     ap = argparse.ArgumentParser(description="resolve the-architect's definition_doc.py (CONVENTIONS §7)")
     ap.add_argument("--root", default=None, help="target-repo root (the in-repo case)")
-    ap.add_argument("--plugin-root", default=None, help="override $CLAUDE_PLUGIN_ROOT (installed-sibling case)")
+    ap.add_argument("--plugin-root", default=None,
+                    help="the plugin root for the installed-sibling case; on Codex pass this "
+                         "instead of relying on $CLAUDE_PLUGIN_ROOT (Codex does not export it)")
     args = ap.parse_args(argv[1:])
     path = resolve(args.root, args.plugin_root)
     if not path:

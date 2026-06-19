@@ -3,6 +3,8 @@ name: writing-specs
 description: Use to author the on-disk `spec` definition-doc once an owner has APPROVED a set of requirements — normally invoked by the the-architect `discovery` skill, not directly by an owner idea. Mints the work-item slug, emits the CONVENTIONS §3.1 frontmatter via the lib, fills the spec body template (EARS requirements + Given-When-Then acceptance criteria, significant-unhappy-path behaviors, the new spec sections), writes `docs/superheroes/<work-item>/spec.md` at the repo root, and runs a self-review. Does NOT elicit requirements (that is `discovery`) or design the technical approach (that is `plan`).
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # writing-specs
 
 Turn an **owner-approved** set of requirements into the on-disk `spec`
@@ -28,7 +30,8 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 1. **Mint the work-item** (once; it is then frozen — CONVENTIONS §6.1):
 
    ```bash
-   WORK_ITEM=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" mint --title "<title>")
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   WORK_ITEM=$(python3 "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
    ```
 
    Reuse an existing slug if this spec already exists (a revision); never re-mint
@@ -39,8 +42,9 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    working directory:
 
    ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
    ROOT=$(git rev-parse --show-toplevel)
-   SPEC=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc spec --root "$ROOT")
+   SPEC=$(python3 "$ROOT_DIR/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc spec --root "$ROOT")
    mkdir -p "$(dirname "$SPEC")"
    ```
 
@@ -48,14 +52,15 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    `gates.review: pending`, null parent):
 
    ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" frontmatter \
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   python3 "$ROOT_DIR/lib/definition_doc.py" frontmatter \
      --doc spec --work-item "$WORK_ITEM" --size "<size>"
    ```
 
    Do not hand-write the frontmatter — the lib owns its shape and the
    parent-linkage invariant.
 
-4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT}/templates/spec.md`: replace the
+4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/spec.md`: replace the
    `{{frontmatter}}` line with the emitted block, set the `# {{Title}}`, and fill
    every section from the approved inputs. Honor the template's contract:
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1

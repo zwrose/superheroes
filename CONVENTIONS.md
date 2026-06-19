@@ -9,12 +9,12 @@ development loop together without stepping on each other.
 later work builds against a fixed target. A plugin implements a convention when it
 first needs it; the convention does not require all plugins to implement it at once.
 Where an existing plugin already implements (or diverges from) a convention, this doc
-says so. Conventions not yet specified are named in **§7**, bound to the plugin and
+says so. Conventions not yet specified are named in **§8**, bound to the plugin and
 roadmap phase that will own them — so deferral is explicit, not silent.
 
 **Scope.** This file is the authoritative contract. The broader product vision lives
 elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (For the phases
-referenced in §7, see [ROADMAP.md](ROADMAP.md).)
+referenced in §8, see [ROADMAP.md](ROADMAP.md).)
 
 **Band posture — designed to be used together.** The heroes ship as *separately installable
 plugins* but form a *cohesively designed band*: within the loop they **assume each other's
@@ -31,7 +31,7 @@ to approve — the spec is **owner-gated and never self-certified** (the deliber
 don't carry dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
 of "superpowers is an assumed dependency." *(How many install-units the band ships as —
 **packaging** — is a separate question from this posture and from the cast of characters;
-deferred, §7.)*
+deferred, §8.)*
 
 ---
 
@@ -298,7 +298,7 @@ live state stays ephemeral.** GitHub issues never hold live machine state. Live 
 checkpointed *into* the control-plane repo, never into an issue. The source of truth for
 the definition-docs is the **files in git**; the issue is the rendered human index. (The
 GitHub-issue schema itself — body, labels, index format, write coordination — is
-deferred; see §7.)
+deferred; see §8.)
 
 ### 4.2 Two stores and their keying
 
@@ -408,7 +408,7 @@ explicit (`order`), not array position. Item lifecycle is
   holder **very unlikely** to complete a write — and it is a check-then-act, not atomic
   with the remote, so it *narrows* rather than fully closes the woken-stale-holder
   window. Any write that does land on the target remote is caught by the exactly-once
-  anchor below; issue writes (no anchor until §7's coordinator schema) rely on the fence
+  anchor below; issue writes (no anchor until §8's coordinator schema) rely on the fence
   alone. (TTL + CAS *without* fencing would be outright unsound — a live-but-slow holder,
   or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
@@ -632,11 +632,66 @@ does not duplicate it.
   a definition-doc `schemaVersion` bump** (so old and new hashes never silently collide);
   whether to *also* embed an explicit canon-version in the stored branch key is deferred
   to the first consumer (an entry-gate, tracked in `eval/gate.md`). (The fuller
-  cross-plugin version-skew / band-compatibility story is deferred; §7.)
+  cross-plugin version-skew / band-compatibility story is deferred; §8.)
 
 ---
 
-## 7. Deferred conventions
+## 7. Multi-host harness contract
+
+The marketplace runs on both Claude Code and Codex. The harness has **two layers**:
+
+### 7.1 Shared layer (host-neutral)
+
+Everything in `plugins/<name>/` is shared and host-neutral:
+
+- **`skills/`** — the skill logic. Written in host-neutral *actions* ("read the
+  file", "run the verify command", "dispatch the reviewer"). No host tool names here.
+- **`lib/`** — Python helpers and tests. Pure Python, no host dependency.
+- **`agents/`**, **`rubric/`**, **`eval/`** — likewise shared.
+
+Each `SKILL.md` carries a host-map pointer line:
+
+> This skill speaks in host-neutral actions. Resolve them to your runtime's tools
+> via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude
+> Code, `codex-tools.md` on Codex.
+
+The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` (assigned
+once per bash block) lets skills reference bundled helpers on both hosts. Bare
+`${CLAUDE_PLUGIN_ROOT}` is banned — it fails on Codex.
+
+### 7.2 Host-adaptation layer (thin, per-host)
+
+Each plugin carries two thin per-host pieces:
+
+| Artifact | Purpose |
+| --- | --- |
+| `plugins/<name>/.claude-plugin/plugin.json` | Claude Code manifest (name, version, description) |
+| `plugins/<name>/.codex-plugin/plugin.json` | Codex manifest — same version, Codex-native description |
+| `plugins/<name>/hosts/claude-tools.md` | Maps host-neutral actions → Claude Code tools |
+| `plugins/<name>/hosts/codex-tools.md` | Maps host-neutral actions → Codex tools (`shell`, `apply_patch`, `spawn_agent`, …) |
+| `plugins/workhorse/hooks/hooks-codex.json` | Codex hook config (per-plugin; only where needed) |
+
+The repo root also carries `hosts/claude-tools.md` and `hosts/codex-tools.md` as
+canonical references; the per-plugin copies must be byte-identical to them.
+
+Both `plugin.json` versions must be kept in sync — `validate_hosts.py` fails on
+version drift between `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`.
+
+### 7.3 Anti-scope
+
+The harness does **not** introduce:
+- Compatibility matrices or minimum-version tables
+- Schema migrations between host versions
+- A `doctor` or `reconcile` command
+- File-locks or coordination between host runtimes
+
+The shared layer is the contract; the host-adaptation layer is a read-only map.
+Adding complexity to guarantee cross-host parity for edge cases is explicitly out of
+scope — the two hosts load the same skills, and the tool maps are the entire seam.
+
+---
+
+## 8. Deferred conventions
 
 Real conventions the band will need that are **intentionally not specified yet**, because
 the plugin that owns each does not exist — specifying them blind would be guesswork.

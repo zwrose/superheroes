@@ -3,6 +3,8 @@ name: plan
 description: Use after a `spec` is approved, to turn it into the technical `plan` (the *how*) for a work-item — overall approach, architecture, components & interfaces, data flow, key decisions, risks. This is superheroes' Plan phase: it runs LARGELY AUTONOMOUSLY (the owner lives in the *what*; the *how* is automated away), pausing ONLY to escalate genuinely consequential decisions in plain-language pros/cons. Produces the `plan` definition-doc and runs review-plan. Not for requirements (that is `discovery`) or step-by-step tasks (that is `tasks`).
 ---
 
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
 # Plan
 
 Turn the approved **`spec`** into the **`plan`** definition-doc: the technical *how* —
@@ -80,11 +82,12 @@ Ground before you design — **bake in the durable, look up the volatile.**
 
   ```bash
   set -euo pipefail
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   ROOT=$(git rev-parse --show-toplevel) || { echo "not in a git repo" >&2; exit 1; }
   WORK_ITEM="<the work-item directory name>"
   # read-gate parses gates.review from the spec frontmatter via the lib (robust to
   # formatting; errors clearly if the spec is missing or malformed)
-  REVIEW=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+  REVIEW=$(python3 "$ROOT_DIR/lib/definition_doc.py" read-gate \
     --doc spec --work-item "$WORK_ITEM" --root "$ROOT") \
     || { echo "no readable spec for $WORK_ITEM — run discovery first" >&2; exit 1; }
   [ "$REVIEW" = passed ] || { echo "spec not approved (gates.review=$REVIEW) — stop; it needs the owner's approval (or review-spec) first" >&2; exit 1; }
@@ -228,15 +231,16 @@ its `size`. Resolve the path at the repo root and emit the §3.1 frontmatter via
 
 ```bash
 set -euo pipefail
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 SIZE=$(grep -m1 '^size:' "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" | sed 's/^size: *//')
-PLAN=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc plan --root "$ROOT")
-python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" frontmatter \
+PLAN=$(python3 "$ROOT_DIR/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc plan --root "$ROOT")
+python3 "$ROOT_DIR/lib/definition_doc.py" frontmatter \
   --doc plan --work-item "$WORK_ITEM" --size "$SIZE" --parent-item "$WORK_ITEM"
 ```
 
-Fill `${CLAUDE_PLUGIN_ROOT}/templates/plan.md`: replace `{{frontmatter}}` with the emitted
+Fill `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/plan.md`: replace `{{frontmatter}}` with the emitted
 block, set the title, fill the sections, and **strip the `<!-- AUTHOR GUIDANCE … -->`
 comments**. Map every spec requirement in *How the requirements are met*; log every
 significant decision (escalated or not) with its reversibility in *Key decisions*. Write to
@@ -333,23 +337,38 @@ escalations were the owner's touchpoints; there is no owner to approve the *how*
 human gate is the final PR). This is the deliberate asymmetry with `spec`, where the **owner**
 is the gate authority and the agent must never self-approve.
 
-Record it idempotently — **set `passed` only when the gate is still `pending`** (no
-`review-plan` wrote it), so a `review-plan` verdict is never clobbered:
+Record it idempotently, and **only in genuine degraded mode**. A still-`pending` gate is
+*ambiguous*: it can mean "`review-plan` is not installed here" (self-certify is correct) **or**
+"`review-plan` ran but could not record its verdict" — e.g. it could not resolve review-crew ↔
+the-architect, so `gate_write` exits non-zero with `skipped:lib-absent`/`failed:set-gate` and
+leaves the gate `pending`. Self-certifying that second case would bless a review that never
+landed. So branch on **whether you actually ran `review-plan` in step 6**, not on the gate value
+alone — a `review-plan` verdict is never clobbered, and a *failed* `review-plan` write never
+gets laundered into `passed`:
 
 ```bash
 set -euo pipefail
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
-CURRENT=$(python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" read-gate \
+# Did you invoke review-plan in step 6? "no" = it is not installed (genuine degraded mode);
+# "yes" = it ran and OWNS the gate write.
+REVIEW_PLAN_RAN="<yes|no>"
+CURRENT=$(python3 "$ROOT_DIR/lib/definition_doc.py" read-gate \
   --doc plan --work-item "$WORK_ITEM" --root "$ROOT") \
   || { echo "could not read the plan gate (missing/malformed frontmatter) — not self-certifying; fix the plan doc first" >&2; exit 1; }
-if [ "$CURRENT" = pending ]; then
-  # degraded mode: review-plan didn't run — self-certify after a clean self-review
-  python3 "${CLAUDE_PLUGIN_ROOT}/lib/definition_doc.py" set-gate \
-    --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
-else
+if [ "$CURRENT" != pending ]; then
   echo "gate already recorded by review-plan ($CURRENT) — not overwriting"
   [ "$CURRENT" = passed ] || { echo "review-plan requested changes — address them and re-run review-plan; do not advance" >&2; exit 1; }
+elif [ "$REVIEW_PLAN_RAN" = yes ]; then
+  # review-plan ran yet the gate is still pending → it produced a verdict it could NOT record.
+  # This is NOT degraded mode — do NOT self-certify (that would bless an unrecorded review).
+  echo "review-plan ran but did not record the gate (see its skipped:/failed: outcome) — NOT self-certifying; resolve the-architect alongside review-crew and re-run review-plan" >&2
+  exit 1
+else
+  # degraded mode: review-plan is not installed — self-certify after a clean self-review
+  python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
+    --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
 fi
 ```
 
