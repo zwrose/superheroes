@@ -90,17 +90,21 @@ def _read(path):
     with open(path, encoding="utf-8") as fh:
         return fh.read()
 
+def _read_bytes(path):
+    with open(path, "rb") as fh:
+        return fh.read()
+
 def _validate_maps_and_skills(plugins, errors):
     for host in ("claude", "codex"):
         canon = os.path.join(REPO, "hosts", f"{host}-tools.md")
-        canon_txt = _read(canon) if os.path.isfile(canon) else None
-        if canon_txt is None:
+        canon_bytes = _read_bytes(canon) if os.path.isfile(canon) else None
+        if canon_bytes is None:
             errors.append(f"missing canonical hosts/{host}-tools.md")
         for name in plugins:
             p = os.path.join(PLUGINS, name, "hosts", f"{host}-tools.md")
             if not os.path.isfile(p):
                 errors.append(f"{name}: missing hosts/{host}-tools.md"); continue
-            if canon_txt is not None and _read(p) != canon_txt:
+            if canon_bytes is not None and _read_bytes(p) != canon_bytes:
                 errors.append(f"{name}: hosts/{host}-tools.md drifts from canonical")
     for name in plugins:
         for root, _, files in os.walk(os.path.join(PLUGINS, name, "skills")):

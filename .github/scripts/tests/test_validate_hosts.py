@@ -81,3 +81,11 @@ def test_map_byte_equality_enforced(tmp_path, monkeypatch, capsys):
     (tmp_path / "plugins" / "p" / "hosts" / "codex-tools.md").write_text("DRIFTED\n")
     assert _run_main(tmp_path, monkeypatch) == 1
     assert "drifts from canonical" in capsys.readouterr().err
+
+def test_map_crlf_drift_rejected(tmp_path, monkeypatch, capsys):
+    """CRLF line endings must be detected as drift even though text mode normalises them."""
+    _scaffold(tmp_path)
+    # Canonical has LF ("\n"); overwrite plugin map with identical text but CRLF endings.
+    (tmp_path / "plugins" / "p" / "hosts" / "codex-tools.md").write_bytes(b"CODEX MAP\r\n")
+    assert _run_main(tmp_path, monkeypatch) == 1
+    assert "drifts from canonical" in capsys.readouterr().err
