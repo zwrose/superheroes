@@ -82,12 +82,11 @@ _CANARY = re.compile(r"workhorse-enforcer-canary", re.I)
 # (classify_path) before denying — so a like-named file in an arbitrary target repo is NOT
 # falsely refused, and `sed -i`/redirection at a real band file IS refused regardless of
 # spacing.
-_SAFETY_BASENAMES = (
-    "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
-    "gate_write.py", "definition_doc.py", "enforcer.py",
-    "model_tier.py", "hooks.json", "precompact.py", "session_start.py",
-    "escalation-base.md", "review-base.md", "allowance.py",
-)
+# Derived from the single source (escalation.SAFETY_MACHINERY) so the two can't drift.
+# Contract: SAFETY_MACHINERY ⊆ _SAFETY_BASENAMES — the enforcer's edit-guard may protect a
+# SUPERSET of the escalation floor; append any enforcer-only basenames to the tuple below
+# (none today).
+_SAFETY_BASENAMES = tuple(escalation.SAFETY_MACHINERY)
 # File-mutating commands whose write DESTINATION is a file ARGUMENT (not a redirection),
 # defined ONCE so the early-out gate (`_WRITE_OPS`) and the per-segment matcher
 # (`_FILE_WRITE_CMD`) can never drift apart (they encode the same "this command mutates a

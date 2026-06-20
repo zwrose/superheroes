@@ -555,7 +555,7 @@ recorded — remains deferred to §7, Phase 2a-plus.)
 
 ## 6. Identifiers and schema versioning
 
-The cross-cutting values every plugin must compute identically.
+The cross-cutting values **all heroes** must compute identically.
 
 ### 6.1 `<work-item>` — the join key
 
@@ -595,8 +595,7 @@ The normative spec is implemented in `lib/store_core.py`. **Hash:** `sha256(...)
 ### 6.3 `<content-hash>` — the exactly-once key
 
 `<content-hash>` makes the work branch content-addressed. It is computed **once at branch
-creation** from the **approved `tasks` doc**, and **must be byte-identical across plugins,
-hosts, and sessions** (`the-architect` recomputes it to detect a material change; `producer`
+creation** from the **approved `tasks` doc**, and **must be byte-identical across hosts and sessions** (`the-architect` recomputes it to detect a material change; `producer`
 computes it to create the branch — they must agree, or every metadata touch spuriously
 reads as a new attempt). Canonical serialization, in this exact order:
 

@@ -32,7 +32,6 @@ def main(argv):
     import argparse
     ap = argparse.ArgumentParser(description="model-tier resolver (superheroes)")
     ap.add_argument("--role", required=True)
-    ap.add_argument("--root", default=None)
     ap.add_argument("--overrides", default=None)
     args = ap.parse_args(argv[1:])
 

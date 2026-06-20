@@ -131,7 +131,7 @@ def test_get_gitdir_pre_231_fallback(tmp_path, monkeypatch):
     --git-common-dir returns None (simulating git < 2.31)."""
     repo = _init_repo(tmp_path / "r")
     calls = {"n": 0}
-    real = sc._run_git
+    real = sc.run_git
 
     def fake(cwd, *a):
         if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
@@ -141,7 +141,7 @@ def test_get_gitdir_pre_231_fallback(tmp_path, monkeypatch):
             return real(cwd, *a)
         return real(cwd, *a)
 
-    monkeypatch.setattr(sc, "_run_git", fake)
+    monkeypatch.setattr(sc, "run_git", fake)
     gd = sc.get_gitdir(repo)
     assert calls["n"] == 1            # fell back to --absolute-git-dir exactly once
     assert os.path.isabs(gd)
@@ -167,7 +167,7 @@ def test_resolve_global_happy_path(tmp_path):
     os.makedirs(entry_dir)
     sc.write_pointer(root, ident["gitdir_hash"], eid)
     sc.write_pointer(root, ident["remote_hash"], eid)
-    sc._write_keys_json(entry_dir, ident)
+    sc.write_keys_json(entry_dir, ident)
     g = sc.resolve_global(repo, root)
     assert g is not None
     assert g["entry_id"] == eid
@@ -181,7 +181,7 @@ def test_resolve_global_self_heals_missing_gitdir_pointer(tmp_path):
     ident = sc.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
     os.makedirs(os.path.join(root, "entries", eid))
-    sc._write_keys_json(os.path.join(root, "entries", eid), ident)
+    sc.write_keys_json(os.path.join(root, "entries", eid), ident)
     sc.write_pointer(root, ident["remote_hash"], eid)   # only remote pointer
     g = sc.resolve_global(repo, root)
     assert g["entry_id"] == eid
@@ -195,7 +195,7 @@ def test_resolve_global_self_heals_missing_remote_pointer(tmp_path):
     ident = sc.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
     os.makedirs(os.path.join(root, "entries", eid))
-    sc._write_keys_json(os.path.join(root, "entries", eid), ident)
+    sc.write_keys_json(os.path.join(root, "entries", eid), ident)
     sc.write_pointer(root, ident["gitdir_hash"], eid)   # only gitdir pointer
     g = sc.resolve_global(repo, root)
     assert g["healed"] is True

@@ -102,7 +102,7 @@ def _register(root, ident, entry_id):
     """Manually register an entry's pointers + keys.json for test setup."""
     entry_dir = os.path.join(root, "entries", entry_id)
     os.makedirs(entry_dir, exist_ok=True)
-    rs._write_keys_json(entry_dir, ident)
+    rs.write_keys_json(entry_dir, ident)
     rs.write_pointer(root, ident["gitdir_hash"], entry_id)
     if ident["remote_hash"]:
         rs.write_pointer(root, ident["remote_hash"], entry_id)
@@ -130,7 +130,7 @@ def test_self_heal_when_gitdir_pointer_missing(tmp_path):
     ident = rs.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
     os.makedirs(os.path.join(root, "entries", eid), exist_ok=True)
-    rs._write_keys_json(os.path.join(root, "entries", eid), ident)
+    rs.write_keys_json(os.path.join(root, "entries", eid), ident)
     rs.write_pointer(root, ident["remote_hash"], eid)   # only remote pointer
     g = rs.resolve_global(repo, root)
     assert g["entry_id"] == eid
@@ -145,7 +145,7 @@ def test_self_heal_when_remote_pointer_missing(tmp_path):
     ident = rs.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
     os.makedirs(os.path.join(root, "entries", eid), exist_ok=True)
-    rs._write_keys_json(os.path.join(root, "entries", eid), ident)
+    rs.write_keys_json(os.path.join(root, "entries", eid), ident)
     rs.write_pointer(root, ident["gitdir_hash"], eid)   # only gitdir pointer
     g = rs.resolve_global(repo, root)
     assert g["healed"] is True
@@ -313,7 +313,7 @@ def test_half_registered_entry_self_heals(tmp_path):
     ident = rs.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
     os.makedirs(os.path.join(root, "entries", eid), exist_ok=True)
-    rs._write_keys_json(os.path.join(root, "entries", eid), ident)
+    rs.write_keys_json(os.path.join(root, "entries", eid), ident)
     rs.write_pointer(root, ident["gitdir_hash"], eid)  # only one pointer written
     g = rs.resolve_global(repo, root)                  # next resolve heals
     assert rs.read_pointer(root, ident["remote_hash"]) == eid
@@ -322,7 +322,7 @@ def test_half_registered_entry_self_heals(tmp_path):
 def test_gitdir_uses_pre_231_fallback(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "r")
     calls = {"n": 0}
-    real = sc._run_git
+    real = sc.run_git
 
     def fake(cwd, *a):
         if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
@@ -332,7 +332,7 @@ def test_gitdir_uses_pre_231_fallback(tmp_path, monkeypatch):
             return real(cwd, *a)
         return real(cwd, *a)
 
-    monkeypatch.setattr(sc, "_run_git", fake)
+    monkeypatch.setattr(sc, "run_git", fake)
     gd = sc.get_gitdir(repo)
     assert calls["n"] == 1            # fell back
     assert os.path.isabs(gd)

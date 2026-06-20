@@ -22,10 +22,10 @@ from store_core import (
     derive_identifiers,
     read_pointer,
     write_pointer,
-    _write_keys_json,
+    write_keys_json,
     resolve_global,
     atomic_write,
-    _run_git,
+    run_git,
 )
 
 SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -47,7 +47,7 @@ def artifact_key(branch, slot=None):
 
 def get_repo_root(cwd):
     """Return the git worktree top-level for cwd (fallback: cwd itself)."""
-    out = _run_git(cwd, "rev-parse", "--show-toplevel")
+    out = run_git(cwd, "rev-parse", "--show-toplevel")
     if out:
         return os.path.realpath(out)
     return os.path.realpath(cwd)
@@ -113,7 +113,7 @@ def create(cwd, location, root):
         entry_dir = os.path.join(root, "entries", entry_id)
     os.makedirs(entry_dir, exist_ok=True)
     if not os.path.exists(os.path.join(entry_dir, "keys.json")):
-        _write_keys_json(entry_dir, ident)
+        write_keys_json(entry_dir, ident)
     write_pointer(root, ident["gitdir_hash"], entry_id)
     if ident["remote_hash"]:
         write_pointer(root, ident["remote_hash"], entry_id)

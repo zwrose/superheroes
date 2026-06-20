@@ -1,7 +1,7 @@
 <!-- review-profile · managed by review-crew · schema 1 -->
 <!-- provenance — do not hand-edit this block; everything below it is yours to edit -->
 schema: 1
-plugin: review-crew@0.3.0
+plugin: superheroes@0.1.0
 rubric-version: 3
 generated: 2026-06-11
 updated: 2026-06-11

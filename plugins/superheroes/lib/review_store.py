@@ -23,7 +23,7 @@ from store_core import (
     derive_identifiers,
     read_pointer,
     write_pointer,
-    _write_keys_json,
+    write_keys_json,
     resolve_global,
 )
 
@@ -52,7 +52,7 @@ def create(cwd, kind, location, root):
     entry_dir = os.path.join(root, "entries", entry_id)
     os.makedirs(entry_dir, exist_ok=True)
     if not os.path.exists(os.path.join(entry_dir, "keys.json")):
-        _write_keys_json(entry_dir, ident)
+        write_keys_json(entry_dir, ident)
     write_pointer(root, ident["gitdir_hash"], entry_id)
     if ident["remote_hash"]:
         write_pointer(root, ident["remote_hash"], entry_id)

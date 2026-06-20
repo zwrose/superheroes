@@ -52,7 +52,7 @@ def short_hash(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
-def _run_git(cwd, *args):
+def run_git(cwd, *args):
     """Run git with an argv array + timeout. Return stdout (stripped) or None."""
     try:
         r = subprocess.run(["git", "-C", cwd, *args],
@@ -64,7 +64,7 @@ def _run_git(cwd, *args):
 
 def get_remote(cwd):
     """Normalized origin URL, or None."""
-    return normalize_remote(_run_git(cwd, "remote", "get-url", "origin"))
+    return normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
 
 
 def get_gitdir(cwd):
@@ -73,9 +73,9 @@ def get_gitdir(cwd):
     Falls back to --absolute-git-dir for git < 2.31, then to realpath(cwd)
     for non-git dirs.
     """
-    out = _run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    out = run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if out is None:
-        out = _run_git(cwd, "rev-parse", "--absolute-git-dir")
+        out = run_git(cwd, "rev-parse", "--absolute-git-dir")
     return os.path.realpath(out if out is not None else cwd)
 
 
@@ -124,7 +124,7 @@ def write_pointer(root, key_hash, entry_id):
     atomic_write(os.path.join(root, "keys", key_hash), entry_id)
 
 
-def _write_keys_json(entry_dir, ident):
+def write_keys_json(entry_dir, ident):
     """Write a keys.json snapshot of ident into entry_dir (atomic)."""
     atomic_write(os.path.join(entry_dir, "keys.json"),
                  json.dumps({
@@ -185,5 +185,5 @@ def resolve_global(cwd, root, _consumer="store_core"):
 
     entry_dir = os.path.join(root, "entries", entry_id)
     if healed:
-        _write_keys_json(entry_dir, ident)
+        write_keys_json(entry_dir, ident)
     return {"entry_id": entry_id, "dir": entry_dir, "healed": healed}
