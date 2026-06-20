@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": true,
+  "packages": {
+    "plugins/review-crew": {
+      "release-type": "simple",
+      "component": "review-crew",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "plugins/review-crew/.claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "plugins/review-crew/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
+    "plugins/test-pilot": {
+      "release-type": "simple",
+      "component": "test-pilot",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "plugins/test-pilot/.claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "plugins/test-pilot/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
+    "plugins/the-architect": {
+      "release-type": "simple",
+      "component": "the-architect",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "plugins/the-architect/.claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "plugins/the-architect/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    },
+    "plugins/workhorse": {
+      "release-type": "simple",
+      "component": "workhorse",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "json", "path": "plugins/workhorse/.claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": "plugins/workhorse/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+      ]
+    }
+  }
+}
