@@ -28,6 +28,19 @@ def test_lint_flags_missing_pointer():
     nopointer = '# S\n\n```bash\nROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"\n```\n'
     assert any("pointer" in v.lower() for v in VH.lint_skill(nopointer))
 
+@pytest.mark.parametrize("bad_ref", [
+    "hosts/claude-tools.md",       # hardcodes a concrete host instead of the placeholder
+    "hosts/codex-tools.md",        # ditto, the other host
+    "hosts/whatever-blah-tools.md",  # arbitrary garbage that still ends in -tools.md
+])
+def test_lint_flags_malformed_pointer_line(bad_ref):
+    """A pointer line that does not use the literal `hosts/<your-host>-tools.md`
+    placeholder is malformed and must be flagged. POINTER_RE must not accept an
+    arbitrary `hosts/<x>-tools.md`."""
+    malformed = "# S\n\nResolve actions via `" + bad_ref + "` directly.\n"
+    assert any("pointer" in v.lower() for v in VH.lint_skill(malformed)), \
+        f"malformed pointer ref {bad_ref!r} was not flagged"
+
 def test_lint_flags_bare_claude_plugin_root():
     bare = '# S\n\n' + POINTER + '\n\n```bash\npython3 "${CLAUDE_PLUGIN_ROOT}/lib/x.py"\n```\n'
     assert any("CLAUDE_PLUGIN_ROOT" in v for v in VH.lint_skill(bare))

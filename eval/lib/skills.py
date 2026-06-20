@@ -16,13 +16,33 @@ _FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n(.*)$", re.DOTALL)
 _DESCRIPTION = re.compile(r"^description:[ \t]*(.*)$", re.MULTILINE)
 
 
+def _unquote(value):
+    """Strip one surrounding pair of matching YAML quotes from a single-line scalar.
+
+    A description with a bare ``colon: space`` (e.g. ``gates.review: passed``) must be
+    quoted or strict ``yaml.safe_load`` rejects it. This module is stdlib-only — it runs
+    in validate_skills.py, which executes before PyYAML is installed in CI — so we cannot
+    defer to a real YAML loader here. SKILL descriptions are simple single-line scalars,
+    so a minimal unquote (one pair, plus the escapes each quote style allows) is enough to
+    keep the structural parser's view of a description in agreement with yaml.safe_load.
+    """
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        inner = value[1:-1]
+        if value[0] == '"':
+            inner = inner.replace('\\"', '"').replace("\\\\", "\\")
+        else:
+            inner = inner.replace("''", "'")
+        return inner
+    return value
+
+
 def parse_skill(text):
     m = _FRONTMATTER.match(text)
     if not m:
         raise ValueError("SKILL.md has no leading frontmatter block")
     frontmatter, body = m.group(1), m.group(2)
     dm = _DESCRIPTION.search(frontmatter)
-    description = dm.group(1).strip() if dm else ""
+    description = _unquote(dm.group(1).strip()) if dm else ""
     return description, body
 
 
@@ -43,6 +63,12 @@ def skill_digest(description, body):
 
 def iter_skill_paths(plugins_root):
     return sorted(glob.glob(os.path.join(plugins_root, "*", "skills", "*", "SKILL.md")))
+
+
+def skill_key(path):
+    """``plugins/<plugin>/skills/<skill>/SKILL.md`` -> ``"<plugin>/<skill>"``."""
+    parts = path.split(os.sep)
+    return f"{parts[-4]}/{parts[-2]}"
 
 
 import json

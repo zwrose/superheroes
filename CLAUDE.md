@@ -58,9 +58,14 @@ Use [Conventional Commits](https://www.conventionalcommits.org/). Scope by plugi
 - `fix(review-crew): correct severity gate in score.py`
 - `feat(review-crew)!: ...` or a `BREAKING CHANGE:` footer for breaking changes.
 - Repo-wide changes (CI, license, governance): `chore:`, `ci:`, `docs:` with no
-  scope or a `repo` scope.
+  scope or a `repo` scope. These touch no plugin's files, so they cut no release.
 
-Commit-type → SemVer intent: `fix:` → patch, `feat:` → minor, `!`/breaking → major.
+Commit-type → SemVer intent: `chore:`/`fix:` → patch, `feat:` → minor, `!`/breaking
+→ major. `chore` is a **releasing** type here (the `changelog-sections` config makes
+it visible): a `chore` that touches a plugin's files bumps that plugin's patch version
+and lands under a "Chores" changelog heading. Reserve `chore` for plugin changes that
+ship but aren't a user-facing feature or bugfix; use `fix`/`feat` when they are. A
+`chore` scoped to no plugin (repo-root files) still cuts no plugin release.
 
 ## CI
 

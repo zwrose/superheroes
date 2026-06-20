@@ -56,7 +56,9 @@ def paths(cwd, work_item, root=None):
             "resume_brief": os.path.join(d, "resume-brief.md"),
             "events": os.path.join(d, "events.jsonl"),
             "patterns_pin": os.path.join(d, "patterns-pin.md"),
-            "devserver": os.path.join(d, "devserver.json")}
+            "devserver": os.path.join(d, "devserver.json"),
+            "review_result": os.path.join(d, "review-result.json"),
+            "provenance": os.path.join(d, "provenance.json")}
 
 
 def atomic_write(path, text):
