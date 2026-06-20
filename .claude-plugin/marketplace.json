@@ -3,7 +3,7 @@
   "owner": { "name": "zwrose" },
   "metadata": {
     "description": "Your team of superheroes, powered by superpowers — Claude Code plugins that team up to run largely-autonomous development.",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "plugins": [
     {
