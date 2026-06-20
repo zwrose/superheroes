@@ -24,6 +24,9 @@ Material drift is ANY of:
     ADDED deps count);
   - a new top-level source dir not reflected in the profile's recorded src-dirs;
   - the verify command no longer resolves (its binary is absent on PATH);
+  - the verify command names a concrete path (a test dir / script) that no
+    longer exists under root — a suite that moved or was removed without the
+    command being updated;
   - the profile's default-branch no longer resolves (git rev-parse --verify).
 """
 import hashlib
@@ -172,6 +175,42 @@ def _verify_binary(verify_command):
     return parts[0] if parts else None
 
 
+# Shell metacharacters that make a token impossible to resolve statically
+# (globs, variable/command substitution, redirection). Tokens carrying any of
+# these are skipped — we only flag concrete, checkable paths.
+_UNRESOLVABLE = set("*?$(){}[]|<>&;`~")
+
+
+def _verify_path_args(verify_command):
+    """Concrete path-like arguments in the verify command.
+
+    A token counts when it names a file or directory in the repo: it contains a
+    `/`, is not a flag (`-q`, `--run`), and carries no shell metacharacter we
+    cannot resolve statically (globs, `$vars`, subshells). Surrounding quotes are
+    stripped and a trailing `/` is dropped so the token can be `os.path`-checked
+    against root. Used to catch a verify command that still references a test
+    path that has since moved or been removed."""
+    if not verify_command:
+        return []
+    out = []
+    for tok in verify_command.split():
+        t = tok.strip().strip("'\"")
+        if not t or t.startswith("-") or "/" not in t:
+            continue
+        if any(c in _UNRESOLVABLE for c in t):
+            continue
+        out.append(t.rstrip("/"))
+    return out
+
+
+def _missing_verify_paths(verify_command, root):
+    """Path args in the verify command that do not exist under root."""
+    return [
+        p for p in _verify_path_args(verify_command)
+        if not os.path.exists(os.path.join(root, p))
+    ]
+
+
 def _binary_resolves(binary, env):
     """True if the binary is on PATH. Package-manager wrappers (npm/pnpm/yarn/
     make/python3) are treated as resolvable iff the wrapper itself is on PATH —
@@ -240,7 +279,15 @@ def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env):
     if not _binary_resolves(binary, env):
         drift.append("verify command no longer resolves: %s" % binary)
 
-    # 6. default-branch no longer resolves.
+    # 6. verify command names a concrete path that no longer exists.
+    missing = _missing_verify_paths(prof["verify-command"], root)
+    if missing:
+        drift.append(
+            "verify command references missing path(s): %s"
+            % ", ".join(sorted(missing))
+        )
+
+    # 7. default-branch no longer resolves.
     branch = prof["default-branch"]
     if not _branch_resolves(root, branch, env):
         drift.append("default-branch no longer resolves: %s" % branch)
