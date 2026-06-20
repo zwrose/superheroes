@@ -54,6 +54,23 @@ def check_conventions_refs(skill_key, text, conventions_sections):
     return out
 
 
+_TOC = re.compile(r"^#+\s+(contents|table of contents)\b", re.IGNORECASE)
+
+
+def check_toc(reference_path):
+    with open(reference_path, encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
+    if len(lines) <= 100:
+        return []
+    for line in lines:
+        if line.strip().startswith("#"):
+            if _TOC.match(line.strip()):
+                return []
+            break
+    rel = os.path.relpath(reference_path, REPO)
+    return [f"table-of-contents: {rel}: file is >100 lines but does not open with a Contents heading"]
+
+
 def check_depth(skill_key, text, plugin_dir):
     out = []
     for m in _REF.finditer(text):

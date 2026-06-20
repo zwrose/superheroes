@@ -42,6 +42,20 @@ def test_depth_ignores_unresolved_target_that_is_check_links_job(tmp_path):
     text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/missing.md`."
     assert vs.check_depth("p/s", text, str(tmp_path)) == []
 
+def test_toc_not_required_under_100_lines(tmp_path):
+    f = tmp_path / "short.md"; f.write_text("# X\n\nbody\n")
+    assert vs.check_toc(str(f)) == []
+
+def test_toc_required_over_100_lines(tmp_path):
+    f = tmp_path / "long.md"; f.write_text("# X\n\n" + "line\n" * 120)
+    out = vs.check_toc(str(f))
+    assert out and "table-of-contents" in out[0]
+
+def test_toc_satisfied_by_contents_heading(tmp_path):
+    f = tmp_path / "long.md"
+    f.write_text("<!-- review-loop-version: 1 -->\n## Contents\n\n- a\n" + "line\n" * 120)
+    assert vs.check_toc(str(f)) == []
+
 def test_line_count_passes_at_or_under_ceiling():
     # ceiling = max allowed (inclusive): 499 for "under 500" skills
     assert vs.check_line_count("review-crew/review-code", 499, {"review-crew/review-code": 499}) == []
