@@ -68,10 +68,13 @@ def _build_current_digests(plugins_root):
 # ---------------------------------------------------------------------------
 _result = _load_json(_RESULT_PATH)
 _observations = _result["observations"]
+assert _observations, "no recorded observations — activation gate would be vacuous"
 _baseline = _load_json(_BASELINE_PATH)
 _fixtures = _load_fixtures()
+assert _fixtures, "no fixtures found — activation gate would be vacuous"
 _current_digests = _build_current_digests(_PLUGINS_ROOT)
 _verdicts = activation_score.score(_observations, _fixtures, _baseline, _current_digests)
+assert _verdicts, "no per-skill verdicts computed — activation gate would be vacuous"
 
 # Pre-compute observation index for coverage checks
 _obs_index: set[tuple[str, str, str]] = {
