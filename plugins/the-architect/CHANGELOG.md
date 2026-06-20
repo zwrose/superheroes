@@ -4,6 +4,14 @@ All notable changes to the `the-architect` plugin. Versions follow
 [SemVer](https://semver.org); entries follow
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.5.0](https://github.com/zwrose/superheroes/compare/the-architect-v0.4.1...the-architect-v0.5.0) (2026-06-20)
+
+
+### Features
+
+* finish wiring the model-tier knob across all dispatch points ([#15](https://github.com/zwrose/superheroes/issues/15)) ([#48](https://github.com/zwrose/superheroes/issues/48)) ([e946c31](https://github.com/zwrose/superheroes/commit/e946c315c0d6f27bb659d68f9db466e62278ed87))
+* trigger-eval-gated skill token efficiency ([#49](https://github.com/zwrose/superheroes/issues/49)) ([8b5d0ec](https://github.com/zwrose/superheroes/commit/8b5d0ec02a966d235c509a38f34fdffbdd66b6f0))
+
 ## [Unreleased]
 
 ## [0.4.1] — 2026-06-19
