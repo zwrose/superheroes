@@ -41,3 +41,31 @@ def test_skill_documents_resume_substrate():
     for needle in ("reconcile", "ref-lease", "fence", "ci_fix_attempt",
                    "re-arm", "startup lock", "control-plane"):
         assert needle in body, needle
+
+
+def _section(text, heading_prefix):
+    """Return the text of the `## <heading_prefix> …` section up to the next `## ` heading."""
+    out, capturing = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if capturing:
+                break
+            if line.startswith("## " + heading_prefix):
+                capturing = True
+                continue
+        if capturing:
+            out.append(line)
+    return "\n".join(out)
+
+
+def test_fr5_deferral_note_and_no_verify_model_dispatch():
+    t = _text()
+    # FR-5: the Build-leg deferral is documented as deliberate.
+    low = t.lower()
+    assert "deliberate deferral" in low and "fr-5" in low, "missing FR-5 deferral note"
+    # FR-7 half b (negative): workhorse owns no model-tier dispatch of its own.
+    assert "model_tier_resolve" not in t and "model_tier_overrides" not in t
+    # FR-7 half b (positive, ②-section-scoped): ② Review still delegates to wired review-code.
+    review_section = _section(t, "② Review")  # "## ② Review …"
+    assert "review-crew:review-code" in review_section, \
+        "② Review must delegate to the wired review-code"
