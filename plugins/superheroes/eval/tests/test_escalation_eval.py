@@ -5,7 +5,7 @@ import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
-_ESC_PATH = os.path.join(_REPO_ROOT, "plugins/the-architect/lib/escalation.py")
+_ESC_PATH = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/escalation.py")
 _FIX = os.path.join(_HERE, "..", "escalation", "expected.json")
 
 
@@ -33,9 +33,7 @@ def test_classify_fixture_exact_match():
         assert ESC.classify_floor(case["action"]) == case["on_floor"], case
 
 def test_guard_fixture_exact_match():
-    band = [os.path.join(_REPO_ROOT, "plugins", "review-crew"),
-            os.path.join(_REPO_ROOT, "plugins", "the-architect"),
-            os.path.join(_REPO_ROOT, "plugins", "workhorse")]
+    band = [os.path.join(_REPO_ROOT, "plugins", "superheroes")]
     for case in _fixture()["guard"]:
         path = os.path.join(_REPO_ROOT, case["path"])
         assert (not ESC.is_safety_machinery(path, band)) == case["allow"], case

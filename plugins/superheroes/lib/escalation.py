@@ -103,11 +103,9 @@ SAFETY_MACHINERY = (
     "loop_state.py",
     "circuit_breaker.py",
     "gate_write.py",
-    "architect_lib.py",
     "definition_doc.py",
     "enforcer.py",            # workhorse action-boundary enforcer (F3)
     "allowance.py",           # workhorse Codex approval-allowance store (gate; #14)
-    "band_lib.py",            # workhorse resolver the enforcer depends on (F3)
     "model_tier.py",          # band model-tier core — policy, protect from auto-edits
     "hooks.json",             # workhorse PreToolUse hook registration (F3)
     "precompact.py",          # workhorse resume hooks (resilience)

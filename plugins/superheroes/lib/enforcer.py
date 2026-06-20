@@ -84,8 +84,8 @@ _CANARY = re.compile(r"workhorse-enforcer-canary", re.I)
 # spacing.
 _SAFETY_BASENAMES = (
     "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
-    "gate_write.py", "architect_lib.py", "definition_doc.py", "enforcer.py",
-    "model_tier.py", "band_lib.py", "hooks.json", "precompact.py", "session_start.py",
+    "gate_write.py", "definition_doc.py", "enforcer.py",
+    "model_tier.py", "hooks.json", "precompact.py", "session_start.py",
     "escalation-base.md", "review-base.md", "allowance.py",
 )
 # File-mutating commands whose write DESTINATION is a file ARGUMENT (not a redirection),

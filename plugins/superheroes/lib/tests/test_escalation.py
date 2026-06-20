@@ -103,8 +103,8 @@ def test_safety_machinery_set_members_are_pinned():
     # included (review caught its omission: without it a fixer could neuter the guard).
     assert set(ESC.SAFETY_MACHINERY) == {
         "escalation.py", "escalation_resolve.py", "loop_state.py", "circuit_breaker.py",
-        "gate_write.py", "architect_lib.py", "definition_doc.py",
-        "enforcer.py", "allowance.py", "band_lib.py", "model_tier.py", "hooks.json",
+        "gate_write.py", "definition_doc.py",
+        "enforcer.py", "allowance.py", "model_tier.py", "hooks.json",
         "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",
     }
