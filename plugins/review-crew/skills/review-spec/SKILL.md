@@ -495,15 +495,4 @@ Agents flag departures from these — the spec contract (CONVENTIONS §3.2):
 
 ## Common Mistakes
 
-| Mistake                                                                     | Fix                                                                                                                                                             |
-| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Marking the spec approved / writing `passed`                                | review-spec is **advisory** — it **never writes `passed`** (the owner approves in Discovery step 8). Its only gate write is resetting a *stale* approval to `pending` (step 6). Never grant approval.                |
-| Proposing a technical approach in a finding                                 | The spec is the *what*. Flag tech that leaked in; don't add more. The *how* is the `plan`.                                                                       |
-| Inventing an answer to a requirements question                              | A genuine "what should happen here?" is a `judgment` finding for the owner — surface it; never fabricate the behavior.                                           |
-| Adding implementation detail while "fixing" a vague requirement             | Keep the owner's plain-language voice. Replace vagueness with a concrete behavior/fit-criterion, not a mechanism.                                                |
-| Flagging a missing unhappy path already tagged Defer-to-plan / N-A          | Check the coverage tags before raising it — a recorded Defer/N-A is a decision, not a gap.                                                                       |
-| Citing line numbers from the wrong file                                     | Spec citations point at `$SESSION_DIR/spec.md`. There is no parent doc to cross-cite for a spec.                                                                 |
-| Re-raising findings the user skipped                                        | Check the `skip-set` and prior rounds before raising a finding.                                                                                                 |
-| Skipping the all-five-specialists rule based on classification              | The `touches` array is informational. All five always run — each returns `[]` when there's nothing in its dimension.                                            |
-| Dispatching reviewers by reading an agent file                              | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).               |
-| Skipping the profile bootstrap                                              | If no profile resolves, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                        |
+The common-mistake table for review-spec is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/spec-detail.md` — read it before finalizing findings.

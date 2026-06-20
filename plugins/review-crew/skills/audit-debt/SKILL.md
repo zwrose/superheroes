@@ -400,17 +400,7 @@ These four behaviors are **non-blocking**, run **at end of run** (after filing i
 
 ### Recording decisions (at resolution time)
 
-audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-included Fix/Defer). Append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/decisions.py" \
-  append "$DECISIONS" '<record-json>'
-```
-
-`<record-json>` is `{"dimension": "<finding dimension>", "category": "<finding taxonomy/topic>", "action": "skip"|"guidance"|"fix"}`:
-- `action` maps from the issue-gate decision: **filed** (auto-included `Fix`/`Defer`, or **File**) → `fix`; **Drop**/deselected → `skip`. `guidance` does not arise here (audit-debt files or drops; it never edits code).
-- `dimension` is the finding's `dimension`; `category` is the finding's taxonomy/topic (its normalized title or topic tag). The store is append-only and atomic; it soft-fails on a bad/missing store, so this never blocks.
+The decisions-recording helper invocation and record-JSON format are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/audit-debt/reference/sweep-detail.md` — read it for the mechanics.
 
 ### Staleness nudge (end of run)
 

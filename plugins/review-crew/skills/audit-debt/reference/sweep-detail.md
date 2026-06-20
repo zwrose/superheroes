@@ -40,3 +40,17 @@ The `severity × inverse-effort` sort means an `Important + Quick` finding ranks
 | Running a deps pass when no audit tool ran                         | The deps audit is ecosystem-aware and skips gracefully (no manifest, or tool absent). If §1 wrote no audit artifact, emit no deps findings — don't invent advisories.     |
 | Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).                          |
 | Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                 |
+
+## Recording Decisions (Helper Reference)
+
+audit-debt's resolution point is the §5 issue-gate (File / Drop, and the auto-included Fix/Defer). Append ONE record per decision to the **project-level** learning-loop store at the resolved `$DECISIONS` path (NOT the temp `$SESSION_DIR`). Use the bundled helper:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/decisions.py" \
+  append "$DECISIONS" '<record-json>'
+```
+
+`<record-json>` is `{"dimension": "<finding dimension>", "category": "<finding taxonomy/topic>", "action": "skip"|"guidance"|"fix"}`:
+- `action` maps from the issue-gate decision: **filed** (auto-included `Fix`/`Defer`, or **File**) → `fix`; **Drop**/deselected → `skip`. `guidance` does not arise here (audit-debt files or drops; it never edits code).
+- `dimension` is the finding's `dimension`; `category` is the finding's taxonomy/topic (its normalized title or topic tag). The store is append-only and atomic; it soft-fails on a bad/missing store, so this never blocks.
