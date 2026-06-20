@@ -1,6 +1,6 @@
 ---
 name: review-plan
-description: Use to review the-architect's `plan` definition-doc (the technical *how* for a work-item) before it advances to Tasks. Revises it in place and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads.
+description: "Use to review the-architect's `plan` definition-doc (the technical *how* for a work-item) before it advances to Tasks. Revises it in place and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads."
 user-invocable: true
 ---
 
