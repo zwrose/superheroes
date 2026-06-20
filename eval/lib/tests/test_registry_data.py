@@ -20,6 +20,6 @@ def test_required_phrases_keys_match_skills_exactly_and_are_present():
 def test_body_ceilings_cover_the_six():
     reg = skills.load_registry(REGISTRY)
     assert set(reg["bodyCeilings"]) == {
-        "review-crew/review-code", "review-crew/review-spec", "review-crew/review-plan",
-        "review-crew/review-tasks", "review-crew/audit-debt", "the-architect/plan",
+        "superheroes/review-code", "superheroes/review-spec", "superheroes/review-plan",
+        "superheroes/review-tasks", "superheroes/audit-debt", "superheroes/architect-plan",
     }

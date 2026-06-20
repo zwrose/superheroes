@@ -1,0 +1,41 @@
+{
+  "route": [
+    {"axes": {"on_floor": true, "ground_truth_locus": "agent", "owner_weighable": false, "reversible": true, "confidence": "high"}, "mode": "gate"},
+    {"axes": {"on_floor": false, "ground_truth_locus": "agent", "owner_weighable": true, "reversible": false, "confidence": "low"}, "mode": "proceed"},
+    {"axes": {"on_floor": false, "ground_truth_locus": "owner", "owner_weighable": false, "reversible": true, "confidence": "high"}, "mode": "proceed"},
+    {"axes": {"on_floor": false, "ground_truth_locus": "owner", "owner_weighable": true, "reversible": false, "confidence": "high"}, "mode": "gate"},
+    {"axes": {"on_floor": false, "ground_truth_locus": "owner", "owner_weighable": true, "reversible": true, "confidence": "low"}, "mode": "gate"},
+    {"axes": {"on_floor": false, "ground_truth_locus": "owner", "owner_weighable": true, "reversible": true, "confidence": "high"}, "mode": "notify"},
+    {"axes": {"on_floor": false, "ground_truth_locus": "owner", "owner_weighable": false, "reversible": false, "confidence": "low"}, "mode": "proceed"},
+    {"axes": {"on_floor": false}, "mode": "gate"},
+    {"axes": {"ground_truth_locus": "banana"}, "mode": "gate"}
+  ],
+  "classify": [
+    {"action": "git push origin main", "on_floor": true},
+    {"action": "git push --force", "on_floor": true},
+    {"action": "DROP COLUMN email", "on_floor": true},
+    {"action": "deploy to production", "on_floor": true},
+    {"action": "add a paid Stripe API call", "on_floor": true},
+    {"action": "POST data to an external webhook", "on_floor": true},
+    {"action": "rename a local variable", "on_floor": false},
+    {"action": "git commit -m wip", "on_floor": false}
+  ],
+  "guard": [
+    {"path": "plugins/superheroes/lib/loop_state.py", "allow": false},
+    {"path": "plugins/superheroes/lib/circuit_breaker.py", "allow": false},
+    {"path": "plugins/superheroes/lib/gate_write.py", "allow": false},
+    {"path": "plugins/superheroes/lib/escalation_resolve.py", "allow": false},
+    {"path": "plugins/superheroes/rubric/review-base.md", "allow": false},
+    {"path": "plugins/superheroes/lib/escalation.py", "allow": false},
+    {"path": "plugins/superheroes/lib/definition_doc.py", "allow": false},
+    {"path": "plugins/superheroes/rubric/escalation-base.md", "allow": false},
+    {"path": "plugins/superheroes/lib/enforcer.py", "allow": false},
+    {"path": "plugins/superheroes/lib/allowance.py", "allow": false},
+    {"path": "plugins/superheroes/lib/model_tier.py", "allow": false},
+    {"path": "plugins/superheroes/hooks/hooks.json", "allow": false},
+    {"path": "plugins/superheroes/hooks/precompact.py", "allow": false},
+    {"path": "plugins/superheroes/hooks/session_start.py", "allow": false},
+    {"path": "plugins/superheroes/lib/decisions.py", "allow": true},
+    {"path": "their_app/loop_state.py", "allow": true}
+  ]
+}

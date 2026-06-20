@@ -10,9 +10,9 @@
 
 | Source location in SKILL.md (pre-change) | Destination |
 | ----------------------------------------- | ----------- |
-| `## Severity Recalibration for Debt Context` section (tier table + note) | `plugins/review-crew/skills/audit-debt/reference/sweep-detail.md` |
-| `## Effort Labels` section (label table + sort note) | `plugins/review-crew/skills/audit-debt/reference/sweep-detail.md` |
-| `## Common Mistakes` section (mistake table) | `plugins/review-crew/skills/audit-debt/reference/sweep-detail.md` |
+| `## Severity Recalibration for Debt Context` section (tier table + note) | `plugins/superheroes/skills/audit-debt/reference/sweep-detail.md` |
+| `## Effort Labels` section (label table + sort note) | `plugins/superheroes/skills/audit-debt/reference/sweep-detail.md` |
+| `## Common Mistakes` section (mistake table) | `plugins/superheroes/skills/audit-debt/reference/sweep-detail.md` |
 
 ## Pointer placed in SKILL.md
 

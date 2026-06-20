@@ -1,0 +1,469 @@
+---
+name: review-code
+description: Use when reviewing code changes on a local branch or an open pull request before merging — including when you want the review's findings auto-fixed locally or posted to GitHub.
+user-invocable: true
+---
+
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+
+# Review Code
+
+Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches five specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies fixes via a fixer subagent, and re-reviews — looping until no Critical/Important findings remain or a circuit breaker halts. It never loads the full diff or any agent's raw output into its own conversation; subagents do all heavy reading and write structured results to disk.
+
+The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the full set of specialists (architecture, code, security, test, premortem) so coverage is uniform across reviews, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — by default — drives an auto-fix loop that commits fixes locally (never pushes). Two read-only behaviors are preserved as flags.
+
+There are three top-level paths, chosen at invocation:
+
+- **`--post`** → one review pass, then read-only GitHub posting (push approved findings to GitHub through `resolve_diff_lines.py` so out-of-hunk anchors never trigger 422 errors). Never touches the working tree.
+- **`--review-only`** → one review pass, then a read-only interactive terminal presentation. No commits.
+- **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
+
+The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project profile (`.claude/review-profile.md`), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator does not chain a "verifier agent" or run a specialist twice within a round, because multi-turn agentic review within a single pass degrades F1 and fabricates findings as real ones get exhausted (base rubric, "In-pass verification & single-pass discipline"). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
+
+## Invocation
+
+| Form                                       | Behavior                                                                                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/superheroes:review-code`                 | **Auto-fix loop (default).** Review → triage → fix → re-review until no Critical/Important findings remain, or a halt condition fires. Commits locally; never pushes. |
+| `/superheroes:review-code --review-only`   | One review pass, interactive tiered presentation, no commits.                                                                                                         |
+| `/superheroes:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
+| `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
+| `/superheroes:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
+| `/superheroes:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
+
+The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
+
+**Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
+
+**`--post` only applies to PR mode.** If the user passes `--post` without a PR (and auto-detection finds none), stop and tell them — branch mode has nothing to post against.
+
+## Session Directory
+
+All review artifacts live in a per-invocation temp directory so parallel reviews don't collide:
+
+```bash
+SESSION_DIR=$(mktemp -d /tmp/review-XXXXXXXX)
+```
+
+Files written during the review. **Per-round artifacts live under `$SESSION_DIR/round-<N>/`** in the auto-fix loop (round 1, 2, …); the read-only paths (`--review-only`, `--post`) run a single pass and write that pass's artifacts under `round-1/` as well. Only `meta.json` lives at the session-dir root.
+
+| Path                                                | Written by     | Purpose                                                                                     |
+| --------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, base ref, verify story, focus notes       |
+| `$SESSION_DIR/repo/`                                | orchestrator   | `--post`/`--review-only` PR paths only: detached `git worktree` at the PR head SHA          |
+| `$SESSION_DIR/prior-comments.json`                  | orchestrator   | PR-mode only: prior review comments + threads (for author justifications)                   |
+| `$SESSION_DIR/round-<N>/diff.txt`                   | orchestrator   | Round `<N>` unified diff (`git diff <baseRef>...HEAD`). **Never read by the main context.** |
+| `$SESSION_DIR/round-<N>/findings-architecture.json` | arch agent     | Architecture-reviewer findings array                                                        |
+| `$SESSION_DIR/round-<N>/findings-code.json`         | code agent     | Code-reviewer findings array                                                                |
+| `$SESSION_DIR/round-<N>/findings-security.json`     | sec agent      | Security-reviewer findings array                                                            |
+| `$SESSION_DIR/round-<N>/findings-test.json`         | test agent     | Test-reviewer findings array                                                                |
+| `$SESSION_DIR/round-<N>/findings-premortem.json`    | premortem agent | Premortem-reviewer (Failure-Mode) findings array                                            |
+| `$SESSION_DIR/round-<N>/compiled.json`              | orchestrator   | Deduplicated, verified findings + summary + verdict (read by `circuit_breaker.py`)          |
+| `$SESSION_DIR/round-<N>/triage.json`                | triage agent   | Per-finding `mechanical`/`judgment` classification + POV for every finding (loop only)      |
+| `$SESSION_DIR/round-<N>/resolutions.json`           | orchestrator   | User decisions on `present-set` findings (loop only; read by `circuit_breaker.py`)          |
+| `$SESSION_DIR/round-<N>/fix-batch.json`             | orchestrator   | Findings handed to the fixer this round (loop only)                                         |
+| `$SESSION_DIR/round-<N>/review.json`                | orchestrator   | `--post` only: review body + approved comments (pre-resolve)                                |
+| `$SESSION_DIR/round-<N>/review-resolved.json`       | resolve script | `--post` only: comments after line-anchor resolution                                        |
+
+**CRITICAL:** The main context only ever runs `wc -l < $SESSION_DIR/round-<N>/diff.txt` to size the diff. It never `cat`s the diff, never reads the full thing, never echoes it back. Subagents read the diff from disk and write structured findings; the orchestrator reads the findings JSON, not the diff.
+
+## Workflow
+
+### 1. Setup
+
+Decide mode (auto-detected or explicit, per `## Invocation`). Create the session directory.
+
+**Resolve the base rubric path once.** The base rubric is bundled at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
+```
+
+**Resolve the escalation guard wrapper and repo root once.** Subagents do not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` or `$REPO_ROOT`, so compute both absolute values here (in the orchestrator's context, where they expand) for embedding into the fixer prompt's `## Input` block — the same way `RUBRIC`/`PROFILE` are embedded as expanded absolute paths:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+ESC_WRAPPER="$ROOT_DIR/lib/escalation_resolve.py"   # absolute; embed the expanded value in the fixer prompt
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
+```
+
+**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
+  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
+PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
+LOCATION=$(printf '%s' "$RES" | jq -r .location)
+EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
+  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
+```
+
+Also resolve the engine versions the staleness self-check (next) needs — the **plugin version** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/.claude-plugin/plugin.json` (`version`) and the **rubric-version** from the first line of `$RUBRIC` (`<!-- rubric-version: N -->`):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude-plugin/plugin.json'))['version'])")
+RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
+```
+
+**Resolve the model tiers once (band-wide knob).** The five specialists run at the
+`reviewer` tier (`reviewer-deep` for security/architecture), and the triage + fixer
+subagents at `mechanical`. Resolve each via the shared knob to get the band defaults:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+MT="$ROOT_DIR/lib/model_tier_resolve.py"   # resolved like $RUBRIC
+OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
+REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
+DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
+MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
+```
+
+When dispatching specialists, pass `model: $DEEP_MODEL` for
+`security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
+other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
+value means "inherit the session model" — omit the `model` arg in that case.
+
+**Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+if [ "$EXISTS" = "true" ]; then
+  # --post path: --root "$SESSION_DIR/repo" (PR-head worktree). branch/default: omit --root (working tree).
+  DOCTOR_JSON=$(python3 "$ROOT_DIR/lib/repo_doctor.py" \
+    "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION" ${DOCTOR_ROOT_ARG})
+fi
+```
+
+(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
+
+**Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+if [ "$LOCATION" = "none" ]; then
+  # Decide location: env override > ask (interactive) > global (headless).
+  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
+  LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
+  # If LOC is "ask", present the in-repo vs global AskUserQuestion now and set LOC.
+  PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
+  DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
+  # Then run review-init's create procedure inline, writing the profile to $PROFILE.
+fi
+```
+
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+
+**Read the verify story from the resolved profile** (the `## Verify` section of `$PROFILE`). This sets `VERIFY_CMD` for the orchestrator's verify gate and the fixer (see `## The verify command` below):
+
+- `command: <cmd>` present → `VERIFY_CMD="<cmd>"`.
+- `mode: unverified` → no verify command; the verify gate is skipped and commits proceed ungated.
+- `mode: review-only` → the project opted out of auto-fix; the default path degrades to a single review pass + the `--review-only` presentation.
+
+**PR mode:**
+
+```bash
+# Resolve PR number — either provided or auto-detected from current branch
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ -z "$PR_NUMBER" ]; then
+  PR_NUMBER=$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')
+fi
+
+# Metadata: small JSON only — do NOT load the diff yet
+gh pr view "$PR_NUMBER" --json number,title,author,headRefName,headRefOid,baseRefName,url > "$SESSION_DIR/pr.json"
+HEAD_SHA=$(jq -r .headRefOid "$SESSION_DIR/pr.json")
+PR_BRANCH=$(jq -r .headRefName "$SESSION_DIR/pr.json")
+BASE_REF=$(jq -r .baseRefName "$SESSION_DIR/pr.json")   # PR base branch — used as the diff base
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+
+# Prior review comments — used for author-justification handling
+gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
+  --jq '[.[] | {id, in_reply_to_id, path, line, position, body, user: .user.login}]' \
+  > "$SESSION_DIR/prior-comments.json"
+
+# Read-only paths ONLY (--post / --review-only): a detached worktree at the PR head
+# gives subagents a clean source of truth to verify against. NOT used on the
+# auto-fix path — that path edits and commits on the current branch directly.
+git fetch origin "$PR_BRANCH"
+git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --post / --review-only ONLY
+```
+
+**Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be standing on the PR's own branch so fix commits land where they belong:
+
+```bash
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ]; then
+  echo "Auto-fix needs PR branch '$PR_BRANCH' checked out (currently on '$CURRENT_BRANCH')."
+  echo "Check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."
+  exit 1
+fi
+```
+
+If the guard fails (detached HEAD, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. Tell the user to use `--post` or `--review-only`. The detached `git worktree add --detach` step above is for the `--post`/`--review-only` PR paths ONLY, never for the auto-fix path.
+
+**Branch mode:**
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+HEAD_SHA=$(git rev-parse HEAD)
+BASE_REF=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo main)   # branch mode diffs against the default branch
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "local")
+
+# No worktree, no prior comments — subagents verify against the current working tree
+```
+
+**Per-round diff is ALWAYS local.** Do NOT use `gh pr diff` to fetch the diff. Each round computes the diff locally from `<baseRef>` (PR mode: the PR's `baseRefName`; branch mode: the default branch), because rounds 2+ have local fix commits that are not on the remote — `gh pr diff` would miss them. The per-round command (run inside the loop, see `## Auto-Fix Loop`) is:
+
+```bash
+git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt"
+```
+
+The read-only paths run a single pass and compute the same local diff into `round-1/diff.txt`.
+
+Then write `meta.json` in both modes:
+
+```bash
+cat > "$SESSION_DIR/meta.json" <<EOF
+{
+  "mode": "${MODE}",
+  "path": "${REVIEW_PATH}",
+  "pr": ${PR_NUMBER:-null},
+  "repo": "${REPO}",
+  "branch": "${BRANCH}",
+  "headSha": "${HEAD_SHA}",
+  "baseRef": "${BASE_REF}",
+  "sessionDir": "${SESSION_DIR}",
+  "verify": "${VERIFY_CMD:-unverified}",
+  "focusNotes": ${FOCUS_JSON:-null}
+}
+EOF
+```
+
+`REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story.
+
+Size the round-1 diff for the dispatch summary (after writing it to `round-1/diff.txt` per the command above):
+
+```bash
+DIFF_LINES=$(wc -l < "$SESSION_DIR/round-1/diff.txt")
+```
+
+**CRITICAL:** Do not `cat`, `head`, `tail`, or otherwise read any `diff.txt` from the main context. The line count is the only thing the orchestrator needs to know about its contents.
+
+### 2. Dispatch Summary
+
+Print this dispatch summary as a plain status message, then dispatch the specialists immediately (no approval gate):
+
+- **Skill:** `review-code`
+- **Mode:** PR or branch
+- **Target:** `PR #<N> "<title>"` (PR mode) or `<branch> vs <baseRef>` (branch mode)
+- **Repo:** `<owner>/<repo>`
+- **Head SHA:** short hash
+- **Diff size:** `<DIFF_LINES>` lines
+- **Verify:** `VERIFY_CMD` (the command string), or `unverified` (no gate), or `review-only` (auto-fix disabled — this run degrades to a single pass + presentation)
+- **Specialists to dispatch (all five, in parallel):**
+  - `architecture-reviewer` → `findings-architecture.json`
+  - `code-reviewer` → `findings-code.json`
+  - `security-reviewer` → `findings-security.json`
+  - `test-reviewer` → `findings-test.json`
+  - `premortem-reviewer` → `findings-premortem.json`
+- **Session directory:** `$SESSION_DIR` (round 1 artifacts under `round-1/`)
+- **Focus notes:** the `--focus` argument, if any
+- **Path:** default → auto-fix loop (compile + dedupe → triage → fix → re-review, committing locally); `--review-only` → one pass + interactive presentation; `--post` → one pass + post to GitHub
+- **What happens after dispatch (default loop):** compile + dedupe → triage → user interventions on judgment calls → fixer subagent commits → verify gate (`VERIFY_CMD`, unless `unverified`) → circuit-breaker → re-review or exit
+
+Do **not** tier or skip specialists based on which files changed. Coverage uniformity matters more than saving an agent dispatch — a "no security-relevant files changed" guess is exactly when an IDOR slips through. All five always run. The agents themselves return an empty findings array when there's nothing in their dimension, which is cheap.
+
+### 3. Dispatch Specialists in Parallel
+
+Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt.
+
+**Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
+
+| reviewer | `<agent>` (findings filename) | `<dimension>` |
+| ---------------------------- | ----------------------------- | ------------- |
+| architecture-reviewer        | architecture                  | Architecture  |
+| code-reviewer                | code                          | Code          |
+| security-reviewer            | security                      | Security      |
+| test-reviewer                | test                          | Test          |
+| premortem-reviewer           | premortem                     | Failure-Mode  |
+
+After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
+
+### 4. Compile + Dedupe (main context)
+
+Read the five `$SESSION_DIR/round-<round>/findings-*.json` files. Apply, in order:
+
+1. **Citation check.** Drop any finding with `file == null` or `line == null` — the base rubric's verification rules require a `file:line` citation.
+2. **Diff-scope verification.** Parse `$SESSION_DIR/round-<round>/diff.txt` to identify, for each file, the set of line numbers on `+` or `-` lines (the same hunk-walking logic `resolve_diff_lines.py` uses). Drop findings whose `(file, line)` pair isn't in that set. This is the same rule the subagents are supposed to enforce — duplicating it at compile time catches the cases they slip up on, especially context-line flags.
+3. **Reachability pre-check on Important findings.** For each remaining `severity == "Important"` finding, open the cited file (in `$SESSION_DIR/repo/` for the read-only PR paths, working tree otherwise), find the call sites of the affected symbol, and confirm the edge case is reachable. **When in doubt, downgrade to Minor rather than drop** — the user can still see and approve it, but it isn't blocking the verdict.
+4. **Dedupe by `(file, line)`.** When two findings target the same `(file, line)`, merge them: concatenate bodies with a separator, keep the higher severity, and list both dimensions (e.g. `"Security + Code"`). The merged finding **keeps the higher-severity input's `title`** (ties → the earlier one in dimension order Architecture, Code, Security, Test, Failure-Mode), so the finding identity (`file::normalized-title`) is deterministic round-to-round — the circuit breaker's recurrence check depends on a stable title. The merged finding is **`tradeoff: true` if either input is** (a judgment call in one facet makes the whole finding a judgment call). This also prevents the visual clutter of two GitHub comments on the same line.
+5. **Author-justification filter (PR mode).** Cross-reference `prior-comments.json`. If a prior comment thread on the same `(file, line)` (or with the same finding topic on an outdated anchor) shows a substantive author justification, drop the new finding unless its body identifies a technical error in the justification.
+6. **Nit cap.** After dedupe, if more than 5 Nits remain, keep the first 5 and replace the rest with a single summary entry like `"+ 12 more Nits — see $SESSION_DIR/round-<round>/findings-*.json for details"` (the base rubric's severity caps).
+
+Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-filter findings). For `/superheroes:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
+
+- 0 Critical, 0 Important → **READY FOR PR**
+- 0 Critical, 1+ Important → **FIX BEFORE PR**
+- 1+ Critical → **MAJOR FIXES NEEDED**
+- Only Minor and/or Nit → **READY FOR PR** (Minor/Nit are informational)
+
+Write the result to `$SESSION_DIR/round-<round>/compiled.json` (preserve each finding's `tradeoff` field through dedupe so triage can read it):
+
+```json
+{
+  "summary": "<1-2 sentence overall summary>",
+  "verdict": "READY FOR PR" | "FIX BEFORE PR" | "MAJOR FIXES NEEDED",
+  "findings": [<deduplicated, verified findings array>]
+}
+```
+
+Order findings: Critical → Important → Minor → Nit, then by file path, then by line.
+
+## Auto-Fix Loop (default path)
+
+Runs when neither `--post` nor `--review-only` is set, and the profile's verify story is not `mode: review-only` (a `review-only` profile degrades the default path to a single review pass + the `--review-only` presentation — see `## The verify command`). The orchestrator keeps a **skip-set** of finding identities the user chose to skip (identity = `file::normalized-title`, matching `circuit_breaker.py`). Initialize `round = 1`, `skip-set = {}`.
+
+**If context was compacted mid-loop**, re-read `$SESSION_DIR/meta.json` (its `path` field says whether the loop, `--review-only`, or `--post` is active; its `verify` field restores the verify story), the highest-numbered `round-N/` files, and every `round-*/resolutions.json` (to rebuild the skip-set, and the **skipped-blocking** set from each entry's `severity`). Then resume mid-round by inspecting which `round-<highest>/` artifacts already exist:
+
+| Present in `round-<N>/`                                       | Resume at                            |
+| ------------------------------------------------------------- | ------------------------------------ |
+| no `compiled.json`                                            | step 1 (restart the round)           |
+| `compiled.json`, no `triage.json`                             | step 6                               |
+| `triage.json`, no `fix-batch.json`                            | step 7                               |
+| `fix-batch.json`, no `Auto-fix round <N>` commit in `git log` | step 11 (re-dispatch the fixer)      |
+| `Auto-fix round <N>` commit present                           | step 12 (re-run verify, then breaker) |
+
+Each round:
+
+1. `mkdir -p $SESSION_DIR/round-<round>`. Regenerate the diff locally: `git diff <baseRef>...HEAD > $SESSION_DIR/round-<round>/diff.txt`. Size it with `wc -l` only — never `cat` it.
+2. **Review.** Dispatch the five specialists in parallel by reviewer name (resolve dispatch via the host tool map, same prompt template as `## Dispatch Specialists in Parallel`), writing `round-<round>/findings-<agent>.json`. Point them at `round-<round>/diff.txt`.
+3. **Compile + dedupe** into `round-<round>/compiled.json` with verdict (same pipeline as `## Compile + Dedupe`).
+4. **Effective findings** = `compiled.findings` whose identity is NOT in the skip-set.
+5. If `effective` is empty → **EXIT SUCCESS** (jump to End-of-Loop Summary with `ACTION=exit_clean`, `ROUND=<round>`, `REASON="no effective findings"`).
+6. **Triage.** Dispatch the triage subagent (template below) over `effective`, writing `round-<round>/triage.json`.
+7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each **Critical/Important** effective finding, route its disposition with the shared rubric (modes PROCEED/NOTIFY/GATE). **GATE** (the consolidated `AskUserQuestion` below) only the blockers whose skip-or-fix is genuinely the owner's call — a product/scope/risk trade-off. For the rest, **verify and proceed**, recording the disposition so `loop_state` still sees it:
+   - **Fix, one right answer per the project's conventions** → fold into the fix batch (step 8) using the POV's suggested approach (a step-8 auto-fix).
+   - **Verifiably-safe skip / believed false-positive** → record a **skip** in `resolutions.json` (`action: "skip"`, **carrying the finding's `severity`**) and add the identity to the skip-set, **with a verification trace** (cite the source / test you checked). A skip with no citable ground truth is **not** eligible — it GATEs. **Never silently drop a blocker** — a skipped blocker is recorded with its severity, so `loop_state` counts it.
+   - **NOTIFY (the rubric's middle mode on a blocker)** → act on the best default (the auto-fix when there is one right answer, else the verifiably-safe skip) and record it via `decisions.py` and in the End-of-Loop Summary with its reverse-path/expiry — surfaced, not asked. (Mirrors the trio: record GATE outcomes and NOTIFY decisions in the summary with their reverse-path/expiry, per `escalation-base.md`.)
+   - Minor/Nit → never escalated: apply the triage recommendation automatically — `Skip`/`Defer` → add the identity to the skip-set; `Fix` → fold into the fix batch (step 8), using the POV's suggested approach for a judgment-fix — then record each via `decisions.py` and surface them in the End-of-Loop Summary (auto-skipped / auto-fixed).
+   Resolve the rubric for this dispatch once via the wrapper (with `REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)` defined in setup): `RUBRIC_RES=$(python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/escalation_resolve.py" rubric --root "$REPO_ROOT")` — read its `path` and embed it (apply the embedded fail-closed posture if `degraded`: apply the hard floor and GATE anything owner-weighable). Nothing is hidden, just not asked; everything the agent recommends fixing mechanically (any severity) is handled in step 8 without asking.
+   - **Write `round-<round>/resolutions.json` whenever this round records ANY disposition** — every autonomous verifiably-safe skip (the bullet above), every NOTIFY-skip, AND every gated answer below. This is the only channel by which step 14 sees a skipped blocker, so it is written even when no `AskUserQuestion` is presented:
+     ```json
+     { "round": <N>, "resolutions": [
+       { "id": "<finding id>", "file": "<file>", "title": "<title>", "severity": "<severity>", "action": "fix" | "fix-with-guidance" | "skip", "guidance": "<text or omitted>" }
+     ] }
+     ```
+     Add every `skip` identity to the skip-set; a skipped Critical/Important finding is recorded with its `severity` so `loop_state` counts it (this survives compaction). `approved` = entries with action `fix`/`fix-with-guidance` (carry `guidance`).
+   - **Present the GATE only for the present-set (owner-weighable blockers).** If the present-set is non-empty: present ONE consolidated `AskUserQuestion`. For each finding, **lead with the orchestrator POV** from `triage.json` (per the base rubric's "Orchestrator POV") — show the recommendation, rationale, and confidence right under the finding, e.g. `→ POV: Skip (Low confidence) — correct in theory but this path is never hit concurrently under the profile's threat model`. Then offer **Fix as suggested** / **Fix with my guidance** (free text) / **Skip** — keep the options in this neutral order regardless of the POV; the POV informs, it does not pre-select. List the auto-fix findings (`recommendation` Fix AND `classification` mechanical) in the same prompt as an FYI (no per-item action; they are fixed automatically). Fold each answer into the `resolutions.json` written above. If the present-set is empty, present no `AskUserQuestion` — but `resolutions.json` is still written (above) whenever the round recorded any skip; only a round with no skip at all omits the file.
+     **Record decisions (learning loop):** after writing `resolutions.json`, append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (`action`: `skip` → `skip`, `fix-with-guidance` → `guidance`, `fix` → `fix`), per `## Learning Loop & Staleness Nudge` → "Recording decisions". Also append a `fix` record for each `auto-fix-set` finding fixed silently this round. This append is non-blocking and never gates the loop.
+8. **Fix batch.** `auto-fix-set` = effective findings where `recommendation` is `Fix` AND (`classification` is `mechanical` **OR** severity is `Minor`/`Nit`) — mechanical fixes at any severity, plus non-blocking judgment-fixes applied as the POV suggests (a non-blocking judgment call isn't worth an interrupt). `fix-batch` = `auto-fix-set ∪ approved`. Write `round-<round>/fix-batch.json` (full finding objects; attach `userGuidance` to any with guidance). (Blocking — Critical/Important — judgment-fixes are not auto-added; they arrive via `approved` from step 7.)
+9. **Blocking-to-fix** = count of `fix-batch` findings with severity Critical or Important.
+10. If `fix-batch` is empty (everything this round was skipped) → **EXIT** with a "remaining findings deliberately skipped" note (list them) (`ACTION=exit_skipped`, `ROUND=<round>`, `REASON="all findings skipped"`). (This all-skipped shortcut pre-empts the step-14 gate, which would return the same `exit_skipped` for these facts. The gate still reaches `exit_skipped` normally at step 14 when a round fixes only Minor/Nit findings but skips a blocker.)
+11. **Fix.** Dispatch the fixer subagent (template below) with `fix-batch.json`.
+    - Status `CHECK_FAILED` → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="fixer CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface the failing `VERIFY_CMD` output. (When the profile is `mode: unverified`, the fixer runs no checks and cannot return `CHECK_FAILED`.)
+    - Status `ESCALATED` → for each escalated finding, present it as a `present-set` intervention now (same prompt shape as step 7), then re-dispatch the fixer with the user's decisions folded in. The follow-up dispatch uses this same `CHECK_FAILED`/`ESCALATED` contract; a finding the user has already decided on is no longer eligible to escalate, so it cannot ping-pong. Do NOT add an escalated finding to the skip-set unless the user skips it. After escalation handling resolves the final `fix-batch`, recompute **blocking-to-fix** (step 9) before evaluating step 14.
+12. **Verify.** If a `VERIFY_CMD` is set, the orchestrator independently runs it from the user's own working tree (never the PR head), non-interactively, with a timeout. Fail (non-zero exit) → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="verify CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface output. (Do not re-review on a broken tree.) If the profile's verify story is `mode: unverified`, **SKIP this gate** — there is no command to run; the round's commit stands ungated.
+13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON; **capture `halt`** as `BREAKER_HALT` (`yes`/`no`). Do NOT read or `cat` the diff into the orchestrator context. (Don't act on it yet — step 14 feeds it to the continuation gate so the next action is decided in one place.)
+14. **Continuation gate — the next action is decided by a script, not by you.** Whether to run another round is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run the deterministic gate and **obey its `action`** (it derives the blocking counts from the round artifacts, so they are not yours to self-report either):
+
+    ```bash
+    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+    python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
+      --breaker-halt "$BREAKER_HALT" \
+      --fix-batch "$SESSION_DIR/round-<N>/fix-batch.json" \
+      --resolutions "$SESSION_DIR/round-<N>/resolutions.json"
+    ```
+
+    (A `resolutions.json` is written whenever the round recorded any skip — autonomous, NOTIFY, or gated; omit `--resolutions` only when no skip occurred at all this round.) Parse its JSON `{action, reason}` and **do exactly what `action` says — you may not substitute your own judgment for it**:
+    - **`review`** → `round += 1` and **repeat from step 1**. This is **MANDATORY**: you applied a blocking fix and the loop must re-review to verify it. Do **not** exit, declare success, or present the next round as optional. (The classic skip is to stop here believing it's clean — that belief is exactly what this gate overrides; the last time it was trusted, the "obviously clean" re-review found two real bugs in the fix.)
+    - **`exit_clean`** → set `ACTION=exit_clean`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT SUCCESS** (no blocking fix applied this round and none skipped; any Minor/Nit are now fixed).
+    - **`exit_skipped`** → set `ACTION=exit_skipped`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT — CLEAN EXCEPT FOR SKIPPED**: list the deliberately-skipped blocking finding(s); do **not** report a plain SUCCESS verdict.
+    - **`halt`** → set `ACTION=halt`, `ROUND=<round>`, `REASON=<gate reason>` and **HALT**: surface the gate's `reason` (plus the breaker's `reason`/`detail` if it halted) + the still-open findings + the commit range (`git log <baseRef>..HEAD --oneline`).
+
+    On `ESCALATED` re-handling (step 11), recompute the fix-batch first, then run this gate on the final `round-<N>/fix-batch.json`. **Red flags that mean you are about to skip the loop** — if you catch yourself thinking any of these, run the gate and obey it instead: "it's a trivial/one-line fix" · "round N+1 will obviously be clean" · "I have full context, I can tell it's done" · "a re-review is diminishing returns / not worth the tokens" · "I'll *offer* another round as optional." None of these is yours to act on; `loop_state.py` decides.
+
+### Triage and Fixer subagent prompts
+
+The triage and fixer subagent prompt templates (including the escalation-guard context and enforcement boundary note) are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read them when building the respective dispatches. The orchestrator must embed `ESC_WRAPPER` and `REPO_ROOT` (resolved in setup as absolute paths) into the fixer prompt's `## Input` block before dispatching.
+
+### End-of-Loop Summary
+
+**If `--result-file` was passed**, write the terminal loop_state decision before printing the summary (atomic write via temp file):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/review_result.py" write \
+  --path "$RESULT_FILE" \
+  --action "$ACTION" \
+  --round "$ROUND" \
+  --reason "$REASON"
+```
+
+(`$ACTION`, `$ROUND`, and `$REASON` are set on **every** terminal exit path: step-5 → `exit_clean`; step-10 → `exit_skipped`; step-11/12 HALT → `halt`; step-14 → the gate's returned action. Each exit path sets these variables before jumping to the End-of-Loop Summary, so the write always has defined values. `$RESULT_FILE` is the path supplied via `--result-file`. When `--result-file` is absent, skip this step entirely — no file written, no behavior change.)
+
+Print: final verdict, rounds run, commits created (one per round), findings fixed by severity, any blocking findings deliberately skipped, **the Minor/Nit findings auto-handled without asking** (a short list — `auto-fixed` vs `auto-skipped` — so the non-blocking work the loop did silently is visible, not hidden), and any new findings the fixer noticed/introduced along the way (informational). If the verify story was `unverified`, state that fixes were committed **without a verify gate**. Because fixes are local-only, offer to push the branch (or, if this was a PR you don't own, point to `--post`). Do not push without explicit confirmation.
+
+**Then, after the summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the review output and none blocks.
+
+## Read-Only Paths
+
+These two paths run a **single review pass** (loop steps 1-3, writing artifacts under `round-1/`) and then diverge. Neither triages, fixes, commits, or loops.
+
+### `--review-only`
+
+After the single pass, run the interactive tiered presentation and a terminal report. No commits. (A profile with `mode: review-only` makes the default path degrade into exactly this presentation.)
+
+**If context was compacted between dispatch and presentation**, re-read `$SESSION_DIR/round-1/compiled.json` and `$SESSION_DIR/meta.json` to restore state. The skill is resumable from disk.
+
+**Form the orchestrator POV before presenting.** Per the base rubric's "Orchestrator POV", for each Critical/Important finding open the cited file at the cited line (in `$SESSION_DIR/repo/` for the PR path, working tree otherwise) and form a **Fix / Skip / Defer + one-sentence rationale + High/Low confidence** take. This is the coordinator's own judgment from a small targeted read — not a re-review. For batched Minor/Nit, derive the POV from the finding text (read the file only if the text is insufficient).
+
+**Apply the review gate.** Partition findings by POV: `auto-include` = `recommendation == Fix` (these enter the report without asking); `ask-set` = `recommendation` is `Skip` or `Defer` (these need your call). Only the `ask-set` is presented below; the `auto-include` set is added to the approved findings silently.
+
+Open with the verdict banner and the one-line summary. If the `ask-set` is empty, skip straight to the report. Otherwise run the tiered presentation over the `ask-set` only:
+
+- **Critical and Important findings (ask-set) — individually.** For each, use `AskUserQuestion`. Header includes severity tag, dimension(s), and `file:line`. Body shows the finding text, the suggested fix, and — on its own line — the **POV**: e.g. `→ POV: Skip (Low confidence) — correct in theory but this path is never hit concurrently under the profile's threat model`. Options (keep this neutral order; the POV informs but does not pre-select):
+  - **Approve** — include at current severity.
+  - **Modify** — open a free-text edit for the comment body before approval.
+  - **Downgrade** — drop one severity tier (Critical → Important, Important → Minor). A downgraded Important → Minor is **auto-approved at Minor** and not re-presented in the Minor batch.
+  - **Skip** — exclude entirely.
+  - The user may use "Other" to push back, ask a clarifying question, or request a targeted re-verification. Engage. If they question a specific finding, read the relevant file from `$SESSION_DIR/repo/` (or working tree) to re-check that one location — this is a small, targeted read, not loading the full diff.
+
+- **Minor and Nit findings (ask-set) — batched, multi-select.** Present in batches of 4 via `AskUserQuestion` with multi-select. For each finding, show severity, `file:line`, a 2-3 sentence summary, and a compact POV tag (e.g. `POV: Skip (Low)`). Always offer **Include all** and **Skip all** as alternatives at the bottom of the batch.
+
+The approved set = `auto-include` ∪ the findings approved from the `ask-set`. After the last batch, summarize how many of each severity were approved, then print a terminal report grouped by severity. Lead with the verdict label in bold. For each approved finding: severity tag, `file:line`, title, body, and the orchestrator POV line. End with the count summary (e.g. `"3 Critical, 5 Important, 2 Minor approved"`). Save nothing else to disk — `compiled.json` already has the full record.
+
+**Record decisions (learning loop):** as you resolve the `ask-set` findings, append one `decisions.py` record per decision to the resolved decisions store (`$DECISIONS`) (**Approve**/**Modify**/**Downgrade** → `fix`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Then, after the terminal report, run the three non-blocking end-of-run steps (staleness nudge, then learning-loop proposal, then provisional-profile confirmation) from that section, in order.
+
+### `--post`
+
+After the single pass (PR mode only), post approved findings to GitHub. No triage, no fix, no loop, no commits to the tree. Run the interactive tiered presentation above (including its **review gate**) to select which findings to post: `recommendation == Fix` findings are auto-selected for posting, and only `Skip`/`Defer` findings are presented for your call. The orchestrator POV is shown to **you** during selection, but is **not** included in the posted comment body (the public comment stays the finding + suggestion). Then ask the user the review event type via `AskUserQuestion`:
+
+- **COMMENT** — findings without approval/rejection
+- **REQUEST_CHANGES** — blocks merge until resolved
+- **APPROVE** — approve with comments
+
+Build the review JSON, run `resolve_diff_lines.py` to validate anchors, post via `gh api`, and verify the post landed — the exact commands and error-handling are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` under `## --post API Commands`. Surface `MOVED:`/`DROPPED:` lines from the script's stderr to the user before posting. Report the review URL (`html_url` from the verification call) to the user.
+
+**Record decisions + end-of-run steps (learning loop):** as you resolve the `ask-set` during selection, append one `decisions.py` record per decision to the resolved decisions store (`$DECISIONS`) (a finding selected for posting → `fix`; a **Skip**/**Drop** → `skip`), per `## Learning Loop & Staleness Nudge`. Then, after reporting the review URL, run the three non-blocking end-of-run steps (staleness nudge, then learning-loop proposal, then provisional-profile confirmation) from that section, in order. (On the `--post` path the staleness check ran with `--root "$SESSION_DIR/repo"`.)
+
+## The verify command
+
+The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both run the project's own verify command, read from the resolved profile (`$PROFILE`)'s `## Verify` section during Setup. There are three branches:
+
+- **`command: <cmd>` →** `VERIFY_CMD="<cmd>"`. Both the orchestrator's gate and the fixer run `VERIFY_CMD` from the user's own working tree (never the PR head), non-interactively, with a timeout. A non-zero exit is a **HALT / `CHECK_FAILED`** — the orchestrator surfaces the failing output and does not re-review on a broken tree.
+- **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer not to run checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
+- **`mode: review-only` →** the project opted out of auto-fix. The default path degrades to a single review pass + the `--review-only` presentation (no triage, no fixer, no commits, no loop). Note this in the dispatch summary.
+
+`meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile.
+
+## Learning Loop & Staleness Nudge
+
+The learning-loop, staleness-nudge, and provisional-profile steps shared across all review skills are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` — read it and apply it at the end of each run and wherever the flow references those steps.
+
+The subagent prompt templates, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`.

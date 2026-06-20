@@ -3,28 +3,13 @@
   "owner": { "name": "zwrose" },
   "metadata": {
     "description": "Your team of superheroes, powered by superpowers — Claude Code plugins that team up to run largely-autonomous development.",
-    "version": "0.4.0"
+    "version": "0.5.0"
   },
   "plugins": [
     {
-      "name": "the-architect",
-      "source": "./plugins/the-architect",
-      "description": "Turns a fuzzy idea into a reviewed spec → plan → tasks — the requirements-first front half of the loop."
-    },
-    {
-      "name": "review-crew",
-      "source": "./plugins/review-crew",
-      "description": "Multi-agent code, plan, and tech-debt review, calibrated per-project."
-    },
-    {
-      "name": "test-pilot",
-      "source": "./plugins/test-pilot",
-      "description": "Seeded manual test plans on PRs plus autonomous browser execution before human spot-check."
-    },
-    {
-      "name": "workhorse",
-      "source": "./plugins/workhorse",
-      "description": "The per-issue back-half producer: approved tasks → a CI-green, ready-for-review PR + live dev server, with a non-bypassable never-merge floor."
+      "name": "superheroes",
+      "source": "./plugins/superheroes",
+      "description": "the-architect + review-crew + test-pilot + workhorse — one plugin that runs a project's development loop (discovery → plan → tasks → build → review → ship)."
     }
   ]
 }

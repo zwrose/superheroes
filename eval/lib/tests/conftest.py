@@ -1,6 +1,7 @@
-import os
-import sys
-
-# Put eval/lib (parent of tests/) on sys.path so tests can `import identifiers`,
-# mirroring the review-crew eval conftest.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import os, sys
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_EVAL_LIB = os.path.dirname(_HERE)
+_PLUGIN_LIB = os.path.join(os.path.dirname(os.path.dirname(_EVAL_LIB)), "plugins", "superheroes", "lib")
+for p in (_EVAL_LIB, _PLUGIN_LIB):
+    if p not in sys.path:
+        sys.path.insert(0, p)

@@ -1,0 +1,30 @@
+{
+  "name": "superheroes",
+  "version": "0.1.0",
+  "description": "Your team of superheroes — the-architect (spec→plan→tasks), review-crew (multi-agent review), test-pilot (browser verification), and workhorse (the producer) — in one plugin that runs a project's development loop.",
+  "author": {
+    "name": "zwrose"
+  },
+  "skills": [
+    "architect-discovery",
+    "architect-plan",
+    "architect-spec",
+    "architect-tasks",
+    "audit-debt",
+    "review-code",
+    "review-init",
+    "review-plan",
+    "review-spec",
+    "review-tasks",
+    "test-pilot-execute",
+    "test-pilot-init",
+    "test-pilot-plan",
+    "workhorse"
+  ],
+  "hooks": "./hooks/hooks-codex.json",
+  "interface": {
+    "displayName": "Superheroes",
+    "shortDescription": "the-architect + review-crew + test-pilot + workhorse — one plugin that runs a project's development loop",
+    "category": "Developer Tools"
+  }
+}

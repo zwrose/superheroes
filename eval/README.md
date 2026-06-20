@@ -1,8 +1,8 @@
 # superheroes — band eval harness
 
-The cross-plugin / loop-level measurement instrument for the superheroes band. It
-generalizes the pattern proven in [`plugins/review-crew/eval/`](../plugins/review-crew/eval/)
-(per-plugin review-quality evals stay there; this harness is for the *band* and the
+The loop-level measurement instrument for the superheroes band. It
+generalizes the pattern proven in [`plugins/superheroes/eval/`](../plugins/superheroes/eval/)
+(plugin review-quality evals stay there; this harness is for the *band* and the
 *loop*).
 
 ## The model (from review-crew/eval, generalized)

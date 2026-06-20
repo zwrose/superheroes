@@ -2,7 +2,8 @@ import json, os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))  # repo root from .github/scripts/tests/
-PLUGINS = ["review-crew", "test-pilot", "the-architect", "workhorse"]
+PLUGIN = "superheroes"
+PKG = "plugins/superheroes"
 
 
 def _load(rel):
@@ -12,39 +13,33 @@ def _load(rel):
 
 def test_manifest_seeds_match_plugin_json():
     manifest = _load(".release-please-manifest.json")
-    for name in PLUGINS:
-        pj = _load(f"plugins/{name}/.claude-plugin/plugin.json")
-        assert manifest[f"plugins/{name}"] == pj["version"], name
+    pj = _load(f"{PKG}/.claude-plugin/plugin.json")
+    assert manifest[PKG] == pj["version"]
 
 
 def test_version_txt_matches_plugin_json():
-    for name in PLUGINS:
-        pj = _load(f"plugins/{name}/.claude-plugin/plugin.json")
-        with open(os.path.join(_ROOT, f"plugins/{name}/version.txt")) as fh:
-            assert fh.read().strip() == pj["version"], name
+    pj = _load(f"{PKG}/.claude-plugin/plugin.json")
+    with open(os.path.join(_ROOT, f"{PKG}/version.txt")) as fh:
+        assert fh.read().strip() == pj["version"]
 
 
 def test_config_is_separate_prs_and_well_formed():
     cfg = _load("release-please-config.json")
     assert cfg.get("separate-pull-requests") is True
     pkgs = cfg["packages"]
-    for name in PLUGINS:
-        key = f"plugins/{name}"
-        assert key in pkgs, key
-        p = pkgs[key]
-        assert p["release-type"] == "simple"
-        assert p["component"] == name
-        assert p["changelog-path"] == "CHANGELOG.md"
-        # release-please resolves a package's extra-files RELATIVE TO THE PACKAGE DIR
-        # (the `key`), so the paths are package-relative, not repo-root-relative.
-        paths = [e["path"] for e in p["extra-files"]]
-        assert ".claude-plugin/plugin.json" in paths
-        assert ".codex-plugin/plugin.json" in paths
-        for e in p["extra-files"]:
-            assert e["type"] == "json" and e["jsonpath"] == "$.version"
-            # verify the path as release-please resolves it: <package-dir>/<extra-file path>
-            resolved = os.path.join(_ROOT, key, e["path"])
-            assert os.path.exists(resolved), resolved
+    assert set(pkgs) == {PKG}
+    p = pkgs[PKG]
+    assert p["release-type"] == "simple"
+    assert p["component"] == PLUGIN
+    assert p["changelog-path"] == "CHANGELOG.md"
+    assert p["bump-minor-pre-major"] is True
+    paths = [e["path"] for e in p["extra-files"]]
+    assert ".claude-plugin/plugin.json" in paths
+    assert ".codex-plugin/plugin.json" in paths
+    for e in p["extra-files"]:
+        assert e["type"] == "json" and e["jsonpath"] == "$.version"
+        # extra-files are package-relative: <package-dir>/<path>
+        assert os.path.exists(os.path.join(_ROOT, PKG, e["path"]))
 
 
 def test_config_keeps_default_tag_scheme():

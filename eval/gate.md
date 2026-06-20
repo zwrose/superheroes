@@ -43,7 +43,7 @@ get their fixtures as the loop is built.
 - **[live — 2a-core] Full resume.** Killing the loop mid-phase and resuming reads the
   durable cursor from `checkpoint.json`, re-acquires the lease, reconciles against reality
   (reality-wins), and neither loses nor duplicates work. Pinned by the kill-resume
-  exactly-once spike (`plugins/workhorse/lib/tests/test_kill_resume_spike.py`) plus the
+  exactly-once spike (`plugins/superheroes/lib/tests/test_kill_resume_spike.py`) plus the
   `recover` / `journal` / `lock` unit tests.
 
 ## Rule
@@ -56,8 +56,8 @@ are the frozen ground truth. Fix the implementation, or add a new fixture.
 - **Layer 1 — routing-logic (deterministic, HARD GATE).** `escalation.py`'s floor-classifier,
   `route()` truth-table, `route()` fail-closed, the fixer file-scope guard, and the loop_state
   disposition-pipeline property must match the frozen fixture
-  `plugins/review-crew/eval/escalation/expected.json` exactly (see
-  `plugins/review-crew/eval/tests/test_escalation_eval.py` and `…/lib/tests/test_loop_state.py`).
+  `plugins/superheroes/eval/escalation/expected.json` exactly (see
+  `plugins/superheroes/eval/tests/test_escalation_eval.py` and `…/lib/tests/test_loop_state.py`).
   A change must clear this before it lands. The fixture is frozen ground truth — fix the code, never
   weaken the fixture.
 - **Layer 2 — axis-assignment calibration (model-in-loop, TRACKED).** The model's ability to assign
