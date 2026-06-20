@@ -90,3 +90,88 @@ def check_depth(skill_key, text, plugin_dir):
                     f"reference-depth: {skill_key}: {m.group(1)} itself references another "
                     f"file (chain deeper than one hop)")
     return out
+
+
+import argparse
+
+sys.path.insert(0, os.path.join(REPO, "eval", "lib"))
+import skills  # noqa: E402
+
+REGISTRY = os.path.join(REPO, "eval", "skills", "registry.json")
+BASELINE = os.path.join(REPO, "eval", "skills", "baseline.json")
+CONVENTIONS = os.path.join(REPO, "CONVENTIONS.md")
+
+
+def _skill_key(path):
+    parts = path.split(os.sep)
+    return f"{parts[-4]}/{parts[-2]}"
+
+
+def known_red_ceilings(baseline):
+    return set(baseline.get("knownRedCeilings", []))
+
+
+def gather_violations(plugins_root, registry, red_set, conv_secs, combined_before=None):
+    """Walk skills under plugins_root and collect per-skill + combined-size violations.
+
+    Pure over its inputs (no global file reads) so it is unit-testable on a temp tree.
+    red_set suppresses the line-count rule for known-red skills (FR-8). Returns
+    (errors, combined_description_chars).
+    """
+    errors = []
+    combined_now = 0
+    for path in skills.iter_skill_paths(plugins_root):
+        key = _skill_key(path)
+        plugin_dir = os.path.join(plugins_root, key.split("/")[0])
+        with open(path, encoding="utf-8") as fh:
+            raw = fh.read()
+        description, _ = skills.parse_skill(raw)
+        combined_now += len(description)
+        total_lines = raw.count("\n") + (0 if raw.endswith("\n") else 1)
+
+        if key not in red_set:
+            errors += check_line_count(key, total_lines, registry["bodyCeilings"])
+        errors += check_links(key, raw, plugin_dir)
+        errors += check_conventions_refs(key, raw, conv_secs)
+        errors += check_depth(key, raw, plugin_dir)
+        errors += check_phrases(key, description, registry["requiredPhrases"].get(key, []))
+
+    # FR-10: combined description size strictly smaller than the recorded pre-change baseline.
+    if combined_before is not None and combined_now >= combined_before:
+        errors.append(
+            f"description-size: combined description chars {combined_now} "
+            f"is not smaller than baseline {combined_before}")
+    return errors, combined_now
+
+
+def main(argv=None):
+    argparse.ArgumentParser(description="validate skill token-shape").parse_args(argv or [])
+    registry = skills.load_registry(REGISTRY)
+    if os.path.isfile(BASELINE):
+        with open(BASELINE, encoding="utf-8") as fh:
+            baseline = json.load(fh)
+    else:
+        baseline = {}
+    with open(CONVENTIONS, encoding="utf-8") as fh:
+        conv_secs = conventions_section_numbers(fh.read())
+
+    errors, _ = gather_violations(
+        PLUGINS, registry, known_red_ceilings(baseline), conv_secs,
+        baseline.get("combinedDescriptionChars"))
+
+    # FR-6: TOC on long reference files (any .md under a plugin's reference/ dirs)
+    import glob as _glob
+    for ref in _glob.glob(os.path.join(PLUGINS, "*", "**", "reference", "*.md"), recursive=True):
+        errors += check_toc(ref)
+
+    if errors:
+        sys.stderr.write(f"\n✗ {len(errors)} skill problem(s):\n")
+        for e in errors:
+            sys.stderr.write(f"  - {e}\n")
+        return 1
+    print("✓ skills meet token-shape rules")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

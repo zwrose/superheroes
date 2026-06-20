@@ -73,3 +73,35 @@ def test_line_count_fails_over_ceiling():
 
 def test_line_count_ignores_skills_without_a_ceiling():
     assert vs.check_line_count("test-pilot/test-pilot-plan", 700, {"review-crew/review-code": 499}) == []
+
+import os
+
+def _mk_skill(root, plugin, skill, body_lines, desc="Use when reviewing code changes"):
+    d = os.path.join(root, plugin, "skills", skill)
+    os.makedirs(d)
+    with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write(f"---\nname: {skill}\ndescription: {desc}\n---\n" + "x\n" * body_lines)
+
+def test_known_red_suppresses_line_count_in_set():
+    assert vs.known_red_ceilings({"knownRedCeilings": ["review-crew/review-code"]}) == {"review-crew/review-code"}
+
+def test_gather_names_line_count_violation(tmp_path):
+    root = str(tmp_path / "plugins"); os.makedirs(root)
+    _mk_skill(root, "review-crew", "review-code", 600)
+    reg = {"bodyCeilings": {"review-crew/review-code": 499}, "requiredPhrases": {}}
+    errors, _ = vs.gather_violations(root, reg, set(), set())
+    assert any("line-count: review-crew/review-code" in e for e in errors)
+
+def test_gather_known_red_suppresses_the_line_count(tmp_path):
+    root = str(tmp_path / "plugins"); os.makedirs(root)
+    _mk_skill(root, "review-crew", "review-code", 600)
+    reg = {"bodyCeilings": {"review-crew/review-code": 499}, "requiredPhrases": {}}
+    errors, _ = vs.gather_violations(root, reg, {"review-crew/review-code"}, set())
+    assert not any("line-count" in e for e in errors)
+
+def test_gather_combined_size_flags_not_smaller(tmp_path):
+    root = str(tmp_path / "plugins"); os.makedirs(root)
+    _mk_skill(root, "p", "s", 10, desc="x" * 50)
+    errors, combined = vs.gather_violations(root, {"bodyCeilings": {}, "requiredPhrases": {}},
+                                            set(), set(), combined_before=10)
+    assert combined == 50 and any("description-size" in e for e in errors)
