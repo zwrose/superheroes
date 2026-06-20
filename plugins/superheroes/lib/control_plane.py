@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/control_plane.py
+# plugins/superheroes/lib/control_plane.py
 """Per-checkout control-plane store (CONVENTIONS §4.2): a machine-local git repo,
 keyed by <absolute-git-dir-key> (§6.2) — DISTINCT per worktree/clone — holding one
 work-item's runtime (checkpoint, resume-brief, events). Dependency-free.

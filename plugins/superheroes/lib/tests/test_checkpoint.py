@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_checkpoint.py
+# plugins/superheroes/lib/tests/test_checkpoint.py
 import json
 import checkpoint as ck
 

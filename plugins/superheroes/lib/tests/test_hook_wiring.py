@@ -6,7 +6,7 @@ import os
 import enforcer
 
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# The escalation core is a same-tree sibling now (repointed from plugins/the-architect/lib).
+# The escalation core is a same-tree sibling now (repointed from plugins/superheroes/lib).
 _ESC = os.path.join(_PLUGIN, "lib", "escalation.py")
 _ENFORCER = os.path.join(_PLUGIN, "lib", "enforcer.py")
 _HOOKS = os.path.join(_PLUGIN, "hooks", "hooks.json")

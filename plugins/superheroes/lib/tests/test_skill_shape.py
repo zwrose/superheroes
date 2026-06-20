@@ -21,7 +21,7 @@ def test_references_each_owned_lib_and_subskill():
     t = _text()
     for ref in ("enforcer.py", "ci_loop.py", "detect.py", "devserver.py",
                 "reset.py", "readout.py",
-                "subagent-driven-development", "review-crew:review-code",
+                "subagent-driven-development", "superheroes:review-code",
                 "test-pilot-plan", "test-pilot-execute", "engine.py"):
         assert ref in t, ref
 
@@ -67,5 +67,5 @@ def test_fr5_deferral_note_and_no_verify_model_dispatch():
     assert "model_tier_resolve" not in t and "model_tier_overrides" not in t
     # FR-7 half b (positive, step-2-section-scoped): step 2 Review still delegates to wired review-code.
     review_section = _section(t, "2 Review")  # "## 2 Review …"
-    assert "review-crew:review-code" in review_section, \
+    assert "superheroes:review-code" in review_section, \
         "step 2 Review must delegate to the wired review-code"

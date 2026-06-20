@@ -85,7 +85,7 @@ def test_known_roles_matches_core_default_tiers():
     # silent drift so a renamed/added core role can't make this helper drop a valid
     # override (fail-open would otherwise mask it). Mirrors the sibling guard in
     # test_model_tier_resolve.py (_FALLBACK == core.DEFAULT_TIERS). Repointed from the old
-    # plugins/the-architect/lib/model_tier.py to the in-tree sibling core.
+    # plugins/superheroes/lib/model_tier.py to the in-tree sibling core.
     core_path = os.path.join(_HERE, "..", "model_tier.py")
     spec = importlib.util.spec_from_file_location("model_tier_core", core_path)
     core = importlib.util.module_from_spec(spec)

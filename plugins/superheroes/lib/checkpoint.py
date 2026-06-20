@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/checkpoint.py
+# plugins/superheroes/lib/checkpoint.py
 """checkpoint.json — the §4.3 LOCKED resume cursor. This slice implements the
 writer/reader for the schema CONVENTIONS §4.3 already locked; it does NOT redefine
 it. An unknown (newer) schemaVersion fails closed (read -> None) so the caller

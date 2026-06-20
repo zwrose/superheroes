@@ -269,7 +269,7 @@ entirely otherwise.
 
 The full self-review checklist (design-quality hard gates, LLM failure-mode guards, doc
 quality markers, and coverage checks) is in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/plan/reference/method-detail.md` — read it and
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-plan/reference/method-detail.md` — read it and
 work through every item with the written plan before proceeding to step 6.
 
 ### 6. review-plan (automated gate)

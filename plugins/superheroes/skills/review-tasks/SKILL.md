@@ -12,7 +12,7 @@ Red-team the-architect's **`tasks` definition-doc** — the bite-sized, test-fir
 steps for a work-item (`docs/superheroes/<work-item>/tasks.md`) — **before** the producer's
 Build executes them. The main context is an orchestrator: it locates the tasks doc, reads
 its parent `plan` (and the `spec` behind it) for the work it must cover, dispatches the same
-five specialist agents `/review-crew:review-code` uses (architecture, code, security, test,
+five specialist agents `/superheroes:review-code` uses (architecture, code, security, test,
 premortem) in parallel against the tasks doc, compiles their findings under the base rubric,
 attaches its own point of view to each finding, and **revises the tasks doc in place** —
 auto-applying mechanical fixes and stopping to ask only about findings it would skip/defer or
@@ -40,9 +40,9 @@ architecture is itself a finding (it belongs in the plan, or it's drift).
 
 | Form                               | Behavior                                                                     |
 | ---------------------------------- | ---------------------------------------------------------------------------- |
-| `/review-crew:review-tasks`        | Review the most recent `docs/superheroes/*/tasks.md`.                        |
-| `/review-crew:review-tasks <work-item>` | Review `docs/superheroes/<work-item>/tasks.md`.                         |
-| `/review-crew:review-tasks <path>` | Review the tasks doc at `<path>` (relative to repo root or absolute).        |
+| `/superheroes:review-tasks`        | Review the most recent `docs/superheroes/*/tasks.md`.                        |
+| `/superheroes:review-tasks <work-item>` | Review `docs/superheroes/<work-item>/tasks.md`.                         |
+| `/superheroes:review-tasks <path>` | Review the tasks doc at `<path>` (relative to repo root or absolute).        |
 
 If no tasks doc is found and no argument was passed, ask the user via `AskUserQuestion` before
 continuing — there is nothing to review otherwise.
@@ -111,7 +111,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before locating the tasks doc or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -128,7 +128,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
 
 **Locate the target tasks doc.** Resolve by work-item slug, explicit path, or most-recent:
 
@@ -333,7 +333,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 2. **Dedupe by tasks section + topic.** When two findings target the same task/step and same topic, merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count.
 
-Determine the verdict per the base rubric's "Verdict labels & mapping". For `/review-crew:review-tasks` the labels are **TASKS READY** / **REVISE BEFORE BUILD** / **MAJOR GAPS — RECONSIDER PLAN**:
+Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-tasks` the labels are **TASKS READY** / **REVISE BEFORE BUILD** / **MAJOR GAPS — RECONSIDER PLAN**:
 
 - 0 Critical, 0 Important → **TASKS READY**
 - 0 Critical, 1+ Important → **REVISE BEFORE BUILD**

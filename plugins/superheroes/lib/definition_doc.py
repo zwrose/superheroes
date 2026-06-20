@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""the-architect: definition-doc location + frontmatter helper (CONVENTIONS §3, §6.1).
+"""superheroes (architect): definition-doc location + frontmatter helper (CONVENTIONS §3, §6.1).
 
 Phase 1 is deliberately MINIMAL and in-repo only: definition-docs live at
 `docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the target repo. Global

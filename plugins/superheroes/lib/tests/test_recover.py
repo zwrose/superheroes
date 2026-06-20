@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_recover.py
+# plugins/superheroes/lib/tests/test_recover.py
 import recover
 
 CKPT = {"workItem": "wi", "branch": "superheroes/wi-abc123", "lastGoodStep": "5"}

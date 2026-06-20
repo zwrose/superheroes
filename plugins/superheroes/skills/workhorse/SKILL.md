@@ -136,7 +136,7 @@ the SDD-invocation path — **executing the tasks inline instead of through SDD 
 which the step 3 ship-gate detects (no `build` provenance → GATE). Inline execution in place of
 SDD is a forbidden substitution.
 
-## 2 Review — review-crew:review-code (deterministic terminal read)
+## 2 Review — superheroes:review-code (deterministic terminal read)
 
 Emit step_entered/step_completed journal events; write checkpoint.
 
@@ -145,7 +145,7 @@ a result file:
 
 ```
 RESULT="${paths[review_result]}"   # durable control-plane path (issue dir), survives resume
-# invoke: /review-crew:review-code --result-file "$RESULT"
+# invoke: /superheroes:review-code --result-file "$RESULT"
 # then read the terminal action — fail-closed (missing/garbled/unknown -> "halt"),
 # mirroring review-crew's review_result.read_result (a library reader, not a CLI):
 ACTION=$(python3 -c "import json; print(json.load(open('$RESULT'))['action'])" 2>/dev/null || echo halt)
@@ -164,7 +164,7 @@ The step 3 ship-gate requires this to equal the shipped HEAD (a later commit →
 
 **Non-substitutable.** A single specialist subagent (e.g. a lone `code-reviewer`) is **not**
 `review-code` and does **not** satisfy step 2. The only evidence step 2 records is the
-`review-result.json` written by the full `/review-crew:review-code` loop at
+`review-result.json` written by the full `/superheroes:review-code` loop at
 `paths["review_result"]`; do not hand-write it.
 
 **Version-skew diagnostic.** `$RESULT` is empty only when review-code did not write

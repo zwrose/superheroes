@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/recover.py
+# plugins/superheroes/lib/recover.py
 """reconcile-on-entry: (checkpoint, world) -> the safe next action. Pure decision
 logic (the reset.plan_reset / ci_loop.decide pattern); the orchestrator skill gathers
 the world reads and sequences the result. Reality wins; the checkpoint only speeds a

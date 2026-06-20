@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/hostinfo.py
+# plugins/superheroes/lib/hostinfo.py
 """A portable per-boot identity. Used to corroborate that a recorded pid belongs to
 THIS boot (a recycled PID after a reboot is not the same process). darwin:
 `sysctl -n kern.boottime`; Linux: the `btime` line of /proc/stat. None when neither

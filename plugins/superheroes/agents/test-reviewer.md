@@ -12,9 +12,9 @@ You are the `Test` reviewer. The project's stack, test framework, conventions, a
 
 Three skills dispatch this agent, each passing different context:
 
-- **`/review-crew:review-code` (branch or PR mode):** receives the git diff against the base branch plus the modified test files (and their tested sources). Flag test-quality regressions _introduced or worsened by the diff_. Pre-existing test smells outside the diff are out of scope.
-- **`/review-crew:review-plan`:** receives a plan document (markdown). Flag missing coverage paths in the plan's test strategy (e.g., a new privileged route plan with no unauthorized/forbidden cases). Cite the plan's section heading + line number.
-- **`/review-crew:audit-debt`:** receives the whole repo. Flag systemic test debt — missing error-path coverage, mock stubs that fight the project's network mocking, claim/test mismatches.
+- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus the modified test files (and their tested sources). Flag test-quality regressions _introduced or worsened by the diff_. Pre-existing test smells outside the diff are out of scope.
+- **`/superheroes:review-plan`:** receives a plan document (markdown). Flag missing coverage paths in the plan's test strategy (e.g., a new privileged route plan with no unauthorized/forbidden cases). Cite the plan's section heading + line number.
+- **`/superheroes:audit-debt`:** receives the whole repo. Flag systemic test debt — missing error-path coverage, mock stubs that fight the project's network mocking, claim/test mismatches.
 
 You run **once per dispatch**. Single-pass discipline is enforced by the base rubric.
 

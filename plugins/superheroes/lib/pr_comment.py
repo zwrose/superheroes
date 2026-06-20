@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PR comment management for test-pilot: marker render/find (author-
+"""PR comment management for test-pilot skills: marker render/find (author-
 filtered), edit-else-create upsert via gh, checkbox-state preservation,
 diagnostic scrubbing (the ENFORCED redaction rule), and the no-PR local-
 fallback file lifecycle. Both skills call this; neither re-implements it.

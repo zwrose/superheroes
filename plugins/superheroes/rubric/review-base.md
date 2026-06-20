@@ -141,11 +141,11 @@ finding with its taxonomy term.
 
 ## Verdict labels & mapping
 
-- `/review-crew:review-code`: `READY FOR PR` / `FIX BEFORE PR` / `MAJOR FIXES NEEDED`
-- `/review-crew:review-spec`: `SPEC READY` / `REVISE BEFORE OWNER REVIEW` / `MAJOR GAPS — RETURN TO DISCOVERY` *(advisory — the owner is the spec's gate authority; review-spec records no `passed`)*
-- `/review-crew:review-plan`: `PLAN READY` / `REVISE BEFORE TASKS` / `MAJOR GAPS — RECONSIDER DESIGN`
-- `/review-crew:review-tasks`: `TASKS READY` / `REVISE BEFORE BUILD` / `MAJOR GAPS — RECONSIDER PLAN`
-- `/review-crew:audit-debt`: no single verdict — a prioritized backlog
+- `/superheroes:review-code`: `READY FOR PR` / `FIX BEFORE PR` / `MAJOR FIXES NEEDED`
+- `/superheroes:review-spec`: `SPEC READY` / `REVISE BEFORE OWNER REVIEW` / `MAJOR GAPS — RETURN TO DISCOVERY` *(advisory — the owner is the spec's gate authority; review-spec records no `passed`)*
+- `/superheroes:review-plan`: `PLAN READY` / `REVISE BEFORE TASKS` / `MAJOR GAPS — RECONSIDER DESIGN`
+- `/superheroes:review-tasks`: `TASKS READY` / `REVISE BEFORE BUILD` / `MAJOR GAPS — RECONSIDER PLAN`
+- `/superheroes:audit-debt`: no single verdict — a prioritized backlog
 
 Mapping (post-dedupe, post-filter counts) — the same shape for every skill (the first / second / third label):
 - 0 Critical, 0 Important → the **READY** label (`READY FOR PR` / `SPEC READY` / `PLAN READY` / `TASKS READY`)

@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_resume_hooks.py
+# plugins/superheroes/lib/tests/test_resume_hooks.py
 import json
 import os
 import subprocess

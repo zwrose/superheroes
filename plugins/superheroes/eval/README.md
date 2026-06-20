@@ -60,11 +60,11 @@ Run each agent in two variants with **identical context except the agent-file
 methodology and the base-rubric content**:
 
 - **Baseline:** the faithful-port commit `5a05714`.
-  - agent file: `git show 5a05714:plugins/review-crew/agents/<x>.md`
-  - base rubric: `git show 5a05714:plugins/review-crew/rubric/review-base.md`
+  - agent file: `git show 5a05714:plugins/superheroes/agents/<x>.md`
+  - base rubric: `git show 5a05714:plugins/superheroes/rubric/review-base.md`
 - **Improved:** the current working tree.
-  - agent file: `plugins/review-crew/agents/<x>.md`
-  - base rubric: `plugins/review-crew/rubric/review-base.md`
+  - agent file: `plugins/superheroes/agents/<x>.md`
+  - base rubric: `plugins/superheroes/rubric/review-base.md`
 
 where `<x>` is one of `architecture-reviewer`, `code-reviewer`,
 `security-reviewer`, `test-reviewer`.
@@ -72,15 +72,15 @@ where `<x>` is one of `architecture-reviewer`, `code-reviewer`,
 Extract the four pieces of text up front, e.g.:
 
 ```bash
-EVAL_DIR=plugins/review-crew/eval
+EVAL_DIR=plugins/superheroes/eval
 OUT=$(mktemp -d /tmp/review-ab-XXXX)
 
 for x in architecture-reviewer code-reviewer security-reviewer test-reviewer; do
-  git show 5a05714:plugins/review-crew/agents/$x.md       > "$OUT/$x.baseline.md"
-  cp        plugins/review-crew/agents/$x.md              "$OUT/$x.improved.md"
+  git show 5a05714:plugins/superheroes/agents/$x.md       > "$OUT/$x.baseline.md"
+  cp        plugins/superheroes/agents/$x.md              "$OUT/$x.improved.md"
 done
-git show 5a05714:plugins/review-crew/rubric/review-base.md > "$OUT/rubric.baseline.md"
-cp        plugins/review-crew/rubric/review-base.md        "$OUT/rubric.improved.md"
+git show 5a05714:plugins/superheroes/rubric/review-base.md > "$OUT/rubric.baseline.md"
+cp        plugins/superheroes/rubric/review-base.md        "$OUT/rubric.improved.md"
 ```
 
 ## Procedure — dual dispatch
@@ -232,7 +232,7 @@ and traps (scope-aware, exactly as defined in §Scoring), and prints the result 
 JSON.
 
 ```bash
-EVAL_DIR=plugins/review-crew/eval
+EVAL_DIR=plugins/superheroes/eval
 
 # Score one variant's findings against a fixture. The findings input is a dir
 # (loads every *.json), a glob, or a single JSON file; each file is a JSON array
@@ -276,7 +276,7 @@ use the same ±15 window; all other traps are line-scoped (±2).
 Unit tests live in `eval/tests/`:
 
 ```bash
-python3 -m pytest plugins/review-crew/eval/tests/ -q
+python3 -m pytest plugins/superheroes/eval/tests/ -q
 ```
 
 ## Provenance / reuse

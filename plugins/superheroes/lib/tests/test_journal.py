@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_journal.py
+# plugins/superheroes/lib/tests/test_journal.py
 import journal
 
 

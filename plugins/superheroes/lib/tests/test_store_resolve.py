@@ -43,7 +43,7 @@ def test_in_repo_profile_wins_but_state_stays_global(tmp_path):
     assert r["profile"] == os.path.join(base, "profile.md")
     assert r["blocks_dir"] == os.path.join(base, "blocks")
     assert r["manifests_dir"] == os.path.join(base, "manifests")
-    # The deliberate divergence from review-crew:
+    # The deliberate divergence from review-crew's store design:
     assert r["state_dir"].startswith(root)
     assert r["plans_dir"].startswith(root)
 

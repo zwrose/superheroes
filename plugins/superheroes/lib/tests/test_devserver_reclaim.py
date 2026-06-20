@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_devserver_reclaim.py
+# plugins/superheroes/lib/tests/test_devserver_reclaim.py
 import devserver
 
 

@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/allowance.py
+# plugins/superheroes/lib/allowance.py
 """Codex single-use approval allowance (issue #14, the gate's deny-only host).
 
 `permissionDecision: "ask"` (a live human prompt the agent cannot answer itself) is

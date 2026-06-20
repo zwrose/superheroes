@@ -8,9 +8,9 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 # Audit Debt
 
-Periodic full-repo sweep for accumulated technical, security, and architectural debt. The main context is an orchestrator: it gathers sweep-prep artifacts (an ecosystem-aware dependency audit, a TODO census, a file list, recent dependency churn), dispatches four of the five specialist agents `/review-crew:review-code` uses in **sweep mode** (no diff scope) in parallel (all but `premortem-reviewer` — the Failure-Mode whole-repo sweep is deferred), computes three additional dimensions itself (dependency staleness/vulns, TODO/FIXME accumulation, documentation drift), loops the sweep until it stops surfacing new blocking debt, compiles the results into a backlog sorted by severity × inverse-effort, attaches its own point of view to each Critical/Important finding, and consolidates the findings into a proposed set of GitHub issues to file. It **never edits code** — its only output is the report and the issues.
+Periodic full-repo sweep for accumulated technical, security, and architectural debt. The main context is an orchestrator: it gathers sweep-prep artifacts (an ecosystem-aware dependency audit, a TODO census, a file list, recent dependency churn), dispatches four of the five specialist agents `/superheroes:review-code` uses in **sweep mode** (no diff scope) in parallel (all but `premortem-reviewer` — the Failure-Mode whole-repo sweep is deferred), computes three additional dimensions itself (dependency staleness/vulns, TODO/FIXME accumulation, documentation drift), loops the sweep until it stops surfacing new blocking debt, compiles the results into a backlog sorted by severity × inverse-effort, attaches its own point of view to each Critical/Important finding, and consolidates the findings into a proposed set of GitHub issues to file. It **never edits code** — its only output is the report and the issues.
 
-This skill is **not a sibling of `/review-crew:review-code`**. `/review-crew:review-code` finds bugs in new code; `/review-crew:audit-debt` finds bugs in old code that has rotted. The diff-scope rule does NOT apply — every line in the project's source is in scope. The trade-off is that it is **slow and thorough by design** — meant to be run occasionally (suggest monthly), not before every PR. Running it weekly will drown you in nits you have already triaged; running it never will let real debt accumulate to "rewrite this feature" levels.
+This skill is **not a sibling of `/superheroes:review-code`**. `/superheroes:review-code` finds bugs in new code; `/superheroes:audit-debt` finds bugs in old code that has rotted. The diff-scope rule does NOT apply — every line in the project's source is in scope. The trade-off is that it is **slow and thorough by design** — meant to be run occasionally (suggest monthly), not before every PR. Running it weekly will drown you in nits you have already triaged; running it never will let real debt accumulate to "rewrite this feature" levels.
 
 Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.md`) first for the severity rubric, verification rules, findings schema, triage, POV, and verdict mapping — those are not restated here. The base rubric's tier definitions get a debt-context recalibration in §Severity Recalibration for Debt Context below; if anything in this skill contradicts the base rubric, the base rubric wins.
 
@@ -18,7 +18,7 @@ Read the base rubric (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-base.
 
 | Form                       | Behavior                                                                                                                                                                                                                                                       |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/review-crew:audit-debt`  | Sweep the whole repo. No flags. Repeats the specialist sweep until it stops surfacing new blocking debt (hard cap 7 rounds), then consolidates findings across all tiers into GitHub issues (filed by default — NOTIFY) and saves a report.  |
+| `/superheroes:audit-debt`  | Sweep the whole repo. No flags. Repeats the specialist sweep until it stops surfacing new blocking debt (hard cap 7 rounds), then consolidates findings across all tiers into GitHub issues (filed by default — NOTIFY) and saves a report.  |
 
 ## Session Directory
 
@@ -85,7 +85,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's end). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's end). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before generating artifacts or dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -102,7 +102,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
 
 **Detect the ecosystem.** Mirror review-init's detection: read the profile's `signals` (`dep-set`, `default-branch`, `forge`) and `## Verify` block if present, and detect the manifest/lockfile the same way review-init Step 1 does. The ecosystem drives the dependency audit, the source-dir census, and the dependency-churn pass below.
 
@@ -379,7 +379,7 @@ For the Minor/Nit findings and any Skip/borderline Critical/Important ones (wher
 recommends Drop), present those as a deselect pass via `AskUserQuestion` (**File** / **Drop**)
 before filing, then file the kept ones.
 
-Issue title format: `"<severity>: <finding title>"` (for a multi-finding lower-tier issue, a summary title like `"Nit: 5 convention nits across src/"`). Body: each finding's text + `file:line` + suggestion + effort estimate, then `_Surfaced by /review-crew:audit-debt on <date>_`. The POV guides filing decisions; it is not written into the issue body.
+Issue title format: `"<severity>: <finding title>"` (for a multi-finding lower-tier issue, a summary title like `"Nit: 5 convention nits across src/"`). Body: each finding's text + `file:line` + suggestion + effort estimate, then `_Surfaced by /superheroes:audit-debt on <date>_`. The POV guides filing decisions; it is not written into the issue body.
 
 **Save the report (PROCEED).** Write the report to the default location and state the path:
 
@@ -406,7 +406,7 @@ The decisions-recording helper invocation and record-JSON format are in `${CLAUD
 
 Using the `DOCTOR_JSON` captured in §1: print the doctor's `message` as a single non-blocking line **only when** `message` is non-null AND `nudge_acked` is false:
 
-> ℹ️ Profile may be stale: `<message>`. Run `/review-crew:review-init` to refresh (this nudge won't repeat once acknowledged).
+> ℹ️ Profile may be stale: `<message>`. Run `/superheroes:review-init` to refresh (this nudge won't repeat once acknowledged).
 
 If the user declines or ignores it, record the dismissal (see "Recording a dismissal" below) using the doctor's `signal_hash`. Suppress the line entirely when `nudge_acked` is true or `message` is null.
 
@@ -434,7 +434,7 @@ If the loaded profile's `status:` is `provisional` AND this run is interactive (
 > This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
 
 - **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
-- **Refresh via review-init** — point the user at `/review-crew:review-init` (its reconcile re-detects + can flip status) and do not change the profile now.
+- **Refresh via review-init** — point the user at `/superheroes:review-init` (its reconcile re-detects + can flip status) and do not change the profile now.
 - **Keep provisional** — record a dismissal (see "Recording a dismissal") using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
 
 Skip this entirely when the run is **headless/non-interactive** (no human to answer — never block an automated run), when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged. This is the spec's "next interactive review offers to confirm a provisional profile" behavior; it never auto-flips without the user's choice.

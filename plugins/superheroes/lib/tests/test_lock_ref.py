@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_lock_ref.py
+# plugins/superheroes/lib/tests/test_lock_ref.py
 import subprocess
 import control_plane
 import ref_lock as lock

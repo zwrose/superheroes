@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_ship_gate.py
+# plugins/superheroes/lib/tests/test_ship_gate.py
 import pytest
 import ship_gate
 

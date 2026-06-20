@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_control_plane.py
+# plugins/superheroes/lib/tests/test_control_plane.py
 import os
 import subprocess
 import control_plane as cp

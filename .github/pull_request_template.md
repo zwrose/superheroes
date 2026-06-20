@@ -6,7 +6,7 @@
 
 - [ ] Commits follow [Conventional Commits](https://www.conventionalcommits.org/), scoped by plugin
 - [ ] `python3 .github/scripts/validate_marketplace.py` passes
-- [ ] `python3 -m pytest plugins/review-crew/eval/tests/ -q` passes (and lib tests if touched)
+- [ ] `python3 -m pytest plugins/superheroes/eval/tests/ -q` passes (and lib tests if touched)
 - [ ] Added an `## [Unreleased]` CHANGELOG entry if the change is user-facing
 - [ ] **Docs still accurate** — if this changed the cast, commands, or cross-plugin contracts, updated **README** (hero sections) + **CONVENTIONS** (§1–§7). *(ROADMAP is just a pointer — leave it be.)*
 - [ ] Did **not** bump plugin versions (maintainer-owned — see RELEASING.md)

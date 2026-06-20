@@ -10,7 +10,7 @@ VH = importlib.util.module_from_spec(spec); spec.loader.exec_module(VH)
 POINTER = "Resolve actions via `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` — `claude-tools.md` on Claude, `codex-tools.md` on Codex."
 
 def test_lint_flags_banned_prose():
-    bad = "# S\n\nUse the Agent tool with subagent_type: review-crew:code-reviewer.\n" + POINTER
+    bad = "# S\n\nUse the Agent tool with subagent_type: superheroes:code-reviewer.\n" + POINTER
     assert any("subagent_type" in v for v in VH.lint_skill(bad))
 
 @pytest.mark.parametrize("tok", VH.BANNED)

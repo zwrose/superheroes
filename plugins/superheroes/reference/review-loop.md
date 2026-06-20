@@ -21,7 +21,7 @@ python3 "$ROOT_DIR/lib/decisions.py" \
 
 Using the `DOCTOR_JSON` captured in Setup: print the doctor's `message` as a single non-blocking line **only when** `message` is non-null AND `nudge_acked` is false:
 
-> ℹ️ Profile may be stale: `<message>`. Run `/review-crew:review-init` to refresh (this nudge won't repeat once acknowledged).
+> ℹ️ Profile may be stale: `<message>`. Run `/superheroes:review-init` to refresh (this nudge won't repeat once acknowledged).
 
 If the user declines or ignores it, record the dismissal (see "Recording a dismissal" below) using the doctor's `signal_hash`. Suppress the line entirely when `nudge_acked` is true or `message` is null.
 
@@ -49,7 +49,7 @@ If the loaded profile's `status:` is `provisional` AND this run is interactive (
 > This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
 
 - **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (bump `updated:`). Nothing else changes.
-- **Refresh via review-init** — point the user at `/review-crew:review-init` and do not change the profile now.
+- **Refresh via review-init** — point the user at `/superheroes:review-init` and do not change the profile now.
 - **Keep provisional** — record a dismissal using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
 
 Skip this entirely when the run is **headless/non-interactive**, when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged.

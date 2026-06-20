@@ -13,7 +13,7 @@ Red-team the-architect's **`spec` definition-doc** — the plain-language requir
 final approval**. Discovery runs this (step 7) so the automated review catches ambiguity,
 missing coverage, and tech leakage **before** the owner spends their time. The main context
 is an orchestrator: it locates the spec, dispatches the same five specialist agents
-`/review-crew:review-code` uses (architecture, code, security, test, premortem) — **reframed
+`/superheroes:review-code` uses (architecture, code, security, test, premortem) — **reframed
 to requirements quality** — in parallel against the spec, compiles their findings under the
 base rubric, attaches its own point of view, and **revises the spec in place** (auto-applying
 mechanical fixes, asking about judgment calls), then reports a readiness verdict.
@@ -47,9 +47,9 @@ significant unhappy path, or leaking implementation** — not to propose a techn
 
 | Form                              | Behavior                                                                     |
 | --------------------------------- | ---------------------------------------------------------------------------- |
-| `/review-crew:review-spec`        | Review the most recent `docs/superheroes/*/spec.md`.                         |
-| `/review-crew:review-spec <work-item>` | Review `docs/superheroes/<work-item>/spec.md`.                          |
-| `/review-crew:review-spec <path>` | Review the spec doc at `<path>` (relative to repo root or absolute).         |
+| `/superheroes:review-spec`        | Review the most recent `docs/superheroes/*/spec.md`.                         |
+| `/superheroes:review-spec <work-item>` | Review `docs/superheroes/<work-item>/spec.md`.                          |
+| `/superheroes:review-spec <path>` | Review the spec doc at `<path>` (relative to repo root or absolute).         |
 
 If no spec doc is found and no argument was passed, ask the user via `AskUserQuestion` before
 continuing — there is nothing to review otherwise.
@@ -116,7 +116,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before locating the spec or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -133,7 +133,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
 
 **Locate the target spec doc.** Resolve by work-item slug, explicit path, or most-recent:
 
@@ -325,7 +325,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 2. **Dedupe by spec section + topic.** When two findings target the same requirement and same topic (e.g. both flagging "no acceptance criterion"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count.
 
-Determine the verdict per the base rubric's "Verdict labels & mapping". For `/review-crew:review-spec` the labels are **SPEC READY** / **REVISE BEFORE OWNER REVIEW** / **MAJOR GAPS — RETURN TO DISCOVERY**:
+Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-spec` the labels are **SPEC READY** / **REVISE BEFORE OWNER REVIEW** / **MAJOR GAPS — RETURN TO DISCOVERY**:
 
 - 0 Critical, 0 Important → **SPEC READY** (ready for the owner's review)
 - 0 Critical, 1+ Important → **REVISE BEFORE OWNER REVIEW**

@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_hostinfo.py
+# plugins/superheroes/lib/tests/test_hostinfo.py
 import hostinfo
 
 

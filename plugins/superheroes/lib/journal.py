@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/journal.py
+# plugins/superheroes/lib/journal.py
 """events.jsonl (the append-only audit log) + resume-brief.md — the two §7-deferred
 schemas this slice AUTHORS — plus the step 8 CI-bound replay.
 

@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_kill_resume_spike.py
+# plugins/superheroes/lib/tests/test_kill_resume_spike.py
 import subprocess
 import ci_loop
 import control_plane as cp

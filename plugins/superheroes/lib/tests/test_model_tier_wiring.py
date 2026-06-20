@@ -1,6 +1,6 @@
 """FR-7 (half a): every review-crew skill that dispatches specialists is wired to the
 model-tier knob with overrides, and the skills that dispatch specialists are exactly the
-wired set. The workhorse half of FR-7 lives in plugins/workhorse/lib/tests/ (separate
+wired set. The workhorse half of FR-7 lives in plugins/superheroes/lib/tests/ (separate
 process)."""
 import os
 

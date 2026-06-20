@@ -27,10 +27,10 @@ def test_links_allowlist_suppresses_sentinel(tmp_path):
 def test_gather_allowlist_suppresses_sentinel(tmp_path):
     root = str(tmp_path / "plugins"); os.makedirs(root)
     body = (
-        "---\nname: workhorse\ndescription: Use when build tasks should run\n---\n"
+        "---\nname: producer\ndescription: Use when build tasks should run\n---\n"
         "LIB=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/loop_state.py\"\n"
     )
-    d = os.path.join(root, "workhorse", "skills", "workhorse")
+    d = os.path.join(root, "myplugin", "skills", "producer")
     os.makedirs(d)
     with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
         fh.write(body)
@@ -42,7 +42,7 @@ def test_gather_allowlist_suppresses_sentinel(tmp_path):
 
     # With allowlist: violation suppressed
     errors2, _ = vs.gather_violations(root, reg, set(), set(),
-                                      allowed_unresolved={"workhorse/workhorse:lib/loop_state.py"})
+                                      allowed_unresolved={"myplugin/producer:lib/loop_state.py"})
     assert not any("loop_state.py" in e for e in errors2)
 
 def test_conventions_section_numbers_and_refs():

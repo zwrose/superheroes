@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/ship_gate.py
+# plugins/superheroes/lib/ship_gate.py
 """The step 3 ship-readiness gate: deterministic, fail-closed proof that step 1 Build (SDD) and
 step 2 Review (review-code) ran over the shipped code before the producer opens a PR.
 

@@ -24,12 +24,12 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 
 | Form                                       | Behavior                                                                                                                                                              |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/review-crew:review-code`                 | **Auto-fix loop (default).** Review → triage → fix → re-review until no Critical/Important findings remain, or a halt condition fires. Commits locally; never pushes. |
-| `/review-crew:review-code --review-only`   | One review pass, interactive tiered presentation, no commits.                                                                                                         |
-| `/review-crew:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
-| `/review-crew:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
-| `/review-crew:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
-| `/review-crew:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
+| `/superheroes:review-code`                 | **Auto-fix loop (default).** Review → triage → fix → re-review until no Critical/Important findings remain, or a halt condition fires. Commits locally; never pushes. |
+| `/superheroes:review-code --review-only`   | One review pass, interactive tiered presentation, no commits.                                                                                                         |
+| `/superheroes:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
+| `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
+| `/superheroes:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
+| `/superheroes:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
 
 The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
 
@@ -139,7 +139,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
+(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -158,7 +158,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
 
 **Read the verify story from the resolved profile** (the `## Verify` section of `$PROFILE`). This sets `VERIFY_CMD` for the orchestrator's verify gate and the fixer (see `## The verify command` below):
 
@@ -306,7 +306,7 @@ Read the five `$SESSION_DIR/round-<round>/findings-*.json` files. Apply, in orde
 5. **Author-justification filter (PR mode).** Cross-reference `prior-comments.json`. If a prior comment thread on the same `(file, line)` (or with the same finding topic on an outdated anchor) shows a substantive author justification, drop the new finding unless its body identifies a technical error in the justification.
 6. **Nit cap.** After dedupe, if more than 5 Nits remain, keep the first 5 and replace the rest with a single summary entry like `"+ 12 more Nits — see $SESSION_DIR/round-<round>/findings-*.json for details"` (the base rubric's severity caps).
 
-Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-filter findings). For `/review-crew:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
+Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-filter findings). For `/superheroes:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
 
 - 0 Critical, 0 Important → **READY FOR PR**
 - 0 Critical, 1+ Important → **FIX BEFORE PR**

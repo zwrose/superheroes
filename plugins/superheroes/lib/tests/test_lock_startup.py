@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_lock_startup.py
+# plugins/superheroes/lib/tests/test_lock_startup.py
 import json
 import os
 import control_plane

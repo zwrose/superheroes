@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_current_marker.py
+# plugins/superheroes/lib/tests/test_current_marker.py
 import subprocess
 import control_plane as cp
 

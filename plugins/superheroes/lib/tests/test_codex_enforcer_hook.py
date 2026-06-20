@@ -1,4 +1,4 @@
-# plugins/workhorse/lib/tests/test_codex_enforcer_hook.py
+# plugins/superheroes/lib/tests/test_codex_enforcer_hook.py
 """hooks-codex.json wiring: PreToolUse, ${PLUGIN_ROOT}-rooted, fail-closed deny.
 The enforcer's deny BEHAVIOR is host-agnostic (the same enforcer.py runs on both
 hosts) and is covered by test_enforcer.py. This test scopes to the Codex WIRING +

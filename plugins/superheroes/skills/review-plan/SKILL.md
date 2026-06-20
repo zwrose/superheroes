@@ -12,7 +12,7 @@ Red-team the-architect's **`plan` definition-doc** — the technical *how* for a
 (`docs/superheroes/<work-item>/plan.md`) — **before** it advances to Tasks. The main
 context is an orchestrator: it locates the plan, reads its parent `spec` for the
 requirements the plan must satisfy, dispatches the same five specialist agents
-`/review-crew:review-code` uses (architecture, code, security, test, premortem) in parallel
+`/superheroes:review-code` uses (architecture, code, security, test, premortem) in parallel
 against the plan doc instead of a diff, compiles their findings under the base rubric,
 attaches its own point of view to each finding, and **revises the plan in place** —
 auto-applying the mechanical fixes it recommends and stopping to ask only about findings it
@@ -44,9 +44,9 @@ details the plan reasonably defers to Tasks.
 
 | Form                              | Behavior                                                                                              |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `/review-crew:review-plan`        | Review the most recent `docs/superheroes/*/plan.md`.                                                  |
-| `/review-crew:review-plan <work-item>` | Review `docs/superheroes/<work-item>/plan.md`.                                                   |
-| `/review-crew:review-plan <path>` | Review the plan doc at `<path>` (relative to repo root or absolute).                                 |
+| `/superheroes:review-plan`        | Review the most recent `docs/superheroes/*/plan.md`.                                                  |
+| `/superheroes:review-plan <work-item>` | Review `docs/superheroes/<work-item>/plan.md`.                                                   |
+| `/superheroes:review-plan <path>` | Review the plan doc at `<path>` (relative to repo root or absolute).                                 |
 
 If no plan doc is found and no argument was passed, ask the user via `AskUserQuestion` before
 continuing — there is nothing to review otherwise.
@@ -114,7 +114,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/review-crew:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's terminal summary). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's terminal summary). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before locating the plan or dispatching anything).** The review engine reads its per-project calibration (threat model, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -131,7 +131,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/review-crew/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
 
 **Locate the target plan doc.** Resolve by work-item slug, explicit path, or most-recent:
 
@@ -335,7 +335,7 @@ Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
 2. **Dedupe by plan section + topic.** When two findings target the same plan section heading and same topic (e.g. both flagging "no accepted downside on the data-model decision"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Architecture + Failure-Mode"`).
 3. **Nit cap.** If more than 5 Nits remain after dedupe, keep the first 5 and summarize the rest as a count (e.g. `"+ 8 more Nits — see $SESSION_DIR/findings-*.json"`).
 
-Determine the verdict per the base rubric's "Verdict labels & mapping". For `/review-crew:review-plan` the labels are **PLAN READY** / **REVISE BEFORE TASKS** / **MAJOR GAPS — RECONSIDER DESIGN**:
+Determine the verdict per the base rubric's "Verdict labels & mapping". For `/superheroes:review-plan` the labels are **PLAN READY** / **REVISE BEFORE TASKS** / **MAJOR GAPS — RECONSIDER DESIGN**:
 
 - 0 Critical, 0 Important → **PLAN READY**
 - 0 Critical, 1+ Important → **REVISE BEFORE TASKS**

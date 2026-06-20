@@ -47,6 +47,6 @@ def test_core_error_fails_open_for_reviewer_deep(capsys, monkeypatch):
 def test_embedded_fallback_matches_the_core():
     # _FALLBACK re-encodes the core's DEFAULT_TIERS for the degrade path; guard
     # against silent drift so the fallback never serves a stale tier table. The core
-    # is now the in-tree sibling (repointed from plugins/the-architect/lib/model_tier.py).
+    # is now the in-tree sibling (repointed from plugins/superheroes/lib/model_tier.py).
     core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core")
     assert MTR._FALLBACK == core.DEFAULT_TIERS
