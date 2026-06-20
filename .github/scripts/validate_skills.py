@@ -52,3 +52,17 @@ def check_conventions_refs(skill_key, text, conventions_sections):
         if sec not in conventions_sections:
             out.append(f"conventions-ref: {skill_key}: §{sec} resolves to no CONVENTIONS heading")
     return out
+
+
+def check_depth(skill_key, text, plugin_dir):
+    out = []
+    for m in _REF.finditer(text):
+        target = os.path.join(plugin_dir, m.group(1))
+        if not os.path.isfile(target):
+            continue  # resolution is check_links' job
+        with open(target, encoding="utf-8") as fh:
+            if _REF.search(fh.read()):
+                out.append(
+                    f"reference-depth: {skill_key}: {m.group(1)} itself references another "
+                    f"file (chain deeper than one hop)")
+    return out

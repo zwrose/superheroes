@@ -23,6 +23,25 @@ def test_conventions_section_numbers_and_refs():
     # a bare internal "§12" (not a CONVENTIONS citation) must NOT be flagged
     assert vs.check_conventions_refs("p/s", "see internal section §12 above", secs) == []
 
+def test_depth_ok_when_reference_has_no_further_refs(tmp_path):
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "a.md").write_text("leaf content, no further refs")
+    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`."
+    assert vs.check_depth("p/s", text, str(tmp_path)) == []
+
+def test_depth_flags_a_chain(tmp_path):
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "a.md").write_text(
+        "more at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/b.md`")
+    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`."
+    out = vs.check_depth("p/s", text, str(tmp_path))
+    assert out and "reference-depth" in out[0]
+
+def test_depth_ignores_unresolved_target_that_is_check_links_job(tmp_path):
+    # a reference to a missing file is NOT a depth violation (resolution is check_links')
+    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/missing.md`."
+    assert vs.check_depth("p/s", text, str(tmp_path)) == []
+
 def test_line_count_passes_at_or_under_ceiling():
     # ceiling = max allowed (inclusive): 499 for "under 500" skills
     assert vs.check_line_count("review-crew/review-code", 499, {"review-crew/review-code": 499}) == []
