@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "the tasks doc is approved, build it and ship to a ready-for-review PR",
+    "run the producer on this work item and take it to a draft PR",
+    "workhorse this — build the approved tasks and open a PR",
+    "the gates.review is passed, build this work item and get CI green"
+  ],
+  "should_not_fire": [
+    "decompose the approved plan into executable tasks",
+    "review the tasks definition-doc before the build runs"
+  ]
+}

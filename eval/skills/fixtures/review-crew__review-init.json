@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "this project has no review-profile yet, set one up",
+    "generate a review calibration profile for this repo before the first review",
+    "refresh the project's review calibration after the app changed significantly",
+    "regenerate the review profile for this codebase"
+  ],
+  "should_not_fire": [
+    "review my code changes on this local branch before merging",
+    "set up the test-pilot profile for this project"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "review the plan definition-doc before it advances to tasks",
+    "red-team the architect's plan doc with the five specialist agents",
+    "check this plan and record gates.review: passed if it's clean",
+    "review the technical how document for this work item"
+  ],
+  "should_not_fire": [
+    "review the spec definition-doc before the owner approves it",
+    "review the tasks doc before the build runs"
+  ]
+}

@@ -105,6 +105,22 @@ def _read_bytes(path):
     with open(path, "rb") as fh:
         return fh.read()
 
+def lint_reference_files(plugins_root, plugin_names):
+    """Lint skill reference files for host coupling. The host-map pointer line is a
+    SKILL.md-only requirement, so it is excluded for reference files."""
+    out = []
+    for name in plugin_names:
+        for root, _, files in os.walk(os.path.join(plugins_root, name)):
+            if "reference" not in root.split(os.sep):
+                continue
+            for f in files:
+                if f.endswith(".md"):
+                    fp = os.path.join(root, f)
+                    for v in lint_skill(_read(fp)):
+                        if "host-map pointer" not in v:
+                            out.append(f"{fp}: {v}")
+    return out
+
 def _validate_maps_and_skills(plugins, errors):
     for host in ("claude", "codex"):
         canon = os.path.join(REPO, "hosts", f"{host}-tools.md")
@@ -124,6 +140,7 @@ def _validate_maps_and_skills(plugins, errors):
                     fp = os.path.join(root, f)
                     for v in lint_skill(_read(fp)):
                         errors.append(f"{fp}: {v}")
+    errors.extend(lint_reference_files(PLUGINS, list(plugins)))
 
 def main(argv=None):
     argparse.ArgumentParser(description="dual-host validator").parse_args(argv or [])

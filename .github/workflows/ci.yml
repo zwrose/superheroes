@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # include `edited` so the pr-title check re-validates when the title is fixed
+    # (a re-run replays the stale event payload; only a new event refreshes the title)
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -32,6 +35,9 @@ jobs:
 
       - name: Validate dual-host manifests + tool maps
         run: python3 .github/scripts/validate_hosts.py
+
+      - name: Validate skill token-shape
+        run: python3 .github/scripts/validate_skills.py
 
       - name: Install pytest
         run: python3 -m pip install --upgrade pytest jsonschema pyyaml

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "superheroes/skills-registry",
+  "title": "eval/skills/registry.json — body ceilings + required description phrases",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bodyCeilings", "requiredPhrases"],
+  "properties": {
+    "bodyCeilings": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 1 }
+    },
+    "requiredPhrases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

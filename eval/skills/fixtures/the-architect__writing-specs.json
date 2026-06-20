@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "the owner has approved the requirements, now author the spec definition-doc on disk",
+    "mint the work-item slug and write spec.md with EARS requirements and acceptance criteria",
+    "write the on-disk spec doc once the owner has approved the requirement set",
+    "emit the CONVENTIONS frontmatter and fill the spec body template"
+  ],
+  "should_not_fire": [
+    "elicit requirements from the owner and produce a spec interactively",
+    "turn the approved spec into the technical plan definition-doc"
+  ]
+}

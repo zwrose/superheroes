@@ -1,6 +1,6 @@
 ---
 name: discovery
-description: Use at the START of any new piece of work in a superheroes project — when the owner has a fuzzy idea, feature request, bug, or "let's build / add / change / fix X" and it needs to become an owner-approved requirements spec. This is superheroes' Discovery phase: it OWNS the requirements front-half — the *what*, in plain language, no technical implementation — and supersedes generic brainstorming here. Elicits requirements (incl. significant unhappy paths) with the owner, optionally researches prior art, captures UI/UX via Claude Design, produces the `spec` definition-doc, runs it through review-spec, and ends with the owner's approval. Not for technical approach (that is `plan`) or steps (that is `tasks`).
+description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half — the *what*, in plain language, no technical implementation. Elicits requirements (incl. significant unhappy paths) with the owner, produces the `spec` definition-doc, and ends with the owner's approval. Not for technical approach (that is `plan`) or steps (that is `tasks`).
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.

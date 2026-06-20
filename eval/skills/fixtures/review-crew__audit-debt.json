@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "sweep the whole repo for accumulated technical debt",
+    "run a monthly audit of our codebase for security and architectural issues",
+    "periodically review the entire repository for debt, not just this change",
+    "do a full repo audit for technical, security, and architectural problems"
+  ],
+  "should_not_fire": [
+    "review my code changes before I merge this pull request",
+    "look over the diff on my local branch for bugs"
+  ]
+}

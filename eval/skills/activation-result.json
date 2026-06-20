@@ -1,0 +1,1769 @@
+{
+  "recordedAt": "2026-06-19",
+  "observations": [
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "run a monthly audit of our codebase for security and architectural issues",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "run a monthly audit of our codebase for security and architectural issues",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "run a monthly audit of our codebase for security and architectural issues",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "periodically review the entire repository for debt, not just this change",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "periodically review the entire repository for debt, not just this change",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "periodically review the entire repository for debt, not just this change",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "do a full repo audit for technical, security, and architectural problems",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "do a full repo audit for technical, security, and architectural problems",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "do a full repo audit for technical, security, and architectural problems",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "look over the diff on my local branch for bugs",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "look over the diff on my local branch for bugs",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/audit-debt",
+      "phrase": "look over the diff on my local branch for bugs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "review my code changes before I merge",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "review my code changes before I merge",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "review my code changes before I merge",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "look over this open pull request for bugs",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "look over this open pull request for bugs",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "look over this open pull request for bugs",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "review the diff on my local branch and auto-fix what you find",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "review the diff on my local branch and auto-fix what you find",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "review the diff on my local branch and auto-fix what you find",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "check this PR for correctness issues and post findings to GitHub",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "sweep the whole repo for accumulated technical debt",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "set up a review profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "set up a review profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-code",
+      "phrase": "set up a review profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "this project has no review-profile yet, set one up",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "this project has no review-profile yet, set one up",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "this project has no review-profile yet, set one up",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "generate a review calibration profile for this repo before the first review",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "generate a review calibration profile for this repo before the first review",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "generate a review calibration profile for this repo before the first review",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "refresh the project's review calibration after the app changed significantly",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "refresh the project's review calibration after the app changed significantly",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "refresh the project's review calibration after the app changed significantly",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "regenerate the review profile for this codebase",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "regenerate the review profile for this codebase",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "regenerate the review profile for this codebase",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "review my code changes on this local branch before merging",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "review my code changes on this local branch before merging",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "review my code changes on this local branch before merging",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-init",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the plan definition-doc before it advances to tasks",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the plan definition-doc before it advances to tasks",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the plan definition-doc before it advances to tasks",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "red-team the architect's plan doc with the five specialist agents",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "red-team the architect's plan doc with the five specialist agents",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "red-team the architect's plan doc with the five specialist agents",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "check this plan and record gates.review: passed if it's clean",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "check this plan and record gates.review: passed if it's clean",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "check this plan and record gates.review: passed if it's clean",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the technical how document for this work item",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the technical how document for this work item",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the technical how document for this work item",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the spec definition-doc before the owner approves it",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the spec definition-doc before the owner approves it",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the spec definition-doc before the owner approves it",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-plan",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-spec",
+      "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the tasks definition-doc before the build runs it",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the tasks definition-doc before the build runs it",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the tasks definition-doc before the build runs it",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "red-team the tasks doc and record gates.review: passed if it's clean",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "red-team the tasks doc and record gates.review: passed if it's clean",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "red-team the tasks doc and record gates.review: passed if it's clean",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "check the bite-sized TDD steps before the producer executes them",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "check the bite-sized TDD steps before the producer executes them",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "check the bite-sized TDD steps before the producer executes them",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the test-first executable tasks for this work item",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the test-first executable tasks for this work item",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the test-first executable tasks for this work item",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the plan definition-doc before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the plan definition-doc before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the plan definition-doc before it advances to tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the spec before the owner approves it",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the spec before the owner approves it",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "review-crew/review-tasks",
+      "phrase": "review the spec before the owner approves it",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "run the test plan and pilot this PR in the browser",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "run the test plan and pilot this PR in the browser",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "run the test plan and pilot this PR in the browser",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "verify the branch in the browser before human spot-check",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "verify the branch in the browser before human spot-check",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "verify the branch in the browser before human spot-check",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "execute the test-pilot plan and fix any bugs found",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "drive the app via browser MCP and post a results comment",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "drive the app via browser MCP and post a results comment",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "drive the app via browser MCP and post a results comment",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "write a manual test plan with seeded data for this PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "write a manual test plan with seeded data for this PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "write a manual test plan with seeded data for this PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-execute",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "this project has no test-pilot profile yet, set one up",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "this project has no test-pilot profile yet, set one up",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "this project has no test-pilot profile yet, set one up",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "initialize the test-pilot profile and browser tooling for this repo",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "initialize the test-pilot profile and browser tooling for this repo",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "initialize the test-pilot profile and browser tooling for this repo",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "refresh the project's testing calibration after the app changed",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "refresh the project's testing calibration after the app changed",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "refresh the project's testing calibration after the app changed",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "set up the seeding blocks and test-pilot configuration",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "set up the seeding blocks and test-pilot configuration",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "set up the seeding blocks and test-pilot configuration",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "write a manual test plan with seeded data for this pull request",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "write a manual test plan with seeded data for this pull request",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "write a manual test plan with seeded data for this pull request",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "run the test plan and verify the branch in the browser",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "run the test plan and verify the branch in the browser",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-init",
+      "phrase": "run the test plan and verify the branch in the browser",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "write a test plan with seeded data for this PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "write a test plan with seeded data for this PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "write a test plan with seeded data for this PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "seed test data for this pull request and post a checkbox plan",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "seed test data for this pull request and post a checkbox plan",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "seed test data for this pull request and post a checkbox plan",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "set up manual testing with test-pilot for this branch",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "set up manual testing with test-pilot for this branch",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "set up manual testing with test-pilot for this branch",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "create a manual test plan before I review this change",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "create a manual test plan before I review this change",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "create a manual test plan before I review this change",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "run the test plan and pilot the PR in the browser",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "run the test plan and pilot the PR in the browser",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "run the test plan and pilot the PR in the browser",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "test-pilot/test-pilot-plan",
+      "phrase": "set up the test-pilot profile for this project",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "I have a new piece of work and need an owner-approved requirements spec",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "I have a new piece of work and need an owner-approved requirements spec",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "I have a new piece of work and need an owner-approved requirements spec",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "let's start discovery on this feature idea before any technical planning",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "let's start discovery on this feature idea before any technical planning",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "let's start discovery on this feature idea before any technical planning",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "the owner has a fuzzy idea for a new feature, turn it into a spec",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "the owner has a fuzzy idea for a new feature, turn it into a spec",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "the owner has a fuzzy idea for a new feature, turn it into a spec",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "elicit requirements from the owner and produce a spec definition-doc",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "elicit requirements from the owner and produce a spec definition-doc",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "elicit requirements from the owner and produce a spec definition-doc",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "turn the approved spec into a technical plan",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "turn the approved spec into a technical plan",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "turn the approved spec into a technical plan",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/discovery",
+      "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "the spec is approved, now turn it into the technical plan",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "the spec is approved, now turn it into the technical plan",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "the spec is approved, now turn it into the technical plan",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "design the architecture and data flow for this approved work item",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "design the architecture and data flow for this approved work item",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "design the architecture and data flow for this approved work item",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "produce the plan definition-doc with overall approach and key decisions",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "produce the plan definition-doc with overall approach and key decisions",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "produce the plan definition-doc with overall approach and key decisions",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "after a spec is approved, generate the technical how document",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "after a spec is approved, generate the technical how document",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "after a spec is approved, generate the technical how document",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "elicit requirements and produce a spec from the owner's idea",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "elicit requirements and produce a spec from the owner's idea",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "elicit requirements and produce a spec from the owner's idea",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "decompose the approved plan into bite-sized executable tasks",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "decompose the approved plan into bite-sized executable tasks",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/plan",
+      "phrase": "decompose the approved plan into bite-sized executable tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "the plan is approved, turn it into bite-sized test-first executable tasks",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "the plan is approved, turn it into bite-sized test-first executable tasks",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "the plan is approved, turn it into bite-sized test-first executable tasks",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "decompose the approved plan into checkbox TDD steps for the build",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "decompose the approved plan into checkbox TDD steps for the build",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "decompose the approved plan into checkbox TDD steps for the build",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "produce the tasks definition-doc after the plan is approved",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "produce the tasks definition-doc after the plan is approved",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "produce the tasks definition-doc after the plan is approved",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "break down the plan into tasks that the producer's build will execute",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "break down the plan into tasks that the producer's build will execute",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "break down the plan into tasks that the producer's build will execute",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "turn the approved spec into the technical plan",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "turn the approved spec into the technical plan",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "turn the approved spec into the technical plan",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "elicit requirements and produce a spec definition-doc from the owner's idea",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "elicit requirements and produce a spec definition-doc from the owner's idea",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/tasks",
+      "phrase": "elicit requirements and produce a spec definition-doc from the owner's idea",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "the owner has approved the requirements, now author the spec definition-doc on disk",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "the owner has approved the requirements, now author the spec definition-doc on disk",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "the owner has approved the requirements, now author the spec definition-doc on disk",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "mint the work-item slug and write spec.md with EARS requirements and acceptance criteria",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "mint the work-item slug and write spec.md with EARS requirements and acceptance criteria",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "mint the work-item slug and write spec.md with EARS requirements and acceptance criteria",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "write the on-disk spec doc once the owner has approved the requirement set",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "write the on-disk spec doc once the owner has approved the requirement set",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "write the on-disk spec doc once the owner has approved the requirement set",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "emit the CONVENTIONS frontmatter and fill the spec body template",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "emit the CONVENTIONS frontmatter and fill the spec body template",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "emit the CONVENTIONS frontmatter and fill the spec body template",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "elicit requirements from the owner and produce a spec interactively",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "elicit requirements from the owner and produce a spec interactively",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "elicit requirements from the owner and produce a spec interactively",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "turn the approved spec into the technical plan definition-doc",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "turn the approved spec into the technical plan definition-doc",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "the-architect/writing-specs",
+      "phrase": "turn the approved spec into the technical plan definition-doc",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "run the producer on this work item and take it to a draft PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "run the producer on this work item and take it to a draft PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "run the producer on this work item and take it to a draft PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "workhorse this \u2014 build the approved tasks and open a PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "workhorse this \u2014 build the approved tasks and open a PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "workhorse this \u2014 build the approved tasks and open a PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "the gates.review is passed, build this work item and get CI green",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "the gates.review is passed, build this work item and get CI green",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "the gates.review is passed, build this work item and get CI green",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "decompose the approved plan into executable tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "review the tasks definition-doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "review the tasks definition-doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "workhorse/workhorse",
+      "phrase": "review the tasks definition-doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    }
+  ]
+}

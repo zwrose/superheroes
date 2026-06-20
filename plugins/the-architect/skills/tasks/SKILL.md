@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: Use after a `plan` is approved, to turn it into the bite-sized, test-first executable `tasks` for a work-item — the checkbox TDD steps the build follows. This is superheroes' Tasks phase: it WRAPS superpowers `writing-plans` (the engine that decomposes the plan into steps) and owns the superheroes definition-doc around it. In a superheroes project, route plan-decomposition HERE rather than invoking `writing-plans` standalone, so the output is captured into `docs/superheroes/<work-item>/tasks.md` and execution stays with the producer's Build. Runs LARGELY AUTONOMOUSLY (like Plan) and produces the `tasks` definition-doc, then runs review-tasks. Not for requirements (that is `discovery`) or technical approach (that is `plan`); it does NOT execute the steps (that is Build).
+description: Use after a `plan` is approved, to turn it into the bite-sized, test-first executable `tasks` for a work-item — the checkbox TDD steps the build follows. It WRAPS superpowers `writing-plans` and owns the superheroes definition-doc around it; route plan-decomposition here in a superheroes project (not `writing-plans` standalone). Runs LARGELY AUTONOMOUSLY and produces the `tasks` definition-doc, then runs review-tasks. Not for requirements (that is `discovery`) or technical approach (that is `plan`); it does NOT execute the steps (that is Build).
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
