@@ -13,7 +13,48 @@ This gate makes a *rationalized* skip leave no evidence (-> GATE). It is NOT un-
 evident forge. See the work-item plan.
 """
 
+import json
+import os
+
+from control_plane import atomic_write
+
 _TERMINAL = "exit_clean"
+
+
+class ProvenanceError(Exception):
+    """provenance.json exists but is unparseable — callers fail closed (never clobber)."""
+
+
+def read_provenance(path):
+    """Absent -> {}; a valid JSON object -> the dict; present-but-unparseable -> raise
+    ProvenanceError (so a writer aborts rather than clobbering a sibling key, and the
+    orchestrator GATEs rather than reading a transient garble as 'build absent')."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            obj = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise ProvenanceError(f"{path}: {e}") from e
+    if not isinstance(obj, dict):
+        raise ProvenanceError(f"{path}: not a JSON object")
+    return obj
+
+
+def write_build(path, *, engine, head):
+    """Record that the build ran via `engine` at `head` (read-modify-write; never clobbers)."""
+    prov = read_provenance(path)
+    prov["build"] = {"engine": engine, "head": head}
+    atomic_write(path, json.dumps(prov))
+    return prov
+
+
+def set_review_covers(path, head):
+    """Record the HEAD review-code's clean exit covered (read-modify-write; never clobbers)."""
+    prov = read_provenance(path)
+    prov.setdefault("review", {})["covers"] = head
+    atomic_write(path, json.dumps(prov))
+    return prov
 
 
 def decide(provenance, review_result, head):
