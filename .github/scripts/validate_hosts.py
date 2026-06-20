@@ -111,7 +111,7 @@ def lint_reference_files(plugins_root, plugin_names):
     out = []
     for name in plugin_names:
         for root, _, files in os.walk(os.path.join(plugins_root, name)):
-            if os.sep + "reference" not in root + os.sep:
+            if "reference" not in root.split(os.sep):
                 continue
             for f in files:
                 if f.endswith(".md"):

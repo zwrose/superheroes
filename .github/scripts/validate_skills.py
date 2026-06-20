@@ -62,9 +62,16 @@ def check_toc(reference_path):
         lines = fh.read().split("\n")
     if len(lines) <= 100:
         return []
+    in_fence = False
     for line in lines:
-        if line.strip().startswith("#"):
-            if _TOC.match(line.strip()):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if stripped.startswith("#"):
+            if _TOC.match(stripped):
                 return []
             break
     rel = os.path.relpath(reference_path, REPO)
@@ -80,14 +87,19 @@ def check_phrases(skill_key, description, required_phrases):
 
 def check_depth(skill_key, text, plugin_dir):
     out = []
+    seen = set()
     for m in _REF.finditer(text):
-        target = os.path.join(plugin_dir, m.group(1))
+        rel = m.group(1)
+        if rel in seen:
+            continue
+        seen.add(rel)
+        target = os.path.join(plugin_dir, rel)
         if not os.path.isfile(target):
             continue  # resolution is check_links' job
         with open(target, encoding="utf-8") as fh:
             if _REF.search(fh.read()):
                 out.append(
-                    f"reference-depth: {skill_key}: {m.group(1)} itself references another "
+                    f"reference-depth: {skill_key}: {rel} itself references another "
                     f"file (chain deeper than one hop)")
     return out
 

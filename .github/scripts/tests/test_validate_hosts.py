@@ -146,3 +146,21 @@ def test_lint_reference_files_does_not_require_host_pointer(tmp_path):
     ref_dir.mkdir(parents=True)
     (ref_dir / "leaf.md").write_text("plain neutral relocated prose")
     assert VH.lint_reference_files(str(tmp_path / "plugins"), ["p"]) == []
+
+def test_lint_reference_files_exact_component_match(tmp_path):
+    """'references/' (with trailing s) must NOT be linted; 'reference/' MUST be."""
+    # File under a directory named 'references' (not 'reference') — should be skipped
+    refs_dir = tmp_path / "plugins" / "p" / "skills" / "s" / "references"
+    refs_dir.mkdir(parents=True)
+    (refs_dir / "sibling.md").write_text("dispatch via subagent_type, the host-coupled token")
+    errs_refs = VH.lint_reference_files(str(tmp_path / "plugins"), ["p"])
+    assert not any("sibling.md" in e for e in errs_refs), \
+        "Files under 'references/' should NOT be linted by lint_reference_files"
+
+    # File under a directory named 'reference' (exact) — should be linted
+    ref_dir = tmp_path / "plugins" / "p" / "skills" / "s" / "reference"
+    ref_dir.mkdir(parents=True)
+    (ref_dir / "leaf.md").write_text("dispatch via subagent_type, the host-coupled token")
+    errs_ref = VH.lint_reference_files(str(tmp_path / "plugins"), ["p"])
+    assert any("leaf.md" in e for e in errs_ref), \
+        "Files under 'reference/' SHOULD be linted by lint_reference_files"

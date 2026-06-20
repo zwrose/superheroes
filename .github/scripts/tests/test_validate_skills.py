@@ -76,6 +76,20 @@ def test_depth_ignores_unresolved_target_that_is_check_links_job(tmp_path):
     text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/missing.md`."
     assert vs.check_depth("p/s", text, str(tmp_path)) == []
 
+def test_depth_deduplicates_same_reference(tmp_path):
+    """Citing the same chained reference file twice yields exactly ONE violation."""
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "a.md").write_text(
+        "more at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/b.md`")
+    # Reference a.md twice in the body
+    text = (
+        "First `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`. "
+        "Second `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/a.md`."
+    )
+    out = vs.check_depth("p/s", text, str(tmp_path))
+    depth_violations = [v for v in out if "reference-depth" in v]
+    assert len(depth_violations) == 1, f"Expected 1 violation, got {len(depth_violations)}: {depth_violations}"
+
 def test_toc_not_required_under_100_lines(tmp_path):
     f = tmp_path / "short.md"; f.write_text("# X\n\nbody\n")
     assert vs.check_toc(str(f)) == []
@@ -88,6 +102,15 @@ def test_toc_required_over_100_lines(tmp_path):
 def test_toc_satisfied_by_contents_heading(tmp_path):
     f = tmp_path / "long.md"
     f.write_text("<!-- review-loop-version: 1 -->\n## Contents\n\n- a\n" + "line\n" * 120)
+    assert vs.check_toc(str(f)) == []
+
+def test_toc_fenced_code_comment_not_mistaken_for_heading(tmp_path):
+    """A ```bash block with a # comment before ## Contents must NOT be flagged."""
+    f = tmp_path / "long.md"
+    # Open with a fenced bash block that contains a shell comment, then the real Contents heading
+    body = "```bash\n# this is a shell comment, not a heading\n```\n\n## Contents\n\n- item\n"
+    body += "line\n" * 120
+    f.write_text(body)
     assert vs.check_toc(str(f)) == []
 
 def test_phrases_present():
