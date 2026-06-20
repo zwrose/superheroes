@@ -29,6 +29,25 @@ def test_rename_same_cardinality_without_bump_fails():
     # add+remove in one change (same count, different set) must still be caught (FR-8)
     assert CM.compare_membership(_cat(["a", "b"], "0.4.0"), _cat(["a", "c"], "0.4.0")) != []
 
+def _cat_toplevel(names, version):
+    """Catalog with version at the TOP LEVEL only (no metadata.version)."""
+    return {"version": version, "plugins": [{"name": n} for n in names]}
+
+
+def test_toplevel_version_same_fails():
+    # set-change with same top-level version must be caught (_version reads top-level first)
+    assert CM.compare_membership(
+        _cat_toplevel(["a"], "0.4.0"), _cat_toplevel(["a", "b"], "0.4.0")
+    ) != []
+
+
+def test_toplevel_version_bumped_passes():
+    # set-change with different top-level version must pass
+    assert CM.compare_membership(
+        _cat_toplevel(["a"], "0.4.0"), _cat_toplevel(["a", "b"], "0.5.0")
+    ) == []
+
+
 def test_fails_closed_on_unresolvable_base():
     # A base ref that cannot exist must NOT pass silently (plan R4). Run from repo root
     # (as CI does) so the head catalog reads successfully and only the base fails.

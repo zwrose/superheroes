@@ -30,6 +30,9 @@ def test_rejects_empty():
 def test_only_first_line_considered():
     assert CC.validate("feat: ok subject\n\nbody can be anything at all") is None
 
+def test_rejects_missing_space_after_colon():
+    assert CC.validate("feat:nospace") is not None
+
 def test_cli_exit_codes():
     ok = subprocess.run([sys.executable, _M, "feat: ok"], capture_output=True)
     assert ok.returncode == 0
