@@ -1,7 +1,9 @@
 """Band-wide model-tier policy: role -> dispatch model name (the cost/perf knob).
 
-Pure + deterministic. Workhorse is the first consumer (its Verify dispatches);
-review-code wires it next. Returns the short names the Agent/Skill dispatch layer
+Pure + deterministic. review-code is the first consumer; the review trio
+(review-spec/review-plan/review-tasks) and audit-debt wire it next. Workhorse's
+Build leg deliberately defers to SDD's own model heuristic and is NOT a consumer.
+Returns the short names the Agent/Skill dispatch layer
 accepts ("sonnet"/"opus"/"haiku"), or None to inherit the session model.
 
 Fail-OPEN to the capable default — a wrong/absent tier is a cost concern, never a

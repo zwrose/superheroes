@@ -204,6 +204,22 @@ Print this dispatch summary as a plain status message, then dispatch the special
   - `premortem-reviewer` → `findings-premortem.json` _(inverse reasoning: failure modes + unstated assumptions)_
 - **Session directory:** `$SESSION_DIR`
 
+**Resolve the model tiers once (band-wide knob).** Resolve each specialist's dispatch model
+via the shared knob, honoring any `## Model tiers` override block in the project profile
+(`$PROFILE`):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+MT="$ROOT_DIR/lib/model_tier_resolve.py"
+OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
+REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
+DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
+```
+
+When dispatching the specialists, pass `model: $DEEP_MODEL` to `security-reviewer` and
+`architecture-reviewer`, and `model: $REVIEWER_MODEL` to the other three. An empty value means
+"inherit the session model" — omit the `model` arg in that case.
+
 ### 3. Dispatch Specialists in Parallel
 
 Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools.md`). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):

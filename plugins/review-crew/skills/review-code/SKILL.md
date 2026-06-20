@@ -117,9 +117,10 @@ subagents at `mechanical`. Resolve each via the shared knob to get the band defa
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 MT="$ROOT_DIR/lib/model_tier_resolve.py"   # resolved like $RUBRIC
-REVIEWER_MODEL=$(python3 "$MT" --role reviewer | jq -r '.model // empty')
-DEEP_MODEL=$(python3 "$MT" --role reviewer-deep | jq -r '.model // empty')
-MECH_MODEL=$(python3 "$MT" --role mechanical | jq -r '.model // empty')
+OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
+REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
+DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
+MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
 ```
 
 When dispatching specialists, pass `model: $DEEP_MODEL` for
