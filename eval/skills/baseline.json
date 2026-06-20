@@ -1,0 +1,13 @@
+{
+  "recordedAt": "2026-06-19",
+  "knownRedCeilings": [
+    "review-crew/review-code",
+    "review-crew/review-spec",
+    "review-crew/review-plan",
+    "review-crew/review-tasks",
+    "review-crew/audit-debt"
+  ],
+  "allowedUnresolvedRefs": ["workhorse/workhorse:lib/loop_state.py"],
+  "combinedDescriptionChars": null,
+  "carveOuts": {}
+}

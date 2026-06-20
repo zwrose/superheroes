@@ -25,6 +25,9 @@ jobs:
       - name: Validate dual-host manifests + tool maps
         run: python3 .github/scripts/validate_hosts.py
 
+      - name: Validate skill token-shape
+        run: python3 .github/scripts/validate_skills.py
+
       - name: Install pytest
         run: python3 -m pip install --upgrade pytest jsonschema pyyaml
 
