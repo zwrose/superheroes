@@ -13,7 +13,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 
 from store_core import (
     normalize_remote,
@@ -26,6 +25,7 @@ from store_core import (
     _write_keys_json,
     resolve_global,
     atomic_write,
+    _run_git,
 )
 
 SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -47,7 +47,6 @@ def artifact_key(branch, slot=None):
 
 def get_repo_root(cwd):
     """Return the git worktree top-level for cwd (fallback: cwd itself)."""
-    from store_core import _run_git
     out = _run_git(cwd, "rev-parse", "--show-toplevel")
     if out:
         return os.path.realpath(out)

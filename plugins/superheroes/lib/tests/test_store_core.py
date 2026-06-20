@@ -126,6 +126,28 @@ def test_get_gitdir_worktrees_share_common_dir(tmp_path):
     assert sc.get_gitdir(repo) == sc.get_gitdir(wt)
 
 
+def test_get_gitdir_pre_231_fallback(tmp_path, monkeypatch):
+    """get_gitdir falls back to --absolute-git-dir when --path-format=absolute
+    --git-common-dir returns None (simulating git < 2.31)."""
+    repo = _init_repo(tmp_path / "r")
+    calls = {"n": 0}
+    real = sc._run_git
+
+    def fake(cwd, *a):
+        if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
+            return None  # simulate git < 2.31 not supporting the flag
+        if a == ("rev-parse", "--absolute-git-dir"):
+            calls["n"] += 1
+            return real(cwd, *a)
+        return real(cwd, *a)
+
+    monkeypatch.setattr(sc, "_run_git", fake)
+    gd = sc.get_gitdir(repo)
+    assert calls["n"] == 1            # fell back to --absolute-git-dir exactly once
+    assert os.path.isabs(gd)
+    assert gd == os.path.realpath(gd)
+
+
 # ---------------------------------------------------------------------------
 # resolve_global — the two-key remote-wins + self-heal algorithm
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import sys
 import pytest
 
 import review_store as rs
+import store_core as sc
 
 
 @pytest.mark.parametrize("url,expected", [
@@ -321,7 +322,7 @@ def test_half_registered_entry_self_heals(tmp_path):
 def test_gitdir_uses_pre_231_fallback(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "r")
     calls = {"n": 0}
-    real = rs._run_git
+    real = sc._run_git
 
     def fake(cwd, *a):
         if a == ("rev-parse", "--path-format=absolute", "--git-common-dir"):
@@ -331,8 +332,8 @@ def test_gitdir_uses_pre_231_fallback(tmp_path, monkeypatch):
             return real(cwd, *a)
         return real(cwd, *a)
 
-    monkeypatch.setattr(rs, "_run_git", fake)
-    gd = rs.get_gitdir(repo)
+    monkeypatch.setattr(sc, "_run_git", fake)
+    gd = sc.get_gitdir(repo)
     assert calls["n"] == 1            # fell back
     assert os.path.isabs(gd)
 

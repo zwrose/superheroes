@@ -19,28 +19,15 @@ from store_core import (
     normalize_remote,
     short_hash,
     get_remote,
+    get_gitdir,
     derive_identifiers,
     read_pointer,
     write_pointer,
     _write_keys_json,
     resolve_global,
-    _run_git,
 )
 
 FILENAMES = {"profile": "review-profile.md", "decisions": "review-decisions.json"}
-
-
-def get_gitdir(cwd):
-    """realpath of the git-common-dir (shared by all worktrees).
-
-    Falls back to --absolute-git-dir for git < 2.31, then to realpath(cwd)
-    for non-git dirs. Defined here (not re-exported from store_core) so that
-    tests can monkeypatch review_store._run_git and have it take effect.
-    """
-    out = _run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if out is None:
-        out = _run_git(cwd, "rev-parse", "--absolute-git-dir")
-    return os.path.realpath(out if out is not None else cwd)
 
 REVIEW_CREW_STORAGE = "~/.claude/review-crew"
 
