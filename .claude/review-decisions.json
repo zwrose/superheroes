@@ -252,6 +252,126 @@
       "dimension": "Test",
       "category": "weak-fixture",
       "action": "fix"
+    },
+    {
+      "id": "9a14fb53662b",
+      "dimension": "Code",
+      "category": "compound-requirement",
+      "action": "fix"
+    },
+    {
+      "id": "377a4eccc9ff",
+      "dimension": "Code",
+      "category": "ambiguous-referent",
+      "action": "fix"
+    },
+    {
+      "id": "7a792c77b901",
+      "dimension": "Code",
+      "category": "vague-term",
+      "action": "guidance"
+    },
+    {
+      "id": "2ff8d146564f",
+      "dimension": "Test",
+      "category": "claim/test mismatch",
+      "action": "fix"
+    },
+    {
+      "id": "15a3242e75f5",
+      "dimension": "Failure-Mode",
+      "category": "assumption-violation",
+      "action": "fix"
+    },
+    {
+      "id": "54fb7913cd99",
+      "dimension": "Failure-Mode",
+      "category": "detectability",
+      "action": "fix"
+    },
+    {
+      "id": "8082623be408",
+      "dimension": "Architecture",
+      "category": "internal-consistency",
+      "action": "fix"
+    },
+    {
+      "id": "d6a33162eb5c",
+      "dimension": "Architecture",
+      "category": "scope-coherence",
+      "action": "fix"
+    },
+    {
+      "id": "15a3242e75f5",
+      "dimension": "Failure-Mode",
+      "category": "assumption-violation",
+      "action": "fix"
+    },
+    {
+      "id": "2ff8d146564f",
+      "dimension": "Test",
+      "category": "claim/test mismatch",
+      "action": "fix"
+    },
+    {
+      "id": "2e84377e3ce7",
+      "dimension": "Test",
+      "category": "untested-path",
+      "action": "fix"
+    },
+    {
+      "id": "54fb7913cd99",
+      "dimension": "Failure-Mode",
+      "category": "detectability",
+      "action": "fix"
+    },
+    {
+      "id": "b87a876c747b",
+      "dimension": "Architecture",
+      "category": "abstraction-justification",
+      "action": "fix"
+    },
+    {
+      "id": "e53129c03371",
+      "dimension": "Architecture",
+      "category": "decision-not-weighed",
+      "action": "fix"
+    },
+    {
+      "id": "2ff8d146564f",
+      "dimension": "Test",
+      "category": "claim/test mismatch",
+      "action": "fix"
+    },
+    {
+      "id": "1efdf2b5804d",
+      "dimension": "Test",
+      "category": "tautology-test",
+      "action": "fix"
+    },
+    {
+      "id": "2e84377e3ce7",
+      "dimension": "Test",
+      "category": "untested-path",
+      "action": "fix"
+    },
+    {
+      "id": "f869ab907b87",
+      "dimension": "Code",
+      "category": "regex-correctness",
+      "action": "fix"
+    },
+    {
+      "id": "2d03cdbcbabc",
+      "dimension": "Failure-Mode",
+      "category": "broken-tree-ordering",
+      "action": "fix"
+    },
+    {
+      "id": "b43a808a897e",
+      "dimension": "Security",
+      "category": "untested-validation",
+      "action": "fix"
     }
   ]
 }
