@@ -46,21 +46,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Run plugin + band-eval tests
-        # Each plugin's lib/ is put on sys.path by its tests/conftest.py, so plugins
-        # that share a module basename (e.g. workhorse and test-pilot both have a
-        # lock.py) would collide in a single shared pytest process. Plugins load in
-        # isolation at runtime; mirror that by testing each suite in its own process.
+        # Single pytest process is safe: the four plugins merged into one superheroes
+        # plugin lib tree (no shared module basenames), and eval/lib/identifiers.py was
+        # removed, so the historical sys.path collision is resolved.
         run: |
-          fail=0
-          for suite in \
-            .github/scripts/tests/ \
-            plugins/superheroes/lib/tests/ \
-            plugins/superheroes/eval/tests/ \
-            eval/lib/tests/; do
-            echo "== pytest $suite =="
-            python3 -m pytest "$suite" -q || fail=1
-          done
-          exit $fail
+          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
 
   pr-title:
     name: pr-title
