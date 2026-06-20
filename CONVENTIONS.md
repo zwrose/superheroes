@@ -1,23 +1,23 @@
-# superheroes — cross-plugin conventions
+# superheroes — band conventions
 
-These are the **contracts the superheroes plugins share**: artifact formats, storage
-rules, and the coordination primitives that let a band of independent plugins
-(today review-crew + test-pilot; soon producer, the-architect, coordinator) run a project's
+These are the **contracts the superheroes band shares**: artifact formats, storage
+rules, and the coordination primitives that let the band's heroes
+(the-architect, review-crew, test-pilot, workhorse) run a project's
 development loop together without stepping on each other.
 
 **Status.** This document *locks* conventions — it decides and records the schema so
-later work builds against a fixed target. A plugin implements a convention when it
-first needs it; the convention does not require all plugins to implement it at once.
-Where an existing plugin already implements (or diverges from) a convention, this doc
-says so. Conventions not yet specified are named in **§8**, bound to the plugin and the
+later work builds against a fixed target. A hero implements a convention when it
+first needs it; the convention does not require all heroes to implement it at once.
+Where an existing hero already implements (or diverges from) a convention, this doc
+says so. Conventions not yet specified are named in **§8**, bound to the hero and the
 GitHub issue/milestone that will own them — so deferral is explicit, not silent.
 
 **Scope.** This file is the authoritative contract. The broader product vision lives
 elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (§8's deferred conventions are
 bound to GitHub issues/milestones — see the [roadmap Project](https://github.com/users/zwrose/projects/1).)
 
-**Band posture — designed to be used together.** The heroes ship as *separately installable
-plugins* but form a *cohesively designed band*: within the loop they **assume each other's
+**Band posture — designed to be used together.** The heroes ship as **one plugin** and form a
+*cohesively designed band*: within the loop they **assume each other's
 presence** and **cross-reference freely by qualified name** (`the-architect:plan`,
 `review-crew:review-plan`). We **design for the integrated band and do not compromise that
 design — or add machinery — to guarantee standalone-equivalence**; a hero used outside the
@@ -29,11 +29,7 @@ tasks are autonomous), while an absent `review-spec` simply leaves the spec for 
 to approve — the spec is **owner-gated and never self-certified** (the deliberate asymmetry,
 §3.1). That is "degrade-not-crash," **not** "degrade gracefully to full standalone" — we
 don't carry dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
-of "superpowers is an assumed dependency." *(**Packaging is now decided: the band consolidates
-into one plugin** — see [#44](https://github.com/zwrose/superheroes/issues/44). The "separately
-installable plugins" framing above, and the cross-plugin machinery it motivates (§2.4's
-shared-resolver unification, §7's per-plugin manifests/maps), **retire with that consolidation** —
-they describe today's multi-plugin reality until #44 lands.)*
+of "superpowers is an assumed dependency."
 
 ---
 
@@ -174,14 +170,10 @@ would strand every already-written calibration file and definition-doc.)
 
 ### 2.4 Resolution and evolution
 
-- **One shared resolver, two key derivations.** Both existing plugins already ship
-  near-identical dual-keyed resolvers with self-healing pointers —
-  [`test-pilot/lib/store.py`](plugins/test-pilot/lib/store.py) and
-  [`review-crew/lib/review_store.py`](plugins/review-crew/lib/review_store.py) (store.py
-  even comments "Same algorithm as review_store"). Convergence means **unifying those
-  two near-duplicate libs into one shared resolver** — not grafting a lib onto a
-  lib-less plugin. That resolver exposes **two distinct key derivations**, because
-  config and runtime have opposite sharing needs (see §4.2 and §6.2):
+- **One shared resolver, two key derivations.** The band ships a single in-tree library,
+  `store_core` (`lib/store_core.py`), that all heroes use for storage resolution. It
+  exposes **two distinct key derivations**, because config and runtime have opposite
+  sharing needs (see §4.2 and §6.2):
   - **Config key = per-project** (`<config-key>`, §6.2), with self-healing pointers —
     deliberately unifies a project's clones/worktrees so they share calibration.
   - **Control-plane key = per-checkout** (`<absolute-git-dir-key>`, §6.2), **without**
@@ -193,10 +185,9 @@ would strand every already-written calibration file and definition-doc.)
   guarantee is impossible until a remote exists. On the first push, `init` **rebinds**
   the project store to the new `<remote-key>` (and merges the fallback entry) so
   calibration does not fork.
-- **Living profiles.** Lift review-crew's mechanisms band-wide: a *staleness nudge*,
-  a *learning-loop proposal* (any hero may **propose** a calibration edit, applied only
-  on confirmation), and a **`nudge-ack` map** so a dismissed signal does not re-fire
-  until it changes.
+- **Living profiles.** A *staleness nudge*, a *learning-loop proposal* (any hero may
+  **propose** a calibration edit, applied only on confirmation), and a **`nudge-ack` map**
+  so a dismissed signal does not re-fire until it changes.
 - **Rendered single view.** Although calibration is stored as several files, `init`
   (and a future `superheroes:profile` view) renders core + layers + the pinned patterns
   as **one screen**, so the owner sees "one profile" while the disk stays coordinated.
@@ -318,15 +309,7 @@ config-vs-state line, because the two have opposite sharing needs:
   **distinct per linked worktree and per clone**. Holds the runtime: queue, checkpoints,
   per-issue state. Each checkout gets its **own** control-plane store.
 
-> **Implemented by the resilience slice** (workhorse `control_plane.py`). *(Originally a divergence note: the control-plane key must differ from the config key.)*
-> The cited `store.py get_gitdir()` today prefers `--git-common-dir`, which is *shared*
-> across a clone's linked worktrees — so two worktrees resolve to the **same** entry
-> (confirmed empirically). That is correct for the *config* key and **wrong** for the
-> control-plane key. The control-plane resolver must therefore (a) derive its key from
-> raw `--absolute-git-dir`, and (b) **not** route through the remote-keyed self-healing
-> pointer — remote-key healing deliberately unifies a project's checkouts (right for
-> config), which would funnel two parallel loops onto one queue/state dir: exactly the
-> uncoordinated-write hazard the vision forbids.
+> **Implemented by the resilience slice** (workhorse `control_plane.py`). The control-plane key must differ from the config key: `store_core` uses `--git-common-dir` for the config key (shared across a clone's linked worktrees — correct for config) and `--absolute-git-dir` for the control-plane key (distinct per worktree — correct for state). The control-plane resolver therefore (a) derives its key from raw `--absolute-git-dir`, and (b) does **not** route through the remote-keyed self-healing pointer — remote-key healing deliberately unifies a project's checkouts (right for config), which would funnel two parallel loops onto one queue/state dir: exactly the uncoordinated-write hazard the vision forbids.
 
 ```
 <global-store>/
@@ -418,7 +401,7 @@ explicit (`order`), not array position. Item lifecycle is
   or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
   full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
-- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (workhorse `lock.py`, §4.5 adds the startup per-checkout lock). The existing file-based [`lock.py`](plugins/test-pilot/lib/lock.py) — a *narrower, same-host* engine lock — now has the TTL + host-boot-id staleness wired into `acquire()` (test-pilot `v0.1.1`), superseding its old pid-only `is_stale()`.
+- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/lock.py`, §4.5 adds the startup per-checkout lock). The file-based `lib/lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
 
 **Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
 shared across a project's checkouts (§4.2), so it is **not** guarded by the per-checkout
@@ -595,8 +578,7 @@ into every path, lock ref, and branch (`docs/superheroes/<work-item>/`,
 
 ### 6.2 Storage keys
 
-Reuse the existing resolver's derivation (`store.py` / `review_store.py`) as the
-normative spec. **Hash:** `sha256(...)` truncated to **16 hex** (`short_hash`).
+The normative spec is implemented in `lib/store_core.py`. **Hash:** `sha256(...)` truncated to **16 hex** (`short_hash`).
 
 - **`<remote-key>`** = `short_hash(normalize_remote(origin))`, where `normalize_remote`
   lowercases the host and strips scheme/userinfo/port and a trailing `.git`.
@@ -646,23 +628,25 @@ does not duplicate it.
 - **`schemaVersion`** is stamped independently on each artifact family (`core.md`,
   definition-docs, runtime files). Bump on a **breaking** change (additive changes do not
   bump). A reader that encounters an **unknown** version **fails closed** with a
-  "update the plugin or migrate the file" message — the precedent test-pilot's
-  `engine.py`/`state.py` already set. Migration logic lives in the plugin that owns the
+  "update the plugin or migrate the file" message — the precedent set by
+  `lib/engine.py`/`lib/state.py`. Migration logic lives in the hero that owns the
   artifact. A breaking change to the §6.3 `<content-hash>` canonicalization is **likewise
   a definition-doc `schemaVersion` bump** (so old and new hashes never silently collide);
   whether to *also* embed an explicit canon-version in the stored branch key is deferred
-  to the first consumer (an entry-gate, tracked in `eval/gate.md`). (The fuller
-  cross-plugin version-skew / band-compatibility story is deferred; §8.)
+  to the first consumer (an entry-gate, tracked in `eval/gate.md`). The band ships as one
+  plugin — one version — so cross-plugin version skew is not a concern; artifact
+  `schemaVersion` skew (files written by an older build) is covered by the fail-closed
+  behavior above.
 
 ---
 
 ## 7. Multi-host harness contract
 
-The marketplace runs on both Claude Code and Codex. The harness has **two layers**:
+The superheroes plugin runs on both Claude Code and Codex. The harness has **two layers**:
 
 ### 7.1 Shared layer (host-neutral)
 
-Everything in `plugins/<name>/` is shared and host-neutral:
+Everything in the plugin's source tree is shared and host-neutral:
 
 - **`skills/`** — the skill logic. Written in host-neutral *actions* ("read the
   file", "run the verify command", "dispatch the reviewer"). No host tool names here.
@@ -684,18 +668,15 @@ relative `hosts/` path would resolve against the skill's own folder, which has n
 
 ### 7.2 Host-adaptation layer (thin, per-host)
 
-Each plugin carries two thin per-host pieces:
+The plugin carries one set of thin per-host pieces:
 
 | Artifact | Purpose |
 | --- | --- |
-| `plugins/<name>/.claude-plugin/plugin.json` | Claude Code manifest (name, version, description) |
-| `plugins/<name>/.codex-plugin/plugin.json` | Codex manifest — same version, Codex-native description |
-| `plugins/<name>/hosts/claude-tools.md` | Maps host-neutral actions → Claude Code tools |
-| `plugins/<name>/hosts/codex-tools.md` | Maps host-neutral actions → Codex tools (`shell`, `apply_patch`, `spawn_agent`, …) |
-| `plugins/workhorse/hooks/hooks-codex.json` | Codex hook config (per-plugin; only where needed) |
-
-The repo root also carries `hosts/claude-tools.md` and `hosts/codex-tools.md` as
-canonical references; the per-plugin copies must be byte-identical to them.
+| `.claude-plugin/plugin.json` | Claude Code manifest (name, version, description) |
+| `.codex-plugin/plugin.json` | Codex manifest — same version, Codex-native description |
+| `hosts/claude-tools.md` | Maps host-neutral actions → Claude Code tools |
+| `hosts/codex-tools.md` | Maps host-neutral actions → Codex tools (`shell`, `apply_patch`, `spawn_agent`, …) |
+| `hooks/hooks-codex.json` | Codex hook config (only where needed) |
 
 Both `plugin.json` versions must be kept in sync — `validate_hosts.py` fails on
 version drift between `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json`.
@@ -717,7 +698,7 @@ scope — the two hosts load the same skills, and the tool maps are the entire s
 ## 8. Deferred conventions
 
 Real conventions the band will need that are **intentionally not specified yet**, because
-the plugin that owns each does not exist — specifying them blind would be guesswork.
+the hero that owns each does not exist — specifying them blind would be guesswork.
 **Each is an entry-gate for its owning hero / milestone** (tracked in the
 [roadmap Project](https://github.com/users/zwrose/projects/1)): building that hero means
 specifying its conventions here first. (Surfaced by the reviews of 2026-06-14.)
@@ -728,4 +709,3 @@ specifying its conventions here first. (Surfaced by the reviews of 2026-06-14.)
 | **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **operator** · partly defined by the live-approval gate [#14](https://github.com/zwrose/superheroes/issues/14); the batch/defer contract is TBD |
 | **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | [#42](https://github.com/zwrose/superheroes/issues/42) |
 | **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **operator** · [#26](https://github.com/zwrose/superheroes/issues/26) |
-| **Plugin-version / band-compatibility** | cross-plugin `schemaVersion` skew handling; whether a minimum-compatible-band matrix exists (minimal fail-closed-on-unknown is already specified in §6.4) | **largely moot once consolidated ([#44](https://github.com/zwrose/superheroes/issues/44))** — one plugin = one version; artifact `schemaVersion` stays covered by §6.4 |
