@@ -19,9 +19,9 @@ This is the version Claude Code uses for update detection.
 
 Rules (enforced by `validate_marketplace.py`):
 
-- **Bump `plugin.json` `version` on every plugin release.** Claude Code skips the
-  update if the resolved version is unchanged, so shipping without bumping is
-  invisible to existing users.
+- **Version bumps are automated** (release-please derives them from Conventional Commits and
+  writes them into both `plugin.json` files via the release PR). Do not hand-edit a plugin's
+  `version` in a feature change — it advances only through that plugin's release PR.
 - **Never put `version` in a plugin's `marketplace.json` entry.** `plugin.json`
   wins silently, so a duplicate masks the real value. plugin.json is the single
   source of truth for plugin version.
@@ -32,9 +32,11 @@ Rules (enforced by `validate_marketplace.py`):
 
 ## Releasing
 
-Manual, per-plugin. See [RELEASING.md](RELEASING.md). In short: bump the plugin's
-`plugin.json` version, update its `CHANGELOG.md`, merge to `main`, then tag
-`<plugin>-vX.Y.Z` and cut a GitHub Release.
+Automated via release-please (see [RELEASING.md](RELEASING.md)). Merge plugin-scoped
+Conventional-Commit work to `main`; release-please maintains a per-plugin release PR that
+bumps both `plugin.json` files + `version.txt` and regenerates the CHANGELOG. **Merging that
+release PR** cuts the `<plugin>-vX.Y.Z` tag + GitHub Release. Do not hand-edit a plugin's
+version or hand-cut a release.
 
 ## Commits — Conventional Commits
 
