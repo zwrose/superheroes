@@ -58,7 +58,7 @@ def test_acquire_steals_stale_dead_pid_holder(tmp_path):
 
 def test_acquire_steals_on_bootid_mismatch(tmp_path, monkeypatch):
     p = str(tmp_path / "engine.lock")
-    monkeypatch.setattr(lock, "_boot_id", lambda: "boot-A")
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boot-A")
     with open(p, "w") as fh:
         json.dump({"pid": os.getpid(), "host": socket.gethostname(),
                    "acquiredAt": "1970-01-01T00:00:00Z", "bootId": "boot-OLD"}, fh)

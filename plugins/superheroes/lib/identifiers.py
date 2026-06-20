@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""VENDORED from eval/lib/identifiers.py — the band's canonical CONVENTIONS §6 reference impls.
+"""Canonical reference implementations of the superheroes load-bearing identifiers (CONVENTIONS §6).
 
-A self-contained copy so the `the-architect` plugin works when installed independently (a
-distributed plugin can't import the band-level `eval/`). The *source of truth* is
-`eval/lib/identifiers.py`; do NOT edit the logic here directly — change the source and
-re-sync this copy. The behavioral-equivalence drift test in
-`tests/test_identifiers_drift.py` fails loudly if this copy diverges from the band
-reference, which is what makes vendoring safe (no two implementations drift).
-
-All text inputs are NFC-normalized before use, so canonically-equivalent Unicode
-(macOS-NFD vs Linux-NFC "café") yields the same identifier — the §6.3 "byte-identical
-across hosts" guarantee. Dependency-free and deterministic.
+These are the single source of truth for §6.1 work_item_slug and §6.3 content_hash.
+All plugins in the consolidated superheroes tree import from here. Dependency-free and
+deterministic. All text inputs are NFC-normalized before use, so canonically-equivalent
+Unicode (macOS-NFD vs Linux-NFC "café") yields the same identifier — the §6.3
+"byte-identical across hosts" guarantee.
 """
 import hashlib
 import json

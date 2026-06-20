@@ -8,8 +8,9 @@ import calendar
 import json
 import os
 import socket
-import subprocess
 import time
+
+import hostinfo
 
 DEFAULT_TTL = 1800   # seconds
 
@@ -20,34 +21,10 @@ class LockHeld(Exception):
         super().__init__(f"engine lock held by {self.holder}")
 
 
-def _boot_id():
-    """Portable per-boot id (Linux /proc/stat btime, darwin sysctl kern.boottime);
-    None if unobtainable -> callers degrade, never treat None as a match. NOTE: a
-    vendored copy of workhorse/lib/hostinfo.boot_id (test-pilot can't import workhorse) —
-    keep the two in sync."""
-    try:
-        with open("/proc/stat", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("btime "):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        return "btime:" + parts[1]
-    except OSError:
-        pass
-    try:
-        r = subprocess.run(["sysctl", "-n", "kern.boottime"],
-                           capture_output=True, text=True, timeout=5)
-        if r.returncode == 0 and r.stdout.strip():
-            return "boottime:" + r.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return None
-
-
 def _holder_info():
     return {"pid": os.getpid(), "host": socket.gethostname(),
             "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "bootId": _boot_id(), "ttl": DEFAULT_TTL}
+            "bootId": hostinfo.boot_id(), "ttl": DEFAULT_TTL}
 
 
 def read_holder(lock_path):
@@ -71,7 +48,7 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None):
     h = read_holder(lock_path)
     if not h or h.get("host") != socket.gethostname() or not h.get("pid"):
         return False
-    bid, cur = h.get("bootId"), _boot_id()
+    bid, cur = h.get("bootId"), hostinfo.boot_id()
     if bid is not None and cur is not None and bid != cur:
         return True
     if not _expired(h.get("acquiredAt"), ttl, now):
