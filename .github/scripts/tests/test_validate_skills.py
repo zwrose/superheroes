@@ -162,3 +162,28 @@ def test_gather_combined_size_flags_not_smaller(tmp_path):
     errors, combined = vs.gather_violations(root, {"bodyCeilings": {}, "requiredPhrases": {}},
                                             set(), set(), combined_before=10)
     assert combined == 50 and any("description-size" in e for e in errors)
+
+def test_gather_combined_size_flags_equal_boundary(tmp_path):
+    """combined_now == combined_before must be flagged (>= not >)."""
+    root = str(tmp_path / "plugins"); os.makedirs(root)
+    desc = "x" * 50
+    _mk_skill(root, "p", "s", 10, desc=desc)
+    combined_now = len(desc)  # 50
+    errors, combined = vs.gather_violations(root, {"bodyCeilings": {}, "requiredPhrases": {}},
+                                            set(), set(), combined_before=combined_now)
+    assert combined == combined_now
+    assert any("description-size" in e for e in errors), (
+        "equal combined size should be flagged (one-way ratchet: >= is not allowed)"
+    )
+
+def test_gather_combined_size_no_error_when_genuinely_smaller(tmp_path):
+    """A genuinely smaller combined size must NOT produce a description-size error."""
+    root = str(tmp_path / "plugins"); os.makedirs(root)
+    _mk_skill(root, "p", "s", 10, desc="x" * 30)
+    combined_now = 30
+    errors, combined = vs.gather_violations(root, {"bodyCeilings": {}, "requiredPhrases": {}},
+                                            set(), set(), combined_before=combined_now + 20)
+    assert combined == combined_now
+    assert not any("description-size" in e for e in errors), (
+        f"smaller combined size should NOT produce a description-size error, got: {errors}"
+    )

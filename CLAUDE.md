@@ -68,20 +68,28 @@ Every PR and push to `main` runs `.github/workflows/ci.yml`:
 
 1. `validate_marketplace.py` — manifests parse, sources exist, versions are valid
    SemVer, no duplicate-version trap.
-2. `pytest` over plugin lib/eval tests + the band-level eval harness — review-crew
-   (`lib/`, `eval/`), test-pilot (`lib/`), the-architect (`lib/`), and the cross-plugin
-   `eval/lib/` (identifier reference impls + artifact schemas). Schema tests need
-   `jsonschema`.
+2. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
+3. `validate_skills.py` — skill token-shape (line counts, description sizes,
+   required phrases, reference links, CONVENTIONS citations).
+4. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
+   (`.github/scripts/tests/`), review-crew (`lib/`, `eval/`), test-pilot (`lib/`),
+   the-architect (`lib/`), workhorse (`lib/`), and the cross-plugin `eval/lib/`
+   (identifier reference impls, artifact schemas, and the activation-result CI
+   gate). Schema tests need `jsonschema`.
 
-Run both locally before pushing. Each suite runs in its **own pytest process** —
-plugins load in isolation at runtime, and two plugins may share a module basename
-(e.g. workhorse and test-pilot both have a `lock.py`), which would collide on
-`sys.path` in a single shared process. Test each suite separately to mirror runtime:
+Run all steps locally before pushing. Each pytest suite runs in its **own pytest
+process** — plugins load in isolation at runtime, and two plugins may share a
+module basename (e.g. workhorse and test-pilot both have a `lock.py`), which
+would collide on `sys.path` in a single shared process. Test each suite
+separately to mirror runtime:
 
 ```bash
 python3 .github/scripts/validate_marketplace.py
+python3 .github/scripts/validate_hosts.py
+python3 .github/scripts/validate_skills.py
 fail=0
-for suite in plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ \
+for suite in .github/scripts/tests/ \
+             plugins/review-crew/lib/tests/ plugins/review-crew/eval/tests/ \
              plugins/test-pilot/lib/tests/ plugins/the-architect/lib/tests/ \
              plugins/workhorse/lib/tests/ eval/lib/tests/; do
   python3 -m pytest "$suite" -q || fail=1
