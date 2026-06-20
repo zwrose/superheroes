@@ -6,6 +6,14 @@ All notable changes to the `the-architect` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-06-19
+
+### Fixed
+
+- Correct the `model_tier.py` module docstring to name the real consumers (review-code is
+  the first consumer; the trio and audit-debt wire it next; Workhorse's Build leg is not a
+  consumer) (FR-6).
+
 ## [0.4.1] — 2026-06-19
 
 ### Changed

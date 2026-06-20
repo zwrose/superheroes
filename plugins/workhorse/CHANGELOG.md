@@ -6,6 +6,18 @@ All notable changes to the `workhorse` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-19
+
+### Changed
+
+- Document the deliberate FR-5 Build-leg model-tier deferral in the ① Build section (the
+  knob intentionally does not govern Build-leg implementer models).
+
+### Added
+
+- Guard (`test_skill_shape.py`) asserting workhorse owns no Verify-stage model dispatch and
+  that ② Review still delegates to the wired `review-code` (FR-3, FR-7 half b).
+
 ## [0.4.0] — 2026-06-19
 
 ### Changed

@@ -1,6 +1,8 @@
 {
   "name": "the-architect",
-  "version": "0.4.1",
-  "description": "The Architect — turns a fuzzy idea into a reviewed spec → plan → tasks, the requirements-first front half of the superheroes development loop.",
-  "author": { "name": "zwrose" }
+  "version": "0.4.2",
+  "description": "The Architect \u2014 turns a fuzzy idea into a reviewed spec \u2192 plan \u2192 tasks, the requirements-first front half of the superheroes development loop.",
+  "author": {
+    "name": "zwrose"
+  }
 }
