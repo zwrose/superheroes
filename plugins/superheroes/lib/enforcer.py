@@ -28,16 +28,13 @@ hook-command wrapper, which emits a deny when the enforcer exits non-zero.
 import json
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import allowance  # noqa: E402
-import band_lib  # noqa: E402
+import escalation  # noqa: E402  (same-tree sibling core; no band_lib, no subprocess)
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_ESC = ("the-architect", "lib", "escalation.py")
-_RC = ("review-crew", "lib", "escalation_resolve.py")
 # Tool-name surfaces, HOST-AGNOSTIC: Claude names Bash / Edit|Write|MultiEdit; Codex names
 # shell / apply_patch (the patch carries the target path in its body). Accepting both makes
 # the single enforcer.py genuinely host-agnostic — without the `shell`/`apply_patch` aliases
@@ -137,7 +134,7 @@ def _unquote(tok):
 def _resolves_to_band(tok):
     """True iff `tok`'s basename is a safety basename AND it resolves (band-root anchored)
     to a real band file. The cheap basename test short-circuits so non-safety targets
-    (`/dev/null`, an ordinary out path) never pay the classify_path subprocess."""
+    (`/dev/null`, an ordinary out path) never pay the classify_path guard call."""
     return os.path.basename(tok) in _SAFETY_BASENAMES and classify_path(tok)[0] == "deny"
 
 
@@ -233,28 +230,16 @@ def classify_command(command, host="codex", in_scope=True):
 
 def classify_path(path):
     """('deny'|'allow', reason) for an Edit/Write target. Deny iff the path is band
-    safety-machinery. UNCONDITIONAL (host- and scope-independent). Resolution failure /
-    error fails CLOSED (deny)."""
+    safety-machinery. UNCONDITIONAL (host- and scope-independent). Any error fails CLOSED
+    (deny). In the consolidated tree the escalation core is a same-tree sibling, so this
+    calls `escalation.is_safety_machinery` DIRECTLY (no resolver, no subprocess), anchored on
+    the single merged plugin root — the three per-plugin band roots collapsed into one."""
     if not isinstance(path, str) or not path:
         return ("deny", "missing path (fail-closed)")
     try:
-        lib = band_lib.resolve_target(_ESC, plugin_root=_PLUGIN_ROOT)
-        if lib is None:
-            return ("deny", "escalation lib unresolvable (fail-closed)")
-        band_roots = [_PLUGIN_ROOT, os.path.dirname(os.path.dirname(lib))]
-        rc = band_lib.resolve_target(_RC, plugin_root=_PLUGIN_ROOT)
-        if rc:
-            band_roots.append(os.path.dirname(os.path.dirname(rc)))
-        cli = [sys.executable, lib, "guard", "--path", path]
-        for r in band_roots:
-            cli += ["--band-root", r]
-        p = subprocess.run(cli, capture_output=True, text=True, timeout=10)
-        if p.returncode != 0:
-            return ("deny", "guard error (fail-closed)")
-        res = json.loads(p.stdout.strip())
-        if res.get("allow") is True:
-            return ("allow", "")
-        return ("deny", "edit to band safety-machinery is refused")
+        if escalation.is_safety_machinery(path, [_PLUGIN_ROOT]):
+            return ("deny", "edit to band safety-machinery is refused")
+        return ("allow", "")
     except Exception:
         return ("deny", "guard exception (fail-closed)")
 
@@ -294,7 +279,7 @@ def _classify_patch(ti):
     for path in _PATCH_TARGET.findall(text):
         p = path.strip()
         # Cheap basename pre-filter (mirrors the Bash-write guard), then confirm through
-        # the band-root-anchored classify_path so an ordinary edit costs no subprocess and
+        # the band-root-anchored classify_path so an ordinary edit costs no guard call and
         # a target-repo lookalike isn't false-refused.
         if os.path.basename(p) in _SAFETY_BASENAMES and classify_path(p)[0] == "deny":
             return ("deny", "apply_patch to band safety-machinery is refused")
@@ -387,10 +372,15 @@ def selfcheck():
         # ...and the producer's own commands stay allowed.
         and classify_command("git commit -m x")[0] == "allow"
     )
-    # The Edit guard (classify_path) needs escalation.py. If unresolvable, the guard
-    # fail-closes to deny EVERYTHING — which would still PASS the step 0 canaries yet wedge step 1
-    # Build with misdirecting per-edit denials. Surface the broken install HERE.
-    esc_ok = band_lib.resolve_target(_ESC, plugin_root=_PLUGIN_ROOT) is not None
+    # The Edit guard (classify_path) needs the escalation core. If it can't be imported, the
+    # guard fail-closes to deny EVERYTHING — which would still PASS the step 0 canaries yet wedge
+    # step 1 Build with misdirecting per-edit denials. Surface the broken install HERE. Direct
+    # in-tree probe (the core is a same-tree sibling now; no cross-plugin resolution).
+    try:
+        import escalation  # noqa: F401  (probe: importability == armed-ness signal)
+        esc_ok = True
+    except Exception:
+        esc_ok = False
     hook_cfg = os.path.join(_PLUGIN_ROOT, "hooks", "hooks.json")
     has_cfg = os.path.isfile(hook_cfg)
     armed = ok and esc_ok and has_cfg

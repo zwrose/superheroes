@@ -1,21 +1,19 @@
-import os
-import subprocess
-
-import band_lib
 import readout
 
-_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-_SCRUB = os.path.join(_REPO, "plugins", "test-pilot", "lib", "pr_comment.py")
 
-
-def test_scrub_uses_test_pilot_when_present(monkeypatch):
-    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: _SCRUB)
+def test_scrub_uses_test_pilot_when_present():
+    # pr_comment is a same-tree sibling now — scrub calls it directly (no resolution).
     scrubbed, ok = readout.scrub("Authorization: Bearer abcdef0123456789")
     assert ok is True and "abcdef0123456789" not in scrubbed
 
 
-def test_scrub_fails_closed_when_scrubber_absent(monkeypatch):
-    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: None)
+def test_scrub_fails_closed_when_scrubber_raises(monkeypatch):
+    # Equivalence note: the old "scrubber absent / subprocess non-zero / subprocess raises"
+    # tests are collapsed into this one. In one tree pr_comment can't be absent and there is
+    # no subprocess; the SAME fail-closed posture (scrub error -> DROP, never leak) is now
+    # exercised by making pr_comment.scrub itself raise.
+    monkeypatch.setattr(readout.pr_comment, "scrub",
+                        lambda text: (_ for _ in ()).throw(RuntimeError("boom")))
     scrubbed, ok = readout.scrub("Authorization: Bearer secret")
     assert ok is False and "secret" not in scrubbed and "omitted" in scrubbed
 
@@ -27,36 +25,7 @@ def test_build_readout_has_merge_is_yours_and_ci_line():
     assert "http://x/pr/1" in body
 
 
-def test_scrub_fails_closed_on_subprocess_nonzero_exit(monkeypatch):
-    # scrub must return ('[omitted...]', False) when the subprocess returns non-zero —
-    # never leaking the raw text.
-    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: _SCRUB)
-
-    class _FakeResult:
-        returncode = 1
-        stdout = "should never appear"
-
-    monkeypatch.setattr(readout.subprocess, "run", lambda *a, **k: _FakeResult())
-    scrubbed, ok = readout.scrub("supersecretvalue")
-    assert ok is False
-    assert "supersecretvalue" not in scrubbed
-    assert "omitted" in scrubbed
-
-
-def test_scrub_fails_closed_on_subprocess_exception(monkeypatch):
-    # scrub must return ('[omitted...]', False) when subprocess.run raises —
-    # no exception propagates and the raw text is never returned.
-    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: _SCRUB)
-    monkeypatch.setattr(readout.subprocess, "run",
-                        lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
-    scrubbed, ok = readout.scrub("anothersecret")
-    assert ok is False
-    assert "anothersecret" not in scrubbed
-    assert "omitted" in scrubbed
-
-
-def test_build_readout_scrubs_every_freetext_field(monkeypatch):
-    monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: _SCRUB)
+def test_build_readout_scrubs_every_freetext_field():
     body = readout.build_readout({
         "ci_status": "red",
         "raw_ci_excerpt": "token=supersecretvalue123",

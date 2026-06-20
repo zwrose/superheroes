@@ -1,19 +1,41 @@
 import json
 import os
 
-import band_lib
+import pytest
+
 import enforcer
 
-# Resolve the REAL in-repo escalation.py so classify_floor / guard run for real.
-_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-_ESC = os.path.join(_REPO, "plugins", "the-architect", "lib", "escalation.py")
-_RC_ESC = os.path.join(_REPO, "plugins", "review-crew", "lib", "escalation_resolve.py")
-_RC_LOOP = os.path.join(_REPO, "plugins", "review-crew", "lib", "loop_state.py")
+# The REAL in-tree safety files (all under the single superheroes plugin root, which is what
+# classify_path anchors against via escalation.is_safety_machinery). No band_lib resolution /
+# monkeypatch is needed any more — the guard runs directly against the real in-tree layout.
+_PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_LIB = os.path.join(_PLUGIN, "lib")
+_ESC = os.path.join(_LIB, "escalation.py")
+_RC_ESC = os.path.join(_LIB, "escalation_resolve.py")
+_RC_LOOP = os.path.join(_LIB, "loop_state.py")
+_ENFORCER = os.path.join(_LIB, "enforcer.py")
+_HOOKS = os.path.join(_PLUGIN, "hooks", "hooks.json")
 
 
 def _point_at_real_escalation(monkeypatch):
-    monkeypatch.setattr(band_lib, "resolve_target",
-                        lambda target, root=None, plugin_root=None: _ESC)
+    # Equivalence note: the band_lib.resolve_target monkeypatch is gone — classify_path calls
+    # the in-tree escalation core directly against the real plugin root, so the real safety
+    # files resolve for real. Retained as a no-op so call sites read unchanged.
+    pass
+
+
+@pytest.fixture
+def basename_guard(monkeypatch):
+    """Recreate the old test-env condition for the redirect/exec TARGET-precision tests: in the
+    pre-collapse env band_lib was unresolved, so classify_path fail-closed to deny for ANY
+    safety-basename token — meaning those cases pinned the TARGET logic in
+    _bash_writes_to_safety_machinery alone, NOT the guard resolution. Now that the guard
+    resolves for real, we patch escalation.is_safety_machinery to a basename-only matcher so
+    bare in-test basenames still "resolve", and the tests keep pinning TARGET precision."""
+    monkeypatch.setattr(
+        enforcer.escalation, "is_safety_machinery",
+        lambda path, band_roots: bool(isinstance(path, str)
+                                      and os.path.basename(path) in enforcer._SAFETY_BASENAMES))
 
 
 # --- command deny-list (the enumerated floor) ---
@@ -85,29 +107,30 @@ def test_allows_producer_normal_commands():
 
 
 def test_denies_bash_write_to_safety_machinery():
-    # band_lib unresolved in the test env → classify_path fail-closes to deny, so any
-    # token that IS a band safety basename + a write op denies. Covers the no-space
-    # redirect form too (the round-1 `>enforcer.py` bypass).
-    for cmd in ("sed -i 's/x/y/' plugins/workhorse/lib/enforcer.py",
-                "echo '{}' > hooks.json",
-                "echo '{}' >hooks.json",          # no space — must still deny
-                ">enforcer.py",                    # bare no-space redirect
-                "cp /tmp/x.py escalation.py"):
+    # The guard now resolves for real (in one tree): a write op AT a REAL in-tree band file
+    # denies via band-root anchoring. Covers the no-space redirect form too (the round-1
+    # `>enforcer.py` bypass). Repointed from the old bare/relative basenames (which only
+    # denied because band_lib was unresolved in the old test env) to real in-tree paths.
+    for cmd in ("sed -i 's/x/y/' %s" % _ENFORCER,
+                "echo '{}' > %s" % _HOOKS,
+                "echo '{}' >%s" % _HOOKS,          # no space — must still deny
+                ">%s" % _ENFORCER,                  # bare no-space redirect
+                "cp /tmp/x.py %s" % _ESC):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
 def test_denies_bash_write_to_safety_machinery_all_ops():
-    # Pin every _WRITE_OPS alternative so dropping any one op fails the suite.
-    # band_lib unresolved in the test env → classify_path fail-closes to deny,
-    # so the point is that each operator is RECOGNIZED (the pre-filter fires).
+    # Pin every _WRITE_OPS alternative so dropping any one op fails the suite. The target is a
+    # REAL in-tree band file so the band-root-anchored guard denies; the point is that each
+    # operator is RECOGNIZED (the pre-filter fires) and the write AT the band file denies.
     for cmd in (
-        "echo x >> enforcer.py",           # >> append
-        "tee enforcer.py < /tmp/x",        # tee
-        "mv /tmp/x enforcer.py",           # mv
-        "dd if=/dev/null > enforcer.py",   # dd (redirect form — of= syntax not tokenised)
-        "truncate -s0 enforcer.py",        # truncate
-        "chmod 777 enforcer.py",           # chmod
-        "ln -sf /tmp/x enforcer.py",       # ln
+        "echo x >> %s" % _ENFORCER,           # >> append
+        "tee %s < /tmp/x" % _ENFORCER,        # tee
+        "mv /tmp/x %s" % _ENFORCER,           # mv
+        "dd if=/dev/null > %s" % _ENFORCER,   # dd (redirect form — of= syntax not tokenised)
+        "truncate -s0 %s" % _ENFORCER,        # truncate
+        "chmod 777 %s" % _ENFORCER,           # chmod
+        "ln -sf /tmp/x %s" % _ENFORCER,       # ln
     ):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
@@ -117,24 +140,21 @@ def test_allows_bash_write_to_ordinary_file():
     assert enforcer.classify_command("echo hi > out.txt")[0] == "allow"
 
 
-def test_bash_write_to_target_repo_lookalike_is_allowed(monkeypatch, tmp_path):
+def test_bash_write_to_target_repo_lookalike_is_allowed(tmp_path):
     # Anchoring: a file named like a safety basename but OUTSIDE the band plugin tree
     # (an arbitrary target repo's own file) must NOT be refused — only real band
     # machinery is. `loop_state.py` is already a SAFETY_MACHINERY member, so this
-    # exercises the band-root anchoring (not mere absent-membership). Point band_lib at
-    # the real escalation so classify_path anchors against the real band roots.
-    _point_at_real_escalation(monkeypatch)
+    # exercises the band-root anchoring (not mere absent-membership). classify_path now
+    # anchors against the real in-tree plugin root directly (no band_lib monkeypatch).
     lookalike = tmp_path / "loop_state.py"
     lookalike.write_text("# unrelated target-repo file\n")
     assert enforcer.classify_command("sed -i 's/a/b/' %s" % lookalike)[0] == "allow"
 
 
-def test_bash_write_band_anchoring_positive(monkeypatch, tmp_path):
-    # test-002: pin that the deny comes from the band-root anchoring, not the
-    # unresolvable-lib fail-closed branch. With band_lib pointing at real escalation,
-    # a write to the REAL band escalation.py denies (band-root anchored), while a
-    # same-basename file OUTSIDE the band roots allows.
-    _point_at_real_escalation(monkeypatch)
+def test_bash_write_band_anchoring_positive(tmp_path):
+    # test-002: pin that the deny comes from the band-root anchoring. A write to the REAL
+    # in-tree band escalation.py denies (band-root anchored), while a same-basename file
+    # OUTSIDE the band root allows.
     # Real band file → deny via anchoring
     assert enforcer.classify_command("sed -i 's/x/y/' %s" % _ESC)[0] == "deny"
     # Same basename outside band roots → allow (not false-positive)
@@ -147,21 +167,21 @@ def test_bash_write_band_anchoring_positive(monkeypatch, tmp_path):
 # REGRESSION: _bash_writes_to_safety_machinery used to deny ANY command that paired a bare
 # write-operator token (`>`, `>>`, `2>&1`) with a safety-basename token appearing ANYWHERE
 # — even when the safety file was an EXECUTION arg and the redirect targeted /dev/null. The
-# guard must key off the write operator's TARGET, not mere co-occurrence. (In the default
-# test env band_lib is unresolved, so classify_path fail-closes to deny — meaning any
-# safety basename token "resolves"; these cases must therefore pass on TARGET logic alone.)
-def test_allows_executing_band_cli_with_unrelated_redirect():
+# guard must key off the write operator's TARGET, not mere co-occurrence. These tests use the
+# `basename_guard` fixture so any safety-basename token "resolves" (recreating the old
+# unresolved-lib env), forcing each case to pass on TARGET logic ALONE.
+def test_allows_executing_band_cli_with_unrelated_redirect(basename_guard):
     # Running a band CLI (a safety basename as the EXECUTION target) with a >/dev/null or
     # 2>&1 redirect is NOT a write to the band file — the redirect targets /dev/null / an fd.
     for cmd in (
-        "python3 plugins/the-architect/lib/definition_doc.py read-gate >/dev/null",
-        "python3 plugins/the-architect/lib/definition_doc.py read-gate > /dev/null 2>&1",
-        "python3 plugins/the-architect/lib/gate_write.py set k v 2>&1",
+        "python3 plugins/superheroes/lib/definition_doc.py read-gate >/dev/null",
+        "python3 plugins/superheroes/lib/definition_doc.py read-gate > /dev/null 2>&1",
+        "python3 plugins/superheroes/lib/gate_write.py set k v 2>&1",
     ):
         assert enforcer.classify_command(cmd)[0] == "allow", cmd
 
 
-def test_allows_compound_band_cli_calls_with_redirect():
+def test_allows_compound_band_cli_calls_with_redirect(basename_guard):
     # The real-world compounds that tripped the false positive: a band CLI executed in one
     # segment (a safety basename as exec target) while a /dev/null redirect rides elsewhere.
     for cmd in (
@@ -173,12 +193,12 @@ def test_allows_compound_band_cli_calls_with_redirect():
         assert enforcer.classify_command(cmd)[0] == "allow", cmd
 
 
-def test_allows_reading_band_file_redirected_elsewhere():
+def test_allows_reading_band_file_redirected_elsewhere(basename_guard):
     # Reading a band file and redirecting stdout to a NON-band path is not a write to it.
     assert enforcer.classify_command("grep x enforcer.py > /tmp/out.txt")[0] == "allow"
 
 
-def test_still_denies_redirect_AT_band_file():
+def test_still_denies_redirect_AT_band_file(basename_guard):
     # The genuine write-AT-a-band-file via redirection stays denied (target IS the band
     # file), incl. the no-space and stderr-redirect forms.
     for cmd in ("echo x > enforcer.py", "echo x >>enforcer.py",
@@ -186,15 +206,15 @@ def test_still_denies_redirect_AT_band_file():
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
-def test_still_denies_file_mutating_command_at_band_file():
+def test_still_denies_file_mutating_command_at_band_file(basename_guard):
     # sed -i / cp / mv with a band file as an ARGUMENT stay denied.
-    for cmd in ("sed -i 's/x/y/' plugins/workhorse/lib/enforcer.py",
+    for cmd in ("sed -i 's/x/y/' plugins/superheroes/lib/enforcer.py",
                 "cp /tmp/x.py escalation.py",
                 "mv /tmp/x definition_doc.py"):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
-def test_denies_quoted_redirect_target_at_band_file():
+def test_denies_quoted_redirect_target_at_band_file(basename_guard):
     # security-001 / code-001: a QUOTED redirect target must still be denied. The old
     # whole-command tokenizer stripped quotes; the redirect-target path must too, else
     # `echo x > "enforcer.py"` becomes a guard bypass.
@@ -203,7 +223,7 @@ def test_denies_quoted_redirect_target_at_band_file():
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
-def test_denies_noclobber_and_combined_redirect_at_band_file():
+def test_denies_noclobber_and_combined_redirect_at_band_file(basename_guard):
     # premortem-001 (`>|` noclobber override) and test-001 (`&>`/`&>>` combined redirect):
     # both are redirect-AT-a-band-file forms and must be denied.
     for cmd in ("echo x >|enforcer.py", "python3 gen.py 2>|escalation.py",
@@ -211,24 +231,24 @@ def test_denies_noclobber_and_combined_redirect_at_band_file():
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
-def test_denies_sed_long_form_in_place_at_band_file():
+def test_denies_sed_long_form_in_place_at_band_file(basename_guard):
     # GNU sed's long-form `--in-place` (and `--in-place=SUFFIX`) is an in-place write just
     # like `-i`; a band file argument must be denied. An ordinary file stays allowed.
-    for cmd in ("sed --in-place 's/x/y/' plugins/workhorse/lib/enforcer.py",
+    for cmd in ("sed --in-place 's/x/y/' plugins/superheroes/lib/enforcer.py",
                 "sed --in-place=.bak 's/x/y/' hooks.json"):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
     assert enforcer.classify_command("sed --in-place 's/x/y/' src/app.py")[0] == "allow"
 
 
-def test_denies_dd_of_keyword_operand_at_band_file():
+def test_denies_dd_of_keyword_operand_at_band_file(basename_guard):
     # premortem-002: `dd` names its write destination with the `of=<path>` keyword operand,
     # not a bare positional arg, so the basename pre-filter must see through `of=`.
     for cmd in ("dd of=enforcer.py",
-                "dd bs=1 count=0 of=plugins/workhorse/lib/enforcer.py"):
+                "dd bs=1 count=0 of=plugins/superheroes/lib/enforcer.py"):
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
-def test_allows_quoted_nonband_redirect_target():
+def test_allows_quoted_nonband_redirect_target(basename_guard):
     # The broadened redirect/operand parsing must not over-deny a quoted NON-band target,
     # nor an ordinary dd whose of= destination is not a band file.
     assert enforcer.classify_command('python3 x.py > "/dev/null" 2>&1')[0] == "allow"
@@ -236,7 +256,7 @@ def test_allows_quoted_nonband_redirect_target():
     assert enforcer.classify_command("dd if=/dev/null of=/tmp/out bs=1")[0] == "allow"
 
 
-def test_denies_ampersand_redirect_at_band_file():
+def test_denies_ampersand_redirect_at_band_file(basename_guard):
     # security-001/code-001 (round 2): `>&<filename>` (and `>>&`) redirects BOTH stdout and
     # stderr INTO the file — a real truncating write, equivalent to `&>file`. Only the
     # `>&<digit>` / `>&-` forms are fd duplications. The filename form must be denied (the
@@ -270,28 +290,17 @@ def test_allows_edit_to_ordinary_file(monkeypatch, tmp_path):
     assert enforcer.classify_path(str(ordinary))[0] == "allow"
 
 
-def test_path_fail_closed_on_unresolvable(monkeypatch):
-    monkeypatch.setattr(band_lib, "resolve_target",
-                        lambda *a, **k: None)
-    assert enforcer.classify_path("/anything.py")[0] == "deny"
-
-
-def test_path_fail_closed_on_guard_nonzero_returncode(monkeypatch):
-    # test-003a: subprocess guard returns non-zero → deny (fail-closed).
-    _point_at_real_escalation(monkeypatch)
-
-    class _FakeResult:
-        returncode = 1
-        stdout = ""
-
-    monkeypatch.setattr(enforcer.subprocess, "run", lambda *a, **k: _FakeResult())
-    assert enforcer.classify_path(_ESC)[0] == "deny"
-
+# Equivalence note: `test_path_fail_closed_on_unresolvable` (band_lib.resolve_target -> None)
+# and `test_path_fail_closed_on_guard_nonzero_returncode` (subprocess returncode != 0) tested
+# branches that no longer exist in one tree — there is no cross-plugin lib to be unresolvable
+# and no guard subprocess to return non-zero. classify_path now calls escalation.is_safety_machinery
+# directly. The PRESERVED fail-closed branch (the try/except: any core error -> deny) is covered
+# by the re-expressed test below.
 
 def test_path_fail_closed_on_guard_exception(monkeypatch):
-    # test-003b: subprocess raises → deny (fail-closed).
-    _point_at_real_escalation(monkeypatch)
-    monkeypatch.setattr(enforcer.subprocess, "run",
+    # test-003b (re-expressed): the in-tree guard raising → deny (fail-closed). Patches the
+    # direct seam (escalation.is_safety_machinery) instead of the removed subprocess seam.
+    monkeypatch.setattr(enforcer.escalation, "is_safety_machinery",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     assert enforcer.classify_path(_ESC)[0] == "deny"
 
@@ -323,8 +332,9 @@ def test_gated_is_allowed_outside_a_superheroes_repo():
             assert enforcer.classify_command(cmd, host=host, in_scope=False)[0] == "allow", (host, cmd)
 
 
-def test_canary_and_safety_writes_are_unconditional_deny():
-    # Host/scope NEVER relax the unconditional surfaces.
+def test_canary_and_safety_writes_are_unconditional_deny(basename_guard):
+    # Host/scope NEVER relax the unconditional surfaces. (basename_guard so the bare
+    # `enforcer.py` safety-write target "resolves" — TARGET logic is what's under test.)
     for host in ("claude", "codex"):
         for scope in (True, False):
             assert enforcer.classify_command(": workhorse-enforcer-canary",
@@ -422,16 +432,10 @@ def test_hook_codex_shell_argv_list_command(capsys, tmp_path, monkeypatch):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_hook_apply_patch_to_safety_machinery_denies(monkeypatch, capsys):
+def test_hook_apply_patch_to_safety_machinery_denies(capsys):
     # Codex's native edit tool is `apply_patch`; an edit to band safety-machinery must be
-    # refused (the path lives in the patch body, not a file_path field).
-    def _target_aware(target, root=None, plugin_root=None):
-        if target == enforcer._ESC:
-            return _ESC
-        if target == enforcer._RC:
-            return _RC_ESC
-        return None
-    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    # refused (the path lives in the patch body, not a file_path field). No band_lib
+    # monkeypatch needed — _ESC is the REAL in-tree escalation.py, so the direct guard denies.
     patch = "*** Begin Patch\n*** Update File: %s\n@@\n-x\n+y\n*** End Patch\n" % _ESC
     enforcer.hook(json.dumps({"tool_name": "apply_patch",
                               "tool_input": {"input": patch}}), host="codex")
@@ -449,17 +453,11 @@ def test_hook_apply_patch_to_ordinary_file_is_silent(monkeypatch, capsys, tmp_pa
     assert rc == 0 and capsys.readouterr().out.strip() == ""
 
 
-def test_hook_apply_patch_add_and_move_to_safety_machinery_deny(monkeypatch, capsys):
+def test_hook_apply_patch_add_and_move_to_safety_machinery_deny(capsys):
     # The patch-target guard must catch every header variant that names a safety file,
     # not just `*** Update File:` — `*** Add File:` and `*** Move to:` too (moving an
-    # arbitrary file ONTO a safety basename is the security-interesting one).
-    def _target_aware(target, root=None, plugin_root=None):
-        if target == enforcer._ESC:
-            return _ESC
-        if target == enforcer._RC:
-            return _RC_ESC
-        return None
-    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    # arbitrary file ONTO a safety basename is the security-interesting one). _ESC is the real
+    # in-tree file, so the direct guard denies (no band_lib monkeypatch).
     for header in ("*** Add File: %s" % _ESC, "*** Move to: %s" % _ESC):
         patch = "*** Begin Patch\n%s\n@@\n+x\n*** End Patch\n" % header
         enforcer.hook(json.dumps({"tool_name": "apply_patch",
@@ -468,11 +466,11 @@ def test_hook_apply_patch_add_and_move_to_safety_machinery_deny(monkeypatch, cap
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny", header
 
 
-def test_hook_compound_safety_write_plus_gated_never_enters_allowance(capsys, tmp_path, monkeypatch):
+def test_hook_compound_safety_write_plus_gated_never_enters_allowance(capsys, tmp_path, monkeypatch, basename_guard):
     # A command that is BOTH a safety-machinery write AND a gated action must stay an
     # UNCONDITIONAL deny — it must not enter the Codex allowance overlay (else an owner
     # approving the merge would also wave the safety-write through). And no challenge is
-    # issued for it.
+    # issued for it. (basename_guard so the bare `enforcer.py` write target "resolves".)
     import allowance
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
     scoped = _scoped_cwd(tmp_path)
@@ -517,48 +515,27 @@ def test_denies_merge_api_with_variable_pr_number():
         "gh api repos/o/r/pulls/${PR_NUMBER}/merge --method PUT")[0] == "deny"
 
 
-# --- review-crew band-root anchoring (code-code-001) ---
-def test_denies_edit_to_review_crew_safety_file(monkeypatch):
-    # Target-aware monkeypatch: return the real escalation.py for the _ESC target
-    # and the real escalation_resolve.py for the _RC target, so band_roots covers
-    # the review-crew plugin root and classify_path correctly denies loop_state.py.
-    def _target_aware(target, root=None, plugin_root=None):
-        if target == enforcer._ESC:
-            return _ESC
-        if target == enforcer._RC:
-            return _RC_ESC
-        return None
-    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+# --- band-root anchoring (code-code-001) ---
+def test_denies_edit_to_review_crew_safety_file():
+    # In one tree the (formerly review-crew) safety files live under the single merged plugin
+    # root, which is exactly what classify_path anchors against. No band_lib monkeypatch — the
+    # direct guard denies the real in-tree loop_state.py via band-root anchoring.
     assert enforcer.classify_path(_RC_LOOP)[0] == "deny"
 
 
 # --- hook() Edit/Write dispatch branch (test-test-001) ---
-def test_hook_denies_edit_to_safety_machinery(monkeypatch, capsys):
+def test_hook_denies_edit_to_safety_machinery(capsys):
     # End-to-end: hook() with an Edit payload whose file_path is a safety-machinery
-    # file must emit a deny.
-    def _target_aware(target, root=None, plugin_root=None):
-        if target == enforcer._ESC:
-            return _ESC
-        if target == enforcer._RC:
-            return _RC_ESC
-        return None
-    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
+    # file must emit a deny. _ESC is the real in-tree file → the direct guard denies.
     enforcer.hook(json.dumps({"tool_name": "Edit",
                               "tool_input": {"file_path": _ESC}}))
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_hook_allows_edit_to_ordinary_file_is_silent(monkeypatch, capsys, tmp_path):
+def test_hook_allows_edit_to_ordinary_file_is_silent(capsys, tmp_path):
     # End-to-end: hook() with an Edit payload for an ordinary (non-safety) file
     # must be silent (allow).
-    def _target_aware(target, root=None, plugin_root=None):
-        if target == enforcer._ESC:
-            return _ESC
-        if target == enforcer._RC:
-            return _RC_ESC
-        return None
-    monkeypatch.setattr(band_lib, "resolve_target", _target_aware)
     ordinary = tmp_path / "app.py"
     ordinary.write_text("x = 1\n")
     rc = enforcer.hook(json.dumps({"tool_name": "Edit",

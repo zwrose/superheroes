@@ -1,18 +1,17 @@
-"""Tests for review-crew's gate-write handshake helper (`gate_write`).
+"""Tests for the gate-write handshake helper (`gate_write`).
 
 This is the unit coverage the gate machinery never had while it was inlined SKILL bash —
 the exact behaviors the old manual harnesses proved: canonical-only writes, the parent-gate
-precondition (downgrade passed→changes-requested), fail-closed when the-architect lib is
-absent, and the review-spec reset (revoke a stale `passed`→`pending`, never grant). Driven
-through `main()` (the CLI the skills call), against a temp root with the-architect symlinked
-in so the in-repo resolver finds the real lib while docs stay isolated.
+precondition (downgrade passed→changes-requested), fail-closed when the frontmatter writer
+errors, and the review-spec reset (revoke a stale `passed`→`pending`, never grant). Driven
+through `main()` (the CLI the skills call), against a temp root. In the consolidated tree
+gate_write imports `definition_doc` directly (same-tree sibling) — no the-architect symlink
+fixture is needed; docs stay isolated in the temp root.
 """
 import importlib.util
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
-_REAL_ARCHITECT = os.path.join(_REPO_ROOT, "plugins", "superheroes")
 WI = "add-thing-50c082"
 
 
@@ -24,15 +23,15 @@ def _load(path, name):
 
 
 GW = _load(os.path.join(_HERE, "..", "gate_write.py"), "gate_write")
-DD = _load(os.path.join(_REAL_ARCHITECT, "lib", "definition_doc.py"), "architect_definition_doc")
+DD = _load(os.path.join(_HERE, "..", "definition_doc.py"), "definition_doc_under_test")
 
 
-def _docs_root(tmp_path, with_architect=True):
+def _docs_root(tmp_path):
+    # Equivalence note: the old `with_architect` symlink fixture is gone — gate_write now
+    # imports definition_doc in-tree, so there is no cross-plugin lib to symlink in. Only the
+    # docs/superheroes/<wi>/ layout (owned by definition_doc) is created.
     root = tmp_path / "repo"
-    os.makedirs(DD.work_item_dir(WI, str(root)))  # the-architect owns the layout — derive, don't inline
-    if with_architect:
-        (root / "plugins").mkdir(parents=True)
-        os.symlink(_REAL_ARCHITECT, str(root / "plugins" / "the-architect"))
+    os.makedirs(DD.work_item_dir(WI, str(root)))  # definition_doc owns the layout — derive, don't inline
     return str(root)
 
 
@@ -55,8 +54,8 @@ def _gate(root, doc):
 
 
 def test_canonical_path_matches_the_architect(tmp_path):
-    # arch-r3-001: gate_write._canonical re-encodes the-architect's docs/superheroes/<wi>/<doc>.md
-    # layout so the samefile guard runs without a subprocess. the-architect's doc_path() OWNS that
+    # arch-r3-001: gate_write._canonical re-encodes definition_doc's docs/superheroes/<wi>/<doc>.md
+    # layout so the samefile guard runs without a subprocess. definition_doc's doc_path() OWNS that
     # layout; pin the two equal so a layout change there (e.g. a versioned subdir) can't silently
     # drift gate_write's guard — which would re-open the wrong-file hole the guard exists to close.
     root = str(tmp_path / "repo")
@@ -136,20 +135,27 @@ def test_certify_set_gate_failure_reports(tmp_path, capsys):
     assert rc == 3 and out == "failed:set-gate"  # certify could not record the verdict → non-zero
 
 
-def test_certify_lib_absent_fails_closed(tmp_path, capsys):
-    # GATE-INTEGRITY (the self-certify hole): when the-architect's lib can't be resolved,
-    # certify produces a verdict it cannot record and leaves the gate at 'pending'. That
-    # 'pending' is INDISTINGUISHABLE from "review-plan never ran", so the-architect's
-    # self-certify branch would upgrade it to 'passed' — a green gate with no real review.
-    # certify must therefore exit NON-ZERO so the failure cannot be silently swallowed as
-    # if it were a graceful skip. (reset mode stays exit-0 — it is advisory and never
-    # grants passed; see test_reset_lib_absent_fails_closed, the control.)
-    root = _docs_root(tmp_path, with_architect=False)  # no the-architect resolvable
-    plan = _write(root, "plan")
+# Equivalence note: the old `test_certify_lib_absent_fails_closed` / `test_reset_lib_absent_fails_closed`
+# tested a state (the-architect's cross-plugin lib unresolvable -> `skipped:lib-absent` / exit 3)
+# that can no longer occur in one tree — definition_doc is a same-tree sibling, never absent. They
+# are deleted. The wrapping try/except IS still reachable (a definition_doc CALL raising); the
+# replacement test below covers that preserved fail-closed branch (the self-certify-hole floor:
+# the gate is NOT advanced to `passed`, the outcome is `failed:set-gate`, exit 3).
+
+def test_certify_set_gate_raises_fails_closed(tmp_path, capsys, monkeypatch):
+    # GATE-INTEGRITY (the self-certify hole), via the direct seam: if definition_doc.set_gate
+    # RAISES, certify produces a verdict it cannot record. It must NOT advance the gate to
+    # 'passed' (a green gate with no real review) and must exit NON-ZERO (failed:set-gate) so
+    # the failure isn't silently swallowed. The gate stays at its prior 'pending'.
+    root = _docs_root(tmp_path)
+    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    plan = _write(root, "plan")  # canonical, pending
+    monkeypatch.setattr(GW.definition_doc, "set_gate",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("induced write failure")))
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
                    "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
-    assert rc == 3 and out == "skipped:lib-absent"
-    assert _gate(root, "plan") == "pending"  # nothing recorded — and now the caller sees a non-zero exit
+    assert rc == 3 and out == "failed:set-gate"
+    assert _gate(root, "plan") == "pending"  # NOT advanced to passed — the floor holds
 
 
 # --- reset (review-spec stale approval) -----------------------------------
@@ -194,14 +200,10 @@ def test_reset_skipped_when_gate_unreadable(tmp_path, capsys):
     assert rc == 0 and out == "skipped:unreadable"
 
 
-def test_reset_lib_absent_fails_closed(tmp_path, capsys):
-    root = _docs_root(tmp_path, with_architect=False)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
-    rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
-                   "--reviewed-path", spec, "--root", root)
-    assert rc == 0 and out == "skipped:lib-absent"
-    assert _gate(root, "spec") == "passed"  # could not reset; warned (stderr)
-
+# Equivalence note: `test_reset_lib_absent_fails_closed` (the reset control for the deleted
+# certify lib-absent test) is removed for the same reason — no cross-plugin lib to be absent in
+# one tree. reset mode's preserved fail-closed branch (set-gate fails -> stale 'passed' remains,
+# token failed:set-gate) is covered by test_reset_set_gate_failure_reports below.
 
 def test_reset_set_gate_failure_reports(tmp_path, capsys, monkeypatch):
     # The reset twin of test_certify_set_gate_failure_reports. read-gate must SUCCEED and return

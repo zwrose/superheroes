@@ -1,34 +1,25 @@
 """step 9 Handoff readout builder + the secret-scrub seam. Any CI-log / env-derived
-content Workhorse emits passes through test-pilot's pr_comment.py `scrub` (the
-band's single scrub source). If test-pilot is unresolvable, unscrubbable content
-is DROPPED (fail-closed: never leak), and the readout notes the omission. Merge is
-always the owner's — the readout says so.
+content Workhorse emits passes through pr_comment.py's `scrub` (the band's single
+scrub source). In the consolidated one-plugin tree pr_comment is a same-tree sibling,
+so this imports it directly (no resolver, no subprocess). If scrubbing fails for ANY
+reason, unscrubbable content is DROPPED (fail-closed: never leak), and the readout notes
+the omission. Merge is always the owner's — the readout says so.
 """
 import os
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import band_lib  # noqa: E402
-
-_PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SCRUB = ("test-pilot", "lib", "pr_comment.py")
+import pr_comment  # noqa: E402  (same-tree sibling; the band's single scrub source)
 
 
 def scrub(text, root=None):
-    """Scrub via test-pilot's pr_comment.py. Returns (scrubbed, ok). On any
-    failure ok=False and the text is REPLACED with a redaction note (never raw)."""
+    """Scrub via pr_comment.scrub. Returns (scrubbed, ok). On any failure ok=False and the
+    text is REPLACED with a redaction note (never raw). `root` is accepted for call-site
+    compatibility; the in-tree scrubber needs no resolution."""
     if not text:
         return ("", True)
-    lib = band_lib.resolve_target(_SCRUB, root=root, plugin_root=_PLUGIN_ROOT)
-    if lib is None:
-        return ("[omitted — scrubber unavailable]", False)
     try:
-        p = subprocess.run([sys.executable, lib, "scrub"], input=text,
-                           capture_output=True, text=True, timeout=15)
-        if p.returncode != 0:
-            return ("[omitted — scrub failed]", False)
-        return (p.stdout, True)
+        return (pr_comment.scrub(text), True)
     except Exception:
         return ("[omitted — scrub error]", False)
 

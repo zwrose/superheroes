@@ -21,30 +21,32 @@ def _run(capsys, *args):
 
 
 def test_resolves_via_core_when_present(capsys):
-    # No --root, real CLAUDE_PLUGIN_ROOT unset: in dogfood the repo root resolves
-    # the-architect via --root. Point --root at the repo so the core is found.
-    root = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
-    rc, out = _run(capsys, "--role", "mechanical", "--root", root)
+    # The core is a same-tree sibling now — it always resolves; the call is direct.
+    rc, out = _run(capsys, "--role", "mechanical")
     assert rc == 0 and out["role"] == "mechanical" and out["model"] == "haiku"
     assert out["degraded"] is False
 
 
-def test_core_absent_fails_open_to_embedded_default(capsys, tmp_path):
-    rc, out = _run(capsys, "--role", "reviewer", "--root", str(tmp_path))
+def test_core_error_fails_open_to_embedded_default(capsys, monkeypatch):
+    # Equivalence note: the old "core absent / subprocess garbage -> fail-open" tests are
+    # replaced by the direct-seam core-error branch (the lib is always resolvable in one
+    # tree). Posture is UNCHANGED: any core error -> the embedded fallback, degraded True.
+    monkeypatch.setattr(MTR.model_tier, "resolve_model",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    rc, out = _run(capsys, "--role", "reviewer")
     assert rc == 0 and out["model"] == "sonnet" and out["degraded"] is True
 
 
-def test_subprocess_garbage_fails_open(capsys, tmp_path, monkeypatch):
-    monkeypatch.setattr(MTR, "_resolve", lambda root: "/some/model_tier.py")
-    monkeypatch.setattr(MTR, "_subprocess_json", lambda lib, cli: None)
-    rc, out = _run(capsys, "--role", "reviewer-deep", "--root", str(tmp_path))
+def test_core_error_fails_open_for_reviewer_deep(capsys, monkeypatch):
+    monkeypatch.setattr(MTR.model_tier, "resolve_model",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    rc, out = _run(capsys, "--role", "reviewer-deep")
     assert rc == 0 and out["model"] == "opus" and out["degraded"] is True
 
 
-def test_embedded_fallback_matches_the_core(capsys):
+def test_embedded_fallback_matches_the_core():
     # _FALLBACK re-encodes the core's DEFAULT_TIERS for the degrade path; guard
-    # against silent drift so the fallback never serves a stale tier table.
-    root = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
-    core = _load(os.path.join(root, "plugins", "the-architect", "lib", "model_tier.py"),
-                 "model_tier_core")
+    # against silent drift so the fallback never serves a stale tier table. The core
+    # is now the in-tree sibling (repointed from plugins/the-architect/lib/model_tier.py).
+    core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core")
     assert MTR._FALLBACK == core.DEFAULT_TIERS

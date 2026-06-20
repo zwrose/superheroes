@@ -1,67 +1,73 @@
 #!/usr/bin/env python3
-"""review-crew-local wrapper for the cross-plugin escalation core (F5).
+"""Skill-facing wrapper for the escalation core (F5).
 
-The skills call THIS (at a known ${CLAUDE_PLUGIN_ROOT}/lib path), never the resolved
-cross-plugin path directly — exactly as they call gate_write.py. It resolves
-the-architect's escalation.py via architect_lib, subprocesses it, and owns the
-fail-closed degradation: if the lib is unresolvable, it falls back to the conservative
-posture (GATE / refuse), never to a silent proceed/allow. Output: JSON to stdout with a
-`degraded` flag so the skill can note the fallback.
+The skills call THIS (at a known ${CLAUDE_PLUGIN_ROOT}/lib path), never the core
+directly — exactly as they call gate_write.py. In the consolidated one-plugin tree the
+core (`escalation.py`) is a same-tree sibling, so this wrapper imports it directly (no
+cross-plugin resolution, no subprocess) and owns the fail-closed degradation: on ANY core
+error it falls back to the conservative posture (GATE / on-floor / refuse), never to a
+silent proceed/allow. Output: JSON to stdout with a `degraded` flag so the skill can note
+the fallback.
 """
 import argparse
 import json
 import os
-import subprocess
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
-import architect_lib  # noqa: E402
+import escalation  # noqa: E402  (same-tree sibling; no architect_lib, no subprocess)
 
-_PLUGIN_ROOT = os.path.dirname(_LIB_DIR)               # review-crew plugin root
-_ESC = ("the-architect", "lib", "escalation.py")
-_RUBRIC = ("the-architect", "rubric", "escalation-base.md")
+_PLUGIN_ROOT = os.path.dirname(_LIB_DIR)               # the consolidated superheroes plugin root
+_RUBRIC = ("rubric", "escalation-base.md")
 
 
 def _say(detail):
     sys.stderr.write(detail + "\n")
 
 
-def _resolve(root):
-    return architect_lib.resolve_target(_ESC, root=root, plugin_root=_PLUGIN_ROOT)
+def _safe(fn, conservative, **kw):
+    """Call the core directly; on ANY error return the conservative fail-closed default.
 
-
-def _subprocess_json(lib, cli_args):
-    p = subprocess.run([sys.executable, lib, *cli_args], capture_output=True, text=True)
-    if p.returncode != 0:
-        return None
+    Returns (result, degraded): `degraded` is True iff the conservative fallback was used.
+    """
     try:
-        return json.loads(p.stdout.strip())
-    except (ValueError, json.JSONDecodeError):
-        return None
+        return fn(**kw), False
+    except Exception:
+        return conservative, True
 
 
 def _band_roots(root):
-    """Resolved plugin roots to anchor the canonical-path guard against: this review-crew
-    install, the resolved the-architect install, and — when --root is given (dogfood / in-repo)
-    — the in-repo plugin dirs. The guard refuses a safety-named file under ANY of them, so a
-    like-named file in the target repo (outside these roots) is NOT falsely refused.
+    """Resolved plugin roots to anchor the canonical-path guard against: this (single)
+    superheroes install, and — when --root is given (dogfood / in-repo) — the in-repo plugin
+    dir. The guard refuses a safety-named file under ANY of them, so a like-named file in the
+    target repo (outside these roots) is NOT falsely refused. The three per-plugin roots
+    collapsed to the one merged plugin root when the band consolidated into one plugin.
     """
     roots = [_PLUGIN_ROOT]
-    arch = _resolve(root)                               # .../the-architect[/<ver>]/lib/escalation.py
-    if arch:
-        roots.append(os.path.dirname(os.path.dirname(arch)))
     if root:
-        for p in ("review-crew", "the-architect", "workhorse"):
-            cand = os.path.join(root, "plugins", p)
-            if os.path.isdir(cand):
-                roots.append(cand)
+        cand = os.path.join(root, "plugins", "superheroes")
+        if os.path.isdir(cand):
+            roots.append(cand)
     return roots
 
 
+def _resolve_rubric(root):
+    """Resolve rubric/escalation-base.md under the plugin root directly (no architect_lib).
+    In-repo (root/plugins/superheroes/...) wins; else the wrapper's own plugin root."""
+    if root:
+        cand = os.path.join(root, "plugins", "superheroes", *_RUBRIC)
+        if os.path.isfile(cand):
+            return os.path.abspath(cand)
+    cand = os.path.join(_PLUGIN_ROOT, *_RUBRIC)
+    if os.path.isfile(cand):
+        return os.path.abspath(cand)
+    return None
+
+
 def _build_parser():
-    ap = argparse.ArgumentParser(description="escalation core wrapper (review-crew)")
+    ap = argparse.ArgumentParser(description="escalation core wrapper (superheroes)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def add_root(parser):
@@ -77,11 +83,19 @@ def _build_parser():
     return ap
 
 
+def _as_bool(s):
+    if s in ("true", "True", "1", "yes"):
+        return True
+    if s in ("false", "False", "0", "no"):
+        return False
+    return s   # pass through so route() fail-closes on a bad value
+
+
 def main(argv):
     args = _build_parser().parse_args(argv[1:])          # --root lives on each subparser
 
     if args.cmd == "rubric":
-        path = architect_lib.resolve_target(_RUBRIC, root=args.root, plugin_root=_PLUGIN_ROOT)
+        path = _resolve_rubric(args.root)
         if path is None:
             _say("escalation-base.md not resolvable — the skill must apply the embedded "
                  "fail-closed posture (apply the floor; GATE anything owner-weighable).")
@@ -90,46 +104,28 @@ def main(argv):
         sys.stdout.write(json.dumps({"path": path, "degraded": False}) + "\n")
         return 0
 
-    lib = _resolve(args.root)
-
     if args.cmd == "route":
-        if lib is None:
-            _say("escalation.py not resolvable — applying the conservative fallback (GATE).")
-            sys.stdout.write(json.dumps({"mode": "gate", "degraded": True}) + "\n")
-            return 0
-        res = _subprocess_json(lib, ["route", "--on-floor", args.on_floor,
-                                     "--ground-truth-locus", args.ground_truth_locus,
-                                     "--owner-weighable", args.owner_weighable,
-                                     "--reversible", args.reversible,
-                                     "--confidence", args.confidence])
-        ok = bool(res) and "mode" in res
-        mode = res["mode"] if ok else "gate"                       # fail closed
-        degraded = not ok
+        axes = {"on_floor": _as_bool(args.on_floor),
+                "ground_truth_locus": args.ground_truth_locus,
+                "owner_weighable": _as_bool(args.owner_weighable),
+                "reversible": _as_bool(args.reversible),
+                "confidence": args.confidence}
+        mode, degraded = _safe(escalation.route, "gate", axes=axes)  # fail closed -> gate
+        if degraded:
+            _say("escalation.route errored — applying the conservative fallback (GATE).")
         sys.stdout.write(json.dumps({"mode": mode, "degraded": degraded}) + "\n")
         return 0
 
     if args.cmd == "classify":
-        if lib is None:
-            sys.stdout.write(json.dumps({"on_floor": True, "degraded": True}) + "\n")  # conservative
-            return 0
-        res = _subprocess_json(lib, ["classify", "--action", args.action])
-        ok = bool(res) and "on_floor" in res
-        on_floor = res["on_floor"] if ok else True                 # fail closed
-        degraded = not ok
+        on_floor, degraded = _safe(escalation.classify_floor, True, descriptor=args.action)
         sys.stdout.write(json.dumps({"on_floor": on_floor, "degraded": degraded}) + "\n")
         return 0
 
     if args.cmd == "guard":
-        if lib is None:
-            sys.stdout.write(json.dumps({"allow": False, "degraded": True}) + "\n")  # refuse
-            return 0
-        band_args = []
-        for r in _band_roots(args.root):
-            band_args += ["--band-root", r]
-        res = _subprocess_json(lib, ["guard", "--path", args.path, *band_args])
-        ok = bool(res) and "allow" in res
-        allow = res["allow"] if ok else False                      # fail closed
-        degraded = not ok
+        # conservative=True (treat as safety machinery -> refuse) on any core error.
+        safety, degraded = _safe(escalation.is_safety_machinery, True,
+                                 path=args.path, band_roots=_band_roots(args.root))
+        allow = not safety   # fail closed: error -> safety True -> allow False (refuse)
         sys.stdout.write(json.dumps({"allow": allow, "degraded": degraded}) + "\n")
         return 0
     return 2
