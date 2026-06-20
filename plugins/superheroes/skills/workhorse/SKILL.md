@@ -243,7 +243,7 @@ None detected → no spot-check server; note it and skip steps 4/5/6. Otherwise:
 ## 5 Behavioral — test-pilot (two skills) — runnable surface only
 
 Before writing seed data: `ref_lock.renew(store, WORK_ITEM, generation)` then
-**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort (superseded).
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)`** — stale generation ⇒ abort (superseded).
 
 Emit step_entered/step_completed journal events; write checkpoint.
 
@@ -256,7 +256,7 @@ failure it can fix → fix + re-verify; else → GATE.
 ## 6 Reset — engine clean (state-scoped, protected-gated)
 
 Before the reset write: `ref_lock.renew(store, WORK_ITEM, generation)` then
-**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)`** — stale generation ⇒ abort.
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="verify", lastGoodStep=6, lockGeneration=generation)` after a successful reset/verify_empty.
 
@@ -277,7 +277,7 @@ Regardless of step 5 pass/fail, reset the seeded data via test-pilot's engine (`
 ## 7 Ready — world-read before world-write (idempotent)
 
 Before flipping draft: `ref_lock.renew(store, WORK_ITEM, generation)` then
-**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)`** — stale generation ⇒ abort.
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="verify", lastGoodStep=7, lockGeneration=generation)`.
 
@@ -291,7 +291,7 @@ PR state.
 
 Before any push (the freshen push **and** any CI-fix push):
 `ref_lock.renew(store, WORK_ITEM, generation)` then
-**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)`** — stale generation ⇒ abort.
 
 CI is evaluated on the **ready, integrated HEAD** — never a stale branch. A green
 check on a branch that is behind its base proves nothing about the merge, so this step
