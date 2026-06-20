@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "review the spec definition-doc before the owner gives final approval",
+    "red-team the requirements spec and report a readiness verdict",
+    "check the plain-language requirements doc and improve it before owner sign-off",
+    "review the spec for EARS requirements quality and unhappy-path coverage"
+  ],
+  "should_not_fire": [
+    "review the plan document before it advances to tasks",
+    "review the tasks doc before the build runs"
+  ]
+}

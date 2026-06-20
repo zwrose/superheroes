@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "I have a new piece of work and need an owner-approved requirements spec",
+    "let's start discovery on this feature idea before any technical planning",
+    "the owner has a fuzzy idea for a new feature, turn it into a spec",
+    "elicit requirements from the owner and produce a spec definition-doc"
+  ],
+  "should_not_fire": [
+    "turn the approved spec into a technical plan",
+    "decompose the approved plan into executable tasks"
+  ]
+}

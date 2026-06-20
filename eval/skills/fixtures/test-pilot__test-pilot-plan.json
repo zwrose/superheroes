@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "write a test plan with seeded data for this PR",
+    "seed test data for this pull request and post a checkbox plan",
+    "set up manual testing with test-pilot for this branch",
+    "create a manual test plan before I review this change"
+  ],
+  "should_not_fire": [
+    "run the test plan and pilot the PR in the browser",
+    "set up the test-pilot profile for this project"
+  ]
+}

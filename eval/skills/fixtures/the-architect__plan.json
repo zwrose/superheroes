@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "the spec is approved, now turn it into the technical plan",
+    "design the architecture and data flow for this approved work item",
+    "produce the plan definition-doc with overall approach and key decisions",
+    "after a spec is approved, generate the technical how document"
+  ],
+  "should_not_fire": [
+    "elicit requirements and produce a spec from the owner's idea",
+    "decompose the approved plan into bite-sized executable tasks"
+  ]
+}

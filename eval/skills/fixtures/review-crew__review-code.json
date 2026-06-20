@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "review my code changes before I merge",
+    "look over this open pull request for bugs",
+    "review the diff on my local branch and auto-fix what you find",
+    "check this PR for correctness issues and post findings to GitHub"
+  ],
+  "should_not_fire": [
+    "sweep the whole repo for accumulated technical debt",
+    "set up a review profile for this project"
+  ]
+}
