@@ -43,3 +43,11 @@ def skill_digest(description, body):
 
 def iter_skill_paths(plugins_root):
     return sorted(glob.glob(os.path.join(plugins_root, "*", "skills", "*", "SKILL.md")))
+
+
+import json
+
+
+def load_registry(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
