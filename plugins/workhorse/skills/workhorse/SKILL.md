@@ -1,6 +1,6 @@
 ---
 name: workhorse
-description: Use when an approved tasks doc (gates.review == passed) should be BUILT and shipped to a ready-for-review PR — "run the producer", "build this work item", "take this to a PR", "workhorse it". The per-issue back-half engine: it builds (subagent-driven-development), reviews (review-crew:review-code), opens a draft PR, exercises the change (test-pilot), resets seeded data, gets CI green, and hands you a live dev server + a plain-language readout. It NEVER merges — that is always yours.
+description: Use when an approved tasks doc (gates.review == passed) should be BUILT and shipped to a ready-for-review PR — "run the producer", "build this work item", "take this to a PR", "workhorse it". Builds, reviews, opens a draft PR, exercises the change, gets CI green, and hands you a readout. It NEVER merges — that is always yours.
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.

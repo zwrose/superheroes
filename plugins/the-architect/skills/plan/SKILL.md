@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Use after a `spec` is approved, to turn it into the technical `plan` (the *how*) for a work-item — overall approach, architecture, components & interfaces, data flow, key decisions, risks. This is superheroes' Plan phase: it runs LARGELY AUTONOMOUSLY (the owner lives in the *what*; the *how* is automated away), pausing ONLY to escalate genuinely consequential decisions in plain-language pros/cons. Produces the `plan` definition-doc and runs review-plan. Not for requirements (that is `discovery`) or step-by-step tasks (that is `tasks`).
+description: Use after a `spec` is approved, to turn it into the technical `plan` (the *how*) for a work-item — approach, architecture, data flow, key decisions, risks. It runs LARGELY AUTONOMOUSLY, pausing only to escalate consequential decisions. Produces the `plan` definition-doc and runs review-plan. Not for requirements (that is `discovery`) or step-by-step tasks (that is `tasks`).
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.

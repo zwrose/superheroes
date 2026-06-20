@@ -1,6 +1,6 @@
 ---
 name: review-tasks
-description: Use to review the-architect's `tasks` definition-doc (the bite-sized, test-first executable steps for a work-item) before the producer's Build runs it. Red-teams the tasks doc against the base rubric with the five specialist agents, revises it in place, and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads. The Tasks leg of the superheroes review trio (review-spec / review-plan / review-tasks).
+description: Use to review the-architect's `tasks` definition-doc (the bite-sized, test-first executable steps for a work-item) before the producer's Build runs it. Revises it in place and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads.
 user-invocable: true
 ---
 

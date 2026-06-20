@@ -2,6 +2,6 @@
   "recordedAt": "2026-06-19",
   "knownRedCeilings": [],
   "allowedUnresolvedRefs": ["workhorse/workhorse:lib/loop_state.py"],
-  "combinedDescriptionChars": null,
+  "combinedDescriptionChars": 5873,
   "carveOuts": {}
 }
