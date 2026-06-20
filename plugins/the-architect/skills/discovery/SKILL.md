@@ -3,7 +3,7 @@ name: discovery
 description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half — the *what*, in plain language, no technical implementation. Elicits requirements (incl. significant unhappy paths) with the owner, produces the `spec` definition-doc, and ends with the owner's approval. Not for technical approach (that is `plan`) or steps (that is `tasks`).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Discovery
 
@@ -44,8 +44,11 @@ Create a TodoWrite item for each step and complete them in order:
 
 ### 1. Initial context gathering
 
-- Explore the project first: `CLAUDE.md`, `README`, recent commits, existing
-  `docs/superheroes/` specs. Understand what already exists before asking.
+- **`CLAUDE.md` is mandatory context, not optional reading.** If it is **not
+  already in your context, read it now** (plus any nested `CLAUDE.md` governing
+  paths you'll touch) before gathering anything else — its rules are binding and
+  override your defaults. Then explore the rest: `README`, recent commits, and any
+  existing `docs/superheroes/` specs — understand what exists before asking.
 - **You are the Discovery engine for this project.** Requirements work in a
   superheroes project routes here — do **not** invoke superpowers `brainstorming`.
   You may borrow its *technique* (one question at a time, explore before deciding,
@@ -145,7 +148,7 @@ If the owner doesn't have or doesn't want to use Claude Design, **don't block** 
 capture the UI/UX as a plain-language description of the key screens and states in
 the spec instead.
 
-**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
+**Design-capture peer (host-neutral):** capture the design source using the path appropriate for your host — Claude Design on Claude Code; the host-native design-capture path on Codex (resolve via `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`). Record *which* source was used in the spec's `## UI / UX` section so the artifact is traceable regardless of host.
 
 `mcp__visualize__show_widget` (inline SVG/HTML) may help for a quick option
 comparison **on graphical clients only** — it does **not** render in a terminal, so
@@ -159,11 +162,14 @@ outcomes, UI/UX, definition of done, assumptions, constraints, out-of-scope. Ask
 after each section whether it's right. **Do not proceed past this gate until the
 owner explicitly approves the *what*.** Revise and re-present as needed.
 
-Settle two things here with the owner:
-- **Title** — a concise work-item title. It's the sole input to the *frozen*
-  work-item slug (§6.1), so confirm it with the owner; it shouldn't be improvised.
-- **`size`** (`small | medium | large`) — owner-chosen or inferred from scope. It's
-  frozen into the spec and inherited by plan/tasks (§6.4).
+Decide two things here **yourself** — never make the owner pick them:
+- **Title / slug** — choose a concise, accurate work-item title from the approved
+  requirements; it's the sole input to the *frozen* work-item slug (§6.1), so pick it
+  deliberately (it can't change later). Don't ask the owner to choose or confirm it —
+  they'll see it in the spec they review.
+- **`size`** (`small | medium | large`) — infer it from the scope of the approved
+  requirements. The skill decides; the owner never picks. It's frozen into the spec
+  and inherited by plan/tasks (§6.4).
 
 ### 6. Author the spec via `writing-specs`
 

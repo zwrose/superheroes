@@ -18,10 +18,12 @@ from validate_marketplace import SEMVER
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PLUGINS = os.path.join(REPO, "plugins")
 SEAM = '${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}'
-# The pointer line must use the literal host-neutral placeholder (CONVENTIONS §7.1).
-# Keep this exact — a broader pattern like `hosts/.*-tools\.md` lets a malformed line
-# (e.g. a hardcoded `hosts/claude-tools.md`) pass the check.
-POINTER_RE = re.compile(r"hosts/<your-host>-tools\.md")
+# The pointer line must resolve via the portable seam (CONVENTIONS §7.1): a bare
+# `hosts/<your-host>-tools.md` anchors at the skill's own folder (which has no hosts/),
+# so require the ${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}} prefix. This also rejects a
+# hardcoded host (e.g. ${...}/hosts/claude-tools.md) — the <your-host> placeholder
+# is still required.
+POINTER_RE = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT:-\$\{PLUGIN_ROOT\}\}/hosts/<your-host>-tools\.md")
 BANNED = ("subagent_type", "the Agent tool", "the Skill tool", "the Task tool")
 
 def lint_skill(text):

@@ -245,7 +245,7 @@ These are the base rubric's binding verification rules; they are restated in eve
 | Eyeballing "are we stuck?" by hand                      | Always call `circuit_breaker.py`. Finding-identity comparison across rounds is deterministic; manual judgment drifts after compaction.                             |
 | Exiting the loop early because a fix "looks done"       | The continue decision is `loop_state.py`'s, not yours (step 14). A blocking fix → another round is **mandatory**. "Trivial fix / it'll be clean / save the tokens / I'll offer it as optional" are the rationalizations it overrides — unverified fixes ship exactly this way. |
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
-| Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).                  |
+| Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).                  |
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |
 
 ---

@@ -38,7 +38,7 @@ The `severity × inverse-effort` sort means an `Important + Quick` finding ranks
 | Running this before every PR                                       | This skill is slow and broad by design. Run it monthly. For PR review, use `/review-crew:review-code`.                                                                     |
 | Filing noisy findings the owner won't action                       | Issue-filing is NOTIFY — findings are filed by default and reported back; use the **File** / **Drop** deselect pass to trim, and hard-floor trackers (public/shared/paid) still GATE.                           |
 | Running a deps pass when no audit tool ran                         | The deps audit is ecosystem-aware and skips gracefully (no manifest, or tool absent). If §1 wrote no audit artifact, emit no deps findings — don't invent advisories.     |
-| Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).                          |
+| Dispatching reviewers by reading an agent file                     | The four reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via the host tool map (`hosts/<host>-tools.md` at the plugin root)).                          |
 | Skipping the profile bootstrap                                     | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                                 |
 
 ## Recording Decisions (Helper Reference)
