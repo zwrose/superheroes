@@ -28,6 +28,7 @@ def write_profile(
     dep_set=None,
     default_branch="main",
     forge="github",
+    verify="verifybin --run",
 ):
     """Write a minimal review-profile.md provenance block and return its path."""
     if dep_set is None:
@@ -57,7 +58,7 @@ def write_profile(
         deps=deps,
         branch=default_branch,
         forge=forge,
-        verify="verifybin --run",
+        verify=verify,
     )
     p = tmp_path / "review-profile.md"
     p.write_text(body)
@@ -195,6 +196,40 @@ def test_verify_binary_absent_drifts(tmp_path, capsys):
     rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
     assert rc == 0
     assert any("verify" in d.lower() for d in res["drift"])
+
+
+def test_verify_path_missing_drifts(tmp_path, capsys):
+    # The verify command names a test path that does not exist under root — the
+    # staleness class from issue #16 (a suite moved/removed, command not updated).
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify="verifybin -m pytest plugins/gone/tests/ -q")
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert any("missing path" in d.lower() for d in res["drift"])
+    assert any("plugins/gone/tests" in d for d in res["drift"])
+    assert res["signal_hash"] != ""
+
+
+def test_verify_path_present_no_drift(tmp_path, capsys):
+    # Every path the verify command names exists under root → no path drift.
+    root, env = make_root(tmp_path, src_dirs=["plugins/here/tests"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify="verifybin -m pytest plugins/here/tests/ -q")
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert not any("missing path" in d.lower() for d in res["drift"])
+
+
+def test_verify_path_glob_or_var_not_flagged(tmp_path, capsys):
+    # Tokens we can't resolve statically (shell vars, globs) must never be
+    # reported as missing — only concrete, resolvable paths are checked.
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify='verifybin "$suite" packages/*/tests -q')
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert not any("missing path" in d.lower() for d in res["drift"])
 
 
 def test_default_branch_unresolvable_drifts(tmp_path, capsys):
