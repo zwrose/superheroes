@@ -1,0 +1,46 @@
+# plugins/workhorse/lib/ship_gate.py
+"""The ③ ship-readiness gate: deterministic, fail-closed proof that ① Build (SDD) and
+② Review (review-code) ran over the shipped code before the producer opens a PR.
+
+`decide` is a PURE function (dicts + the HEAD string in -> action out), mirroring
+`recover.pr_action`. The provenance read/write helpers (Task 2) are colocated here the way
+`review-crew/lib/review_result.py` colocates its writer + fail-closed reader. All reads
+fail CLOSED: absent/garbled/stale evidence GATEs, never reads as clean.
+
+Threat posture: the producer is an LLM that *rationalizes shortcuts*, not an adversary.
+This gate makes a *rationalized* skip leave no evidence (-> GATE). It is NOT un-forgeable
+(`review_result.py` is an ungated CLI) — best-effort against a deliberate, transcript-
+evident forge. See the work-item plan.
+"""
+
+_TERMINAL = "exit_clean"
+
+
+def decide(provenance, review_result, head):
+    """Pure ③ ship-gate decision; fail-closed (anything unproven -> gate).
+
+    `provenance`: from read_provenance (a dict, or {} when absent).
+    `review_result`: from a fail-closed parse of review-code's --result-file
+        ({"action": ...}, or {"action": "halt"} on missing/garbled).
+    `head`: the current branch HEAD (`git rev-parse HEAD`).
+    """
+    # 1. Build evidence (FR-3 / UFR-4): SDD must have run.
+    if not isinstance(provenance, dict) or not provenance.get("build"):
+        return {"action": "gate",
+                "reason": "build provenance absent — subagent-driven-development did not run "
+                          "(build bypassed)"}
+    # 2. Review evidence (FR-1 / FR-2 / UFR-1 / UFR-3), reason keyed by action.
+    action = review_result.get("action") if isinstance(review_result, dict) else None
+    if action != _TERMINAL:
+        reason = {
+            "exit_skipped": "review skipped a blocking finding — not shipping it",
+            "review": "review loop did not terminate (non-terminal state)",
+        }.get(action, "review did not run / did not finish clean")
+        return {"action": "gate", "reason": reason}
+    # 3. Freshness (FR-4 / UFR-5): review must cover the shipped HEAD.
+    covers = (provenance.get("review") or {}).get("covers")
+    if covers != head:
+        return {"action": "gate",
+                "reason": "review evidence stale — covered HEAD != shipped HEAD; "
+                          "re-run review-code"}
+    return {"action": "proceed", "reason": "build + review evidence present and current"}
