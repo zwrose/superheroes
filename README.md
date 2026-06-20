@@ -2,13 +2,12 @@
 
 **Your team of superheroes, powered by [superpowers](https://github.com/obra/superpowers) — agent tools for [Claude Code](https://code.claude.com).**
 
-A marketplace of Claude Code plugins, each a character with a job to do. They team
-up to take real development work off your plate — reviewing, testing, and (more and
-more) running the loop themselves. Add the marketplace once, then install whichever
-heroes you want:
+A cast of specialist heroes that team up to take real development work off your plate —
+reviewing, testing, planning, and running the build loop themselves. One plugin, one install:
 
 ```
 /plugin marketplace add zwrose/superheroes
+/plugin install superheroes@superheroes
 ```
 
 ---
@@ -28,21 +27,15 @@ plain-language pros/cons.
 
 | Command | Use it to… |
 | --- | --- |
-| `/the-architect:discovery` | Turn an idea into an owner-approved requirements **spec**. |
-| `/the-architect:plan` | Turn an approved spec into a technical **plan**. |
-| `/the-architect:tasks` | Turn an approved plan into bite-sized, test-first **tasks**. |
+| `/superheroes:architect-discovery` | Turn an idea into an owner-approved requirements **spec**. |
+| `/superheroes:architect-plan` | Turn an approved spec into a technical **plan**. |
+| `/superheroes:architect-tasks` | Turn an approved plan into bite-sized, test-first **tasks**. |
+| `/superheroes:architect-spec` | Write the on-disk spec doc once requirements are approved (normally invoked by discovery). |
 
-### Install & first run
-
-```
-/plugin marketplace add zwrose/superheroes
-/plugin install the-architect@superheroes
-```
-
-Then, in any project:
+First run in any project:
 
 ```
-/the-architect:discovery      # turn an idea into a reviewed spec
+/superheroes:architect-discovery      # turn an idea into a reviewed spec
 ```
 
 ---
@@ -53,9 +46,9 @@ Then, in any project:
 
 Most AI review is one model skimming a diff for "anything wrong?" review-crew is
 built differently: a panel of **five specialist reviewers** — architecture, code,
-security, test, and failure-mode (premortem) — each with its own methodology, running in parallel under a
-shared severity rubric. An orchestrator compiles their findings, triages each one,
-and (for code) drives an **auto-fix loop** that applies the safe fixes and
+security, test, and failure-mode (premortem) — each with its own methodology, running in
+parallel under a shared severity rubric. An orchestrator compiles their findings, triages
+each one, and (for code) drives an **auto-fix loop** that applies the safe fixes and
 re-reviews until nothing Critical or Important remains.
 
 Two things make it more than a clever prompt:
@@ -68,7 +61,7 @@ Two things make it more than a clever prompt:
 - **Measured, not vibes.** The reviewer agents ship with a frozen eval harness
   (planted findings + decoy traps, a deterministic scorer) and a non-regression
   gate: a change has to prove it catches real issues without inflating false
-  positives before it lands. See [`plugins/review-crew/eval/`](plugins/review-crew/eval/).
+  positives before it lands. See [`plugins/superheroes/eval/`](plugins/superheroes/eval/).
 
 It's also context-frugal — the orchestrator never loads the full diff or raw agent
 output into its own conversation; subagents do the heavy reading and write
@@ -78,23 +71,18 @@ structured results to disk.
 
 | Command | Use it to… |
 | --- | --- |
-| `/review-crew:review-init` | Generate or refresh a project's review profile (**run this first**). |
-| `/review-crew:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
-| `/review-crew:review-plan` | Red-team a draft plan or design spec **before** any code is written. |
-| `/review-crew:audit-debt` | Periodically sweep a whole repo for accumulated debt → a prioritized set of GitHub issues. |
+| `/superheroes:review-init` | Generate or refresh a project's review profile (**run this first**). |
+| `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
+| `/superheroes:review-plan` | Red-team a draft plan **before** any code is written. |
+| `/superheroes:review-spec` | Red-team a draft spec and report a readiness verdict. |
+| `/superheroes:review-tasks` | Review a tasks doc before the build runs. |
+| `/superheroes:audit-debt` | Periodically sweep a whole repo for accumulated debt → a prioritized set of GitHub issues. |
 
-### Install & first run
-
-```
-/plugin marketplace add zwrose/superheroes
-/plugin install review-crew@superheroes
-```
-
-Then, in any project:
+First run in any project:
 
 ```
-/review-crew:review-init      # calibrate to this repo
-/review-crew:review-code      # review the current branch / PR
+/superheroes:review-init      # calibrate to this repo
+/superheroes:review-code      # review the current branch / PR
 ```
 
 ---
@@ -116,22 +104,15 @@ profile, seeding blocks, and browser tooling) so the plans and data fit *your* a
 
 | Command | Use it to… |
 | --- | --- |
-| `/test-pilot:test-pilot-init` | Set up (or refresh) a project's testing profile, seed blocks, and browser tooling (**run this first**). |
-| `/test-pilot:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
-| `/test-pilot:test-pilot-execute` | Drive the plan in a real browser, fix what breaks, and post a results comment before your spot-check. |
+| `/superheroes:test-pilot-init` | Set up (or refresh) a project's testing profile, seed blocks, and browser tooling (**run this first**). |
+| `/superheroes:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
+| `/superheroes:test-pilot-execute` | Drive the plan in a real browser, fix what breaks, and post a results comment before your spot-check. |
 
-### Install & first run
-
-```
-/plugin marketplace add zwrose/superheroes
-/plugin install test-pilot@superheroes
-```
-
-Then, in any project:
+First run in any project:
 
 ```
-/test-pilot:test-pilot-init   # calibrate to this app
-/test-pilot:test-pilot-plan   # seed data + post a plan to the PR
+/superheroes:test-pilot-init   # calibrate to this app
+/superheroes:test-pilot-plan   # seed data + post a plan to the PR
 ```
 
 ---
@@ -143,52 +124,45 @@ Then, in any project:
 When a tasks doc is approved, workhorse runs the **back half** of the loop on its own: it
 builds the change (subagent-driven, test-first), reviews it (review-crew's auto-fix loop),
 opens a draft PR, exercises it (test-pilot), resets seeded data, then **flips the PR to
-ready-for-review** and gets CI green on a branch **brought up to date with its base**, and
+ready-for-review** and gets CI green on a branch brought up to date with its base, and
 hands you a live dev server + a plain-language readout. It **never merges** — that's always
-yours. (The draft is only interim — a finished run hands back a non-draft PR.)
+yours.
 
 ### Commands
 
 | Command | Use it to… |
 | --- | --- |
-| `/workhorse:workhorse` | Build an approved work-item and take it to a ready-for-review PR. |
+| `/superheroes:workhorse` | Build an approved work-item and take it to a ready-for-review PR. |
 
-### Install & first run
-
-```
-/plugin marketplace add zwrose/superheroes
-/plugin install workhorse@superheroes
-```
-
-Then, once a tasks doc is approved:
+Once a tasks doc is approved:
 
 ```
-/workhorse:workhorse          # build it and take it to a PR
+/superheroes:workhorse          # build it and take it to a PR
 ```
 
 ---
 
 ## Multi-host harness
 
-The marketplace runs on both **Claude Code** and **Codex**. The plugins are the same;
+The marketplace runs on both **Claude Code** and **Codex**. The plugin is the same;
 only the install command differs.
 
 **Claude Code** (existing flow):
 
 ```
 /plugin marketplace add zwrose/superheroes
-/plugin install review-crew@superheroes
+/plugin install superheroes@superheroes
 ```
 
 **Codex:**
 
 ```
 codex plugin marketplace add zwrose/superheroes
-codex plugin add review-crew@superheroes
+codex plugin add superheroes@superheroes
 ```
 
 Skills speak in host-neutral actions and resolve them per host via a thin tool-map
-(`hosts/claude-tools.md` / `hosts/codex-tools.md` inside each plugin). No behavior
+(`hosts/claude-tools.md` / `hosts/codex-tools.md` inside the plugin). No behavior
 changes — the same methodology runs on both.
 
 ---
