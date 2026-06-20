@@ -133,3 +133,16 @@ def test_claude_absent_from_codex_rejected(tmp_path, monkeypatch, capsys):
     # Do NOT add "q" to the Codex marketplace.
     assert _run_main(tmp_path, monkeypatch) == 1
     assert "absent from codex" in capsys.readouterr().err
+
+def test_lint_reference_files_flags_a_planted_violation(tmp_path):
+    ref_dir = tmp_path / "plugins" / "p" / "skills" / "s" / "reference"
+    ref_dir.mkdir(parents=True)
+    (ref_dir / "leaf.md").write_text("dispatch via subagent_type, the host-coupled token")
+    errs = VH.lint_reference_files(str(tmp_path / "plugins"), ["p"])
+    assert any("subagent_type" in e and "leaf.md" in e for e in errs)
+
+def test_lint_reference_files_does_not_require_host_pointer(tmp_path):
+    ref_dir = tmp_path / "plugins" / "p" / "skills" / "s" / "reference"
+    ref_dir.mkdir(parents=True)
+    (ref_dir / "leaf.md").write_text("plain neutral relocated prose")
+    assert VH.lint_reference_files(str(tmp_path / "plugins"), ["p"]) == []
