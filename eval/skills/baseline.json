@@ -1,8 +1,6 @@
 {
   "recordedAt": "2026-06-19",
-  "knownRedCeilings": [
-    "review-crew/audit-debt"
-  ],
+  "knownRedCeilings": [],
   "allowedUnresolvedRefs": ["workhorse/workhorse:lib/loop_state.py"],
   "combinedDescriptionChars": null,
   "carveOuts": {}
