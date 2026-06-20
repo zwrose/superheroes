@@ -211,6 +211,15 @@ def test_denies_noclobber_and_combined_redirect_at_band_file():
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
+def test_denies_sed_long_form_in_place_at_band_file():
+    # GNU sed's long-form `--in-place` (and `--in-place=SUFFIX`) is an in-place write just
+    # like `-i`; a band file argument must be denied. An ordinary file stays allowed.
+    for cmd in ("sed --in-place 's/x/y/' plugins/workhorse/lib/enforcer.py",
+                "sed --in-place=.bak 's/x/y/' hooks.json"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+    assert enforcer.classify_command("sed --in-place 's/x/y/' src/app.py")[0] == "allow"
+
+
 def test_denies_dd_of_keyword_operand_at_band_file():
     # premortem-002: `dd` names its write destination with the `of=<path>` keyword operand,
     # not a bare positional arg, so the basename pre-filter must see through `of=`.

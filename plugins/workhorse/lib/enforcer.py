@@ -94,8 +94,9 @@ _SAFETY_BASENAMES = (
 # File-mutating commands whose write DESTINATION is a file ARGUMENT (not a redirection),
 # defined ONCE so the early-out gate (`_WRITE_OPS`) and the per-segment matcher
 # (`_FILE_WRITE_CMD`) can never drift apart (they encode the same "this command mutates a
-# file by argument" decision).
-_FILE_CMD_ALT = r"sed\s+-i|tee|cp|mv|dd|truncate|chmod|ln"
+# file by argument" decision). `sed` in-place covers both the short `-i`/`-i.bak` and the
+# GNU long `--in-place`/`--in-place=SUFFIX` forms.
+_FILE_CMD_ALT = r"sed\s+(?:-i|--in-place)|tee|cp|mv|dd|truncate|chmod|ln"
 # Any write operator at all — the cheap pre-filter. Redirections (`>`/`>>`) plus the
 # file-mutating commands above. A command matching none of these can't write anything.
 _WRITE_OPS = re.compile(r"(>>?|\b(?:" + _FILE_CMD_ALT + r")\b)", re.I)
@@ -143,8 +144,8 @@ def _resolves_to_band(tok):
 def _bash_writes_to_safety_machinery(command):
     """True iff a Bash command's WRITE TARGET resolves to a real band safety-machinery
     file — either a redirection (`> f` / `>> f` / `>| f`, quoted or bare) AT the file, or a
-    file-mutating command (`sed -i`/`tee`/`cp`/`mv`/`dd`/`truncate`/`chmod`/`ln`) with the
-    file as an argument (incl. `dd`'s `of=` operand).
+    file-mutating command (`sed -i`/`--in-place`, `tee`/`cp`/`mv`/`dd`/`truncate`/`chmod`/
+    `ln`) with the file as an argument (incl. `dd`'s `of=` operand).
 
     The guard keys off the operator's TARGET, not mere co-occurrence: an unrelated
     `>/dev/null` / `2>&1` redirect, or a band CLI passed as an EXECUTION arg
