@@ -99,9 +99,9 @@ def test_decide_is_deterministic_round_trip(tmp_path):
     assert ship_gate.decide(ship_gate.read_provenance(p), CLEAN, HEAD) == r
 
 
-def test_gate_when_head_is_none_even_if_covers_none():
-    # a failed `git rev-parse HEAD` (head=None) must never proceed
-    r = ship_gate.decide(_prov(covers=None), CLEAN, None)
+def test_gate_when_head_is_none():
+    # a failed `git rev-parse HEAD` (head=None) must never proceed, even with a real covers
+    r = ship_gate.decide(_prov(covers=HEAD), CLEAN, None)
     assert r["action"] == "gate" and "stale" in r["reason"]
 
 
