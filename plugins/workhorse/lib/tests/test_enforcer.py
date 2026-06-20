@@ -143,6 +143,57 @@ def test_bash_write_band_anchoring_positive(monkeypatch, tmp_path):
     assert enforcer.classify_command("sed -i 's/x/y/' %s" % outside)[0] == "allow"
 
 
+# --- redirect/exec TARGET precision (workhorse-2026-06-20 false-positive fix) ---
+# REGRESSION: _bash_writes_to_safety_machinery used to deny ANY command that paired a bare
+# write-operator token (`>`, `>>`, `2>&1`) with a safety-basename token appearing ANYWHERE
+# — even when the safety file was an EXECUTION arg and the redirect targeted /dev/null. The
+# guard must key off the write operator's TARGET, not mere co-occurrence. (In the default
+# test env band_lib is unresolved, so classify_path fail-closes to deny — meaning any
+# safety basename token "resolves"; these cases must therefore pass on TARGET logic alone.)
+def test_allows_executing_band_cli_with_unrelated_redirect():
+    # Running a band CLI (a safety basename as the EXECUTION target) with a >/dev/null or
+    # 2>&1 redirect is NOT a write to the band file — the redirect targets /dev/null / an fd.
+    for cmd in (
+        "python3 plugins/the-architect/lib/definition_doc.py read-gate >/dev/null",
+        "python3 plugins/the-architect/lib/definition_doc.py read-gate > /dev/null 2>&1",
+        "python3 plugins/the-architect/lib/gate_write.py set k v 2>&1",
+    ):
+        assert enforcer.classify_command(cmd)[0] == "allow", cmd
+
+
+def test_allows_compound_band_cli_calls_with_redirect():
+    # The real-world compounds that tripped the false positive: a band CLI executed in one
+    # segment (a safety basename as exec target) while a /dev/null redirect rides elsewhere.
+    for cmd in (
+        "GATE=$(python3 a/definition_doc.py set-gate g) ; "
+        "python3 b/decisions.py append \"$DEC\" \"$1\" >/dev/null 2>&1",
+        "python3 b/decisions.py append \"$DEC\" x >/dev/null 2>&1 && "
+        "python3 a/definition_doc.py read-gate g",
+    ):
+        assert enforcer.classify_command(cmd)[0] == "allow", cmd
+
+
+def test_allows_reading_band_file_redirected_elsewhere():
+    # Reading a band file and redirecting stdout to a NON-band path is not a write to it.
+    assert enforcer.classify_command("grep x enforcer.py > /tmp/out.txt")[0] == "allow"
+
+
+def test_still_denies_redirect_AT_band_file():
+    # The genuine write-AT-a-band-file via redirection stays denied (target IS the band
+    # file), incl. the no-space and stderr-redirect forms.
+    for cmd in ("echo x > enforcer.py", "echo x >>enforcer.py",
+                "echo '{}' > hooks.json", "python3 gen.py 2>escalation.py"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_still_denies_file_mutating_command_at_band_file():
+    # sed -i / cp / mv with a band file as an ARGUMENT stay denied.
+    for cmd in ("sed -i 's/x/y/' plugins/workhorse/lib/enforcer.py",
+                "cp /tmp/x.py escalation.py",
+                "mv /tmp/x definition_doc.py"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
 def test_command_fail_closed_on_non_string():
     assert enforcer.classify_command(None)[0] == "deny"
 
