@@ -44,12 +44,12 @@ context).
 **Store bootstrap (startup lock).**
 `control_plane.ensure_store(ROOT)` → `None` ⇒ **park-GATE**:
 "durable store unusable — fail closed". Then acquire the startup lock:
-`lock.acquire_startup(store)` → `(False, …)` ⇒ **fail closed**
+`ref_lock.acquire_startup(store)` → `(False, …)` ⇒ **fail closed**
 ("another loop holds this checkout — will not start a parallel run").
 
 ### 0.1 Work-item ref-lease
 
-`lock.acquire(store, WORK_ITEM)` → `(ok, generation, reason)`:
+`ref_lock.acquire(store, WORK_ITEM)` → `(ok, generation, reason)`:
 on `ok` (reason `created`/`stolen`) record the returned `generation` and emit
 `lease_acquired`/`lease_reclaimed`; on ANY non-ok result — `held`, or a
 `lost-create-cas`/`lost-steal-cas` CAS race — **GATE** (fail-closed: cannot confirm
@@ -177,8 +177,8 @@ fix the cause instead of seeing an unexplained GATE every run.
 ## 3 Draft PR (NOTIFY) — world-read before world-write (idempotent)
 
 Emit step_entered journal event. **Before the push/PR write:**
-`lock.renew(store, WORK_ITEM, generation)` then **`lock.fence_ok(store, WORK_ITEM, generation)`**
-(`lock.py`) — a stale generation means a newer session holds the ref-lease; abort the
+`ref_lock.renew(store, WORK_ITEM, generation)` then **`ref_lock.fence_ok(store, WORK_ITEM, generation)`**
+(`ref_lock.py`) — a stale generation means a newer session holds the ref-lease; abort the
 write (superseded). Never push under a stale fence.
 
 **3.0 Ship-gate (HARD GATE) — proof step 1 and step 2 ran over the shipped code.** Before any
@@ -242,8 +242,8 @@ None detected → no spot-check server; note it and skip steps 4/5/6. Otherwise:
 
 ## 5 Behavioral — test-pilot (two skills) — runnable surface only
 
-Before writing seed data: `lock.renew(store, WORK_ITEM, generation)` then
-`lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort (superseded).
+Before writing seed data: `ref_lock.renew(store, WORK_ITEM, generation)` then
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort (superseded).
 
 Emit step_entered/step_completed journal events; write checkpoint.
 
@@ -255,8 +255,8 @@ failure it can fix → fix + re-verify; else → GATE.
 
 ## 6 Reset — engine clean (state-scoped, protected-gated)
 
-Before the reset write: `lock.renew(store, WORK_ITEM, generation)` then
-`lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
+Before the reset write: `ref_lock.renew(store, WORK_ITEM, generation)` then
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="verify", lastGoodStep=6, lockGeneration=generation)` after a successful reset/verify_empty.
 
@@ -276,8 +276,8 @@ Regardless of step 5 pass/fail, reset the seeded data via test-pilot's engine (`
 
 ## 7 Ready — world-read before world-write (idempotent)
 
-Before flipping draft: `lock.renew(store, WORK_ITEM, generation)` then
-`lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
+Before flipping draft: `ref_lock.renew(store, WORK_ITEM, generation)` then
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="verify", lastGoodStep=7, lockGeneration=generation)`.
 
@@ -290,8 +290,8 @@ PR state.
 ## 8 Up-to-date + CI-green gate — freshen against base, then bounded CI fix loop
 
 Before any push (the freshen push **and** any CI-fix push):
-`lock.renew(store, WORK_ITEM, generation)` then
-`lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
+`ref_lock.renew(store, WORK_ITEM, generation)` then
+**`ref_lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
 
 CI is evaluated on the **ready, integrated HEAD** — never a stale branch. A green
 check on a branch that is behind its base proves nothing about the merge, so this step
@@ -425,7 +425,7 @@ the resilience substrate above). If a GATE fires and the owner is away, **park s
 2. Run step 6 reset (clean baseline). If a parking step fails (e.g. a held engine lock),
    **report the partial state honestly** rather than assert a baseline that doesn't hold.
 3. Leave the PR as **draft**.
-4. Release the startup lock: `lock.release_startup(store)` — the ref-lease expires
+4. Release the startup lock: `ref_lock.release_startup(store)` — the ref-lease expires
    naturally (do not release it; a future resume needs to re-evaluate `stolen` vs
    `continue`).
 5. Write the parked state to the journal via `journal.render_brief(…)` so any resume

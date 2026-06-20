@@ -301,7 +301,7 @@ is the gate authority and the agent must never self-approve.
 Record it idempotently, and **only in genuine degraded mode**. A still-`pending` gate is
 *ambiguous*: it can mean "`review-plan` is not installed here" (self-certify is correct) **or**
 "`review-plan` ran but could not record its verdict" — e.g. it could not resolve review-crew ↔
-the-architect, so `gate_write` exits non-zero with `skipped:lib-absent`/`failed:set-gate` and
+the-architect, so `gate_write` exits non-zero with `failed:set-gate` and
 leaves the gate `pending`. Self-certifying that second case would bless a review that never
 landed. So branch on **whether you actually ran `review-plan` in step 6**, not on the gate value
 alone — a `review-plan` verdict is never clobbered, and a *failed* `review-plan` write never

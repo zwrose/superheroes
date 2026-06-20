@@ -201,7 +201,7 @@ the real human gate is the final PR) — the deliberate asymmetry with `spec`. R
 idempotently, and **only in genuine degraded mode**. A still-`pending` gate is *ambiguous*: it
 can mean "`review-tasks` is not installed here" (self-certify is correct) **or** "`review-tasks`
 ran but could not record its verdict" — e.g. it could not resolve review-crew ↔ the-architect, so
-`gate_write` exits non-zero with `skipped:lib-absent`/`failed:set-gate` and leaves the gate
+`gate_write` exits non-zero with `failed:set-gate` and leaves the gate
 `pending`. Self-certifying that second case would bless a review that never landed. So branch on
 **whether you actually ran `review-tasks` in step 5**, not on the gate value alone — a
 `review-tasks` verdict is never clobbered, and a *failed* `review-tasks` write never gets

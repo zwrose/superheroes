@@ -17,12 +17,6 @@ _ENFORCER = os.path.join(_LIB, "enforcer.py")
 _HOOKS = os.path.join(_PLUGIN, "hooks", "hooks.json")
 
 
-def _point_at_real_escalation(monkeypatch):
-    # Equivalence note: the band_lib.resolve_target monkeypatch is gone — classify_path calls
-    # the in-tree escalation core directly against the real plugin root, so the real safety
-    # files resolve for real. Retained as a no-op so call sites read unchanged.
-    pass
-
 
 @pytest.fixture
 def basename_guard(monkeypatch):
@@ -278,13 +272,11 @@ def test_command_fail_closed_on_non_string():
 
 
 # --- safety-machinery edit guard ---
-def test_denies_edit_to_safety_machinery(monkeypatch):
-    _point_at_real_escalation(monkeypatch)
+def test_denies_edit_to_safety_machinery():
     assert enforcer.classify_path(_ESC)[0] == "deny"   # escalation.py is protected
 
 
-def test_allows_edit_to_ordinary_file(monkeypatch, tmp_path):
-    _point_at_real_escalation(monkeypatch)
+def test_allows_edit_to_ordinary_file(tmp_path):
     ordinary = tmp_path / "app.py"
     ordinary.write_text("x = 1\n")
     assert enforcer.classify_path(str(ordinary))[0] == "allow"
@@ -444,7 +436,6 @@ def test_hook_apply_patch_to_safety_machinery_denies(capsys):
 
 
 def test_hook_apply_patch_to_ordinary_file_is_silent(monkeypatch, capsys, tmp_path):
-    _point_at_real_escalation(monkeypatch)
     ordinary = tmp_path / "app.py"
     ordinary.write_text("x = 1\n")
     patch = "*** Begin Patch\n*** Update File: %s\n@@\n-x\n+y\n*** End Patch\n" % ordinary

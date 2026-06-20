@@ -401,7 +401,7 @@ explicit (`order`), not array position. Item lifecycle is
   or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
   full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
-- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/lock.py`, §4.5 adds the startup per-checkout lock). The file-based `lib/lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
+- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/ref_lock.py`, §4.5 adds the startup per-checkout lock). The file-based `lib/file_lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
 
 **Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
 shared across a project's checkouts (§4.2), so it is **not** guarded by the per-checkout

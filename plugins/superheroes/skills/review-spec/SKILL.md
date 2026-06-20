@@ -449,7 +449,7 @@ fi
 ```
 
 `$GATE` is `reset:pending` (a stale approval was revoked), `noop:not-approved` (gate wasn't
-`passed` — nothing to revoke), `skipped:noncanonical`, `skipped:lib-absent`,
+`passed` — nothing to revoke), `skipped:noncanonical`,
 `skipped:unreadable` (the gate could **not** be read — if it was approved, the approval may be
 stale and the owner must re-approve), or `failed:set-gate` (the stale `passed` could **not** be
 revoked — surface it: the approval is stale and the owner must re-approve); the helper prints

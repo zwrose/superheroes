@@ -280,31 +280,30 @@ def test_derive_identifiers_no_remote(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Same hashes for same inputs across the two consumers
-# (verify the core produces identical results to the old store.py / review_store.py)
+# Golden-value behavioral tests for short_hash and normalize_remote
+# (pin concrete expected outputs so tests FAIL if the implementation changes)
 # ---------------------------------------------------------------------------
 
-def test_short_hash_matches_store_and_review_store():
-    """Core hash must match what both consumers computed (SHA-256 first 16 hex)."""
-    import store
-    import review_store
-    for s in ["github.com/org/repo", "some/path", "x"]:
-        assert sc.short_hash(s) == store.short_hash(s)
-        assert sc.short_hash(s) == review_store.short_hash(s)
+def test_short_hash_golden_values():
+    """short_hash must produce the exact SHA-256-first-16-hex values for known inputs.
+
+    These golden values were computed from the implementation and will catch any
+    accidental mutation of the hash algorithm or truncation length.
+    """
+    assert sc.short_hash("github.com/org/repo") == "4c06e3f1e1c41311"
+    assert sc.short_hash("some/path") == "d1563248892cd59a"
+    assert sc.short_hash("x") == "2d711642b726b044"
 
 
-def test_normalize_remote_matches_store_and_review_store():
-    """Core normalize_remote must match both consumers for the same URLs."""
-    import store
-    import review_store
-    urls = [
-        "git@github.com:org/repo.git",
-        "https://github.com/org/repo.git",
-        "https://user@github.com/org/repo/",
-        "ssh://git@github.com:22/org/repo.git",
-        "",
-        None,
-    ]
-    for url in urls:
-        assert sc.normalize_remote(url) == store.normalize_remote(url), f"Mismatch for {url!r}"
-        assert sc.normalize_remote(url) == review_store.normalize_remote(url), f"Mismatch for {url!r}"
+def test_normalize_remote_golden_values():
+    """normalize_remote must produce the exact canonical forms for known URL shapes.
+
+    These golden values pin the stripping of scheme, user-info, .git suffix, trailing
+    slashes, and port — any logic change will break these assertions.
+    """
+    assert sc.normalize_remote("git@github.com:org/repo.git") == "github.com/org/repo"
+    assert sc.normalize_remote("https://github.com/org/repo.git") == "github.com/org/repo"
+    assert sc.normalize_remote("https://user@github.com/org/repo/") == "github.com/org/repo"
+    assert sc.normalize_remote("ssh://git@github.com:22/org/repo.git") == "github.com/org/repo"
+    assert sc.normalize_remote("") is None
+    assert sc.normalize_remote(None) is None

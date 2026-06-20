@@ -443,7 +443,7 @@ GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc tasks \
 ```
 
 `$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
-`skipped:lib-absent` / `failed:set-gate` — surface it (and any stderr detail) in the terminal
+`failed:set-gate` — surface it (and any stderr detail) in the terminal
 summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
 only writer.
 

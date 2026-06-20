@@ -1,4 +1,4 @@
-# plugins/superheroes/lib/lock.py
+# plugins/superheroes/lib/ref_lock.py
 """The work-item lock (CONVENTIONS §4.4 / §4.5).
 
 Ref-lease (§4.4): a leased git ref `refs/superheroes/locks/<work-item>` in the
@@ -162,7 +162,7 @@ def fence_ok(store, work_item, generation):
     return bool(lease) and lease.get("generation") == generation
 
 
-# --- §4.5 startup per-checkout lock (append to plugins/superheroes/lib/lock.py) ---
+# --- §4.5 startup per-checkout lock (append to plugins/superheroes/lib/ref_lock.py) ---
 
 def _startup_path(store):
     return os.path.join(store, "startup.lock")
