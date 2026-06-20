@@ -1,6 +1,6 @@
 {
   "name": "the-architect",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "The Architect — turns a fuzzy idea into a reviewed spec → plan → tasks, the requirements-first front half of the superheroes development loop.",
   "author": {
     "name": "zwrose"
