@@ -16,37 +16,11 @@
     { "type": "ci", "section": "Continuous Integration", "hidden": true }
   ],
   "packages": {
-    "plugins/review-crew": {
+    "plugins/superheroes": {
       "release-type": "simple",
-      "component": "review-crew",
+      "component": "superheroes",
       "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
-      ]
-    },
-    "plugins/test-pilot": {
-      "release-type": "simple",
-      "component": "test-pilot",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
-      ]
-    },
-    "plugins/the-architect": {
-      "release-type": "simple",
-      "component": "the-architect",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
-      ]
-    },
-    "plugins/workhorse": {
-      "release-type": "simple",
-      "component": "workhorse",
-      "changelog-path": "CHANGELOG.md",
+      "bump-minor-pre-major": true,
       "extra-files": [
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
         { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
