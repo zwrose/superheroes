@@ -46,3 +46,11 @@ def test_atomic_write_roundtrip(tmp_path):
     f = str(tmp_path / "sub" / "x.json")
     cp.atomic_write(f, '{"a":1}')
     assert open(f).read() == '{"a":1}'
+
+
+def test_paths_has_review_result_and_provenance_keys(tmp_path):
+    p = cp.paths(str(tmp_path), "wi", root=str(tmp_path / "store"))
+    assert p["review_result"].endswith("/review-result.json")
+    assert p["provenance"].endswith("/provenance.json")
+    assert p["review_result"].startswith(p["issue_dir"])
+    assert p["provenance"].startswith(p["issue_dir"])
