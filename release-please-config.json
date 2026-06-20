@@ -20,6 +20,7 @@
       "release-type": "simple",
       "component": "superheroes",
       "changelog-path": "CHANGELOG.md",
+      "release-as": "0.1.0",
       "bump-minor-pre-major": true,
       "extra-files": [
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
