@@ -3,7 +3,7 @@ name: test-pilot-plan
 description: Use when a PR/branch needs a manual test plan with seeded data — "write a test plan", "seed test data for this PR", "set up manual testing". Seeds scenarios via the test-pilot engine and posts a checkbox plan to the PR. Does NOT execute the plan (that is test-pilot-execute).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # test-pilot-plan
 
