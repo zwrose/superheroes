@@ -105,14 +105,16 @@ _WRITE_OPS = re.compile(r"(>>?|\b(?:" + _FILE_CMD_ALT + r")\b)", re.I)
 _FILE_WRITE_CMD = re.compile(r"\b(?:" + _FILE_CMD_ALT + r")\b", re.I)
 # Path-ish tokens, split on shell metacharacters so `>enforcer.py` yields `enforcer.py`.
 _TOKENS = re.compile(r"[^\s'\"<>|;&()]+")
-# A redirection's WRITE TARGET: optional fd digits, `>`/`>>`, optional `|` (the `>|`
-# noclobber override), optional spaces, then the target — a single/double-quoted literal
-# OR a bare token. `2>&1` / `>&2` (fd duplications — target begins with `&`) do NOT match,
-# so `cmd >/dev/null 2>&1` yields only `/dev/null`. The quoted alternatives restore the
-# coverage the pre-rewrite whole-command tokenizer had (quotes stripped via _unquote), so
-# `> "enforcer.py"` is not a bypass.
+# A redirection's WRITE TARGET: optional fd digits, `>`/`>>`, an optional `&` or `|`
+# (the `>&word` both-streams form and the `>|` noclobber override), optional spaces, then
+# the target — a single/double-quoted literal OR a bare token. The `&` is consumed so
+# `>&enforcer.py` (redirect BOTH stdout+stderr into the file — a real write) captures
+# `enforcer.py`; the fd-duplication forms `2>&1` / `>&2` / `>&-` also match but capture a
+# digit / `-`, which fails the basename check harmlessly. The quoted alternatives restore
+# the coverage the pre-rewrite whole-command tokenizer had (quotes stripped via _unquote),
+# so `> "enforcer.py"` is not a bypass.
 _REDIRECT_TARGET = re.compile(
-    r"\d*>>?\|?\s*(\"[^\"]*\"|'[^']*'|[^\s'\"<>|;&()]+)")
+    r"\d*>>?[&|]?\s*(\"[^\"]*\"|'[^']*'|[^\s'\"<>|;&()]+)")
 # `dd` names its write destination with the `of=<path>` keyword operand (not a bare arg),
 # so a band file there is invisible to the basename token walk (`of=enforcer.py`'s basename
 # is the whole token). Capture the of= value explicitly. `if=` (the READ input) is NOT

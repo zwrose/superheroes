@@ -227,6 +227,23 @@ def test_allows_quoted_nonband_redirect_target():
     assert enforcer.classify_command("dd if=/dev/null of=/tmp/out bs=1")[0] == "allow"
 
 
+def test_denies_ampersand_redirect_at_band_file():
+    # security-001/code-001 (round 2): `>&<filename>` (and `>>&`) redirects BOTH stdout and
+    # stderr INTO the file — a real truncating write, equivalent to `&>file`. Only the
+    # `>&<digit>` / `>&-` forms are fd duplications. The filename form must be denied (the
+    # old whole-command tokenizer caught it).
+    for cmd in ("echo x >&enforcer.py", "echo x >&'hooks.json'",
+                "echo x >>&escalation.py"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_allows_fd_duplication_not_treated_as_write():
+    # `>&<digit>`, `2>&1`, and `>&-` (close) are fd manipulations, not file writes — they
+    # must stay allowed even though the broadened operator now consumes the `&`.
+    for cmd in ("python3 x.py >&2", "python3 x.py 2>&1", "python3 x.py >&-"):
+        assert enforcer.classify_command(cmd)[0] == "allow", cmd
+
+
 def test_command_fail_closed_on_non_string():
     assert enforcer.classify_command(None)[0] == "deny"
 
