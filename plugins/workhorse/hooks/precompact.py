@@ -16,6 +16,14 @@ def main():
     except ValueError:
         return 0
     cwd = payload.get("cwd") or os.getcwd()
+    # Wipe any pending owner-approval allowance (issue #14): no approval may survive a
+    # context compaction — a post-compact agent has no inherited "approved" state and
+    # must re-ask. Best-effort, never fatal.
+    try:
+        import allowance
+        allowance.clear_all(cwd)   # scope to THIS checkout — don't revoke a concurrent loop's approval
+    except Exception as exc:
+        sys.stderr.write("workhorse precompact: allowance wipe skipped (%s)\n" % exc)
     try:
         import control_plane
         import checkpoint as ck

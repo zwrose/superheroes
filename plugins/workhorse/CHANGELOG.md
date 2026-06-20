@@ -6,6 +6,39 @@ All notable changes to the `workhorse` plugin. Versions follow
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-19
+
+### Changed
+
+- **Producer-enforcer is now a live owner-approval GATE, not a hard-deny floor**
+  (issue #14). Owner-authority / irreversible actions — merge / release / deploy /
+  force-push / push-to-default / `gh workflow run` / destructive — are gated on the
+  owner's live, in-turn approval instead of being unconditionally denied, and only
+  **inside a superheroes repo** (a `docs/superheroes/` tree). Outside one the gate
+  does not fire, so installing workhorse no longer subjects unrelated interactive
+  sessions to the floor.
+  - **Host-aware mechanism, same functionality** (approve → proceed; no owner →
+    park): on **Claude Code** the hook emits `permissionDecision: ask` (a native
+    prompt the agent cannot answer itself); on **Codex** (honors only `deny`) the
+    hook denies + issues a one-time nonce, and on the owner's approval the agent mints
+    a single-use, command-scoped, 90s-TTL **allowance** (`lib/allowance.py`) that the
+    next matching call consumes. The host capability is passed by the hook wiring
+    (`hook --host claude`); an unknown/missing host fails safe to the deny path.
+  - Allowances are namespaced **per checkout** and consumed via an atomic claim, so
+    concurrent producer loops can never cross-consume an approval; `PreCompact` wipes
+    pending allowances so none survives a context compaction.
+
+### Fixed
+
+- The enforcer hook now dispatches the **Codex tool names** (`shell`, `apply_patch`)
+  in addition to the Claude ones (`Bash`, `Edit`/`Write`/`MultiEdit`) — previously a
+  Codex `shell` command and `apply_patch` edit fell through to *allow*, so the command
+  gate and the safety-machinery edit-guard were inert on Codex. `apply_patch` edits to
+  band safety-machinery are now refused (the target is parsed from the patch body).
+- Safety-machinery self-protection stays an **unconditional** deny on both hosts and
+  is held out of the allowance flow even for a compound command that is both a
+  safety-write and a gated action.
+
 ## [0.3.0] — 2026-06-19
 
 ### Added
