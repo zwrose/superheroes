@@ -91,7 +91,8 @@ Skills must work on both Claude Code and Codex. A few hard rules:
   `subagent_type`, `the Agent tool`, `the Skill tool`, and `the Task tool`.
 - **Every `SKILL.md` carries the host-map pointer line.** The boilerplate reads:
   > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
-  > via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude
+  > by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`
+  > (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude
   > Code, `codex-tools.md` on Codex.
 - **Use the portable root seam.** Assign it once per bash block:
   ```bash

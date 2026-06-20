@@ -639,7 +639,7 @@ does not duplicate it.
 ### 6.4 `size` and schema versioning
 
 - **`size`** (`small | medium | large`, §3.1) sizes a work-item. It is set when the
-  `spec` is approved (owner-chosen or inferred from spec scope), frozen there, and
+  `spec` is approved (the discovery skill infers it from scope, not the owner), frozen there, and
   inherited by `plan`/`tasks` and mirrored into `checkpoint.json`. It is currently
   **descriptive** — consumers must accept it; no control-flow keys off it yet. (The
   word "tier" is reserved for the §4 state substrates and durability tiers.)
@@ -672,12 +672,15 @@ Everything in `plugins/<name>/` is shared and host-neutral:
 Each `SKILL.md` carries a host-map pointer line:
 
 > This skill speaks in host-neutral actions. Resolve them to your runtime's tools
-> via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude
+> by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md`
+> (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude
 > Code, `codex-tools.md` on Codex.
 
 The portable root seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` (assigned
 once per bash block) lets skills reference bundled helpers on both hosts. Bare
-`${CLAUDE_PLUGIN_ROOT}` is banned — it fails on Codex.
+`${CLAUDE_PLUGIN_ROOT}` is banned — it fails on Codex. The pointer line above uses
+that same seam so it resolves at the plugin **root** (where `hosts/` lives); a bare
+relative `hosts/` path would resolve against the skill's own folder, which has none. `validate_hosts.py` enforces the seam form.
 
 ### 7.2 Host-adaptation layer (thin, per-host)
 

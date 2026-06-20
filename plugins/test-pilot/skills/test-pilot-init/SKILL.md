@@ -3,7 +3,7 @@ name: test-pilot-init
 description: Use when a project has no test-pilot profile yet (before the first test-pilot plan/execute in a repo), or to refresh a project's testing calibration after the app changed. Sets up the profile, seeding blocks, and browser tooling.
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # test-pilot-init
 

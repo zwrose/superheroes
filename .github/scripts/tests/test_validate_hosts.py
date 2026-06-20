@@ -6,8 +6,8 @@ _V = os.path.join(_HERE, "..", "validate_hosts.py")
 spec = importlib.util.spec_from_file_location("validate_hosts", _V)
 VH = importlib.util.module_from_spec(spec); spec.loader.exec_module(VH)
 
-# Full pointer line — must contain `hosts/<your-host>-tools.md` so POINTER_RE matches.
-POINTER = "Resolve actions via `hosts/<your-host>-tools.md` — `claude-tools.md` on Claude, `codex-tools.md` on Codex."
+# Full pointer line — must use the seam form `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` so POINTER_RE matches.
+POINTER = "Resolve actions via `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` — `claude-tools.md` on Claude, `codex-tools.md` on Codex."
 
 def test_lint_flags_banned_prose():
     bad = "# S\n\nUse the Agent tool with subagent_type: review-crew:code-reviewer.\n" + POINTER
@@ -32,11 +32,13 @@ def test_lint_flags_missing_pointer():
     "hosts/claude-tools.md",       # hardcodes a concrete host instead of the placeholder
     "hosts/codex-tools.md",        # ditto, the other host
     "hosts/whatever-blah-tools.md",  # arbitrary garbage that still ends in -tools.md
+    "hosts/<your-host>-tools.md",  # right placeholder, but missing the ${...} seam prefix
 ])
 def test_lint_flags_malformed_pointer_line(bad_ref):
-    """A pointer line that does not use the literal `hosts/<your-host>-tools.md`
-    placeholder is malformed and must be flagged. POINTER_RE must not accept an
-    arbitrary `hosts/<x>-tools.md`."""
+    """A pointer line that does not use the seam-anchored
+    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` is malformed and must
+    be flagged — POINTER_RE must reject both a hardcoded host and a bare (un-seamed)
+    placeholder."""
     malformed = "# S\n\nResolve actions via `" + bad_ref + "` directly.\n"
     assert any("pointer" in v.lower() for v in VH.lint_skill(malformed)), \
         f"malformed pointer ref {bad_ref!r} was not flagged"

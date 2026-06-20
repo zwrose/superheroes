@@ -3,7 +3,7 @@ name: tasks
 description: Use after a `plan` is approved, to turn it into the bite-sized, test-first executable `tasks` for a work-item — the checkbox TDD steps the build follows. It WRAPS superpowers `writing-plans` and owns the superheroes definition-doc around it; route plan-decomposition here in a superheroes project (not `writing-plans` standalone). Runs LARGELY AUTONOMOUSLY and produces the `tasks` definition-doc, then runs review-tasks. Not for requirements (that is `discovery`) or technical approach (that is `plan`); it does NOT execute the steps (that is Build).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Tasks
 
@@ -84,9 +84,10 @@ Create a TodoWrite item for each step:
   self-certification, not an owner approval; either way `passed` means the plan's review
   completed. Tasks builds only on an approved plan.
 - **Ground for an accurate decomposition.** `writing-plans` writes exact file paths and
-  real code, so the inputs must be real: read `CLAUDE.md` / the calibration layer, and
-  explore the actual files the plan touches (grep the symbols, follow imports, note the
-  test conventions) so the tasks reference real paths and match existing patterns.
+  real code, so the inputs must be real: **`CLAUDE.md` must be in your context (read it
+  now if it isn't)** — then read the rest of the calibration layer, and explore the
+  actual files the plan touches (grep the symbols, follow imports, note the test
+  conventions) so the tasks reference real paths and match existing patterns.
 
 ### 2. Generate the bite-sized tasks via superpowers `writing-plans`
 
