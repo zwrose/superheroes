@@ -13,6 +13,40 @@ heroes you want:
 
 ---
 
+## the-architect
+
+**Turns a fuzzy idea into a reviewed spec → plan → tasks.**
+
+the-architect owns the front half of the loop. From a rough idea, feature request, or
+bug it runs **Discovery** (eliciting plain-language requirements with you — the *what*,
+no jargon), then autonomously drafts the technical **Plan** (the *how*) and the
+bite-sized, test-first **Tasks** — each gated by review-crew. You live in the *what*; it
+handles the *how*, pausing only to escalate genuinely consequential calls in
+plain-language pros/cons.
+
+### Commands
+
+| Command | Use it to… |
+| --- | --- |
+| `/the-architect:discovery` | Turn an idea into an owner-approved requirements **spec**. |
+| `/the-architect:plan` | Turn an approved spec into a technical **plan**. |
+| `/the-architect:tasks` | Turn an approved plan into bite-sized, test-first **tasks**. |
+
+### Install & first run
+
+```
+/plugin marketplace add zwrose/superheroes
+/plugin install the-architect@superheroes
+```
+
+Then, in any project:
+
+```
+/the-architect:discovery      # turn an idea into a reviewed spec
+```
+
+---
+
 ## review-crew
 
 **A standing review panel for your code, plans, and tech debt.**
@@ -102,6 +136,36 @@ Then, in any project:
 
 ---
 
+## workhorse
+
+**The producer — builds an approved work-item and ships it to a ready-for-review PR.**
+
+When a tasks doc is approved, workhorse runs the **back half** of the loop on its own: it
+builds the change (subagent-driven, test-first), reviews it (review-crew's auto-fix loop),
+opens a draft PR, exercises it (test-pilot), resets seeded data, gets CI green, and hands
+you a live dev server + a plain-language readout. It **never merges** — that's always yours.
+
+### Commands
+
+| Command | Use it to… |
+| --- | --- |
+| `/workhorse:workhorse` | Build an approved work-item and take it to a ready-for-review PR. |
+
+### Install & first run
+
+```
+/plugin marketplace add zwrose/superheroes
+/plugin install workhorse@superheroes
+```
+
+Then, once a tasks doc is approved:
+
+```
+/workhorse:workhorse          # build it and take it to a PR
+```
+
+---
+
 ## Multi-host harness
 
 The marketplace runs on both **Claude Code** and **Codex**. The plugins are the same;
@@ -130,8 +194,9 @@ changes — the same methodology runs on both.
 ## Where this is going
 
 superheroes is growing into a band that runs much of a project's development loop for
-you. See the [roadmap](ROADMAP.md) for the phases, and [CONVENTIONS.md](CONVENTIONS.md)
-for the cross-plugin contracts.
+you. See the [roadmap](ROADMAP.md) — now a live [GitHub Project](https://github.com/users/zwrose/projects/1) —
+for what's planned and in flight, and [CONVENTIONS.md](CONVENTIONS.md) for the cross-plugin
+contracts.
 
 ## Contributing
 

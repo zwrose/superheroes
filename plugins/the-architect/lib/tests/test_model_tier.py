@@ -50,3 +50,9 @@ def test_cli_ignores_malformed_overrides_json(capsys):
                   "--overrides", "{not json"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["model"] == "sonnet"  # fail-open
+
+
+def test_docstring_names_real_consumers():
+    doc = MT.__doc__ or ""
+    assert "Workhorse is the first consumer" not in doc, "false first-consumer claim still present"
+    assert "review-code" in doc, "docstring should name review-code as a real consumer"

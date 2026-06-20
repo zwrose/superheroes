@@ -118,7 +118,9 @@ Emit `journal.append(events, "step_entered", step=1, world={…})` at entry and
 Invoke superpowers `subagent-driven-development` to execute the tasks doc,
 **clipped** per CONVENTIONS §3.2: the worktree is **pre-made** (do NOT create
 one) and you **stop before** `finishing-a-development-branch`. Build keeps
-SDD's own Model Selection heuristic. A `BLOCKED` status → GATE.
+SDD's own Model Selection heuristic. **This is a deliberate deferral (spec FR-5): the
+model-tier knob intentionally does NOT govern Build-leg implementer models — do not wire
+the knob here.** A `BLOCKED` status → GATE.
 
 ## ② Review — review-crew:review-code (deterministic terminal read)
 

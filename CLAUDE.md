@@ -12,6 +12,18 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `.github/scripts/validate_marketplace.py` — catalog/manifest validator.
 - `docs/` — internal design docs and plans. **Gitignored**, kept local only.
 
+## Keeping the docs fresh
+
+When a change alters the **cast, commands, or cross-plugin contracts**, update the docs in
+the same PR:
+
+- **README.md** — the hero sections + their command tables.
+- **CONVENTIONS.md** — the cross-plugin contracts (§1–§7).
+
+**ROADMAP.md is just a pointer** to the [GitHub Project](https://github.com/users/zwrose/projects/1)
+(the live plan). Keep it a short vision + pointer — **do not re-add a phase list or status
+table**; the Project is the source of truth for what's planned and in flight.
+
 ## Versioning (per-plugin SemVer)
 
 Each plugin owns its version in its own `plugins/<name>/.claude-plugin/plugin.json`.
@@ -19,9 +31,9 @@ This is the version Claude Code uses for update detection.
 
 Rules (enforced by `validate_marketplace.py`):
 
-- **Bump `plugin.json` `version` on every plugin release.** Claude Code skips the
-  update if the resolved version is unchanged, so shipping without bumping is
-  invisible to existing users.
+- **Version bumps are automated** (release-please derives them from Conventional Commits and
+  writes them into both `plugin.json` files via the release PR). Do not hand-edit a plugin's
+  `version` in a feature change — it advances only through that plugin's release PR.
 - **Never put `version` in a plugin's `marketplace.json` entry.** `plugin.json`
   wins silently, so a duplicate masks the real value. plugin.json is the single
   source of truth for plugin version.
@@ -32,9 +44,11 @@ Rules (enforced by `validate_marketplace.py`):
 
 ## Releasing
 
-Manual, per-plugin. See [RELEASING.md](RELEASING.md). In short: bump the plugin's
-`plugin.json` version, update its `CHANGELOG.md`, merge to `main`, then tag
-`<plugin>-vX.Y.Z` and cut a GitHub Release.
+Automated via release-please (see [RELEASING.md](RELEASING.md)). Merge plugin-scoped
+Conventional-Commit work to `main`; release-please maintains a per-plugin release PR that
+bumps both `plugin.json` files + `version.txt` and regenerates the CHANGELOG. **Merging that
+release PR** cuts the `<plugin>-vX.Y.Z` tag + GitHub Release. Do not hand-edit a plugin's
+version or hand-cut a release.
 
 ## Commits — Conventional Commits
 
