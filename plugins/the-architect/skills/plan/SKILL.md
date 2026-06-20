@@ -3,7 +3,7 @@ name: plan
 description: Use after a `spec` is approved, to turn it into the technical `plan` (the *how*) for a work-item — approach, architecture, data flow, key decisions, risks. It runs LARGELY AUTONOMOUSLY, pausing only to escalate consequential decisions. Produces the `plan` definition-doc and runs review-plan. Not for requirements (that is `discovery`) or step-by-step tasks (that is `tasks`).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Plan
 
@@ -98,9 +98,10 @@ Ground before you design — **bake in the durable, look up the volatile.**
   approval (discovery step 8). Either way it reflects a real approval, never a
   self-approval; a spec straight out of discovery with the owner's sign-off will read
   `passed`.
-- **Read the calibration layer as binding constraints, not suggestions:** `CLAUDE.md`, the
-  profile / `patterns.md` (stack, threat model, current best-practice opinions), and any
-  prior decisions/ADRs. The plan must fit the project these describe.
+- **Read the calibration layer as binding constraints, not suggestions:** `CLAUDE.md`
+  (if it is **not already in your context, read it now** — never assume it was
+  auto-loaded), the profile / `patterns.md` (stack, threat model, current best-practice
+  opinions), and any prior decisions/ADRs. The plan must fit the project these describe.
 - **Explore the actual codebase before designing:** read the files the spec touches, grep
   the relevant symbols, follow imports to neighbours. Identify the layering, error-handling,
   naming, and test conventions **actually in use**, and design to match them — reuse

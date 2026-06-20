@@ -3,7 +3,7 @@ name: writing-specs
 description: Use to author the on-disk `spec` definition-doc once an owner has APPROVED a set of requirements — normally invoked by the `discovery` skill, not directly by an owner idea. Mints the work-item slug, fills the spec body template, writes `docs/superheroes/<work-item>/spec.md`, and runs a self-review. Does NOT elicit requirements (that is `discovery`) or design the technical approach (that is `plan`).
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # writing-specs
 
