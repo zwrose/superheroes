@@ -6,18 +6,6 @@ All notable changes to the `review-crew` plugin. Versions follow
 
 ## [Unreleased]
 
-## [0.8.0] — 2026-06-19
-
-### Added
-
-- Wire the model-tier knob into the review trio (`review-spec`/`review-plan`/`review-tasks`)
-  and `audit-debt`, and thread profile overrides through `review-code` — all five dispatch
-  points now resolve specialist models via the shared knob (FR-1, FR-2, FR-4).
-- New `model_tier_overrides.py` helper: reads an optional `## Model tiers` block from the
-  project profile and feeds it to the resolver's existing `--overrides` seam (fail-open).
-- New `test_model_tier_wiring.py` drift guard: asserts every dispatching review-crew skill
-  is wired, and that the dispatching set is exactly the wired set (FR-7).
-
 ## [0.7.0] — 2026-06-19
 
 ### Added
