@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -21,6 +23,12 @@ jobs:
 
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py
+
+      - name: Catalog membership / metadata.version consistency
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          python3 .github/scripts/check_catalog_membership.py "origin/$GITHUB_BASE_REF"
 
       - name: Validate dual-host manifests + tool maps
         run: python3 .github/scripts/validate_hosts.py
@@ -50,3 +58,17 @@ jobs:
             python3 -m pytest "$suite" -q || fail=1
           done
           exit $fail
+
+  pr-title:
+    name: pr-title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: PR title is a Conventional Commit
+        run: python3 .github/scripts/check_conventional_commit.py "$PR_TITLE"
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
