@@ -1,8 +1,10 @@
 {
   "name": "test-pilot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Seeded manual test plans on PRs plus autonomous browser execution — Claude pilots the plan, fixes what it finds, and hands you the spot-check.",
-  "author": { "name": "zwrose" },
+  "author": {
+    "name": "zwrose"
+  },
   "skills": "./skills/",
   "interface": {
     "displayName": "Test Pilot",

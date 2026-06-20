@@ -4,6 +4,13 @@ All notable changes to the `test-pilot` plugin. Versions follow
 [SemVer](https://semver.org); entries follow
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.2.1](https://github.com/zwrose/superheroes/compare/test-pilot-v0.2.0...test-pilot-v0.2.1) (2026-06-20)
+
+
+### Bug Fixes
+
+* host-map pointer resolution, CLAUDE.md context enforcement, and discovery size/slug autonomy ([#66](https://github.com/zwrose/superheroes/issues/66)) ([7f346cc](https://github.com/zwrose/superheroes/commit/7f346cc18646f2c0112d6d70d7f7f4b594855585))
+
 ## [Unreleased]
 
 ## [0.2.0] — 2026-06-19
