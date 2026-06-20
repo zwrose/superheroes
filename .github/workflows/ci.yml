@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # include `edited` so the pr-title check re-validates when the title is fixed
+    # (a re-run replays the stale event payload; only a new event refreshes the title)
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
