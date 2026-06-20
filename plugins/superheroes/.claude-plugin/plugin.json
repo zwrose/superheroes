@@ -1,0 +1,6 @@
+{
+  "name": "superheroes",
+  "version": "0.1.0",
+  "description": "Your team of superheroes — the-architect (spec→plan→tasks), review-crew (multi-agent review), test-pilot (browser verification), and workhorse (the producer) — in one plugin that runs a project's development loop.",
+  "author": { "name": "zwrose" }
+}

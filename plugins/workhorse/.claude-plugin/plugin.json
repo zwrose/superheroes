@@ -1,8 +1,0 @@
-{
-  "name": "workhorse",
-  "version": "0.5.0",
-  "description": "Workhorse — the superintelligent horse foreman. Takes the-architect's approved tasks and gets them built, reviewed, tested, and shipped to a CI-green, ready-for-review PR with a live dev server to spot-check. You merge; Workhorse never does.",
-  "author": {
-    "name": "zwrose"
-  }
-}
