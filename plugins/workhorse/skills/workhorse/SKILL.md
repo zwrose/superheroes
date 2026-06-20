@@ -122,6 +122,13 @@ SDD's own Model Selection heuristic. **This is a deliberate deferral (spec FR-5)
 model-tier knob intentionally does NOT govern Build-leg implementer models — do not wire
 the knob here.** A `BLOCKED` status → GATE.
 
+**Record build provenance (the ① half of the ③ ship-gate).** Once SDD completes, write the
+build evidence: `ship_gate.write_build(paths["provenance"],
+engine="subagent-driven-development", head=$(git rev-parse HEAD))`. This write is part of
+the SDD-invocation path — **executing the tasks inline instead of through SDD skips it**,
+which the ③ ship-gate detects (no `build` provenance → GATE). Inline execution in place of
+SDD is a forbidden substitution.
+
 ## ② Review — review-crew:review-code (deterministic terminal read)
 
 Emit step_entered/step_completed journal events; write checkpoint.
@@ -130,7 +137,7 @@ Run the review-code auto-fix loop on the branch, capturing its terminal state to
 a result file:
 
 ```
-RESULT="$(mktemp)"
+RESULT="${paths[review_result]}"   # durable control-plane path (issue dir), survives resume
 # invoke: /review-crew:review-code --result-file "$RESULT"
 # then read the terminal action — fail-closed (missing/garbled/unknown -> "halt"),
 # mirroring review-crew's review_result.read_result (a library reader, not a CLI):
@@ -143,6 +150,15 @@ Read `$RESULT` (via `review_result.read_result`). Branch on `action`:
   the skipped blocker; do not ship it silently.
 - `halt` (circuit breaker / round cap) → **GATE**.
 - missing/garbled → reads as `halt` → **GATE** (fail-closed).
+
+**Stamp the reviewed HEAD (the ② half of the ship-gate).** On `exit_clean`, record the HEAD
+the review covered: `ship_gate.set_review_covers(paths["provenance"], $(git rev-parse HEAD))`.
+The ③ ship-gate requires this to equal the shipped HEAD (a later commit → stale → GATE).
+
+**Non-substitutable.** A single specialist subagent (e.g. a lone `code-reviewer`) is **not**
+`review-code` and does **not** satisfy ②. The only evidence ② records is the
+`review-result.json` written by the full `/review-crew:review-code` loop at
+`paths["review_result"]`; do not hand-write it.
 
 **Version-skew diagnostic.** `$RESULT` is empty only when review-code did not write
 it — most likely an installed review-crew that predates `--result-file`. So when the
@@ -157,6 +173,22 @@ Emit step_entered journal event. **Before the push/PR write:**
 `lock.renew(store, WORK_ITEM, generation)` then **`lock.fence_ok(store, WORK_ITEM, generation)`**
 (`lock.py`) — a stale generation means a newer session holds the ref-lease; abort the
 write (superseded). Never push under a stale fence.
+
+**③.0 Ship-gate (HARD GATE) — proof ① and ② ran over the shipped code.** Before any
+world-write, gather the evidence and decide deterministically:
+
+- `provenance = ship_gate.read_provenance(paths["provenance"])` — a `ship_gate.ProvenanceError`
+  (present-but-garbled) → **GATE** ("provenance unreadable — fail closed").
+- `review_result` = a fail-closed parse of `paths["review_result"]`: `json.load(...)` on
+  success, else `{"action": "halt"}` on missing/garbled (the same fail-closed-to-`halt` read
+  ② uses).
+- `head = git rev-parse HEAD`.
+
+Then `ship_gate.decide(provenance, review_result, head)`:
+- `proceed` → continue to the PR world-read/write below.
+- `gate` → **GATE**: surface the returned `reason` (build bypassed / review didn't run /
+  review skipped a blocker / review stale) and park per the supervised-park flow. This is the
+  deterministic backstop: a build/review that did not genuinely run cannot reach a PR.
 
 **First world-READ, then world-WRITE.** Use **`recover.pr_action(world)`** to decide:
 - A PR already exists for this branch → **adopt** it (capture its number; if it's
