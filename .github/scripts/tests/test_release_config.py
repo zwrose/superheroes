@@ -35,12 +35,16 @@ def test_config_is_separate_prs_and_well_formed():
         assert p["release-type"] == "simple"
         assert p["component"] == name
         assert p["changelog-path"] == "CHANGELOG.md"
+        # release-please resolves a package's extra-files RELATIVE TO THE PACKAGE DIR
+        # (the `key`), so the paths are package-relative, not repo-root-relative.
         paths = [e["path"] for e in p["extra-files"]]
-        assert f"plugins/{name}/.claude-plugin/plugin.json" in paths
-        assert f"plugins/{name}/.codex-plugin/plugin.json" in paths
+        assert ".claude-plugin/plugin.json" in paths
+        assert ".codex-plugin/plugin.json" in paths
         for e in p["extra-files"]:
             assert e["type"] == "json" and e["jsonpath"] == "$.version"
-            assert os.path.exists(os.path.join(_ROOT, e["path"])), e["path"]
+            # verify the path as release-please resolves it: <package-dir>/<extra-file path>
+            resolved = os.path.join(_ROOT, key, e["path"])
+            assert os.path.exists(resolved), resolved
 
 
 def test_config_keeps_default_tag_scheme():
