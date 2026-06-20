@@ -12,6 +12,18 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `.github/scripts/validate_marketplace.py` — catalog/manifest validator.
 - `docs/` — internal design docs and plans. **Gitignored**, kept local only.
 
+## Keeping the docs fresh
+
+When a change alters the **cast, commands, or cross-plugin contracts**, update the docs in
+the same PR:
+
+- **README.md** — the hero sections + their command tables.
+- **CONVENTIONS.md** — the cross-plugin contracts (§1–§7).
+
+**ROADMAP.md is just a pointer** to the [GitHub Project](https://github.com/users/zwrose/projects/1)
+(the live plan). Keep it a short vision + pointer — **do not re-add a phase list or status
+table**; the Project is the source of truth for what's planned and in flight.
+
 ## Versioning (per-plugin SemVer)
 
 Each plugin owns its version in its own `plugins/<name>/.claude-plugin/plugin.json`.

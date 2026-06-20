@@ -9,12 +9,12 @@ development loop together without stepping on each other.
 later work builds against a fixed target. A plugin implements a convention when it
 first needs it; the convention does not require all plugins to implement it at once.
 Where an existing plugin already implements (or diverges from) a convention, this doc
-says so. Conventions not yet specified are named in **§8**, bound to the plugin and
-roadmap phase that will own them — so deferral is explicit, not silent.
+says so. Conventions not yet specified are named in **§8**, bound to the plugin and the
+GitHub issue/milestone that will own them — so deferral is explicit, not silent.
 
 **Scope.** This file is the authoritative contract. The broader product vision lives
-elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (For the phases
-referenced in §8, see [ROADMAP.md](ROADMAP.md).)
+elsewhere; this doc is deliberately narrow — *interfaces*, not roadmap. (§8's deferred conventions are
+bound to GitHub issues/milestones — see the [roadmap Project](https://github.com/users/zwrose/projects/1).)
 
 **Band posture — designed to be used together.** The heroes ship as *separately installable
 plugins* but form a *cohesively designed band*: within the loop they **assume each other's
@@ -29,9 +29,11 @@ tasks are autonomous), while an absent `review-spec` simply leaves the spec for 
 to approve — the spec is **owner-gated and never self-certified** (the deliberate asymmetry,
 §3.1). That is "degrade-not-crash," **not** "degrade gracefully to full standalone" — we
 don't carry dual-mode complexity to keep the apart-case whole. This is the superheroes-internal analog
-of "superpowers is an assumed dependency." *(How many install-units the band ships as —
-**packaging** — is a separate question from this posture and from the cast of characters;
-deferred, §8.)*
+of "superpowers is an assumed dependency." *(**Packaging is now decided: the band consolidates
+into one plugin** — see [#44](https://github.com/zwrose/superheroes/issues/44). The "separately
+installable plugins" framing above, and the cross-plugin machinery it motivates (§2.4's
+shared-resolver unification, §7's per-plugin manifests/maps), **retire with that consolidation** —
+they describe today's multi-plugin reality until #44 lands.)*
 
 ---
 
@@ -66,14 +68,17 @@ review (review-crew owns all three review gates):
 > built. (Inline `mcp__visualize__show_widget` mockups are a graphical-client convenience
 > only — they do not render in a terminal — so never the sole path.)
 
-The **cast** referenced below: **producer** (the controller / loop driver),
-**the-architect** (produces the definition-docs — spec/plan/tasks), **review-crew** (all
-review gates + code review), **test-pilot** (behavioral/browser verification),
-**coordinator** (owns all GitHub-issue writes). the-architect, review-crew, test-pilot,
-and the producer (**Workhorse**) are shipped today; the coordinator is upcoming
-(Phase 2a-plus). (The spec/plan/tasks
-artifact family is called **definition-docs** — the docs that *define* a work item —
-independent of the producing plugin's name.)
+The **cast** referenced below: **producer** (the per-issue back-half loop driver —
+**Workhorse**), **the-architect** (produces the definition-docs — spec/plan/tasks),
+**review-crew** (all review gates + code review), **test-pilot** (behavioral/browser
+verification). These four are **shipped today** (and run on both Claude Code and Codex, §7).
+**Upcoming heroes:** an **operator** (the outer-loop run engine that drives a queue of
+work-items to merge-ready PRs), a **backlog/TPM** (owns all GitHub-issue writes — triage,
+decomposition), and a **maintainability guardian** — see the
+[roadmap Project](https://github.com/users/zwrose/projects/1). (The "coordinator" of earlier
+drafts split into the operator + the backlog/TPM.) (The spec/plan/tasks artifact family is
+called **definition-docs** — the docs that *define* a work item — independent of the producing
+plugin's name.)
 
 Load-bearing identifiers used throughout (`<work-item>`, `<content-hash>`, the storage
 keys) and the schema-versioning policy are defined once in **§6**.
@@ -439,7 +444,7 @@ second open PR for the same head→base**, and the lock lease further serializes
 one resumer reaches `gh` at a time. (Pre-search "check-then-act" is explicitly rejected:
 it is only at-least-once under `gh` eventual consistency.)
 
-### 4.5 Concurrency model (three layers)
+### 4.5 Concurrency model (two layers)
 
 - **Per-checkout isolation (local).** Each worktree/clone loop has its own control-plane
   store, queue, and lock refs. **`init`/the producer acquires a per-checkout lock at
@@ -448,18 +453,10 @@ it is only at-least-once under `gh` eventual consistency.)
   writes prevent torn files, not lost updates; the startup lock is what prevents the
   within-checkout read-modify-write race on `queue.json`/`checkpoint.json`.) **Parallelism
   = more checkouts.**
-- **Per-project state remote (durability, optional, off by default).** A private
-  `<owner>/superheroes-state-<project>` repo, **one branch per checkout-loop**, that the
-  producer pushes resume-briefs/checkpoints to at gates — for walk-away and cross-machine
-  durability. Local git is the baseline; the remote is the walk-away tier. (Any
-  always-on / machine-off execution would be a **separate product, not a tier of this
-  loop** — it cannot run on subscription-billed Claude Code mechanics, so it is out of
-  contract here.)
 - **Cross-loop backstop = the target repo's remote.** The genuinely shared write targets
-  are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4); the
+  are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4) and the
   shared **config store** (serialized by the project-scoped config lock, §4.4, and
-  git-mediated cross-machine in in-repo mode); and the **state remote** (whose
-  branch-per-checkout isolation depends on the §4.2 keying fix). The exactly-once
+  git-mediated cross-machine in in-repo mode). The exactly-once
   machinery lives on the target remote, so it is inherently cross-process and
   cross-machine.
 
@@ -530,7 +527,11 @@ The producer's back-half loop (workhorse ⓪–⑨) is **reality-wins, reconcile
   **GATEs** — a downstream run is invalidated when its upstream definition-doc changes.
 - **Escalation to the owner** follows the F5 policy (`escalation-base.md`): act
   autonomously on agent-verifiable / reversible decisions; escalate on owner-authority or
-  high-stakes-irreversible ones. **Merge is always the owner's** — the producer never merges.
+  high-stakes-irreversible ones. The irreversible / owner-authority actions — **merge,
+  release, deploy, force-push, destructive ops** — are gated on the owner's **live, in-turn
+  approval** (a real prompt the owner answers, never an agent-set token): the producer never
+  does them unattended (no approver → it **parks**), but performs them on explicit go-ahead.
+  **PR-create stays autonomous.** (The live-approval gate — [#14](https://github.com/zwrose/superheroes/issues/14).)
 
 (The fuller walk-away approval-gate contract — defer-vs-block, where approvals are
 recorded — remains deferred to §7, Phase 2a-plus.)
@@ -546,7 +547,6 @@ recorded — remains deferred to §7, Phase 2a-plus.)
 | `registry.json` + `config.lock` | machine-local project store | machine-local project store | project (`<config-key>`) |
 | Runtime (queue, checkpoints, briefs, events) | machine-local control-plane store | machine-local control-plane store | checkout (`<absolute-git-dir-key>`) |
 | Work items + rendered index | GitHub issues | GitHub issues | — |
-| Walk-away durability | `superheroes-state-<project>` remote, branch per checkout | same | checkout (branch) |
 
 ---
 
@@ -695,15 +695,14 @@ scope — the two hosts load the same skills, and the tool maps are the entire s
 
 Real conventions the band will need that are **intentionally not specified yet**, because
 the plugin that owns each does not exist — specifying them blind would be guesswork.
-**Each is an entry-gate for its owning phase** (see [ROADMAP.md](ROADMAP.md)): building
-that plugin means specifying its conventions here first. (Surfaced by the reviews of
-2026-06-14.)
+**Each is an entry-gate for its owning hero / milestone** (tracked in the
+[roadmap Project](https://github.com/users/zwrose/projects/1)): building that hero means
+specifying its conventions here first. (Surfaced by the reviews of 2026-06-14.)
 
-| Deferred convention | What it must define | Owner · phase |
+| Deferred convention | What it must define | Owner · tracking |
 | --- | --- | --- |
-| **GitHub issue ↔ work-item schema** | issue body / labels / state conventions; `<work-item>`→issue mapping; the "rendered index/summary" format; how producer & coordinator coordinate writes to one issue | **coordinator · Phase 2a-plus** |
-| **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **producer + coordinator · Phase 2a-plus** |
-| **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | **producer / coordinator · Phase 2a-plus / 4** |
-| **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **producer · Phase 2a-plus** |
-| **Plugin-version / band-compatibility** | cross-plugin `schemaVersion` skew handling; whether a minimum-compatible-band matrix exists (minimal fail-closed-on-unknown is already specified in §6.4) | **band-wide · later** |
-| **Plugin packaging / bundling** | how many install-units the band ships as. Lean: review-crew & test-pilot stay separate (genuine standalone value + already published). Open: whether to bundle the tightly-coupled, band-only orchestration (the-architect / producer / coordinator) into fewer plugins once their version-coupling is concrete. Decide with real coupling info, not blind. (Packaging ≠ the cast — see Band posture above; the brand is fixed.) | **band-wide · revisit when producer/coordinator land (~Phase 2a)** |
+| **GitHub issue ↔ work-item schema** | issue body / labels / state conventions; `<work-item>`→issue mapping; the "rendered index/summary" format; how producer & coordinator coordinate writes to one issue | **backlog/TPM** · [#30](https://github.com/zwrose/superheroes/issues/30) |
+| **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **operator** · partly defined by the live-approval gate [#14](https://github.com/zwrose/superheroes/issues/14); the batch/defer contract is TBD |
+| **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | [#42](https://github.com/zwrose/superheroes/issues/42) |
+| **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **operator** · [#26](https://github.com/zwrose/superheroes/issues/26) |
+| **Plugin-version / band-compatibility** | cross-plugin `schemaVersion` skew handling; whether a minimum-compatible-band matrix exists (minimal fail-closed-on-unknown is already specified in §6.4) | **largely moot once consolidated ([#44](https://github.com/zwrose/superheroes/issues/44))** — one plugin = one version; artifact `schemaVersion` stays covered by §6.4 |
