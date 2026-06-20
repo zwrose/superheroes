@@ -7,8 +7,8 @@
       "component": "review-crew",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        { "type": "json", "path": "plugins/review-crew/.claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "plugins/review-crew/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     },
     "plugins/test-pilot": {
@@ -16,8 +16,8 @@
       "component": "test-pilot",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        { "type": "json", "path": "plugins/test-pilot/.claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "plugins/test-pilot/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     },
     "plugins/the-architect": {
@@ -25,8 +25,8 @@
       "component": "the-architect",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        { "type": "json", "path": "plugins/the-architect/.claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "plugins/the-architect/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     },
     "plugins/workhorse": {
@@ -34,8 +34,8 @@
       "component": "workhorse",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        { "type": "json", "path": "plugins/workhorse/.claude-plugin/plugin.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "plugins/workhorse/.codex-plugin/plugin.json", "jsonpath": "$.version" }
+        { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" },
+        { "type": "json", "path": ".codex-plugin/plugin.json", "jsonpath": "$.version" }
       ]
     }
   }
