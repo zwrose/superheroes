@@ -1,4 +1,4 @@
-# plugins/the-architect/lib/tests/test_escalation.py
+# plugins/superheroes/lib/tests/test_escalation.py
 import importlib.util
 import json
 import os
@@ -109,30 +109,29 @@ def test_safety_machinery_set_members_are_pinned():
         "escalation-base.md", "review-base.md",
     }
 
-def _band_file(tmp_path, plugin, sub, name):
-    p = tmp_path / "plugins" / plugin / sub / name
+def _band_file(tmp_path, sub, name):
+    p = tmp_path / "plugins" / "superheroes" / sub / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("x", encoding="utf-8")
     return p
 
+# Files that live under hooks/ in the merged superheroes tree (not lib/)
+_HOOKS_FILES = {"hooks.json", "precompact.py", "session_start.py"}
+
 def test_guard_refuses_each_safety_file_under_a_band_root(tmp_path):
-    roots = [str(tmp_path / "plugins" / "review-crew"),
-             str(tmp_path / "plugins" / "the-architect"),
-             str(tmp_path / "plugins" / "workhorse")]
-    arch = {"escalation.py", "definition_doc.py", "escalation-base.md", "model_tier.py"}
-    workhorse = {"enforcer.py", "band_lib.py", "hooks.json", "precompact.py", "session_start.py"}
+    band_root = str(tmp_path / "plugins" / "superheroes")
     for name in ESC.SAFETY_MACHINERY:
-        if name in workhorse:
-            plugin, sub = "workhorse", ("hooks" if name in ("hooks.json", "precompact.py", "session_start.py") else "lib")
-        elif name in arch:
-            plugin, sub = "the-architect", ("rubric" if name.endswith(".md") else "lib")
+        if name in _HOOKS_FILES:
+            sub = "hooks"
+        elif name.endswith(".md"):
+            sub = "rubric"
         else:
-            plugin, sub = "review-crew", ("rubric" if name.endswith(".md") else "lib")
-        p = _band_file(tmp_path, plugin, sub, name)
-        assert ESC.is_safety_machinery(str(p), roots) is True, name
+            sub = "lib"
+        p = _band_file(tmp_path, sub, name)
+        assert ESC.is_safety_machinery(str(p), [band_root]) is True, name
 
 def test_guard_allows_ordinary_source(tmp_path):
-    roots = [str(tmp_path / "plugins" / "review-crew")]
+    roots = [str(tmp_path / "plugins" / "superheroes")]
     p = tmp_path / "src" / "feature.py"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("x", encoding="utf-8")
@@ -141,22 +140,22 @@ def test_guard_allows_ordinary_source(tmp_path):
 def test_guard_allows_same_basename_outside_band_roots(tmp_path):
     # The false-positive fix (review): a target repo legitimately containing loop_state.py
     # OUTSIDE the band's plugin tree must NOT be refused — basename alone is not enough.
-    roots = [str(tmp_path / "plugins" / "review-crew")]
+    roots = [str(tmp_path / "plugins" / "superheroes")]
     p = tmp_path / "their_app" / "loop_state.py"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("x", encoding="utf-8")
     assert ESC.is_safety_machinery(str(p), roots) is False
 
 def test_guard_resists_symlink_evasion(tmp_path):
-    real = _band_file(tmp_path, "review-crew", "lib", "loop_state.py")
+    real = _band_file(tmp_path, "lib", "loop_state.py")
     link = tmp_path / "alias.py"
     os.symlink(str(real), str(link))
-    roots = [str(tmp_path / "plugins" / "review-crew")]
+    roots = [str(tmp_path / "plugins" / "superheroes")]
     # matched by the RESOLVED real path (basename + under a band root), not the link name
     assert ESC.is_safety_machinery(str(link), roots) is True
 
 def test_guard_fails_closed_without_band_roots(tmp_path):
-    p = _band_file(tmp_path, "review-crew", "lib", "loop_state.py")
+    p = _band_file(tmp_path, "lib", "loop_state.py")
     assert ESC.is_safety_machinery(str(p), None) is True   # can't anchor -> protect
 
 
@@ -182,8 +181,8 @@ def test_cli_classify_emits_json():
     assert rc == 0 and json.loads(out)["on_floor"] is True
 
 def test_cli_guard_refuses_safety_file(tmp_path):
-    p = tmp_path / "plugins" / "review-crew" / "lib" / "loop_state.py"
+    p = tmp_path / "plugins" / "superheroes" / "lib" / "loop_state.py"
     p.parent.mkdir(parents=True, exist_ok=True); p.write_text("x", encoding="utf-8")
     rc, out, _ = _run_cli("guard", "--path", str(p),
-                          "--band-root", str(tmp_path / "plugins" / "review-crew"))
+                          "--band-root", str(tmp_path / "plugins" / "superheroes"))
     assert rc == 0 and json.loads(out)["allow"] is False

@@ -1,4 +1,4 @@
-# plugins/review-crew/eval/tests/test_escalation_eval.py
+# plugins/superheroes/eval/tests/test_escalation_eval.py
 import importlib.util
 import json
 import os
