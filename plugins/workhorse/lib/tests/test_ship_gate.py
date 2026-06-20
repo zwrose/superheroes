@@ -17,7 +17,8 @@ def _prov(covers=HEAD, build=BUILD):
 
 
 def test_proceed_when_build_and_fresh_clean_review():
-    assert ship_gate.decide(_prov(), CLEAN, HEAD)["action"] == "proceed"
+    r = ship_gate.decide(_prov(), CLEAN, HEAD)
+    assert r["action"] == "proceed" and "build + review" in r["reason"]
 
 
 def test_gate_when_build_absent():
@@ -91,7 +92,35 @@ def test_decide_is_deterministic_round_trip(tmp_path):
     p = str(tmp_path / "provenance.json")
     ship_gate.write_build(p, engine="subagent-driven-development", head=HEAD)
     ship_gate.set_review_covers(p, HEAD)
-    prov1 = ship_gate.read_provenance(p)
-    prov2 = ship_gate.read_provenance(p)
-    assert ship_gate.decide(prov1, CLEAN, HEAD) == ship_gate.decide(prov2, CLEAN, HEAD)
-    assert ship_gate.decide(prov1, CLEAN, HEAD)["action"] == "proceed"
+    prov = ship_gate.read_provenance(p)
+    r = ship_gate.decide(prov, CLEAN, HEAD)
+    assert r["action"] == "proceed"
+    # purity: a re-read of the same durable evidence yields the identical decision
+    assert ship_gate.decide(ship_gate.read_provenance(p), CLEAN, HEAD) == r
+
+
+def test_gate_when_head_is_none_even_if_covers_none():
+    # a failed `git rev-parse HEAD` (head=None) must never proceed
+    r = ship_gate.decide(_prov(covers=None), CLEAN, None)
+    assert r["action"] == "gate" and "stale" in r["reason"]
+
+
+def test_gate_when_review_is_non_dict():
+    prov = {"build": BUILD, "review": "oops"}
+    r = ship_gate.decide(prov, CLEAN, HEAD)
+    assert r["action"] == "gate" and "stale" in r["reason"]
+
+
+def test_read_provenance_nonobject_json_raises(tmp_path):
+    p = tmp_path / "provenance.json"
+    p.write_text("[1, 2, 3]")
+    with pytest.raises(ship_gate.ProvenanceError):
+        ship_gate.read_provenance(str(p))
+
+
+def test_write_build_aborts_on_garbled_not_clobber(tmp_path):
+    p = tmp_path / "provenance.json"
+    p.write_text("{garbled")
+    with pytest.raises(ship_gate.ProvenanceError):
+        ship_gate.write_build(str(p), engine="subagent-driven-development", head=HEAD)
+    assert p.read_text() == "{garbled"  # unchanged — never clobbered

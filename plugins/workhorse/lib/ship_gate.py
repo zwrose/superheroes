@@ -16,7 +16,7 @@ evident forge. See the work-item plan.
 import json
 import os
 
-from control_plane import atomic_write
+import control_plane
 
 _TERMINAL = "exit_clean"
 
@@ -45,7 +45,7 @@ def write_build(path, *, engine, head):
     """Record that the build ran via `engine` at `head` (read-modify-write; never clobbers)."""
     prov = read_provenance(path)
     prov["build"] = {"engine": engine, "head": head}
-    atomic_write(path, json.dumps(prov))
+    control_plane.atomic_write(path, json.dumps(prov))
     return prov
 
 
@@ -53,7 +53,7 @@ def set_review_covers(path, head):
     """Record the HEAD review-code's clean exit covered (read-modify-write; never clobbers)."""
     prov = read_provenance(path)
     prov.setdefault("review", {})["covers"] = head
-    atomic_write(path, json.dumps(prov))
+    control_plane.atomic_write(path, json.dumps(prov))
     return prov
 
 
@@ -78,9 +78,11 @@ def decide(provenance, review_result, head):
             "review": "review loop did not terminate (non-terminal state)",
         }.get(action, "review did not run / did not finish clean")
         return {"action": "gate", "reason": reason}
-    # 3. Freshness (FR-4 / UFR-5): review must cover the shipped HEAD.
-    covers = (provenance.get("review") or {}).get("covers")
-    if covers != head:
+    # 3. Freshness (FR-4 / UFR-5): review must cover the shipped HEAD. A falsy
+    # covers/head (absent stamp, or a failed `git rev-parse`) must GATE, never proceed.
+    rev = provenance.get("review")
+    covers = rev.get("covers") if isinstance(rev, dict) else None
+    if not covers or covers != head:
         return {"action": "gate",
                 "reason": "review evidence stale — covered HEAD != shipped HEAD; "
                           "re-run review-code"}
