@@ -280,7 +280,19 @@ Do **not** tier or skip specialists based on which files changed. Coverage unifo
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools.md`). The specialist dispatch prompt template, per-agent substitution table, and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt.
+Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via `hosts/<your-host>-tools.md`). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt.
+
+**Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
+
+| reviewer | `<agent>` (findings filename) | `<dimension>` |
+| ---------------------------- | ----------------------------- | ------------- |
+| architecture-reviewer        | architecture                  | Architecture  |
+| code-reviewer                | code                          | Code          |
+| security-reviewer            | security                      | Security      |
+| test-reviewer                | test                          | Test          |
+| premortem-reviewer           | premortem                     | Failure-Mode  |
+
+After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
 ### 4. Compile + Dedupe (main context)
 
@@ -435,50 +447,7 @@ After the single pass (PR mode only), post approved findings to GitHub. No triag
 - **REQUEST_CHANGES** — blocks merge until resolved
 - **APPROVE** — approve with comments
 
-Then build the review JSON from approved findings:
-
-```bash
-cat > "$SESSION_DIR/round-1/review.json" <<EOF
-{
-  "commit_id": "<HEAD_SHA from meta.json>",
-  "body": "<summary from compiled.json + verdict label>",
-  "event": "<user's choice>",
-  "comments": [
-    {"path": "<file>", "line": <N>, "side": "RIGHT", "body": "<severity tag + finding body + suggestion>"}
-  ]
-}
-EOF
-```
-
-Run `resolve_diff_lines.py` to validate every comment anchor against the diff. This is non-optional — GitHub returns 422 "Line could not be resolved" for any inline comment whose `(file, line)` doesn't land on a `+` or context line inside a hunk, and the script moves out-of-hunk comments to the nearest valid line (prefixing the body with `(Re: line N)`) and drops comments for files not in the diff:
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 "$ROOT_DIR/lib/resolve_diff_lines.py" \
-  "$SESSION_DIR/round-1/diff.txt" \
-  "$SESSION_DIR/round-1/review.json" \
-  --output "$SESSION_DIR/round-1/review-resolved.json"
-```
-
-Surface the script's stderr to the user — any `MOVED:` or `DROPPED:` lines mean a finding got relocated or excluded, and the user should know before the review goes out.
-
-Post the review:
-
-```bash
-gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-  --input "$SESSION_DIR/round-1/review-resolved.json"
-```
-
-**Post-submit verification — non-optional.** Fetch the last review to confirm it actually landed (silent failures and accidental duplicates have burned us before):
-
-```bash
-gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
-  --jq '.[-1] | {id, state, submitted_at, html_url}'
-```
-
-If the post returns 422 "Line could not be resolved" despite running `resolve_diff_lines.py`, the script's stderr will have logged which comments were moved or dropped — re-check those, fix manually in `review-resolved.json`, and retry the `gh api ... reviews` call. Do **not** test line validity by posting real reviews iteratively; submitted reviews cannot be deleted via API.
-
-Report the review URL (`html_url` from the verification call) to the user.
+Build the review JSON, run `resolve_diff_lines.py` to validate anchors, post via `gh api`, and verify the post landed — the exact commands and error-handling are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` under `## --post API Commands`. Surface `MOVED:`/`DROPPED:` lines from the script's stderr to the user before posting. Report the review URL (`html_url` from the verification call) to the user.
 
 **Record decisions + end-of-run steps (learning loop):** as you resolve the `ask-set` during selection, append one `decisions.py` record per decision to the resolved decisions store (`$DECISIONS`) (a finding selected for posting → `fix`; a **Skip**/**Drop** → `skip`), per `## Learning Loop & Staleness Nudge`. Then, after reporting the review URL, run the three non-blocking end-of-run steps (staleness nudge, then learning-loop proposal, then provisional-profile confirmation) from that section, in order. (On the `--post` path the staleness check ran with `--root "$SESSION_DIR/repo"`.)
 

@@ -2,11 +2,11 @@
 ## Contents
 
 1. [Specialist Dispatch Prompt Template](#specialist-dispatch-prompt-template)
-2. [Per-Agent Substitutions](#per-agent-substitutions)
-3. [Triage Subagent Prompt](#triage-subagent-prompt)
-4. [Fixer Subagent Prompt](#fixer-subagent-prompt)
-5. [Verification Rules (for subagents)](#verification-rules-for-subagents)
-6. [Common Mistakes](#common-mistakes)
+2. [Triage Subagent Prompt](#triage-subagent-prompt)
+3. [Fixer Subagent Prompt](#fixer-subagent-prompt)
+4. [Verification Rules (for subagents)](#verification-rules-for-subagents)
+5. [Common Mistakes](#common-mistakes)
+6. [--post API Commands](#--post-api-commands)
 
 ---
 
@@ -82,16 +82,6 @@ omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
 most 5 reported per agent). If you have nothing to flag, write an empty array
 (`[]`) — do not skip writing the file.
 ```
-
-## Per-Agent Substitutions
-
-| reviewer | `<agent>` (findings filename) | `<dimension>` |
-| ---------------------------- | ----------------------------- | ------------- |
-| architecture-reviewer        | architecture                  | Architecture  |
-| code-reviewer                | code                          | Code          |
-| security-reviewer            | security                      | Security      |
-| test-reviewer                | test                          | Test          |
-| premortem-reviewer           | premortem                     | Failure-Mode  |
 
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
@@ -257,3 +247,50 @@ These are the base rubric's binding verification rules; they are restated in eve
 | Pushing automatically at loop end                       | The loop commits locally only. Pushing is always a separate, user-confirmed step.                                                                                 |
 | Dispatching reviewers by reading an agent file          | The five reviewers are bundled plugin agents — dispatch the `<name>` reviewer with its methodology (resolve dispatch via `hosts/<your-host>-tools.md`).                  |
 | Skipping the profile bootstrap                           | If `.claude/review-profile.md` is absent, run review-init's create procedure inline first. Headless runs get a provisional strict profile.                         |
+
+---
+
+## --post API Commands
+
+The exact commands for building the review payload, running the anchor validator, posting to GitHub, and verifying the post (referenced from `### --post` in `SKILL.md`).
+
+**Build the review JSON** from approved findings:
+
+```bash
+cat > "$SESSION_DIR/round-1/review.json" <<EOF
+{
+  "commit_id": "<HEAD_SHA from meta.json>",
+  "body": "<summary from compiled.json + verdict label>",
+  "event": "<user's choice>",
+  "comments": [
+    {"path": "<file>", "line": <N>, "side": "RIGHT", "body": "<severity tag + finding body + suggestion>"}
+  ]
+}
+EOF
+```
+
+**Run `resolve_diff_lines.py`** to validate every comment anchor against the diff. This is non-optional — GitHub returns 422 "Line could not be resolved" for any inline comment whose `(file, line)` doesn't land on a `+` or context line inside a hunk; the script moves out-of-hunk comments to the nearest valid line (prefixing the body with `(Re: line N)`) and drops comments for files not in the diff:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/resolve_diff_lines.py" \
+  "$SESSION_DIR/round-1/diff.txt" \
+  "$SESSION_DIR/round-1/review.json" \
+  --output "$SESSION_DIR/round-1/review-resolved.json"
+```
+
+**Post the review:**
+
+```bash
+gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+  --input "$SESSION_DIR/round-1/review-resolved.json"
+```
+
+**Post-submit verification — non-optional.** Fetch the last review to confirm it actually landed (silent failures and accidental duplicates have happened):
+
+```bash
+gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+  --jq '.[-1] | {id, state, submitted_at, html_url}'
+```
+
+If the post returns 422 despite running `resolve_diff_lines.py`, the script's stderr will have logged which comments were moved or dropped — re-check those, fix manually in `review-resolved.json`, and retry the `gh api ... reviews` call. Do **not** test line validity by posting real reviews iteratively; submitted reviews cannot be deleted via API.
