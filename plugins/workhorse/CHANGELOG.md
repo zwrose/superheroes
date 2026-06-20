@@ -4,6 +4,18 @@ All notable changes to the `workhorse` plugin. Versions follow
 [SemVer](https://semver.org); entries follow
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.6.0](https://github.com/zwrose/superheroes/compare/workhorse-v0.5.0...workhorse-v0.6.0) (2026-06-20)
+
+
+### Features
+
+* **workhorse:** freshen branch against base + flip to ready before handback ([#71](https://github.com/zwrose/superheroes/issues/71)) ([2c16a0c](https://github.com/zwrose/superheroes/commit/2c16a0cb5da799f4f3de215b139ba453e9c1a745))
+
+
+### Bug Fixes
+
+* host-map pointer resolution, CLAUDE.md context enforcement, and discovery size/slug autonomy ([#66](https://github.com/zwrose/superheroes/issues/66)) ([7f346cc](https://github.com/zwrose/superheroes/commit/7f346cc18646f2c0112d6d70d7f7f4b594855585))
+
 ## [0.5.0](https://github.com/zwrose/superheroes/compare/workhorse-v0.4.0...workhorse-v0.5.0) (2026-06-20)
 
 
