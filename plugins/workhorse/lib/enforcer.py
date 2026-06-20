@@ -91,23 +91,44 @@ _SAFETY_BASENAMES = (
     "model_tier.py", "band_lib.py", "hooks.json", "precompact.py", "session_start.py",
     "escalation-base.md", "review-base.md", "allowance.py",
 )
-_WRITE_OPS = re.compile(
-    r"(>>?|\btee\b|\bsed\s+-i|\bcp\b|\bmv\b|\bdd\b|\btruncate\b|\bchmod\b|\bln\b)", re.I)
+# File-mutating commands whose write DESTINATION is a file ARGUMENT (not a redirection),
+# defined ONCE so the early-out gate (`_WRITE_OPS`) and the per-segment matcher
+# (`_FILE_WRITE_CMD`) can never drift apart (they encode the same "this command mutates a
+# file by argument" decision).
+_FILE_CMD_ALT = r"sed\s+-i|tee|cp|mv|dd|truncate|chmod|ln"
+# Any write operator at all — the cheap pre-filter. Redirections (`>`/`>>`) plus the
+# file-mutating commands above. A command matching none of these can't write anything.
+_WRITE_OPS = re.compile(r"(>>?|\b(?:" + _FILE_CMD_ALT + r")\b)", re.I)
+# A safety file must appear in the SAME command segment as one of these keywords to count
+# as a write — so a band CLI run as an EXECUTION target (`python3 definition_doc.py …`) in
+# another segment is never mistaken for writing it.
+_FILE_WRITE_CMD = re.compile(r"\b(?:" + _FILE_CMD_ALT + r")\b", re.I)
 # Path-ish tokens, split on shell metacharacters so `>enforcer.py` yields `enforcer.py`.
 _TOKENS = re.compile(r"[^\s'\"<>|;&()]+")
-# A redirection's WRITE TARGET: optional fd digits, `>`/`>>`, optional spaces, then the
-# target path. `2>&1` / `>&2` (fd duplications — target begins with `&`) do NOT match, so
-# `cmd >/dev/null 2>&1` yields only `/dev/null`. Captures the redirect target token.
-_REDIRECT_TARGET = re.compile(r"\d*>>?\s*([^\s'\"<>|;&()]+)")
-# File-mutating commands whose write DESTINATION is a file ARGUMENT (not a redirection). A
-# safety file must appear in the SAME command segment as one of these keywords to count as
-# a write — so a band CLI run as an EXECUTION target (`python3 definition_doc.py …`) in
-# another segment is never mistaken for writing it.
-_FILE_WRITE_CMD = re.compile(
-    r"\b(?:sed\s+-i|tee|cp|mv|dd|truncate|chmod|ln)\b", re.I)
+# A redirection's WRITE TARGET: optional fd digits, `>`/`>>`, optional `|` (the `>|`
+# noclobber override), optional spaces, then the target — a single/double-quoted literal
+# OR a bare token. `2>&1` / `>&2` (fd duplications — target begins with `&`) do NOT match,
+# so `cmd >/dev/null 2>&1` yields only `/dev/null`. The quoted alternatives restore the
+# coverage the pre-rewrite whole-command tokenizer had (quotes stripped via _unquote), so
+# `> "enforcer.py"` is not a bypass.
+_REDIRECT_TARGET = re.compile(
+    r"\d*>>?\|?\s*(\"[^\"]*\"|'[^']*'|[^\s'\"<>|;&()]+)")
+# `dd` names its write destination with the `of=<path>` keyword operand (not a bare arg),
+# so a band file there is invisible to the basename token walk (`of=enforcer.py`'s basename
+# is the whole token). Capture the of= value explicitly. `if=` (the READ input) is NOT
+# captured — reading a band file is not a write.
+_DD_OF = re.compile(r"\bof=([^\s'\"<>|;&()]+)", re.I)
 # Split a compound command into segments on shell control operators, so a mutating keyword
 # in one segment is not associated with a safety token in another.
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|\n]")
+
+
+def _unquote(tok):
+    """Strip a single matched surrounding quote pair, so a quoted redirect target
+    (`"enforcer.py"`) resolves to its bare path. Bare tokens pass through unchanged."""
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+        return tok[1:-1]
+    return tok
 
 
 def _resolves_to_band(tok):
@@ -119,8 +140,9 @@ def _resolves_to_band(tok):
 
 def _bash_writes_to_safety_machinery(command):
     """True iff a Bash command's WRITE TARGET resolves to a real band safety-machinery
-    file — either a redirection (`> f` / `>> f`) AT the file, or a file-mutating command
-    (`sed -i`/`tee`/`cp`/`mv`/`dd`/`truncate`/`chmod`/`ln`) with the file as an argument.
+    file — either a redirection (`> f` / `>> f` / `>| f`, quoted or bare) AT the file, or a
+    file-mutating command (`sed -i`/`tee`/`cp`/`mv`/`dd`/`truncate`/`chmod`/`ln`) with the
+    file as an argument (incl. `dd`'s `of=` operand).
 
     The guard keys off the operator's TARGET, not mere co-occurrence: an unrelated
     `>/dev/null` / `2>&1` redirect, or a band CLI passed as an EXECUTION arg
@@ -130,14 +152,14 @@ def _bash_writes_to_safety_machinery(command):
         return False
     # Redirection writes: the deny requires the redirect's TARGET to be a band file.
     for target in _REDIRECT_TARGET.findall(command):
-        if _resolves_to_band(target):
+        if _resolves_to_band(_unquote(target)):
             return True
     # File-mutating commands: the band file must share the segment with the keyword (so an
     # exec target / unrelated redirect in a neighbouring segment doesn't trip the match).
     for segment in _SEGMENT_SPLIT.split(command):
         if not _FILE_WRITE_CMD.search(segment):
             continue
-        for tok in _TOKENS.findall(segment):
+        for tok in _TOKENS.findall(segment) + _DD_OF.findall(segment):
             if _resolves_to_band(tok):
                 return True
     return False

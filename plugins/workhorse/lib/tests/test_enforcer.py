@@ -194,6 +194,39 @@ def test_still_denies_file_mutating_command_at_band_file():
         assert enforcer.classify_command(cmd)[0] == "deny", cmd
 
 
+def test_denies_quoted_redirect_target_at_band_file():
+    # security-001 / code-001: a QUOTED redirect target must still be denied. The old
+    # whole-command tokenizer stripped quotes; the redirect-target path must too, else
+    # `echo x > "enforcer.py"` becomes a guard bypass.
+    for cmd in ('echo x > "enforcer.py"', "echo x >'enforcer.py'",
+                'echo x >"hooks.json"', 'python3 gen.py 2>"escalation.py"'):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_denies_noclobber_and_combined_redirect_at_band_file():
+    # premortem-001 (`>|` noclobber override) and test-001 (`&>`/`&>>` combined redirect):
+    # both are redirect-AT-a-band-file forms and must be denied.
+    for cmd in ("echo x >|enforcer.py", "python3 gen.py 2>|escalation.py",
+                "echo x &>enforcer.py", "python3 gen.py &>>hooks.json"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_denies_dd_of_keyword_operand_at_band_file():
+    # premortem-002: `dd` names its write destination with the `of=<path>` keyword operand,
+    # not a bare positional arg, so the basename pre-filter must see through `of=`.
+    for cmd in ("dd of=enforcer.py",
+                "dd bs=1 count=0 of=plugins/workhorse/lib/enforcer.py"):
+        assert enforcer.classify_command(cmd)[0] == "deny", cmd
+
+
+def test_allows_quoted_nonband_redirect_target():
+    # The broadened redirect/operand parsing must not over-deny a quoted NON-band target,
+    # nor an ordinary dd whose of= destination is not a band file.
+    assert enforcer.classify_command('python3 x.py > "/dev/null" 2>&1')[0] == "allow"
+    assert enforcer.classify_command("echo hi > 'out.txt'")[0] == "allow"
+    assert enforcer.classify_command("dd if=/dev/null of=/tmp/out bs=1")[0] == "allow"
+
+
 def test_command_fail_closed_on_non_string():
     assert enforcer.classify_command(None)[0] == "deny"
 
