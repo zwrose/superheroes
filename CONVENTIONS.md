@@ -18,8 +18,8 @@ bound to GitHub issues/milestones — see the [roadmap Project](https://github.c
 
 **Band posture — designed to be used together.** The heroes ship as **one plugin** and form a
 *cohesively designed band*: within the loop they **assume each other's
-presence** and **cross-reference freely by qualified name** (`the-architect:plan`,
-`review-crew:review-plan`). We **design for the integrated band and do not compromise that
+presence** and **cross-reference freely by qualified name** (`superheroes:architect-plan`,
+`superheroes:review-plan`). We **design for the integrated band and do not compromise that
 design — or add machinery — to guarantee standalone-equivalence**; a hero used outside the
 band carries **no warranty** (an individual hero may still have standalone utility — e.g.
 review-crew's `review-code`, test-pilot's browser runs — but that is not a contract). A
@@ -120,7 +120,7 @@ Every file begins with a one-line **provenance comment**:
 
 ```
 <!-- superheroes-core: schemaVersion=1 status=provisional created=2026-06-14 updated=2026-06-14 -->
-<!-- test-pilot: plugin-version=0.1.0 schemaVersion=1 status=confirmed created=… updated=… nudge-ack={} -->
+<!-- superheroes: plugin-version=0.1.0 schemaVersion=1 status=confirmed created=… updated=… nudge-ack={} -->
 ```
 
 - The **leading tag** (`superheroes-core:` / `<plugin>:`) is the canonical encoding of

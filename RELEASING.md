@@ -1,25 +1,25 @@
 # Releasing
 
 Releases are **automated** with [release-please](https://github.com/googleapis/release-please).
-Each plugin versions independently; the version Claude Code reads for auto-update is the one
-in `plugins/<name>/.claude-plugin/plugin.json` (kept in sync with `.codex-plugin/plugin.json`
-by the automation).
+The `superheroes` plugin versions as a single package; the version Claude Code reads for
+auto-update is in `plugins/superheroes/.claude-plugin/plugin.json` (kept in sync with
+`.codex-plugin/plugin.json` by the automation).
 
 ## The normal flow
 
-1. Merge ordinary work to `main` with Conventional-Commit messages scoped to a plugin
-   (e.g. `feat(workhorse): …`). A required CI check rejects a non-Conventional-Commit PR
+1. Merge ordinary work to `main` with Conventional-Commit messages scoped to `superheroes`
+   (e.g. `feat(superheroes): …`). A required CI check rejects a non-Conventional-Commit PR
    title before merge.
-2. release-please maintains an **open release PR per plugin** that proposes the next version
+2. release-please maintains an **open release PR** that proposes the next version
    (`chore`→patch, `fix`→patch, `feat`→minor, `!`/`BREAKING CHANGE`→major) and regenerates
-   that plugin's `CHANGELOG.md`. It bumps both `plugin.json` files and the plugin's
-   `version.txt`. (`chore` is a releasing type via the `changelog-sections` config — a
-   `chore` touching a plugin's files cuts a patch and shows under a "Chores" heading.)
-3. **Review and merge the plugin's release PR.** Merging it makes the workflow create the
-   `<plugin>-vX.Y.Z` tag and publish the matching GitHub Release. No hand-cut release.
+   `CHANGELOG.md`. It bumps both `plugin.json` files and `version.txt`. (`chore` is a
+   releasing type via the `changelog-sections` config — a `chore` touching plugin files cuts
+   a patch and shows under a "Chores" heading.)
+3. **Review and merge the release PR.** Merging it makes the workflow create the
+   `superheroes-vX.Y.Z` tag and publish the matching GitHub Release. No hand-cut release.
 
-A change that touches **no** plugin's files (repo-root `ci:`, `docs:`, `chore:`) triggers no
-plugin release, whatever its type.
+A change that touches **no** plugin files (repo-root `ci:`, `docs:`, `chore:`) triggers no
+release, whatever its type.
 
 ## Adding or removing a plugin (catalog version)
 
@@ -46,19 +46,18 @@ These are owner actions, performed once via GitHub settings (not by the automati
 Before merging the first real release PR, run release-please in **dry-run** with the App
 token and confirm two things against an existing release:
 
-- the tag it proposes matches the retained scheme **`<plugin>-vX.Y.Z`** (e.g.
-  `review-crew-v0.7.1`, not `v0.7.1` or `review-crew/0.7.1`) — if it renders differently,
+- the tag it proposes matches the retained scheme **`superheroes-vX.Y.Z`** (e.g.
+  `superheroes-v0.7.1`, not `v0.7.1` or `superheroes/0.7.1`) — if it renders differently,
   set `include-component-in-tag` / `include-v-in-tag` / `tag-separator` explicitly in
   `release-please-config.json` before the first release; and
-- the regenerated `CHANGELOG.md` for each plugin renders cleanly when prepended to the
-  existing hand-written entries.
+- the regenerated `CHANGELOG.md` renders cleanly when prepended to the existing
+  hand-written entries.
 
-Cut one plugin's first automated release and verify the tag + GitHub Release appear as
-expected before relying on the pipeline for the rest.
+Verify the tag + GitHub Release appear as expected before relying on the pipeline.
 
 ## Recovery
 
 A failed release run is visible in the Actions tab and is safely re-runnable; re-running
 completes the Release for an already-created tag (the tag is the idempotency anchor, so a
 re-run never double-releases). If the Action cannot finish, cut the missing Release by hand
-for the existing tag with `gh release create <plugin>-vX.Y.Z`.
+for the existing tag with `gh release create superheroes-vX.Y.Z`.

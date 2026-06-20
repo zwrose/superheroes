@@ -1,19 +1,19 @@
 # review-code.md — Relocation Map (UFR-2)
 
 Records every pre-change instruction unit relocated out of
-`plugins/review-crew/skills/review-code/SKILL.md` (Task 16).
+`plugins/superheroes/skills/review-code/SKILL.md` (Task 16).
 
 ## Relocated Blocks
 
 | Block | Origin heading (SKILL.md) | Origin lines (before) | Destination |
 | ----- | ------------------------- | --------------------- | ----------- |
-| Specialist dispatch prompt template | `### 3. Dispatch Specialists in Parallel` (inner block) | 285–352 | `plugins/review-crew/skills/review-code/reference/auto-fix-loop.md` §Specialist Dispatch Prompt Template |
-| Per-agent substitution table + closing dispatch note | `### 3. Dispatch Specialists in Parallel` (table + closing) | 354–364 | `plugins/review-crew/skills/review-code/reference/auto-fix-loop.md` §Per-Agent Substitutions |
-| Triage subagent prompt | `### Triage subagent prompt` | 459–503 | `plugins/review-crew/skills/review-code/reference/auto-fix-loop.md` §Triage Subagent Prompt |
-| Fixer subagent prompt (heading + guard note + template) | `### Fixer subagent prompt` | 505–572 | `plugins/review-crew/skills/review-code/reference/auto-fix-loop.md` §Fixer Subagent Prompt |
-| `## Learning Loop & Staleness Nudge` (58 lines, all sub-sections) | `## Learning Loop & Staleness Nudge` | 687–744 | `plugins/review-crew/reference/review-loop.md` (shared, already exists from Task 15) |
-| `## Verification Rules (for subagents)` (11 lines) | `## Verification Rules (for subagents)` | 746–756 | `plugins/review-crew/skills/review-code/reference/auto-fix-loop.md` §Verification Rules (for subagents) |
-| `## Common Mistakes` (27 lines, full table) | `## Common Mistakes` | 758–784 | `plugins/review-crew/skills/review-code/reference/auto-fix-loop.md` §Common Mistakes |
+| Specialist dispatch prompt template | `### 3. Dispatch Specialists in Parallel` (inner block) | 285–352 | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md` §Specialist Dispatch Prompt Template |
+| Per-agent substitution table + closing dispatch note | `### 3. Dispatch Specialists in Parallel` (table + closing) | 354–364 | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md` §Per-Agent Substitutions |
+| Triage subagent prompt | `### Triage subagent prompt` | 459–503 | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md` §Triage Subagent Prompt |
+| Fixer subagent prompt (heading + guard note + template) | `### Fixer subagent prompt` | 505–572 | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md` §Fixer Subagent Prompt |
+| `## Learning Loop & Staleness Nudge` (58 lines, all sub-sections) | `## Learning Loop & Staleness Nudge` | 687–744 | `plugins/superheroes/reference/review-loop.md` (shared, already exists from Task 15) |
+| `## Verification Rules (for subagents)` (11 lines) | `## Verification Rules (for subagents)` | 746–756 | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md` §Verification Rules (for subagents) |
+| `## Common Mistakes` (27 lines, full table) | `## Common Mistakes` | 758–784 | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md` §Common Mistakes |
 
 ## Notes
 

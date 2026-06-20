@@ -21,23 +21,23 @@ every skill scores `pass`.
 ### 1. Load all 14 skill descriptions
 
 Before judging any fixture phrase, read the `description:` frontmatter field of every
-skill SKILL.md in `plugins/`:
+skill SKILL.md in `plugins/superheroes/skills/`:
 
 ```
-plugins/review-crew/skills/audit-debt/SKILL.md
-plugins/review-crew/skills/review-code/SKILL.md
-plugins/review-crew/skills/review-init/SKILL.md
-plugins/review-crew/skills/review-plan/SKILL.md
-plugins/review-crew/skills/review-spec/SKILL.md
-plugins/review-crew/skills/review-tasks/SKILL.md
-plugins/test-pilot/skills/test-pilot-execute/SKILL.md
-plugins/test-pilot/skills/test-pilot-init/SKILL.md
-plugins/test-pilot/skills/test-pilot-plan/SKILL.md
-plugins/the-architect/skills/discovery/SKILL.md
-plugins/the-architect/skills/plan/SKILL.md
-plugins/the-architect/skills/tasks/SKILL.md
-plugins/the-architect/skills/writing-specs/SKILL.md
-plugins/workhorse/skills/workhorse/SKILL.md
+plugins/superheroes/skills/audit-debt/SKILL.md
+plugins/superheroes/skills/review-code/SKILL.md
+plugins/superheroes/skills/review-init/SKILL.md
+plugins/superheroes/skills/review-plan/SKILL.md
+plugins/superheroes/skills/review-spec/SKILL.md
+plugins/superheroes/skills/review-tasks/SKILL.md
+plugins/superheroes/skills/test-pilot-execute/SKILL.md
+plugins/superheroes/skills/test-pilot-init/SKILL.md
+plugins/superheroes/skills/test-pilot-plan/SKILL.md
+plugins/superheroes/skills/architect-discovery/SKILL.md
+plugins/superheroes/skills/architect-plan/SKILL.md
+plugins/superheroes/skills/architect-tasks/SKILL.md
+plugins/superheroes/skills/architect-spec/SKILL.md
+plugins/superheroes/skills/workhorse/SKILL.md
 ```
 
 Judgment must be made in the context of ALL 14 descriptions simultaneously — not in

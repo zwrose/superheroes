@@ -1,13 +1,13 @@
 # review-loop.md — Relocation Map (UFR-2)
 
 Records every pre-change instruction unit relocated into
-`plugins/review-crew/reference/review-loop.md` (Task 15).
+`plugins/superheroes/reference/review-loop.md` (Task 15).
 
 ## Relocated Blocks
 
 | Block | Origin skills | Origin heading | Destination |
 | ----- | ------------- | -------------- | ----------- |
-| `## Learning Loop & Staleness Nudge` (59 lines, including sub-sections: Recording decisions, Staleness nudge, Learning-loop proposal, Provisional-profile confirmation, Recording a dismissal) | `review-crew/review-spec` (lines 461–519), `review-crew/review-plan` (lines 456–514), `review-crew/review-tasks` (lines 448–506) | `## Learning Loop & Staleness Nudge` in each SKILL.md | `plugins/review-crew/reference/review-loop.md` lines 2–59 |
+| `## Learning Loop & Staleness Nudge` (59 lines, including sub-sections: Recording decisions, Staleness nudge, Learning-loop proposal, Provisional-profile confirmation, Recording a dismissal) | `superheroes/review-spec` (lines 461–519), `superheroes/review-plan` (lines 456–514), `superheroes/review-tasks` (lines 448–506) | `## Learning Loop & Staleness Nudge` in each SKILL.md | `plugins/superheroes/reference/review-loop.md` lines 2–59 |
 
 ## Notes
 

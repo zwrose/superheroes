@@ -11,11 +11,11 @@ keeps the published plugins stable for everyone installing them.
 
 ## Ways to contribute
 
-- **Report a bug or request a feature** — open an issue. For review-crew, include
-  the command you ran, what you expected, and what actually happened.
+- **Report a bug or request a feature** — open an issue. Include the command you ran,
+  what you expected, and what actually happened.
 - **Fix or improve something** — open a PR (see below).
 - **Improve a reviewer** — if you change agent methodology or the rubric, the eval
-  gate has to stay green. Start with [`plugins/review-crew/eval/README.md`](plugins/review-crew/eval/README.md).
+  gate has to stay green. Start with [`plugins/superheroes/eval/README.md`](plugins/superheroes/eval/README.md).
 
 ## Development setup
 
@@ -36,19 +36,19 @@ Restart Claude Code after installing, and re-install after changes.
 
 ## Before you open a PR
 
-Run the same checks CI runs — both must pass:
+Run the same checks CI runs — all must pass:
 
 ```bash
 python3 .github/scripts/validate_marketplace.py
-python3 -m pytest plugins/review-crew/eval/tests/ -q
+python3 -m pytest plugins/superheroes/eval/tests/ -q
 # and, if you touched the shared lib/ helpers:
-python3 -m pytest plugins/review-crew/lib/tests/ -q
+python3 -m pytest plugins/superheroes/lib/tests/ -q
 ```
 
 Then:
 
-- **Use [Conventional Commits](https://www.conventionalcommits.org/)**, scoped by
-  plugin — e.g. `fix(review-crew): …`, `feat(review-crew): …`, `docs: …`. See
+- **Use [Conventional Commits](https://www.conventionalcommits.org/)**, scoped to
+  `superheroes` — e.g. `fix(superheroes): …`, `feat(superheroes): …`, `docs: …`. See
   [CLAUDE.md](CLAUDE.md) for the convention.
 - **Don't bump plugin versions.** Versioning, tags, and releases are
   maintainer-owned (see [RELEASING.md](RELEASING.md)). If your change is
