@@ -17,3 +17,7 @@ htmlcov/
 
 # subagent-driven-development scratch (build-local)
 .superpowers/
+
+# review-crew store — lives in the machine-local global store, never in-repo
+.claude/review-decisions.json
+.claude/review-profile.md
