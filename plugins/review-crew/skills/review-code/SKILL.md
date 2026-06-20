@@ -29,7 +29,7 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 | `/review-crew:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
 | `/review-crew:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
 | `/review-crew:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
-| `/review-crew:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse ②). Combinable with any form; absent → no file written (backward-compatible). |
+| `/review-crew:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
 
 The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
 
