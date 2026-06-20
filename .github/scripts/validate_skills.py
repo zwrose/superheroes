@@ -71,6 +71,13 @@ def check_toc(reference_path):
     return [f"table-of-contents: {rel}: file is >100 lines but does not open with a Contents heading"]
 
 
+def check_phrases(skill_key, description, required_phrases):
+    return [
+        f"trigger-phrase: {skill_key}: description no longer contains required phrase {p!r}"
+        for p in required_phrases if p not in description
+    ]
+
+
 def check_depth(skill_key, text, plugin_dir):
     out = []
     for m in _REF.finditer(text):

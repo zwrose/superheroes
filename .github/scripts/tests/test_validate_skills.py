@@ -56,6 +56,13 @@ def test_toc_satisfied_by_contents_heading(tmp_path):
     f.write_text("<!-- review-loop-version: 1 -->\n## Contents\n\n- a\n" + "line\n" * 120)
     assert vs.check_toc(str(f)) == []
 
+def test_phrases_present():
+    assert vs.check_phrases("p/s", "Use when reviewing code changes on a branch", ["reviewing code changes"]) == []
+
+def test_phrases_missing_is_flagged():
+    out = vs.check_phrases("p/s", "Use when reviewing things", ["reviewing code changes"])
+    assert out and "trigger-phrase" in out[0] and "reviewing code changes" in out[0]
+
 def test_line_count_passes_at_or_under_ceiling():
     # ceiling = max allowed (inclusive): 499 for "under 500" skills
     assert vs.check_line_count("review-crew/review-code", 499, {"review-crew/review-code": 499}) == []
