@@ -5,14 +5,28 @@ artifact_key() is THE one key-derivation function for every artifact name
 that embeds branch+slot identity (manifests, plan records, fallback files,
 comment markers). Injective: % is encoded before /, and the slot delimiter ~
 is illegal in git refnames, so distinct (branch, slot) pairs never collide.
+
+The two-key pointer + self-heal resolution algorithm lives in store_core.py;
+this module is the test-pilot-specific adapter on top.
 """
-import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
+
+from store_core import (
+    normalize_remote,
+    short_hash,
+    get_remote,
+    get_gitdir,
+    derive_identifiers,
+    read_pointer,
+    write_pointer,
+    _write_keys_json,
+    resolve_global,
+    atomic_write,
+)
 
 SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
@@ -31,64 +45,9 @@ def artifact_key(branch, slot=None):
     return f"{key}~{slot}" if slot is not None else key
 
 
-def normalize_remote(url):
-    """Normalize a remote URL to host/path. None for empty/unparseable."""
-    if not url:
-        return None
-    s = url.strip()
-    if not s:
-        return None
-    m = re.match(r"^[^@/]+@([^:/]+):(.+)$", s)
-    if m:
-        host, path = m.group(1), m.group(2)
-    else:
-        m = re.match(
-            r"^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^:/]+)(?::\d+)?/(.+)$", s)
-        if m:
-            host, path = m.group(1), m.group(2)
-        else:
-            return None
-    host = host.lower()
-    path = path.strip("/")
-    if path.endswith(".git"):
-        path = path[:-4]
-    return f"{host}/{path.strip('/')}"
-
-
-def short_hash(s):
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
-
-
-def _run_git(cwd, *args):
-    try:
-        r = subprocess.run(["git", "-C", cwd, *args],
-                           capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout.strip() if r.returncode == 0 else None
-
-
-def get_remote(cwd):
-    return normalize_remote(_run_git(cwd, "remote", "get-url", "origin"))
-
-
-def get_gitdir(cwd):
-    out = _run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
-    if out is None:
-        out = _run_git(cwd, "rev-parse", "--absolute-git-dir")
-    return os.path.realpath(out if out is not None else cwd)
-
-
-def derive_identifiers(cwd):
-    remote = get_remote(cwd)
-    gitdir = get_gitdir(cwd)
-    return {"remote": remote, "gitdir": gitdir,
-            "remote_hash": short_hash(remote) if remote else None,
-            "gitdir_hash": short_hash(gitdir)}
-
-
 def get_repo_root(cwd):
     """Return the git worktree top-level for cwd (fallback: cwd itself)."""
+    from store_core import _run_git
     out = _run_git(cwd, "rev-parse", "--show-toplevel")
     if out:
         return os.path.realpath(out)
@@ -99,78 +58,8 @@ def store_root():
     return os.path.realpath(os.path.expanduser(
         os.environ.get("TEST_PILOT_STORE_ROOT", "~/.claude/test-pilot")))
 
-
-def atomic_write(path, text):
-    d = os.path.dirname(os.path.abspath(path)) or "."
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".test-pilot-store.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def read_pointer(root, key_hash):
-    try:
-        with open(os.path.join(root, "keys", key_hash)) as fh:
-            return fh.read().strip() or None
-    except OSError:
-        return None
-
-
-def write_pointer(root, key_hash, entry_id):
-    atomic_write(os.path.join(root, "keys", key_hash), entry_id)
-
-
-def _write_keys_json(entry_dir, ident):
-    atomic_write(os.path.join(entry_dir, "keys.json"),
-                  json.dumps(ident, indent=2))
-
-
-def resolve_global(cwd, root):
-    """Find the live global entry for cwd via key pointers (remote preferred),
-    self-healing dangling/stale pointers. Same algorithm as review_store."""
-    ident = derive_identifiers(cwd)
-    rh, gh = ident["remote_hash"], ident["gitdir_hash"]
-    p_remote = read_pointer(root, rh) if rh else None
-    p_gitdir = read_pointer(root, gh)
-    candidates = []
-    for c in (p_remote, p_gitdir):
-        if c and c not in candidates:
-            candidates.append(c)
-    entry_id = next(
-        (c for c in candidates
-         if os.path.isdir(os.path.join(root, "entries", c))), None)
-    if entry_id is None:
-        return None
-
-    # Warn on a GENUINE conflict: both pointers point at live-but-different entries.
-    if (p_remote and p_gitdir and p_remote != p_gitdir
-            and os.path.isdir(os.path.join(root, "entries", p_remote))
-            and os.path.isdir(os.path.join(root, "entries", p_gitdir))):
-        sys.stderr.write(
-            "test_pilot store: key disagreement — both keys point at live but "
-            "different entries; preferring the remote-keyed entry\n")
-
-    healed = False
-    if gh and p_gitdir != entry_id:
-        write_pointer(root, gh, entry_id)
-        healed = True
-    if rh and p_remote != entry_id:
-        write_pointer(root, rh, entry_id)
-        healed = True
-    entry_dir = os.path.join(root, "entries", entry_id)
-    if healed:
-        _write_keys_json(entry_dir, ident)
-    return {"entry_id": entry_id, "dir": entry_dir, "healed": healed}
+# Re-export TEST_PILOT_STORE_ROOT as a sentinel name callers may use.
+TEST_PILOT_STORE_ROOT = "~/.claude/test-pilot"
 
 
 def _entry_dirs(entry_dir):
@@ -186,7 +75,7 @@ def resolve(cwd, root):
     plans_dir/state_dir ALWAYS point into the global entry (machine-local)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
-    g = resolve_global(cwd, root)
+    g = resolve_global(cwd, root, _consumer="test_pilot store")
     entry_id = g["entry_id"] if g else ident["gitdir_hash"]
     entry_dir = os.path.join(root, "entries", entry_id)
     machine = {k: v for k, v in _entry_dirs(entry_dir).items()
@@ -216,7 +105,7 @@ def create(cwd, location, root):
     ident = derive_identifiers(cwd)
     # Reuse an existing live entry if one already exists (avoids orphaning
     # applied state when a second clone creates a fresh gitdir-hash entry).
-    existing = resolve_global(cwd, root)
+    existing = resolve_global(cwd, root, _consumer="test_pilot store")
     if existing is not None:
         entry_id = existing["entry_id"]
         entry_dir = existing["dir"]

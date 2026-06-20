@@ -7,187 +7,46 @@ git-common-dir path (per-key pointer files, self-healing). See
 docs/superpowers/specs/2026-06-07-review-crew-profile-storage-design.md.
 
 All git calls use argv arrays with a timeout — never shell=True.
+
+The two-key pointer + self-heal resolution algorithm lives in store_core.py;
+this module is the review-crew-specific adapter on top.
 """
-import hashlib
 import json
 import os
-import re
-import subprocess
 import sys
-import tempfile
+
+from store_core import (
+    normalize_remote,
+    short_hash,
+    get_remote,
+    derive_identifiers,
+    read_pointer,
+    write_pointer,
+    _write_keys_json,
+    resolve_global,
+    _run_git,
+)
 
 FILENAMES = {"profile": "review-profile.md", "decisions": "review-decisions.json"}
 
 
-def normalize_remote(url):
-    """Normalize a remote URL to host/path: lowercase host, drop scheme/userinfo/
-    port, strip trailing .git and slashes. Return None for empty/None."""
-    if not url:
-        return None
-    s = url.strip()
-    if not s:
-        return None
-    # scp-like: git@host:org/repo.git
-    m = re.match(r"^[^@/]+@([^:/]+):(.+)$", s)
-    if m:
-        host, path = m.group(1), m.group(2)
-    else:
-        # scheme://[user@]host[:port]/path
-        m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://(?:[^@/]+@)?([^:/]+)(?::\d+)?/(.+)$", s)
-        if m:
-            host, path = m.group(1), m.group(2)
-        else:
-            return None
-    host = host.lower()
-    path = path.strip("/")
-    if path.endswith(".git"):
-        path = path[:-4]
-    path = path.strip("/")
-    return f"{host}/{path}"
-
-
-def short_hash(s):
-    """First 16 hex chars of sha256(s)."""
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
-
-
-def _run_git(cwd, *args):
-    """Run git with an argv array + timeout. Return stdout (stripped) or None."""
-    try:
-        r = subprocess.run(["git", "-C", cwd, *args],
-                           capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if r.returncode != 0:
-        return None
-    return r.stdout.strip()
-
-
-def get_remote(cwd):
-    """Normalized origin URL, or None."""
-    return normalize_remote(_run_git(cwd, "remote", "get-url", "origin"))
-
-
 def get_gitdir(cwd):
-    """realpath of the git-common-dir (shared by all worktrees). Falls back to
-    `--absolute-git-dir` for git < 2.31, then to realpath(cwd) for non-git dirs."""
+    """realpath of the git-common-dir (shared by all worktrees).
+
+    Falls back to --absolute-git-dir for git < 2.31, then to realpath(cwd)
+    for non-git dirs. Defined here (not re-exported from store_core) so that
+    tests can monkeypatch review_store._run_git and have it take effect.
+    """
     out = _run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if out is None:
         out = _run_git(cwd, "rev-parse", "--absolute-git-dir")
-    if out is None:
-        out = cwd
-    return os.path.realpath(out)
+    return os.path.realpath(out if out is not None else cwd)
 
-
-def derive_identifiers(cwd):
-    remote = get_remote(cwd)
-    gitdir = get_gitdir(cwd)
-    return {
-        "remote": remote,
-        "gitdir": gitdir,
-        "remote_hash": short_hash(remote) if remote else None,
-        "gitdir_hash": short_hash(gitdir),
-    }
+REVIEW_CREW_STORAGE = "~/.claude/review-crew"
 
 
 def store_root():
-    return os.path.realpath(os.path.expanduser("~/.claude/review-crew"))
-
-
-def _atomic_write(path, text):
-    """Write text atomically: temp file in the same dir + os.replace."""
-    d = os.path.dirname(os.path.abspath(path)) or "."
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".review-store.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _keys_dir(root):
-    return os.path.join(root, "keys")
-
-
-def read_pointer(root, key_hash):
-    p = os.path.join(_keys_dir(root), key_hash)
-    try:
-        with open(p) as fh:
-            return fh.read().strip() or None
-    except OSError:
-        return None
-
-
-def write_pointer(root, key_hash, entry_id):
-    _atomic_write(os.path.join(_keys_dir(root), key_hash), entry_id)
-
-
-def _write_keys_json(entry_dir, ident):
-    _atomic_write(os.path.join(entry_dir, "keys.json"), json.dumps({
-        "remote": ident["remote"],
-        "gitdir": ident["gitdir"],
-        "remote_hash": ident["remote_hash"],
-        "gitdir_hash": ident["gitdir_hash"],
-    }, indent=2))
-
-
-def resolve_global(cwd, root):
-    """Find the global entry for cwd via its key pointers, self-healing a
-    missing/changed pointer. Return {entry_id, dir, healed} or None."""
-    ident = derive_identifiers(cwd)
-    rh, gh = ident["remote_hash"], ident["gitdir_hash"]
-    p_remote = read_pointer(root, rh) if rh else None
-    p_gitdir = read_pointer(root, gh)
-
-    # Candidate entry-ids in preference order (remote first), deduped.
-    candidates = []
-    for c in (p_remote, p_gitdir):
-        if c and c not in candidates:
-            candidates.append(c)
-    if not candidates:
-        return None
-
-    # Resolve to a LIVE entry: the first candidate whose entry dir exists. If a
-    # pointer dangles (its entry dir was deleted out of band), fall through to
-    # the other; if none is live, the registration is stale -> treat as absent.
-    entry_id = next(
-        (c for c in candidates if os.path.isdir(os.path.join(root, "entries", c))),
-        None)
-    if entry_id is None:
-        return None
-
-    # Warn only on a GENUINE conflict: both keys point at live-but-different
-    # entries. A mere dangling pointer (one entry dir gone) is routine self-heal,
-    # not a conflict, so it stays quiet.
-    if (p_remote and p_gitdir and p_remote != p_gitdir
-            and os.path.isdir(os.path.join(root, "entries", p_remote))
-            and os.path.isdir(os.path.join(root, "entries", p_gitdir))):
-        sys.stderr.write(
-            "review_store: key disagreement — both keys point at live but "
-            "different entries; preferring the remote-keyed entry\n")
-
-    # Self-heal: point both available keys at the chosen live entry. Only writes
-    # when a pointer is missing or stale, so we never re-point at a dead entry.
-    healed = False
-    if gh and p_gitdir != entry_id:
-        write_pointer(root, gh, entry_id)
-        healed = True
-    if rh and p_remote != entry_id:
-        write_pointer(root, rh, entry_id)
-        healed = True
-
-    entry_dir = os.path.join(root, "entries", entry_id)
-    if healed:
-        _write_keys_json(entry_dir, ident)
-    return {"entry_id": entry_id, "dir": entry_dir, "healed": healed}
+    return os.path.realpath(os.path.expanduser(REVIEW_CREW_STORAGE))
 
 
 def create(cwd, kind, location, root):
@@ -223,7 +82,7 @@ def resolve(cwd, kind, root):
         return {"kind": kind, "path": path, "location": "in-repo",
                 "exists": os.path.exists(path), "healed": False, "entry_id": None}
 
-    g = resolve_global(cwd, root)
+    g = resolve_global(cwd, root, _consumer="review_store")
     if g is not None and os.path.exists(os.path.join(g["dir"], "review-profile.md")):
         path = os.path.join(g["dir"], FILENAMES[kind])
         return {"kind": kind, "path": path, "location": "global",
