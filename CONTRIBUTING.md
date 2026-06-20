@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in **zwr-agent-skills**. This is a personal marketplace I
+Thanks for your interest in **superheroes**. This is a personal marketplace I
 maintain, but it's public and contributions are genuinely welcome — bug reports,
 fixes, docs, eval fixtures, and new ideas all help.
 
@@ -20,16 +20,16 @@ keeps the published plugins stable for everyone installing them.
 ## Development setup
 
 ```bash
-git clone https://github.com/<your-fork>/zwr-agent-skills
-cd zwr-agent-skills
+git clone https://github.com/<your-fork>/superheroes
+cd superheroes
 python3 -m pip install --upgrade pytest   # the only test dependency
 ```
 
 To try a plugin from your working copy, add the local checkout as a marketplace:
 
 ```
-/plugin marketplace add /absolute/path/to/zwr-agent-skills
-/plugin install review-crew@zwr-agent-skills
+/plugin marketplace add /absolute/path/to/superheroes
+/plugin install superheroes@superheroes
 ```
 
 Restart Claude Code after installing, and re-install after changes.
