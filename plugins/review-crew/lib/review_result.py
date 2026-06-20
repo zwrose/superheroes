@@ -1,7 +1,7 @@
 """Machine-readable terminal-result contract for review-code's auto-fix loop.
 
 review-code writes its final loop_state decision here (when invoked with
---result-file) so a CALLER (Workhorse ②) can branch deterministically instead of
+--result-file) so a CALLER (Workhorse step 2) can branch deterministically instead of
 parsing prose — closing the loop-skipping gap at the skill boundary. The reader
 fails CLOSED: a missing or garbled result reads as 'halt' (GATE), never as clean.
 """

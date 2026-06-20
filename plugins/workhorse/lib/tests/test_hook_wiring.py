@@ -53,7 +53,7 @@ def test_selfcheck_armed_now_that_hooks_exist(capsys, monkeypatch):
 
 def test_selfcheck_refuses_when_escalation_unresolvable(capsys, monkeypatch):
     # A broken install where the Edit guard can't resolve escalation would deny ALL
-    # edits (fail-closed) and wedge ① Build with misdirecting per-edit denials. The
+    # edits (fail-closed) and wedge step 1 Build with misdirecting per-edit denials. The
     # startup self-check must catch it HERE: armed:false, escalation_resolved:false.
     monkeypatch.setattr(band_lib, "resolve_target", lambda *a, **k: None)
     rc = enforcer.selfcheck()

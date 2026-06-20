@@ -61,11 +61,11 @@ def reconcile(checkpoint, world):
             "reason": "reconciled — resume"}
 
 
-# --- ③ idempotency + ⓪ floor-re-arm decisions as PURE CODE (not SKILL prose), so they
+# --- step 3 idempotency + step 0 floor-re-arm decisions as PURE CODE (not SKILL prose), so they
 #     are deterministically testable (plan red-team test-001/test-002). ---
 
 def pr_action(world):
-    """The ③ world-read-before-write decision: 'adopt' an existing open PR (one with a
+    """The step 3 world-read-before-write decision: 'adopt' an existing open PR (one with a
     real number), 'gate' a merged / unreadable / malformed read, else 'create'. The
     exactly-once anchor, as code."""
     pr = (world or {}).get("pr")
@@ -84,7 +84,7 @@ FLOOR_RETRY_MAX = 3
 
 
 def rearm_action(attempt, armed, *, max_retry=FLOOR_RETRY_MAX):
-    """The ⓪ floor re-arm disposition (design §5 step 3): armed -> 'proceed'; a
+    """The step 0 floor re-arm disposition (design §5 step 3): armed -> 'proceed'; a
     transient miss -> 'retry' while attempt < max_retry (attempts 1..max_retry-1 retry),
     then the max_retry-th attempt -> 'park_gate' (fail-closed, visible — never resume
     unguarded, never silent-wedge). `attempt` is 1-based (max_retry=3 → 2 retries then park)."""
