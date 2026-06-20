@@ -4,6 +4,21 @@ All notable changes to the `review-crew` plugin. Versions follow
 [SemVer](https://semver.org); entries follow
 [Keep a Changelog](https://keepachangelog.com).
 
+## [0.8.0](https://github.com/zwrose/superheroes/compare/review-crew-v0.7.0...review-crew-v0.8.0) (2026-06-20)
+
+
+### Features
+
+* finish wiring the model-tier knob across all dispatch points ([#15](https://github.com/zwrose/superheroes/issues/15)) ([#48](https://github.com/zwrose/superheroes/issues/48)) ([e946c31](https://github.com/zwrose/superheroes/commit/e946c315c0d6f27bb659d68f9db466e62278ed87))
+* **review-crew:** flag stale verify-command paths in repo_doctor ([#60](https://github.com/zwrose/superheroes/issues/60)) ([dfb635b](https://github.com/zwrose/superheroes/commit/dfb635b9df8c6738f5e8732359b9d1b79df01ccc))
+* trigger-eval-gated skill token efficiency ([#49](https://github.com/zwrose/superheroes/issues/49)) ([8b5d0ec](https://github.com/zwrose/superheroes/commit/8b5d0ec02a966d235c509a38f34fdffbdd66b6f0))
+* **workhorse:** live owner-approval gate replaces the hard-deny floor ([#14](https://github.com/zwrose/superheroes/issues/14)) ([#43](https://github.com/zwrose/superheroes/issues/43)) ([b77ab85](https://github.com/zwrose/superheroes/commit/b77ab852bf6e1192072c3615630488d71d32ca5e))
+
+
+### Chores
+
+* **review-crew:** quote bare-colon YAML in SKILL.md descriptions ([#64](https://github.com/zwrose/superheroes/issues/64)) ([48dd910](https://github.com/zwrose/superheroes/commit/48dd910af83e28355ff783eecba380183771a874))
+
 ## [Unreleased]
 
 ## [0.7.0] — 2026-06-19

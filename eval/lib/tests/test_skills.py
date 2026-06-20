@@ -8,6 +8,31 @@ def test_parse_skill_splits_description_and_body():
     assert desc == "Does a thing. Use when X."
     assert body.startswith("# Demo")
 
+def test_parse_skill_unwraps_quoted_description_with_bare_colon():
+    # A description with a bare "colon: space" must be quoted for yaml.safe_load; the
+    # structural parser must see the same logical value the YAML loader would, so a digest
+    # or size keyed to it does not shift just because the value gained surrounding quotes.
+    raw = '---\nname: demo\ndescription: "records `gates.review: passed` then stops."\n---\n# Demo\n'
+    desc, _ = skills.parse_skill(raw)
+    assert desc == "records `gates.review: passed` then stops."
+
+def test_parse_skill_unwraps_single_quoted_description():
+    raw = "---\nname: demo\ndescription: 'it''s fine: really'\n---\n# Demo\n"
+    desc, _ = skills.parse_skill(raw)
+    assert desc == "it's fine: really"
+
+def test_unquote_leaves_plain_and_mismatched_values_untouched():
+    assert skills._unquote("plain value") == "plain value"
+    assert skills._unquote('"unterminated') == '"unterminated'
+    assert skills._unquote("'mismatched\"") == "'mismatched\""
+    assert skills._unquote('""') == ""
+
+def test_unquote_decodes_double_quoted_escapes():
+    # Pin the double-quoted branch (\" -> " and \\ -> \) so a mutation dropping the
+    # unescaping is caught here, not only if a shipped SKILL.md happens to use an escape.
+    assert skills._unquote(r'"a\"b"') == 'a"b'
+    assert skills._unquote(r'"a\\b"') == 'a\\b'
+
 def test_skill_digest_is_stable_and_changes_with_content():
     d1 = skills.skill_digest("Does a thing. Use when X.", "# Demo\n\nBody line.\n")
     d2 = skills.skill_digest("Does a thing. Use when X.", "# Demo\n\nBody line.\n")

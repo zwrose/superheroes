@@ -11,12 +11,15 @@ by the automation).
    (e.g. `feat(workhorse): …`). A required CI check rejects a non-Conventional-Commit PR
    title before merge.
 2. release-please maintains an **open release PR per plugin** that proposes the next version
-   (`fix`→patch, `feat`→minor, `!`/`BREAKING CHANGE`→major) and regenerates that plugin's
-   `CHANGELOG.md`. It bumps both `plugin.json` files and the plugin's `version.txt`.
+   (`chore`→patch, `fix`→patch, `feat`→minor, `!`/`BREAKING CHANGE`→major) and regenerates
+   that plugin's `CHANGELOG.md`. It bumps both `plugin.json` files and the plugin's
+   `version.txt`. (`chore` is a releasing type via the `changelog-sections` config — a
+   `chore` touching a plugin's files cuts a patch and shows under a "Chores" heading.)
 3. **Review and merge the plugin's release PR.** Merging it makes the workflow create the
    `<plugin>-vX.Y.Z` tag and publish the matching GitHub Release. No hand-cut release.
 
-A repo-wide change scoped to no plugin (`ci:`, `docs:`, `chore:`) triggers no plugin release.
+A change that touches **no** plugin's files (repo-root `ci:`, `docs:`, `chore:`) triggers no
+plugin release, whatever its type.
 
 ## Adding or removing a plugin (catalog version)
 

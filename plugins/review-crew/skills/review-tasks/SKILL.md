@@ -1,6 +1,6 @@
 ---
 name: review-tasks
-description: Use to review the-architect's `tasks` definition-doc (the bite-sized, test-first executable steps for a work-item) before the producer's Build runs it. Revises it in place and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads.
+description: "Use to review the-architect's `tasks` definition-doc (the bite-sized, test-first executable steps for a work-item) before the producer's Build runs it. Revises it in place and — on a clean pass — records the review gate (`gates.review: passed`) the autonomous loop reads."
 user-invocable: true
 ---
 
