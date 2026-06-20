@@ -11,6 +11,40 @@ def test_links_flag_missing_target(tmp_path):
     out = vs.check_links("p/s", text, str(tmp_path))
     assert out and "reference-link" in out[0] and "gone.md" in out[0]
 
+# Fix A: directory targets must NOT be flagged
+def test_links_accept_directory_target(tmp_path):
+    (tmp_path / "lib").mkdir()
+    text = 'LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"'
+    assert vs.check_links("p/s", text, str(tmp_path)) == []
+
+# Fix B: allowlist suppresses known sentinel references
+def test_links_allowlist_suppresses_sentinel(tmp_path):
+    # missing file IS flagged when not in allowlist
+    text = "See `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/loop_state.py`."
+    out = vs.check_links("p/s", text, str(tmp_path))
+    assert out and "reference-link" in out[0]
+
+def test_gather_allowlist_suppresses_sentinel(tmp_path):
+    root = str(tmp_path / "plugins"); os.makedirs(root)
+    body = (
+        "---\nname: workhorse\ndescription: Use when build tasks should run\n---\n"
+        "LIB=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/loop_state.py\"\n"
+    )
+    d = os.path.join(root, "workhorse", "skills", "workhorse")
+    os.makedirs(d)
+    with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+    reg = {"bodyCeilings": {}, "requiredPhrases": {}}
+
+    # Without allowlist: violation present
+    errors, _ = vs.gather_violations(root, reg, set(), set())
+    assert any("reference-link" in e and "loop_state.py" in e for e in errors)
+
+    # With allowlist: violation suppressed
+    errors2, _ = vs.gather_violations(root, reg, set(), set(),
+                                      allowed_unresolved={"workhorse/workhorse:lib/loop_state.py"})
+    assert not any("loop_state.py" in e for e in errors2)
+
 def test_conventions_section_numbers_and_refs():
     conv = "## 1. Vocabulary\n## 3. Definition docs\n### 3.1 Frontmatter\n"
     secs = vs.conventions_section_numbers(conv)

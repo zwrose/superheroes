@@ -36,7 +36,7 @@ def check_links(skill_key, text, plugin_dir):
     out = []
     for m in _REF.finditer(text):
         rel = m.group(1)
-        if not os.path.isfile(os.path.join(plugin_dir, rel)):
+        if not os.path.exists(os.path.join(plugin_dir, rel)):
             out.append(f"reference-link: {skill_key}: unresolved reference {rel}")
     return out
 
@@ -111,12 +111,15 @@ def known_red_ceilings(baseline):
     return set(baseline.get("knownRedCeilings", []))
 
 
-def gather_violations(plugins_root, registry, red_set, conv_secs, combined_before=None):
+def gather_violations(plugins_root, registry, red_set, conv_secs, combined_before=None,
+                      allowed_unresolved=frozenset()):
     """Walk skills under plugins_root and collect per-skill + combined-size violations.
 
     Pure over its inputs (no global file reads) so it is unit-testable on a temp tree.
-    red_set suppresses the line-count rule for known-red skills (FR-8). Returns
-    (errors, combined_description_chars).
+    red_set suppresses the line-count rule for known-red skills (FR-8).
+    allowed_unresolved is a set of "<skill_key>:<relpath>" strings; any reference-link
+    violation whose skill+relpath is in that set is suppressed (deliberate sentinels).
+    Returns (errors, combined_description_chars).
     """
     errors = []
     combined_now = 0
@@ -131,7 +134,15 @@ def gather_violations(plugins_root, registry, red_set, conv_secs, combined_befor
 
         if key not in red_set:
             errors += check_line_count(key, total_lines, registry["bodyCeilings"])
-        errors += check_links(key, raw, plugin_dir)
+        for v in check_links(key, raw, plugin_dir):
+            # Suppress deliberate sentinel references listed in allowed_unresolved.
+            # Violation format: "reference-link: <key>: unresolved reference <relpath>"
+            if allowed_unresolved and v.startswith("reference-link: "):
+                suffix = v[len("reference-link: "):]  # "<key>: unresolved reference <relpath>"
+                parts = suffix.split(": unresolved reference ", 1)
+                if len(parts) == 2 and f"{parts[0]}:{parts[1]}" in allowed_unresolved:
+                    continue
+            errors.append(v)
         errors += check_conventions_refs(key, raw, conv_secs)
         errors += check_depth(key, raw, plugin_dir)
         errors += check_phrases(key, description, registry["requiredPhrases"].get(key, []))
@@ -155,9 +166,11 @@ def main(argv=None):
     with open(CONVENTIONS, encoding="utf-8") as fh:
         conv_secs = conventions_section_numbers(fh.read())
 
+    allowed_unresolved = set(baseline.get("allowedUnresolvedRefs", []))
     errors, _ = gather_violations(
         PLUGINS, registry, known_red_ceilings(baseline), conv_secs,
-        baseline.get("combinedDescriptionChars"))
+        baseline.get("combinedDescriptionChars"),
+        allowed_unresolved=allowed_unresolved)
 
     # FR-6: TOC on long reference files (any .md under a plugin's reference/ dirs)
     import glob as _glob
