@@ -78,3 +78,16 @@ def test_cli_emits_json(tmp_path, capsys):
     rc = MTO.main(["model_tier_overrides.py", "--profile", str(p)])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out == {"reviewer-deep": "opus", "mechanical": "sonnet"}
+
+
+def test_known_roles_matches_core_default_tiers():
+    # KNOWN_ROLES mirrors the-architect core's DEFAULT_TIERS keys; guard against
+    # silent drift so a renamed/added core role can't make this helper drop a valid
+    # override (fail-open would otherwise mask it). Mirrors the sibling guard in
+    # test_model_tier_resolve.py (_FALLBACK == core.DEFAULT_TIERS).
+    root = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
+    core_path = os.path.join(root, "plugins", "the-architect", "lib", "model_tier.py")
+    spec = importlib.util.spec_from_file_location("model_tier_core", core_path)
+    core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(core)
+    assert set(MTO.KNOWN_ROLES) == set(core.DEFAULT_TIERS)
