@@ -10,7 +10,7 @@ def _store(tmp_path):
 
 
 def test_startup_reacquire_same_process_is_reentrant(tmp_path):
-    # A compaction-resume re-runs ⓪ in the SAME OS process, which still holds its own
+    # A compaction-resume re-runs step 0 in the SAME OS process, which still holds its own
     # startup.lock — that must read as re-entrant success, NOT "another loop holds this".
     s = _store(tmp_path)
     ok, _ = lock.acquire_startup(s)

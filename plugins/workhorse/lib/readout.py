@@ -1,4 +1,4 @@
-"""⑨ Handoff readout builder + the secret-scrub seam. Any CI-log / env-derived
+"""step 9 Handoff readout builder + the secret-scrub seam. Any CI-log / env-derived
 content Workhorse emits passes through test-pilot's pr_comment.py `scrub` (the
 band's single scrub source). If test-pilot is unresolvable, unscrubbable content
 is DROPPED (fail-closed: never leak), and the readout notes the omission. Merge is
@@ -39,7 +39,7 @@ def build_readout(ctx):
     raw_ci_excerpt, root. EVERY free-text field that could carry a secret
     (built_vs_acceptance, test_results, raw_ci_excerpt — anything Workhorse
     interpolates from CI logs / env / subagent output) passes through `scrub`
-    (design §3⑨: ALL PR-bound output through the secret-scrub seam, not just the
+    (design §3.9: ALL PR-bound output through the secret-scrub seam, not just the
     CI excerpt). Structured fields (URLs, the CI status word, the static smoke
     list) are Workhorse-authored and not scrubbed. Merge is always the owner's."""
     ctx = ctx or {}

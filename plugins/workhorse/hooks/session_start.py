@@ -2,7 +2,7 @@
 """SessionStart hook (best-effort, non-fatal). On source=='compact', inject context
 telling the resumed orchestrator to RECONCILE + RE-ARM THE FLOOR before continuing,
 and where the resume brief is. The actual reconcile / floor re-arm is the
-orchestrator's job (recover.py + SKILL ⓪) — this only surfaces the instruction.
+orchestrator's job (recover.py + SKILL step 0) — this only surfaces the instruction.
 Always exits 0."""
 import json
 import os
@@ -26,7 +26,7 @@ def main():
             return 0
         brief = control_plane.paths(cwd, wi)["resume_brief"]
         ctx = ("Workhorse resume: this session was compacted mid-run on work-item "
-               "'%s'. Before continuing, RECONCILE against reality and RE-ARM the ⓪ "
+               "'%s'. Before continuing, RECONCILE against reality and RE-ARM the step 0 "
                "enforcer floor self-check (bounded retry → parked-GATE). Resume brief: %s"
                % (wi, brief))
         sys.stdout.write(json.dumps({

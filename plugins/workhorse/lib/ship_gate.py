@@ -1,6 +1,6 @@
 # plugins/workhorse/lib/ship_gate.py
-"""The ③ ship-readiness gate: deterministic, fail-closed proof that ① Build (SDD) and
-② Review (review-code) ran over the shipped code before the producer opens a PR.
+"""The step 3 ship-readiness gate: deterministic, fail-closed proof that step 1 Build (SDD) and
+step 2 Review (review-code) ran over the shipped code before the producer opens a PR.
 
 `decide` is a PURE function (dicts + the HEAD string in -> action out), mirroring
 `recover.pr_action`. The provenance read/write helpers (Task 2) are colocated here the way
@@ -58,7 +58,7 @@ def set_review_covers(path, head):
 
 
 def decide(provenance, review_result, head):
-    """Pure ③ ship-gate decision; fail-closed (anything unproven -> gate).
+    """Pure step 3 ship-gate decision; fail-closed (anything unproven -> gate).
 
     `provenance`: from read_provenance (a dict, or {} when absent).
     `review_result`: from a fail-closed parse of review-code's --result-file

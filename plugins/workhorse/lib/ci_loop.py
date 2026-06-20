@@ -1,4 +1,4 @@
-"""Deterministic bound for the ⑧ CI-fix loop — the band's loop-skipping defense
+"""Deterministic bound for the step 8 CI-fix loop — the band's loop-skipping defense
 (cf. loop_state.py / circuit_breaker.py) applied to CI. Pure + fail-CLOSED: on a
 bad/ambiguous input it HALTS (revert-to-draft + GATE), never loops free.
 """

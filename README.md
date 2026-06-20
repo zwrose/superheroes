@@ -142,8 +142,10 @@ Then, in any project:
 
 When a tasks doc is approved, workhorse runs the **back half** of the loop on its own: it
 builds the change (subagent-driven, test-first), reviews it (review-crew's auto-fix loop),
-opens a draft PR, exercises it (test-pilot), resets seeded data, gets CI green, and hands
-you a live dev server + a plain-language readout. It **never merges** — that's always yours.
+opens a draft PR, exercises it (test-pilot), resets seeded data, then **flips the PR to
+ready-for-review** and gets CI green on a branch **brought up to date with its base**, and
+hands you a live dev server + a plain-language readout. It **never merges** — that's always
+yours. (The draft is only interim — a finished run hands back a non-draft PR.)
 
 ### Commands
 

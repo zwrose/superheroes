@@ -479,13 +479,13 @@ JSON object per line, written under the single-writer model (§4.5) via an atomi
 - `type` — one of `run_started`, `step_entered`, `step_completed`, `notify`, `gate`,
   `error`, `resumed`, `lease_acquired`, `lease_reclaimed`, `ci_fix_attempt`, `parked`,
   `run_completed`.
-- optional `step` — the ⓪–⑨ step the event belongs to.
+- optional `step` — the step number (0–9) the event belongs to.
 - optional `detail` — free-text, **scrubbed fail-closed** (`readout.scrub`) before write.
 - optional `world` — a dict of reality facts; string values scrubbed fail-closed.
 - optional `payload` — structured non-secret data (e.g. `ci_fix_attempt` →
   `{round, failing: [signatures]}`), written as-is.
 
-Readers tolerate a single torn trailing line (a crash mid-append). The ⑧ CI-fix bound
+Readers tolerate a single torn trailing line (a crash mid-append). The step 8 CI-fix bound
 is reconstructed by replaying `ci_fix_attempt` events, written **write-ahead** (before
 the fix push); a torn trailing line counts **+1** — a conservative over-count, so the
 bound trips earlier and is never bypassed by a crash-loop (it never under-counts). A
@@ -503,7 +503,7 @@ sections:
 
 ### 4.7 Loop failure / retry / cascade contract (authored — resilience slice)
 
-The producer's back-half loop (workhorse ⓪–⑨) is **reality-wins, reconcile-on-entry**
+The producer's back-half loop (workhorse steps 0–9) is **reality-wins, reconcile-on-entry**
 (`recover.py`). On every entry (first run or resume):
 
 - **Reconcile against reality.** The durable `checkpoint.json` only *speeds* a resume;
@@ -512,16 +512,36 @@ The producer's back-half loop (workhorse ⓪–⑨) is **reality-wins, reconcile
   as "absent" (which under auto-continue could redo a mutating step). A lost/unparseable
   checkpoint → **world-derive**. A **wedged control-plane store or unacquirable lock →
   park-GATE** (fail-closed; never run lockless — the lock lives in the store).
-- **Floor re-arm.** Every entry re-arms the ⓪ enforcer self-check + per-matcher canaries;
+- **Floor re-arm.** Every entry re-arms the step 0 enforcer self-check + per-matcher canaries;
   a transient miss retries (bounded, `recover.rearm_action`, ≤3) then **parks** (visible,
   never resume unguarded, never silent-wedge).
 - **`changes-requested` / failed review.** review-crew owns its internal auto-fix loop;
   the producer reads the terminal review action and, on a non-pass, **parks-GATE** (PR
   left draft, live resources torn down).
 - **Failed build / verify.** Park safely — draft PR, dev-server teardown, GATE to the owner.
-- **⑧ CI bound (bounded fix loop).** `ci_loop.decide` halts after `max_rounds` or on a
+- **step 8 CI bound (bounded fix loop).** `ci_loop.decide` halts after `max_rounds` or on a
   **recurring failing set** (`revert_and_gate`). The bound **survives restarts** via the
   write-ahead `ci_fix_attempt` events — a crash-loop cannot reset it.
+- **step 8 base-freshness gate.** Handback requires the branch **up to date with its PR
+  base**, so CI is evaluated on the integrated HEAD (not a stale branch). The producer
+  freshens by **merging the base in** (non-force feature-branch push — never a rebase /
+  force-push, which is owner-authority), bounded by `freshness.decide` (`DEFAULT_MAX_SYNCS`).
+  A **merge conflict** is confidence-gated (F5): a trivially-correct resolution may proceed
+  (CI re-vets), anything uncertain → **GATE** (the owner resolves; never a guessed merge).
+  An unreadable freshness read → **GATE** (fail-closed). If the base keeps advancing past the
+  bound, the loop stops chasing and hands back with an explicit **NOTIFY** — freshness is
+  promised only *as of* handback (post-handback drift is the owner's). The sync counter is
+  in-session: a resume re-derives freshness from reality and re-bounds (a merge converges, so
+  no crash-loop). **The freshness read is on the *local* HEAD, but CI runs on — and the owner
+  merges — the *remote* PR head**, so the producer reconciles them before the CI wait (push the
+  local HEAD when it is ahead of the PR head; idempotent). This closes the partial-failure
+  window where a crash *between* the local merge commit and its push would otherwise read
+  `up_to_date` locally while the PR still points at the stale pre-merge commit, and CI is then
+  evaluated on the reconciled HEAD SHA (a just-pushed-but-unregistered SHA reads as "no checks
+  yet", never an older commit's green). The freshen merge advances HEAD past the step-3
+  ship-gate's reviewed commit by design (the merge integrates already-reviewed base code; CI
+  re-vets it, review is not re-run) — so a post-review merge/conflict-resolution is **NOTIFY**ed
+  in the readout, never silently presented as review-covered.
 - **Stale-spec cascade (§6.3).** When the approved `tasks` doc changes under an in-flight
   branch (the recorded `<content-hash>` no longer matches the recomputed one), the resume
   **GATEs** — a downstream run is invalidated when its upstream definition-doc changes.

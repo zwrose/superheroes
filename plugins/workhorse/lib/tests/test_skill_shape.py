@@ -65,7 +65,7 @@ def test_fr5_deferral_note_and_no_verify_model_dispatch():
     assert "deliberate deferral" in low and "fr-5" in low, "missing FR-5 deferral note"
     # FR-7 half b (negative): workhorse owns no model-tier dispatch of its own.
     assert "model_tier_resolve" not in t and "model_tier_overrides" not in t
-    # FR-7 half b (positive, ②-section-scoped): ② Review still delegates to wired review-code.
-    review_section = _section(t, "② Review")  # "## ② Review …"
+    # FR-7 half b (positive, step-2-section-scoped): step 2 Review still delegates to wired review-code.
+    review_section = _section(t, "2 Review")  # "## 2 Review …"
     assert "review-crew:review-code" in review_section, \
-        "② Review must delegate to the wired review-code"
+        "step 2 Review must delegate to the wired review-code"

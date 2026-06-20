@@ -12,8 +12,8 @@ def _store(tmp_path):
 
 
 def test_crash_after_pr_create_before_checkpoint_no_double_create():
-    # The ③ idempotency decision is REAL code (recover.pr_action), not a test closure.
-    # Crash after the PR-create world-write but before the checkpoint advanced past ②:
+    # The step 3 idempotency decision is REAL code (recover.pr_action), not a test closure.
+    # Crash after the PR-create world-write but before the checkpoint advanced past step 2:
     # on re-entry the world shows the PR exists -> the decision is ADOPT, never CREATE.
     world = {"store_ok": True, "current_content_hash": "abc",
              "pr": {"state": "open", "number": 1}, "seeded_empty": True}

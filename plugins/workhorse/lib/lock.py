@@ -190,7 +190,7 @@ def acquire_startup(store):
     except FileExistsError:
         holder = _startup_holder(store)
         # Re-entrant for THIS very process (same pid + host + boot): a compaction-resume
-        # re-runs ⓪ in the SAME OS process, which still holds its own startup.lock —
+        # re-runs step 0 in the SAME OS process, which still holds its own startup.lock —
         # treat that as already-held, not a rival loop, or every resume would fail closed.
         if (holder.get("pid") == os.getpid() and holder.get("host") == _host()
                 and holder.get("bootId") == hostinfo.boot_id()):

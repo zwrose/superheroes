@@ -15,7 +15,7 @@ Two surfaces:
     scope-independent): a Bash WRITE to safety-machinery (`sed -i`/redirection), and the
     self-check canary sentinel.
   * Edit/Write/MultiEdit — refuse edits to band safety-machinery files (via F5's
-    is_safety_machinery guard), so the ⑧ CI fixer can't disable the gate. UNCONDITIONAL.
+    is_safety_machinery guard), so the step 8 CI fixer can't disable the gate. UNCONDITIONAL.
 
 Fail-CLOSED on the safety surfaces (non-string command, unparseable payload, path-guard
 error → deny). Fail-SAFE on the gate scope (cwd undetectable → allow only the gated set;
@@ -55,7 +55,7 @@ _PATCH_TARGET = re.compile(
 # paths F5's git-only classify_floor never had). A command not on this list is ALLOWED —
 # the producer must run build/test/git/gh commands. We deliberately do NOT consult F5's
 # classify_floor for command classification: its bare `git push` pattern would deny the
-# producer's OWN required ③/⑧ pushes and wedge the core job.
+# producer's OWN required steps 3/8 pushes and wedge the core job.
 GATED_COMMANDS = [
     ("merge-pr",     re.compile(r"\bgh\s+pr\s+merge\b", re.I)),
     ("merge-api",    re.compile(r"\bgh\s+api\b.*\bpulls/[^/\s]+/merge\b", re.I)),
@@ -73,7 +73,7 @@ GATED_COMMANDS = [
     ("rm-rf",           re.compile(r"\brm\s+-[a-z]*[rf][a-z]*[rf]", re.I)),
 ]
 
-# Self-check canary: a harmless shell no-op the ⓪ startup probe runs through Bash to
+# Self-check canary: a harmless shell no-op the step 0 startup probe runs through Bash to
 # prove the hook is firing end-to-end. UNCONDITIONAL deny (its expected outcome is deny;
 # it is not an owner action and must never be gateable / scope-dependent).
 _CANARY = re.compile(r"workhorse-enforcer-canary", re.I)
@@ -388,7 +388,7 @@ def selfcheck():
         and classify_command("git commit -m x")[0] == "allow"
     )
     # The Edit guard (classify_path) needs escalation.py. If unresolvable, the guard
-    # fail-closes to deny EVERYTHING — which would still PASS the ⓪ canaries yet wedge ①
+    # fail-closes to deny EVERYTHING — which would still PASS the step 0 canaries yet wedge step 1
     # Build with misdirecting per-edit denials. Surface the broken install HERE.
     esc_ok = band_lib.resolve_target(_ESC, plugin_root=_PLUGIN_ROOT) is not None
     hook_cfg = os.path.join(_PLUGIN_ROOT, "hooks", "hooks.json")

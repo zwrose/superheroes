@@ -1,6 +1,6 @@
 # plugins/workhorse/lib/journal.py
 """events.jsonl (the append-only audit log) + resume-brief.md — the two §7-deferred
-schemas this slice AUTHORS — plus the ⑧ CI-bound replay.
+schemas this slice AUTHORS — plus the step 8 CI-bound replay.
 
 Durable-write contract (design §4.2): every free-text field (detail, world facts)
 passes through readout.scrub FAIL-CLOSED before it is written; a structured `payload`
@@ -49,7 +49,7 @@ def _next_seq(events_path):
 def append(events_path, event_type, *, step=None, detail=None, world=None,
            payload=None, root=None, ts=None):
     # Fail closed on an unknown event type: a typo'd "ci_fix_attempt" would be silently
-    # ignored by ci_attempts() and UNDER-count the ⑧ bound (inverting the over-count
+    # ignored by ci_attempts() and UNDER-count the step 8 bound (inverting the over-count
     # fail-safe). Parking on it (the orchestrator catches DurableWriteError) is safe.
     if event_type not in EVENT_TYPES:
         raise DurableWriteError("unknown event type: %r" % event_type)
@@ -67,7 +67,7 @@ def append(events_path, event_type, *, step=None, detail=None, world=None,
     # The ENTIRE durable write — makedirs, open, write, fsync — is fail-closed: ANY OSError
     # (ENOSPC during inode/dir allocation, EACCES, a vanished dir) surfaces as
     # DurableWriteError so the orchestrator PARKS (Task 11) instead of crashing uncaught
-    # mid-step. append is write-ahead (before the ⑧ push), so parking -> no under-count.
+    # mid-step. append is write-ahead (before the step 8 push), so parking -> no under-count.
     try:
         os.makedirs(os.path.dirname(os.path.abspath(events_path)), exist_ok=True)
         fd = os.open(events_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -109,7 +109,7 @@ def read_events(events_path, *, want_torn_tail=False):
 def ci_attempts(events_path):
     """Replay the write-ahead ci_fix_attempt events. CONSERVATIVE TAIL (design §2/§9): a
     torn trailing line MIGHT be a ci_fix_attempt, so it counts as +1 (over-count,
-    fail-safe — the ⑧ bound trips EARLIER, never bypassed by a crash-loop)."""
+    fail-safe — the step 8 bound trips EARLIER, never bypassed by a crash-loop)."""
     evs, torn = read_events(events_path, want_torn_tail=True)
     rounds, history = 0, []
     for ev in evs:

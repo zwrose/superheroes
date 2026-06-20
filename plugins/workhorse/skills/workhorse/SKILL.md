@@ -1,6 +1,6 @@
 ---
 name: workhorse
-description: Use when an approved tasks doc (gates.review == passed) should be BUILT and shipped to a ready-for-review PR — "run the producer", "build this work item", "take this to a PR", "workhorse it". Builds, reviews, opens a draft PR, exercises the change, gets CI green, and hands you a readout. It NEVER merges — that is always yours.
+description: Use when an approved tasks doc (gates.review == passed) should be BUILT and shipped to a ready-for-review PR — "run the producer", "build this work item", "take this to a PR", "workhorse it". Builds, reviews, opens a draft PR, exercises the change, then flips it to ready-for-review once the branch is up to date with its base and CI is green, and hands you a readout. It NEVER merges — that is always yours.
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools via `hosts/<your-host>-tools.md` in this plugin — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
@@ -13,22 +13,29 @@ readout**. You **never merge, deploy, release, or force-push** on your own — t
 are the owner's: a deterministic enforcer **gates** them behind the owner's live,
 in-turn approval (and with no owner present, the loop **parks**).
 
+**The PR you hand back is non-draft, up to date with its base branch, and
+CI-green** — those three together *are* the endpoint. A **draft** PR is only an
+*interim* state (open early so test-pilot can exercise it, step 3) or a *parked*
+state (an incomplete/GATEd run); it is **never** how a finished run hands back.
+"Ready-for-review" therefore means literally non-draft in GitHub: step 7 flips it
+and step 8 keeps it green on a base-current HEAD before handback.
+
 Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`.
 
 **Prerequisites (install the band first).** Workhorse resolves its sibling band
 plugins' bundled libs at runtime, so install **the-architect ≥ 0.3.0**,
 **review-crew ≥ 0.6.0**, and **test-pilot** alongside workhorse. If they're absent,
-the ⓪ self-check reports `escalation_resolved: false` / `armed: false` and refuses
+the step 0 self-check reports `escalation_resolved: false` / `armed: false` and refuses
 to run — by design (never run the gate unguarded), not a mid-build failure. If you
 see `armed: false`, confirm the band siblings are installed before retrying.
 
-## ⓪ Startup self-check + store bootstrap + resume reconcile (every run — first or resume)
+## 0 Startup self-check + store bootstrap + resume reconcile (every run — first or resume)
 
 Run this exact sequence on **every** entry — whether fresh or resuming after
 compaction / restart. The control-plane and resilience substrate are initialized
 here so every subsequent step is already fenced and journalled.
 
-### ⓪.0 Resolve env + control-plane store
+### 0.0 Resolve env + control-plane store
 
 Set `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`. Resolve `ROOT=$(git rev-parse
 --show-toplevel)` and `WORK_ITEM` (the work-item slug — from frontmatter or caller
@@ -40,7 +47,7 @@ context).
 `lock.acquire_startup(store)` → `(False, …)` ⇒ **fail closed**
 ("another loop holds this checkout — will not start a parallel run").
 
-### ⓪.1 Work-item ref-lease
+### 0.1 Work-item ref-lease
 
 `lock.acquire(store, WORK_ITEM)` → `(ok, generation, reason)`:
 on `ok` (reason `created`/`stolen`) record the returned `generation` and emit
@@ -50,10 +57,10 @@ exclusive ownership; do not run two loops on one work-item).
 
 `control_plane.set_current(ROOT, WORK_ITEM)`.
 
-### ⓪.2 Re-arm the gate (bounded retry → parked-GATE)
+### 0.2 Re-arm the gate (bounded retry → parked-GATE)
 
 Run the enforcer self-check and both per-matcher canaries. This runs on **every**
-entry because resumes frequently re-enter adjacent to a guarded step (③/⑤/⑥/⑦/⑧)
+entry because resumes frequently re-enter adjacent to a guarded step (3/5/6/7/8)
 and the gate must be live before any write.
 
 1. **Enforcer self-check (HARD GATE).** `python3 "$LIB/enforcer.py" selfcheck`;
@@ -74,7 +81,7 @@ Drive the disposition with **`recover.rearm_action(attempt, armed)`**
 attempt). A persistent gate-arm failure is a **parked-GATE** — tear down cleanly and
 surface; never resume unguarded, never silent-wedge.
 
-### ⓪.3 Reconcile world → resume or start fresh
+### 0.3 Reconcile world → resume or start fresh
 
 Gather world reads:
 - `store_ok` — True (store bootstrapped above).
@@ -98,7 +105,7 @@ Call `recover.reconcile(checkpoint.read(paths["checkpoint"]), world)` (`recover.
 Write `journal.render_brief(...)` (`journal.py`) and emit a `resumed` event
 (always — even on a fresh start, this anchors the journal).
 
-(Preview: step ③ will use **`recover.pr_action(world)`** (`recover.py`) — adopt an existing PR / create exactly one / gate a merged-or-unknown read — the exactly-once PR anchor as code, not judgment.)
+(Preview: step 3 will use **`recover.pr_action(world)`** (`recover.py`) — adopt an existing PR / create exactly one / gate a merged-or-unknown read — the exactly-once PR anchor as code, not judgment.)
 
 **Input precondition (HARD GATE).** Read the tasks doc gate:
 `python3 <the-architect>/lib/definition_doc.py read-gate --doc tasks
@@ -109,7 +116,7 @@ Write `journal.render_brief(...)` (`journal.py`) and emit a `resumed` event
 using the-architect's `lib/identifiers.py:content_hash(frontmatter, body)` over the
 approved tasks doc. Establish/verify a clean worktree on that branch.
 
-## ① Build — subagent-driven-development (CLIPPED)
+## 1 Build — subagent-driven-development (CLIPPED)
 
 Emit `journal.append(events, "step_entered", step=1, world={…})` at entry and
 `journal.append(events, "step_completed", step=1, world={…})` on success; write
@@ -122,14 +129,14 @@ SDD's own Model Selection heuristic. **This is a deliberate deferral (spec FR-5)
 model-tier knob intentionally does NOT govern Build-leg implementer models — do not wire
 the knob here.** A `BLOCKED` status → GATE.
 
-**Record build provenance (the ① half of the ③ ship-gate).** Once SDD completes, write the
+**Record build provenance (the step 1 half of the step 3 ship-gate).** Once SDD completes, write the
 build evidence: `ship_gate.write_build(paths["provenance"],
 engine="subagent-driven-development", head=$(git rev-parse HEAD))`. This write is part of
 the SDD-invocation path — **executing the tasks inline instead of through SDD skips it**,
-which the ③ ship-gate detects (no `build` provenance → GATE). Inline execution in place of
+which the step 3 ship-gate detects (no `build` provenance → GATE). Inline execution in place of
 SDD is a forbidden substitution.
 
-## ② Review — review-crew:review-code (deterministic terminal read)
+## 2 Review — review-crew:review-code (deterministic terminal read)
 
 Emit step_entered/step_completed journal events; write checkpoint.
 
@@ -151,12 +158,12 @@ Read `$RESULT` (via `review_result.read_result`). Branch on `action`:
 - `halt` (circuit breaker / round cap) → **GATE**.
 - missing/garbled → reads as `halt` → **GATE** (fail-closed).
 
-**Stamp the reviewed HEAD (the ② half of the ship-gate).** On `exit_clean`, record the HEAD
+**Stamp the reviewed HEAD (the step 2 half of the ship-gate).** On `exit_clean`, record the HEAD
 the review covered: `ship_gate.set_review_covers(paths["provenance"], $(git rev-parse HEAD))`.
-The ③ ship-gate requires this to equal the shipped HEAD (a later commit → stale → GATE).
+The step 3 ship-gate requires this to equal the shipped HEAD (a later commit → stale → GATE).
 
 **Non-substitutable.** A single specialist subagent (e.g. a lone `code-reviewer`) is **not**
-`review-code` and does **not** satisfy ②. The only evidence ② records is the
+`review-code` and does **not** satisfy step 2. The only evidence step 2 records is the
 `review-result.json` written by the full `/review-crew:review-code` loop at
 `paths["review_result"]`; do not hand-write it.
 
@@ -167,21 +174,21 @@ message — "review-code did not report a terminal state; your installed `review
 may predate `--result-file` (upgrade it)" — rather than a bare halt, so the owner can
 fix the cause instead of seeing an unexplained GATE every run.
 
-## ③ Draft PR (NOTIFY) — world-read before world-write (idempotent)
+## 3 Draft PR (NOTIFY) — world-read before world-write (idempotent)
 
 Emit step_entered journal event. **Before the push/PR write:**
 `lock.renew(store, WORK_ITEM, generation)` then **`lock.fence_ok(store, WORK_ITEM, generation)`**
 (`lock.py`) — a stale generation means a newer session holds the ref-lease; abort the
 write (superseded). Never push under a stale fence.
 
-**③.0 Ship-gate (HARD GATE) — proof ① and ② ran over the shipped code.** Before any
+**3.0 Ship-gate (HARD GATE) — proof step 1 and step 2 ran over the shipped code.** Before any
 world-write, gather the evidence and decide deterministically:
 
 - `provenance = ship_gate.read_provenance(paths["provenance"])` — a `ship_gate.ProvenanceError`
   (present-but-garbled) → **GATE** ("provenance unreadable — fail closed").
 - `review_result` = a fail-closed parse of `paths["review_result"]`: `json.load(...)` on
   success, else `{"action": "halt"}` on missing/garbled (the same fail-closed-to-`halt` read
-  ② uses).
+  step 2 uses).
 - `head = git rev-parse HEAD`.
 
 Then `ship_gate.decide(provenance, review_result, head)`:
@@ -205,12 +212,12 @@ the PR-action decision is a code gate, not free-form judgment. Reversible → **
 Write `checkpoint.write(…, phase="verify", lastGoodStep=3, pr=<pr-object: {number, url, isDraft}>, lockGeneration=generation)`
 (a dict, not a bare number — `render_brief` reads `pr.get("url")` and the reconcile reads `pr.get("state")`/`number`).
 
-## ④ Dev server (managed) — only when there's a runnable surface
+## 4 Dev server (managed) — only when there's a runnable surface
 
 Emit step_entered/step_completed journal events.
 
 Detect the dev-server command: `python3 "$LIB/detect.py"` (`detect_dev_server`).
-None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
+None detected → no spot-check server; note it and skip steps 4/5/6. Otherwise:
 
   The sidecar path is `SIDECAR = paths["devserver"]` (`control_plane.paths` →
   `<issue_dir>/devserver.json`) — the **same** stable path on the first run and on
@@ -221,7 +228,7 @@ None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
   it's actually **alive** with `devserver.poll_healthy(devserver.health_url(port),
   timeout=…, interval=…)` before adopting. Alive → adopt the teardown handle (a managed
   server from a prior run is still up; don't double-start). **Corroborated-but-dead**
-  (poll fails — the orphan died between sessions) → tear it down and start fresh, so ⑤
+  (poll fails — the orphan died between sessions) → tear it down and start fresh, so step 5
   never runs against a non-responding server. If `reclaim` is `None` but
   `devserver.port_in_use(port)`, **GATE** (an unrecognized process holds the port — do
   not kill what we can't prove is ours). Else start fresh.
@@ -231,9 +238,9 @@ None detected → no spot-check server; note it and skip ④⑤⑥. Otherwise:
   reclaim: `devserver.write_sidecar(SIDECAR, handle, command, root=ROOT)` (the
   `command` is scrubbed fail-closed).
 - Capture the handle. **Tear it down (`devserver.teardown`) on every terminal state,
-  GATE, or error** — no zombie. One server serves ⑤ and the ⑨ spot-check.
+  GATE, or error** — no zombie. One server serves step 5 and the step 9 spot-check.
 
-## ⑤ Behavioral — test-pilot (two skills) — runnable surface only
+## 5 Behavioral — test-pilot (two skills) — runnable surface only
 
 Before writing seed data: `lock.renew(store, WORK_ITEM, generation)` then
 `lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort (superseded).
@@ -242,18 +249,18 @@ Emit step_entered/step_completed journal events; write checkpoint.
 
 Invoke `test-pilot-plan` (seeds scenarios via test-pilot's `engine.py`, posts the
 checkbox plan comment to the PR via `pr_comment.py`) then `test-pilot-execute`
-(drives the UI, posts the results comment). Workhorse supplies the PR number (③)
-and the live dev server (④); it does NOT re-implement seeding or PR posting. A
+(drives the UI, posts the results comment). Workhorse supplies the PR number (step 3)
+and the live dev server (step 4); it does NOT re-implement seeding or PR posting. A
 failure it can fix → fix + re-verify; else → GATE.
 
-## ⑥ Reset — engine clean (state-scoped, protected-gated)
+## 6 Reset — engine clean (state-scoped, protected-gated)
 
 Before the reset write: `lock.renew(store, WORK_ITEM, generation)` then
 `lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="verify", lastGoodStep=6, lockGeneration=generation)` after a successful reset/verify_empty.
 
-Regardless of ⑤ pass/fail, reset the seeded data via test-pilot's engine (`reset.py`):
+Regardless of step 5 pass/fail, reset the seeded data via test-pilot's engine (`reset.py`):
 1. `python3 <test-pilot>/lib/engine.py status --json` → feed to
    `reset.plan_reset(status)`.
 2. `clean` → `engine.py clean --branch "$BRANCH" [--slot S] --json`; then
@@ -267,28 +274,78 @@ Regardless of ⑤ pass/fail, reset the seeded data via test-pilot's engine (`res
    reboot is reclaimed instead of reading live-and-GATE on a reused PID; a genuinely
    live holder is still surfaced honestly to the owner.)*
 
-## ⑦ Ready — world-read before world-write (idempotent)
+## 7 Ready — world-read before world-write (idempotent)
 
 Before flipping draft: `lock.renew(store, WORK_ITEM, generation)` then
 `lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="verify", lastGoodStep=7, lockGeneration=generation)`.
 
-Once ⓪–⑥ are clean, **read the PR's current state first** (`gh pr view <N> --json
+Once steps 0–6 are clean, **read the PR's current state first** (`gh pr view <N> --json
 isDraft`): if it is already non-draft, this step already ran (a prior pass /
 pre-compaction) — note it and continue. Only when it is still a draft: flip it
 (`gh pr ready <N>`) (NOTIFY). The read-before-write keeps re-entry from churning the
 PR state.
 
-## ⑧ CI-green gate — bounded fix loop (write-ahead journal)
+## 8 Up-to-date + CI-green gate — freshen against base, then bounded CI fix loop
 
-Before any fix push: `lock.renew(store, WORK_ITEM, generation)` then
+Before any push (the freshen push **and** any CI-fix push):
+`lock.renew(store, WORK_ITEM, generation)` then
 `lock.fence_ok(store, WORK_ITEM, generation)` — stale generation ⇒ abort.
 
-Wait on the PR's checks **whenever CI runs** (this repo's CI runs on drafts):
-`gh pr checks <N>`. Detect the provider with `detect.detect_ci`; **none →** the
-readout says **"CI not detected"**, never a false ✓.
-- Green → write `checkpoint.write(…, phase="verify", lastGoodStep=8, lockGeneration=generation)`, then continue (so a resume after ⑧ advances to ⑨ rather than re-running the CI gate).
+CI is evaluated on the **ready, integrated HEAD** — never a stale branch. A green
+check on a branch that is behind its base proves nothing about the merge, so this step
+**freshens against the base first**, then gates on CI, then re-checks freshness once more
+before handback. (CI running on drafts is repo-specific and not assumed; the step-7 flip
+to non-draft + the freshen push below are what make the full suite run on the ready HEAD.)
+
+**8.0 Freshen against base.** Resolve the PR's base — `gh pr view <N> --json baseRefName`
+(do NOT assume `main`) — and `git fetch` it. Compute `is_ancestor` from
+`git merge-base --is-ancestor origin/<base> HEAD` (exit 0 → `True`/up-to-date, exit 1 →
+`False`/behind, anything else → `None`/unreadable), then drive the disposition with
+**`freshness.decide(is_ancestor, attempt)`** (`freshness.py`; `attempt` is 1-based, bounded
+by `DEFAULT_MAX_SYNCS`):
+- `up_to_date` → the branch already contains the base; fall through to the push-reconcile below.
+- `sync` → `git merge origin/<base>`:
+  - **clean** → non-force push the merge commit. The enforcer permits this feature-branch
+    push (not force, not push-to-default); the push also (re)triggers CI on the now-non-draft
+    PR via `synchronize`, so CI runs on the integrated HEAD even where the repo gates CI off
+    drafts.
+  - **conflict** → confidence-gated (F5): only a **trivially-correct, high-confidence**
+    resolution may proceed (commit + push; CI re-vets it). Anything semantically uncertain
+    → `git merge --abort` + **GATE** — the owner resolves; never hand back a half-integrated
+    branch, never guess a merge.
+- `give_up_notify` → the base kept advancing past the sync bound; stop chasing. Carry an
+  explicit **NOTIFY** into the readout ("base advanced during CI; branch is behind `<base>` —
+  update before merge") rather than block forever. (Post-handback drift is the owner's; this
+  promises freshness only *as of* handback, best-effort within the bound.)
+- `gate` → fail-closed (unreadable freshness read / bad attempt).
+
+**Push-reconcile — the freshness read is local; the merge isn't real until it's on the PR head.**
+`is_ancestor` above is computed on the **local** HEAD, but CI runs on — and the owner merges —
+the **remote PR head**. Before 8.1, reconcile them: read `PR_HEAD = gh pr view <N> --json
+headRefOid --jq .headRefOid` and `HEAD = git rev-parse HEAD`; if they differ (local ahead — e.g.
+a **resume after a crash *between* the local merge commit and its push**), renew+fence then
+non-force push so the remote PR head equals the local integrated HEAD. This is idempotent (a
+no-op when already in sync) and closes the partial-failure window where `up_to_date` is true
+locally while the remote PR is still the stale pre-merge commit. Capture the reconciled `HEAD`
+SHA for 8.1.
+
+The sync-attempt counter is in-session; a resume re-derives freshness from reality
+(reality-wins, CONVENTIONS §4.7) and re-bounds — a merge naturally converges, so it cannot
+crash-loop the way a recurring CI failure can.
+
+**8.1 CI-green on the integrated HEAD.** Wait on the PR's checks **for the reconciled HEAD
+SHA**: `gh pr checks <N>` — and confirm the rollup is for that SHA, not a prior commit. A
+just-pushed SHA whose checks have not yet registered reads the **same** as "no checks yet"
+(keep waiting); never adopt an *older* commit's green for the new HEAD. Detect the provider with
+`detect.detect_ci`; **none →** the readout says **"CI not detected"**, never a false ✓. If a
+provider exists but **no checks ever run on the reconciled HEAD SHA**, fail honest — "CI did not
+run on the ready PR; confirm the repo runs CI on ready/non-draft PRs" — never a false ✓.
+- Green → **re-check freshness** (the base may have advanced during the wait): re-run 8.0; if
+  it now says `sync`, loop back through it (same bounded counter). Once the branch is **both
+  up-to-date and green**, write `checkpoint.write(…, phase="verify", lastGoodStep=8,
+  lockGeneration=generation)` and continue (a resume after step 8 advances to step 9).
 - Red → derive the failing-check signatures, then:
   1. **Derive attempt count from the journal (survives restarts):**
      `(rounds, history) = journal.ci_attempts(events)` (`journal.py`).
@@ -301,7 +358,18 @@ readout says **"CI not detected"**, never a false ✓.
      - `revert_and_gate` (cap reached / recurring set / no actionable failures) →
        `gh pr ready --undo <N>` (revert to draft) + **GATE**.
 
-## ⑨ Handoff — your turn
+**Review-coverage boundary (deliberate — don't silently violate the ship-gate's invariant).**
+Step 2's review-code covered the *authored* diff and the step-3 ship-gate stamped
+`review.covers == HEAD` for that commit. A step-8 base-merge advances HEAD **past** that
+reviewed commit, and step 8 does **not** re-run review-code or the ship-gate (by design: the
+merge brings in base code that already passed its own review on `<base>`, and CI re-vets the
+integration). So the shipped HEAD can legitimately differ from the review-covered HEAD —
+**surface a NOTIFY in the readout whenever step 8 added a merge commit or a conflict resolution
+after review**, so the owner knows the final commit carries post-review integration (the
+authored work was review-gated; the mechanical merge was CI-gated, not review-gated). A
+conflict that is anything but trivially-correct is GATEd above, never auto-resolved.
+
+## 9 Handoff — your turn
 
 Emit step_entered/step_completed journal events; write `checkpoint.write(…, phase="ship", lastGoodStep=9, lockGeneration=generation)` (the final checkpoint).
 
@@ -321,7 +389,7 @@ test-pilot's `pr_comment.py scrub`; unscrubbable → dropped). End with
 Route every seam through F5 (review-crew's `escalation_resolve.py`): **PROCEED**
 (routine+reversible), **NOTIFY** (reversible, surfaced in the readout), **GATE**
 (owner-weighable / irreversible-or-uncertain / owner-authority). The cooperative
-layer routes the UX; the **PreToolUse enforcer** (`enforcer.py`, self-checked in ⓪)
+layer routes the UX; the **PreToolUse enforcer** (`enforcer.py`, self-checked in step 0)
 is the deterministic backstop. The owner-authority set — `gh pr merge` (incl. the
 `gh api`/GraphQL forms) / `gh release create` / `gh workflow run` / `git push
 --force` / push-to-default / deploy / destructive — is **GATED on the owner's live,
@@ -354,7 +422,7 @@ explicit here so the boundary is a deliberate choice, not a gap.
 Workhorse is a supervised single session (durable/unattended resume is handled by
 the resilience substrate above). If a GATE fires and the owner is away, **park safely**:
 1. Tear down the dev server.
-2. Run ⑥ reset (clean baseline). If a parking step fails (e.g. a held engine lock),
+2. Run step 6 reset (clean baseline). If a parking step fails (e.g. a held engine lock),
    **report the partial state honestly** rather than assert a baseline that doesn't hold.
 3. Leave the PR as **draft**.
 4. Release the startup lock: `lock.release_startup(store)` — the ref-lease expires
@@ -366,17 +434,17 @@ the resilience substrate above). If a GATE fires and the owner is away, **park s
 **Durable-write failures are fail-closed (park-GATE).** The orchestrator wraps every
 `journal.append` / `checkpoint.write`; a `journal.DurableWriteError` (`journal.py`)
 or an `atomic_write` `OSError` (e.g. a full disk, from `control_plane.py`) →
-**park-GATE**: "durable state write failed — disk?". Because the ⑧ `ci_fix_attempt`
+**park-GATE**: "durable state write failed — disk?". Because the step 8 `ci_fix_attempt`
 journal entry is *write-ahead* (before the push), parking on its failure means the
 push never happens → no under-count.
 
 **SessionStart(compact)** is handled by the hook injecting context (the compact
-hook); the orchestrator, on its next turn, re-runs the ⓪ reconcile + gate re-arm
+hook); the orchestrator, on its next turn, re-runs the step 0 reconcile + gate re-arm
 (the cold path is the gated invariant). The control-plane's `control_plane.get_current`
 gives the resumed work item; the journal brief gives the last step, so the reconcile
 can hand back the right `from_step`.
 
 ## Applicability
 
-④⑤⑥ run as one unit **only when the change has a runnable surface**. A
-library/CLI change skips to ②③⑦⑧⑨ (PR + CI + readout, no server).
+steps 4/5/6 run as one unit **only when the change has a runnable surface**. A
+library/CLI change skips to steps 2/3/7/8/9 (PR + CI + readout, no server).

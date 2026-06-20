@@ -1,4 +1,4 @@
-"""⑥ Reset orchestration: drive test-pilot's engine.py clean + verify empty, with
+"""step 6 Reset orchestration: drive test-pilot's engine.py clean + verify empty, with
 the held-lock decision (unlock-or-GATE). Workhorse never re-implements teardown
 and never auto-passes --allow-protected — the protected-target gate is the
 engine's, and --allow-protected is the owner's call. Pure decision logic here;

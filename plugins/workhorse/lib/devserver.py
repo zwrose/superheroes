@@ -1,6 +1,6 @@
 """Managed dev-server lifecycle for Workhorse: resolve the port, start the
 process (background), and tear it down on any terminal state / GATE / error so no
-zombie outlives the run. One server serves both ⑤ (test-pilot) and the ⑨
+zombie outlives the run. One server serves both step 5 (test-pilot) and the step 9
 spot-check. The start+health-poll path is integration-exercised; the bookkeeping
 (port resolve, PID liveness, teardown) is unit-tested here.
 """
@@ -58,13 +58,13 @@ def is_running(pid):
 
 class PortInUseError(RuntimeError):
     """Raised by start() when the target port is already bound — surfaced loudly
-    (design §3④), so the orchestrator GATEs with 'a server is already on :PORT
+    (design §3.4), so the orchestrator GATEs with 'a server is already on :PORT
     (possible orphan from a prior run)' instead of silently colliding."""
 
 
 def start(command, port, cwd=None, env=None):
     """Launch `command` in the background; return a handle dict. Refuses LOUDLY if
-    the port is already bound (design §3④: reuse-or-fail, never silent-collide).
+    the port is already bound (design §3.4: reuse-or-fail, never silent-collide).
     The caller health-polls health_url(port) and MUST teardown(handle) on every
     terminal/GATE/error path. (Durable cross-session orphan reclaim — finding a
     server an EARLIER killed session left behind — is the resilience slice; here we
