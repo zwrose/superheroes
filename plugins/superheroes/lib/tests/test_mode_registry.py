@@ -318,10 +318,10 @@ def test_nf6_holder_death_releases_lock_and_next_resolve_backfills(tmp_path, mon
     try:
         deadline = time.time() + 30
         while not os.path.exists(held) and time.time() < deadline:
-            rc = child.poll()
-            if rc is not None:  # child exited before signaling → fail fast, not a hang
+            exit_code = child.poll()
+            if exit_code is not None:  # child exited before signaling → fail fast, not a hang
                 raise AssertionError(
-                    f"child exited (returncode={rc}) before signaling flock acquisition "
+                    f"child exited (returncode={exit_code}) before signaling flock acquisition "
                     f"(pid={child.pid})")
             time.sleep(0.02)
         assert os.path.exists(held), f"child did not signal flock acquisition within deadline (pid={child.pid})"

@@ -106,7 +106,7 @@ def reconcile(cwd, chosen_mode=None, root=None):
             return {"action": "backfilled" if wrote is not None else "deferred",
                     "mode": verdict, "written": wrote is not None,
                     "signals": gather_signals(cwd, root)}
-    return {"action": "noop", "signals": gather_signals(cwd, root)}
+    return {"action": "noop", "mode": None, "written": None, "signals": gather_signals(cwd, root)}
 
 
 def main(argv):

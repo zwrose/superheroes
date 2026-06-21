@@ -78,6 +78,19 @@ def test_reconcile_backfills_consistent_in_repo_evidence(tmp_path, monkeypatch):
     assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO
 
 
+def test_reconcile_backfill_deferred_when_write_skipped(tmp_path, monkeypatch):
+    # FIX r2-test-deferred: no-chosen-mode BACKFILL-DEFERRED branch (write skipped).
+    # Consistent in-repo evidence, no registry, but write_registry returns None (contended/wedged).
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    monkeypatch.setattr(mr, "write_registry", lambda *a, **k: None)
+    out = rc.reconcile(str(tmp_path), root=root)
+    assert out["action"] == "deferred"
+    assert out["written"] is False
+
+
 def test_reconcile_noop_when_consistent(tmp_path):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
