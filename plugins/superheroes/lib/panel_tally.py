@@ -106,3 +106,21 @@ def round_gate(compiled, expected_roster, completed_roster):
     all_verifiable = all(bool(f.get("evidence")) for f in compiled)
     confidence = "high" if (not incomplete and all_verifiable) else "low"
     return gate, confidence, incomplete
+
+
+# ── deferral accounting (FR-10) ──
+def present_deferred(compiled, deferred_set):
+    """present-∩-deferred: count present BLOCKING findings whose identity was deferred and whose
+    current severity is no GREATER than the severity it was deferred at (a higher-severity or
+    different-substance re-flag is a new, non-deferred blocker). Mirrors loop_state's cumulative
+    present-∩-skip contract: a deferral for a finding no longer re-flagged simply stops counting."""
+    n = 0
+    for f in compiled:
+        if f.get("severity") not in BLOCKING:
+            continue
+        deferred_sev = deferred_set.get(_identity(f))
+        if deferred_sev is None:
+            continue
+        if SEV_RANK.get(f.get("severity"), 99) >= SEV_RANK.get(deferred_sev, 99):
+            n += 1
+    return n

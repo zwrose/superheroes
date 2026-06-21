@@ -88,3 +88,30 @@ def test_confidence_low_when_a_finding_lacks_verification_evidence():
     bad["evidence"] = ""
     gate, conf, missing = PT.round_gate([bad], ["code"], ["code"])
     assert conf == "low"
+
+
+def test_present_deferred_counts_same_identity_same_severity():
+    f = _f("a.py", 1, "bug", "Important")
+    deferred = {PT._identity(f): "Important"}
+    assert PT.present_deferred([f], deferred) == 1
+
+
+def test_present_deferred_excludes_severity_escalation():
+    # deferred at Important; re-flagged at Critical → NOT deferred (severity ceiling)
+    f = _f("a.py", 1, "bug", "Critical")
+    deferred = {PT._identity(f): "Important"}
+    assert PT.present_deferred([f], deferred) == 0
+
+
+def test_present_deferred_ignores_identities_not_present_this_round():
+    f = _f("a.py", 1, "bug", "Important")
+    deferred = {"other.py::stale": "Important"}
+    assert PT.present_deferred([f], deferred) == 0
+
+
+def test_present_deferred_excludes_different_issue_at_same_location():
+    # deferral is keyed by file::normalized_title, so a DIFFERENT issue at the same file is a
+    # new, non-deferred blocker (FR-10) — not silently inheriting the earlier deferral.
+    deferred = {PT._identity(_f("a.py", 1, "bug one", "Important")): "Important"}
+    other = _f("a.py", 1, "a different bug", "Important")
+    assert PT.present_deferred([other], deferred) == 0
