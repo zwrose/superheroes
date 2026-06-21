@@ -87,3 +87,30 @@ def test_write_refuses_to_change_sticky_mode(tmp_path):
     assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.GLOBAL  # preserved
     # explicit migration is allowed
     assert mr.write_registry(str(tmp_path), mr.IN_REPO, None, root=root, allow_migration=True)["storageMode"] == mr.IN_REPO
+
+
+def test_evidence_in_repo_anchored_at_repo_root(tmp_path):
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    locs = mr.hero_evidence(str(tmp_path), hero_roots={"review-crew": str(tmp_path/"g1"),
+                                                       "test-pilot": str(tmp_path/"g2")})
+    assert locs["review-crew"] == mr.IN_REPO and locs["test-pilot"] == "none"
+
+
+def test_verdict_present_only_and_disagree_needs_two():
+    assert mr.evidence_verdict({"review-crew": mr.IN_REPO, "test-pilot": "none"}) == mr.IN_REPO
+    assert mr.evidence_verdict({"review-crew": "none", "test-pilot": "none"}) == "none"
+    assert mr.evidence_verdict({"review-crew": mr.IN_REPO, "test-pilot": mr.GLOBAL}) == "disagree"
+
+
+def test_evidence_global_via_pointer_is_read_only(tmp_path):
+    import store_core as sc
+    _init_repo(tmp_path)
+    g = str(tmp_path / "review-crew-global")
+    entry = os.path.join(g, "entries", "e1"); os.makedirs(entry)
+    open(os.path.join(entry, "review-profile.md"), "w").write("p")
+    sc.write_pointer(g, sc.derive_identifiers(str(tmp_path))["gitdir_hash"], "e1")
+    locs = mr.hero_evidence(str(tmp_path), hero_roots={"review-crew": g, "test-pilot": str(tmp_path/"g2")})
+    assert locs["review-crew"] == mr.GLOBAL
+    assert not os.path.exists(os.path.join(entry, "keys.json"))  # probe healed nothing

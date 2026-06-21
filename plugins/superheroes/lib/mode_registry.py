@@ -103,6 +103,58 @@ def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=
         return rec
 
 
+# mode_registry owns the in-repo subpath + filename (the heroes keep them inline today);
+# the GLOBAL store root is read from each hero's own store_root() via a deferred import.
+_HERO_INREPO = {
+    "review-crew": os.path.join(".claude", "review-profile.md"),
+    "test-pilot": os.path.join(".claude", "test-pilot", "profile.md"),
+}
+_HERO_GLOBAL_FILENAME = {"review-crew": "review-profile.md", "test-pilot": "profile.md"}
+
+
+def _hero_global_root(name):
+    if name == "review-crew":
+        import review_store
+        return review_store.store_root()
+    import store as test_pilot_store
+    return test_pilot_store.store_root()
+
+
+def _repo_root(cwd):
+    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
+    return os.path.realpath(out) if out else os.path.realpath(cwd)
+
+
+def hero_evidence(cwd, root=None, hero_roots=None):
+    """Pure read-only probe of each hero's calibration location. In-repo is anchored at
+    the REPO ROOT; global is resolved read-only (resolve_global heal=False). Returns
+    {hero: 'in-repo'|'global'|'none'}. hero_roots overrides each global root for tests."""
+    repo = _repo_root(cwd)
+    out = {}
+    for name, subpath in _HERO_INREPO.items():
+        if os.path.isfile(os.path.join(repo, subpath)):
+            out[name] = IN_REPO
+            continue
+        groot = (hero_roots or {}).get(name) or _hero_global_root(name)
+        g = store_core.resolve_global(cwd, groot, heal=False)
+        if g and os.path.isfile(os.path.join(g["dir"], _HERO_GLOBAL_FILENAME[name])):
+            out[name] = GLOBAL
+        else:
+            out[name] = "none"
+    return out
+
+
+def evidence_verdict(hero_locs):
+    """Present-heroes-only: all-present-agree → that mode; ≥2 present in different modes
+    → 'disagree'; none present → 'none' (greenfield)."""
+    present = [v for v in hero_locs.values() if v != "none"]
+    if not present:
+        return "none"
+    if all(v == present[0] for v in present):
+        return present[0]
+    return "disagree"
+
+
 def ensure_project_store(cwd, root=None):
     """Create the per-project store (git repo + meta.json). Idempotent and safe under
     concurrent first-touch by parallel worktrees (§4.2): makedirs(exist_ok), guarded
