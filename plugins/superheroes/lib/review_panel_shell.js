@@ -11,6 +11,7 @@
 //
 // reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep, maxRounds = 7 }) -> verdict
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep, maxRounds = 7 }) {
+  runDir = runDir || runKey // runKey is the logical key; runDir its resolved on-disk path
   if (!reviewerSet || reviewerSet.length === 0) {
     // empty roster is rejected by the core; surface its verdict without dispatching anything.
     return await tallyAgent(runDir, 1, reviewerSet || [], maxRounds, 'no', 'completed')
@@ -65,6 +66,7 @@ async function runFixStep(fixStep, verdict, runDir) {
     await recordDeferred(report, verdict, runDir) // append deferred identities (+severity) to deferred-set.json
     return true
   } catch (e) {
+    try { log(`review-panel: fix step failed, treating as fix failure -> halted: ${e && e.message ? e.message : e}`) } catch (_) {}
     return false
   }
 }
