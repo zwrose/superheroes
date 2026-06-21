@@ -20,6 +20,26 @@ def test_disagreement_yields_one_signal(tmp_path, monkeypatch):
     assert len(sigs) == 1 and sigs[0]["type"] == "disagreement"
 
 
+def test_fr10_disagreement_identity_ignores_none_heroes(tmp_path, monkeypatch):
+    # FIX 5 / FR-10: a future hero appearing as "none" must NOT change the disagreement
+    # identity (else a dismissed nudge would re-surface). The identity over the 2 present
+    # heroes plus a none-hero must equal the identity over just the 2 present heroes.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    two = {"review-crew": mr.IN_REPO, "test-pilot": mr.GLOBAL}
+    three = {"review-crew": mr.IN_REPO, "test-pilot": mr.GLOBAL, "future-hero": "none"}
+
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: dict(three))
+    sigs_three = rc.gather_signals(str(tmp_path), root=root)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: dict(two))
+    sigs_two = rc.gather_signals(str(tmp_path), root=root)
+
+    dis_three = [s for s in sigs_three if s["type"] == "disagreement"]
+    dis_two = [s for s in sigs_two if s["type"] == "disagreement"]
+    assert len(dis_three) == 1 and len(dis_two) == 1
+    assert dis_three[0]["identity"] == dis_two[0]["identity"]
+
+
 def test_coalesce_one_prompt_with_count_and_ack_suppresses(tmp_path):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")

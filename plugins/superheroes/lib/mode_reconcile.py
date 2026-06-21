@@ -24,7 +24,10 @@ def gather_signals(cwd, root=None):
     sigs = []
     if rec is None:
         if verdict == "disagree":
-            facts = sorted(f"{k}={v}" for k, v in locs.items())
+            # FR-10 identity stability: hash only PRESENT heroes so a future none-hero
+            # cannot change the identity and re-surface a dismissed nudge (aligns with the
+            # migration-pending branch, which already filters to off-heroes).
+            facts = sorted(f"{k}={v}" for k, v in locs.items() if v != "none")
             sigs.append({"type": "disagreement",
                          "identity": _sig_id("disagreement", *facts), "detail": locs})
         elif verdict == "none":
@@ -83,7 +86,13 @@ def reconcile(cwd, chosen_mode=None, root=None):
             raise ValueError(f"invalid mode: {chosen_mode!r}")
         remote_hash = mr.store_core.derive_identifiers(cwd)["remote_hash"]
         written = mr.write_registry(cwd, chosen_mode, remote_hash, root, allow_migration=True)
-        return {"action": "recorded", "mode": chosen_mode,
+        if written is None:
+            sys.stderr.write(
+                f"mode_reconcile: chosen mode {chosen_mode!r} could not be persisted "
+                "(store contended or unwritable); deferring — owner will be asked again\n")
+        # action is honest: "recorded" only when the write landed, else "deferred".
+        return {"action": "recorded" if written is not None else "deferred",
+                "mode": chosen_mode,
                 "written": written is not None, "signals": gather_signals(cwd, root)}
     if mr.read_registry(cwd, root) is None:
         verdict = mr.evidence_verdict(mr.hero_evidence(cwd, root))

@@ -8,6 +8,7 @@ import fcntl
 import json
 import os
 import subprocess
+import sys
 from contextlib import contextmanager
 
 import control_plane
@@ -66,13 +67,25 @@ def read_registry(cwd, root=None):
         return None
     if not isinstance(rec, dict):
         return None
+    # Order matters (UFR-3 corrupt→absent / UFR-4 / §6.3-6.4 fail-closed on unknown-newer):
+    # a malformed/missing/bool/<1 schemaVersion is a corrupt record (→ absent), but a parseable
+    # NEWER version must still RAISE (fail-closed), so the raise precedes the corrupt-shape returns.
     ver = rec.get("schemaVersion")
-    if isinstance(ver, int) and ver > SCHEMA_VERSION:
+    # isinstance(True, int) is True in Python, so the explicit bool exclusion is required.
+    if not isinstance(ver, int) or isinstance(ver, bool) or ver < 1:
+        return None  # malformed/missing/bool/<1 → corrupt (UFR-3)
+    if ver > SCHEMA_VERSION:
         raise UnknownSchemaVersion(
             f"registry.json schemaVersion={ver} is newer than {SCHEMA_VERSION} — "
             "update the plugin or migrate the file")
     if rec.get("storageMode") not in (IN_REPO, GLOBAL):
         return None  # parseable but invalid → corrupt (UFR-3)
+    rk = rec.get("remoteKey")
+    if rk is not None and not isinstance(rk, str):
+        return None  # malformed remoteKey → corrupt (UFR-3)
+    created = rec.get("createdAt")
+    if not isinstance(created, str) or not created:
+        return None  # missing/empty createdAt → corrupt (UFR-3)
     return rec
 
 
@@ -96,7 +109,13 @@ def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=
             return None
         if existing and existing["storageMode"] == mode:
             return existing
-        created = (existing or {}).get("createdAt") or (now or _utc_now())
+        # Preserve an existing non-empty string createdAt; else stamp a new one. Gate on
+        # PRESENCE not truthiness (a falsy stored value must not regenerate spuriously; with
+        # the hardened read_registry a valid existing record already has a non-empty createdAt).
+        created = (existing.get("createdAt")
+                   if (existing and isinstance(existing.get("createdAt"), str)
+                       and existing.get("createdAt"))
+                   else (now or _utc_now()))
         rec = {"schemaVersion": SCHEMA_VERSION, "storageMode": mode,
                "remoteKey": remote_key, "createdAt": created}
         store_core.atomic_write(registry_path(cwd, root), json.dumps(rec, indent=2))
@@ -165,8 +184,14 @@ def resolve(cwd, root=None):
     verdict = evidence_verdict(hero_evidence(cwd, root))
     if verdict in (IN_REPO, GLOBAL):
         remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
-        write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention)
-        return {"mode": verdict, "authoritative": True, "source": "backfilled", "evidence": verdict}
+        wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
+        if wrote is None:
+            sys.stderr.write(
+                f"mode_registry: backfill of {verdict!r} could not be persisted "
+                "(store contended or unwritable); reporting non-authoritative\n")
+        # mode stays the evidence verdict; authoritative reflects whether the write landed.
+        return {"mode": verdict, "authoritative": wrote is not None,
+                "source": "backfilled", "evidence": verdict}
     return {"mode": GLOBAL, "authoritative": False, "source": "provisional", "evidence": verdict}
 
 

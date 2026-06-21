@@ -79,6 +79,55 @@ def test_read_semantically_invalid_is_treated_as_absent(tmp_path):
     assert mr.read_registry(str(tmp_path), root=root) is None
 
 
+def test_read_float_schema_version_is_corrupt_not_accepted(tmp_path):
+    # FIX 1: a non-int schemaVersion (float 2.0) must NOT bypass the fail-closed guard;
+    # it is a corrupt record → absent (None), neither raised nor accepted.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"schemaVersion": 2.0, "storageMode": "in-repo",
+                                     "remoteKey": None, "createdAt": "2026-06-21T00:00:00Z"})
+    assert mr.read_registry(str(tmp_path), root=root) is None
+
+
+def test_read_string_schema_version_is_corrupt_not_accepted(tmp_path):
+    # FIX 1: a string schemaVersion ("2") is corrupt → absent.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"schemaVersion": "2", "storageMode": "in-repo",
+                                     "remoteKey": None, "createdAt": "2026-06-21T00:00:00Z"})
+    assert mr.read_registry(str(tmp_path), root=root) is None
+
+
+def test_read_missing_schema_version_is_corrupt_not_accepted(tmp_path):
+    # FIX 1: an absent schemaVersion (storageMode otherwise valid) is corrupt → absent.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"storageMode": "in-repo",
+                                     "remoteKey": None, "createdAt": "2026-06-21T00:00:00Z"})
+    assert mr.read_registry(str(tmp_path), root=root) is None
+
+
+def test_read_non_string_remote_key_is_corrupt(tmp_path):
+    # FIX 2: a v1 record with a non-string remoteKey (42) is malformed → absent.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"schemaVersion": 1, "storageMode": "in-repo",
+                                     "remoteKey": 42, "createdAt": "2026-06-21T00:00:00Z"})
+    assert mr.read_registry(str(tmp_path), root=root) is None
+
+
+def test_read_empty_or_missing_created_at_is_corrupt(tmp_path):
+    # FIX 2: an empty createdAt (and a missing one) is malformed → absent.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"schemaVersion": 1, "storageMode": "in-repo",
+                                     "remoteKey": "rk", "createdAt": ""})
+    assert mr.read_registry(str(tmp_path), root=root) is None
+    _write_raw(str(tmp_path), root, {"schemaVersion": 1, "storageMode": "in-repo",
+                                     "remoteKey": "rk"})  # createdAt missing entirely
+    assert mr.read_registry(str(tmp_path), root=root) is None
+
+
 def test_write_refuses_to_change_sticky_mode(tmp_path):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
@@ -140,6 +189,20 @@ def test_resolve_backfills_from_consistent_evidence(tmp_path, monkeypatch):
     r = mr.resolve(str(tmp_path), root=root)
     assert r["mode"] == mr.IN_REPO and r["authoritative"] is True and r["source"] == "backfilled"
     assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO  # synthesized
+
+
+def test_resolve_backfill_on_wedged_store_reports_non_authoritative(tmp_path, monkeypatch):
+    # FIX 3: consistent in-repo evidence but a wedged store (write cannot land) must report
+    # authoritative=False, not masquerade as authoritative. The resolved mode + source stay.
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    monkeypatch.setattr(mr, "ensure_project_store", lambda *a, **k: None)  # write_registry → None
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["authoritative"] is False
+    assert r["mode"] == mr.IN_REPO
+    assert r["source"] == "backfilled"
 
 
 def test_resolve_artifact_reads_follow_the_artifact(tmp_path):
@@ -241,8 +304,13 @@ def test_nf6_holder_death_releases_lock_and_next_resolve_backfills(tmp_path, mon
         f"fd=os.open({lock!r},os.O_CREAT|os.O_RDWR,0o644);fcntl.flock(fd,fcntl.LOCK_EX);"
         f"open({held!r},'w').close();time.sleep(30)"])
     try:
-        deadline = time.time() + 10
+        deadline = time.time() + 30
         while not os.path.exists(held) and time.time() < deadline:
+            rc = child.poll()
+            if rc is not None:  # child exited before signaling → fail fast, not a hang
+                raise AssertionError(
+                    f"child exited (returncode={rc}) before signaling flock acquisition "
+                    f"(pid={child.pid})")
             time.sleep(0.02)
         assert os.path.exists(held), f"child did not signal flock acquisition within deadline (pid={child.pid})"
         with mr.config_lock(str(tmp_path), root=root) as got:
