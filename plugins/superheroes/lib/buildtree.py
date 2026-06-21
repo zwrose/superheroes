@@ -335,11 +335,13 @@ def teardown(cwd, path, branch, decision):
     """Execute a reap decision. Removes the worktree checkout BEFORE deleting the branch
     (so a partial failure leaves a still-recognized worktree, never a branch-less one).
     Never `--force` (UFR-1 is enforced upstream by reap_decision). Idempotent and never
-    raises (the devserver.teardown contract). Returns {ok, removed, branch_deleted,
-    incomplete}; `incomplete` (UFR-5) flags a partial
-    teardown the caller must keep on the record and notify about — either `git worktree
-    remove` failed and the leaf is still present (removed False), or the worktree was removed
-    but `git branch -D` failed (removed True, branch_deleted False)."""
+    raises (the devserver.teardown contract).
+    Returns {ok, removed, branch_deleted, incomplete}. `incomplete` (UFR-5) is True only on a
+    partial teardown the caller must keep on the record and notify about: either `git worktree
+    remove` failed and the leaf is still present (removed False), or — under REMOVE_AND_DELETE —
+    the worktree was removed but `git branch -D` failed (removed True, branch_deleted False).
+    A REMOVE_KEEP_BRANCH success also returns removed True / branch_deleted False but with
+    incomplete False (the branch is intentionally preserved, not a failure)."""
     if decision not in (REMOVE_KEEP_BRANCH, REMOVE_AND_DELETE):
         return {"ok": True, "removed": False, "branch_deleted": False, "incomplete": False}
     rc, _ = _git(cwd, "worktree", "remove", path)
@@ -349,6 +351,10 @@ def teardown(cwd, path, branch, decision):
     if not removed:
         return {"ok": False, "removed": False, "branch_deleted": False, "incomplete": True}
     if decision == REMOVE_KEEP_BRANCH:
+        return {"ok": True, "removed": True, "branch_deleted": False, "incomplete": False}
+    if not branch:
+        # REMOVE_AND_DELETE with no branch to delete (branch-less worktree) -> clean removal,
+        # not a failure (honors the never-raises contract).
         return {"ok": True, "removed": True, "branch_deleted": False, "incomplete": False}
     rc, _ = _git(cwd, "branch", "-D", branch)
     deleted = rc == 0 or not branch_exists(cwd, branch)

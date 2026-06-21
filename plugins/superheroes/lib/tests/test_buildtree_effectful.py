@@ -287,14 +287,17 @@ def test_split_leaf_no_hyphen():
 
 def test_plan_sweep_failcloses_on_forward_version_record(tmp_path, monkeypatch):
     # test-001: a forward-version worktrees.json makes record_read raise RecordSchemaError;
-    # plan_sweep must fail closed with [] (no candidates), never crash.
+    # plan_sweep must fail closed with [] BEFORE building candidates — even when pr_info would
+    # otherwise make the worktree a terminal (merged) reap candidate.
     repo = _setup(tmp_path, monkeypatch)
-    buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    pr_info = {a["branch"]: {"pr_state": "merged",
+                            "pr_head_oid": buildtree.rev_parse(repo, a["branch"])}}
     rec_file = buildtree.record_path(repo)
     os.makedirs(os.path.dirname(rec_file), exist_ok=True)
     with open(rec_file, "w") as fh:
         fh.write('{"schemaVersion": 999, "worktrees": []}')
-    assert buildtree.plan_sweep(repo, {}, active_work_item="none") == []
+    assert buildtree.plan_sweep(repo, pr_info, active_work_item="none") == []
 
 
 def test_create_makedirs_failure_gate_failclosed(tmp_path, monkeypatch):
@@ -305,3 +308,13 @@ def test_create_makedirs_failure_gate_failclosed(tmp_path, monkeypatch):
     monkeypatch.setattr(buildtree.os, "makedirs", _boom)
     r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
     assert r["outcome"] == buildtree.GATE_FAILCLOSED
+
+
+def test_teardown_remove_and_delete_with_none_branch_is_clean(tmp_path, monkeypatch):
+    # code-001: teardown must never raise on a branch-less worktree even under
+    # REMOVE_AND_DELETE — no branch to delete -> clean removal, not a TypeError.
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    res = buildtree.teardown(repo, r["path"], None, buildtree.REMOVE_AND_DELETE)
+    assert res["removed"] is True and res["branch_deleted"] is False and res["incomplete"] is False
+    assert not os.path.isdir(r["path"])
