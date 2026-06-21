@@ -111,10 +111,30 @@ Write `journal.render_brief(...)` (`journal.py`) and emit a `resumed` event
 `python3 <the-architect>/lib/definition_doc.py read-gate --doc tasks
 --work-item "$WORK_ITEM" --root "$ROOT"`. If not `passed`, STOP.
 
-**Worktree + content-addressed branch.** The producer owns worktree creation
-(CONVENTIONS §3.2). Mint the branch `superheroes/<work-item>-<content-hash>`
-using the-architect's `lib/identifiers.py:content_hash(frontmatter, body)` over the
-approved tasks doc. Establish/verify a clean worktree on that branch.
+**Worktree + content-addressed branch (managed — CONVENTIONS §3.2).** The producer owns
+the build worktree's lifecycle via `buildtree` (`$LIB/buildtree.py`). Mint the branch
+`superheroes/<work-item>-<content-hash>` using the-architect's
+`lib/identifiers.py:content_hash(frontmatter, body)` over the approved tasks doc, then
+`buildtree.reclaim_or_create(ROOT, WORK_ITEM, content_hash)`:
+- `REUSED`/`CREATED` → proceed with `result["path"]` as the build worktree (FR-1/FR-2; the
+  deterministic home is `~/.superheroes-worktrees/<checkout-key>/<work-item>-<content-hash>`).
+- `PRESERVE_NOTIFY` (a dirty existing tree, or a non-worktree directory occupying the path)
+  → **GATE**: surface the path for the owner to resolve; never clobber (UFR-1).
+- `GATE_FAILCLOSED` (`git worktree add` itself failed) → **GATE**.
+
+**Backstop sweep + cleanup (FR-3/FR-4/FR-5/FR-10/FR-11).** On entry, after the tasks-gate
+check, run `buildtree.plan_sweep(ROOT, pr_info, active_work_item=WORK_ITEM,
+active_path=result["path"])` — where `result` is the step-0
+`reclaim_or_create` outcome and `pr_info` maps each candidate branch to its
+`{pr_state, pr_head_oid}` from `gh pr view --json state,headRefOid` — and **present the
+returned candidate list (each worktree + whether
+its branch is deleted or kept) for the owner's batch approval (FR-10).** Reap only approved
+candidates via `buildtree.reap_one(...)` (which re-validates at reap time, FR-11). **In an
+autonomous run, do NOT interrupt the loop for this approval (FR-11): carry the pending-reap
+list to the next natural owner interaction.** For an owner-reported terminal PR (FR-4) or the
+band-mediated merge (FR-3), verify state via `gh` then call `buildtree.reap_one(...)`
+directly. `buildtree` never `--force`-removes a worktree and deletes a local branch only via
+the merged tier.
 
 ## 1 Build — subagent-driven-development (CLIPPED)
 
