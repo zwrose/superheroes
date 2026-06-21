@@ -70,3 +70,49 @@ def coalesce(cwd, root=None):
         return None
     return {"count": len(items), "items": items,
             "message": f"this project has {len(items)} item(s) to reconcile — run init to settle it"}
+
+
+def reconcile(cwd, chosen_mode=None, root=None):
+    """The engine the init skill drives. Given an owner-chosen mode, record it
+    authoritatively (FR-7), allowing migration of a prior mode; a disagreement is
+    recorded now with the physical move deferred to I6 (a migration-pending signal
+    remains). Without a chosen mode: backfill consistent evidence, else no-op."""
+    mr.ensure_project_store(cwd, root)
+    if chosen_mode is not None:
+        if chosen_mode not in (mr.IN_REPO, mr.GLOBAL):
+            raise ValueError(f"invalid mode: {chosen_mode!r}")
+        remote_hash = mr.store_core.derive_identifiers(cwd)["remote_hash"]
+        written = mr.write_registry(cwd, chosen_mode, remote_hash, root, allow_migration=True)
+        return {"action": "recorded", "mode": chosen_mode,
+                "written": written is not None, "signals": gather_signals(cwd, root)}
+    if mr.read_registry(cwd, root) is None:
+        verdict = mr.evidence_verdict(mr.hero_evidence(cwd, root))
+        if verdict in (mr.IN_REPO, mr.GLOBAL):
+            remote_hash = mr.store_core.derive_identifiers(cwd)["remote_hash"]
+            mr.write_registry(cwd, verdict, remote_hash, root)
+            return {"action": "backfilled", "mode": verdict, "signals": gather_signals(cwd, root)}
+    return {"action": "noop", "signals": gather_signals(cwd, root)}
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="mode_reconcile")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name in ("resolve", "signals", "reconcile"):
+        sp = sub.add_parser(name)
+        sp.add_argument("--cwd", default=".")
+        sp.add_argument("--root", default=None)
+        if name == "reconcile":
+            sp.add_argument("--mode", choices=[mr.IN_REPO, mr.GLOBAL], default=None)
+    args = ap.parse_args(argv)
+    if args.cmd == "resolve":
+        out = mr.resolve(args.cwd, args.root)
+    elif args.cmd == "signals":
+        out = coalesce(args.cwd, args.root)
+    else:
+        out = reconcile(args.cwd, args.mode, args.root)
+    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
