@@ -68,11 +68,11 @@ The **cast** referenced below: **producer** (the per-issue back-half loop driver
 **Workhorse**), **the-architect** (produces the definition-docs — spec/plan/tasks),
 **review-crew** (all review gates + code review), **test-pilot** (behavioral/browser
 verification). These four are **shipped today** (and run on both Claude Code and Codex, §7).
-**Upcoming heroes:** an **operator** (the outer-loop run engine that drives a queue of
+**Upcoming heroes:** the **showrunner** (the outer-loop run engine that drives a queue of
 work-items to merge-ready PRs), a **backlog/TPM** (owns all GitHub-issue writes — triage,
 decomposition), and a **maintainability guardian** — see the
 [roadmap Project](https://github.com/users/zwrose/projects/1). (The "coordinator" of earlier
-drafts split into the operator + the backlog/TPM.) (The spec/plan/tasks artifact family is
+drafts split into the showrunner + the backlog/TPM.) (The spec/plan/tasks artifact family is
 called **definition-docs** — the docs that *define* a work item — independent of the producing
 plugin's name.)
 
@@ -704,7 +704,115 @@ specifying its conventions here first. (Surfaced by the reviews of 2026-06-14.)
 
 | Deferred convention | What it must define | Owner · tracking |
 | --- | --- | --- |
-| **GitHub issue ↔ work-item schema** | issue body / labels / state conventions; `<work-item>`→issue mapping; the "rendered index/summary" format; how producer & coordinator coordinate writes to one issue | **backlog/TPM** · [#30](https://github.com/zwrose/superheroes/issues/30) |
-| **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **operator** · partly defined by the live-approval gate [#14](https://github.com/zwrose/superheroes/issues/14); the batch/defer contract is TBD |
+| **GitHub issue ↔ work-item schema** | issue body / labels / state conventions; `<work-item>`→issue mapping; the "rendered index/summary" format; how producer & coordinator coordinate writes to one issue | **backlog/TPM** · [#30](https://github.com/zwrose/superheroes/issues/30) · **now specified in §9** |
+| **Owner-interaction / approval-gate contract** | how the owner is prompted (and in approachable pros/cons); where approvals/decisions are recorded; how a walk-away run defers vs. blocks on a needed human decision | **showrunner** · partly defined by the live-approval gate [#14](https://github.com/zwrose/superheroes/issues/14); the batch/defer contract is TBD |
 | **Cleanup / retention / GC** | when merged work branches, finished `issues/<work-item>/` dirs, lock refs, abandoned checkouts, and state-remote branches are reaped (ties to the "without a trace" promise) | [#42](https://github.com/zwrose/superheroes/issues/42) |
-| **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **operator** · [#26](https://github.com/zwrose/superheroes/issues/26) |
+| **Auth / credentials / scopes** | required `gh` token scopes and push rights; credential handling; graceful behavior when auth is missing or insufficient (a routine state for the non-technical owner) | **showrunner** · [#26](https://github.com/zwrose/superheroes/issues/26) |
+
+---
+
+## 9. GitHub issue ↔ work-item schema
+
+The data contract mapping a **GitHub issue ↔ a band work-item** — the Human tier of §4.1.
+The **showrunner** reads issues as runnable work-items; the **backlog/TPM** (#28) writes
+them. Authoritative state lives in git (definition-doc `gates.review`, §3.1) and the
+control-plane (`checkpoint.json`, §4.3); **the issue is a rendered projection of that
+state, never its source** — no control flow reads from the issue. (Promoted from §8 ahead
+of its owning hero because the showrunner's read-path makes it a root dependency, #30.)
+
+### 9.1 Mapping (1:1, slug-anchored)
+
+- One work-item ↔ one GitHub issue. The join key is the **frozen `<work-item>` slug**
+  (§6.1); the **issue number is a linked attribute** (`issue:` in the definition-doc
+  frontmatter §3.1, the queue item §4.3, and `checkpoint.json`), **not** the path segment.
+- A work-item may exist **pre-issue** (`issue: null`, §6.1); the TPM later files the issue
+  and back-links the number — **nothing is renamed**. An owner-filed issue becomes a
+  work-item when discovery/TPM mints its slug.
+
+### 9.2 Body = owner/TPM prose + one managed block
+
+- **Prose** (title, description, acceptance) — human-authored.
+- **One machine-managed block**, HTML-comment-fenced (the §2.2 provenance-comment
+  pattern), the only region a resolver parses deterministically:
+
+  ```
+  <!-- superheroes-workitem: schemaVersion=1 workItem=<slug> size=<s|m|l> phase=<discovery|plan|tasks|build|verify|ship> -->
+  ```
+
+  followed by a human-readable rendered roll-up (per-doc gate states, linked PR
+  `{number,url,state}`, latest-readout pointer). The prose around the block is free.
+
+### 9.3 Write coordination = partition by surface (no lock)
+
+- The **backlog/TPM is the sole writer of the issue body** (issue-write authority, #28),
+  including the managed block.
+- The **showrunner/producer never writes the body**; it surfaces run state by **posting
+  comments** (the parked-PR handoff readout, NOTIFYs) and **best-effort labels** (§9.4).
+- Single-writer body + append-only comments ⇒ **no clobber** — the §8 "how producer &
+  coordinator coordinate writes to one issue" question, answered by partitioning the
+  surface rather than locking it.
+
+### 9.4 Labels = owner-facing lane, best-effort
+
+Beyond the taxonomy (`area:*`, `enhancement`/`chore`, `spike`, milestone), a small
+**`state:` lane** projects where a work-item is for the owner — `state:queued`,
+`state:running`, `state:parked`, `state:blocked`, `state:merged` — plus a `size:` mirror
+of §6.4. Labels are a **projection reconciled from authoritative state, never trusted for
+control flow** (a stale label is cosmetic). The TPM sets labels; the showrunner may set its
+own work-item's `state:running`/`state:parked`, reconciled on entry.
+
+### 9.5 Issue open/closed ↔ lifecycle
+
+The issue stays **open** across the work-item's life. It is **closed on merge** (the
+owner's action — merge is owner authority, §4.7) or when the owner drops the work-item.
+**The showrunner never closes an issue** (closing implies done = merge). Reopening
+reactivates the work-item.
+
+### 9.6 Schema versioning + reference impl
+
+The managed block carries `schemaVersion`; an unknown version **fails closed** (§6.4). The
+render/parse is a small library built by the **first consumer** (the showrunner's read-path
+needs parse; the TPM's write-path needs render) — proportionate, not gold-plated.
+
+---
+
+## 10. Orchestration model (the showrunner-era contract)
+
+Decided by the engine spike (#37): the band's outer loop runs on **native Workflows over
+the existing durable substrate (§4)**. Three contracts follow that constrain every hero's
+orchestration going forward.
+
+### 10.1 Scripts orchestrate; leaf agents do single-purpose work
+
+A Workflow **worker (an `agent()` step) is a leaf** — it has **no Agent/Task tool** and
+**cannot dispatch its own subagents** (verified empirically, including with a full-tool
+agent type). Therefore **all fan-out lives in the Workflow script**, never inside a worker:
+a panel of reviewers is `parallel([…])` in the script; a producer's build/review/verify
+phases are script steps. A hero that fans out (review-code's panel, the spec/plan/tasks
+review trio, test-pilot, subagent-driven-development) is **re-expressed as Workflow control
+flow that reuses the hero's libraries and leaf agents** — never wrapped as one opaque worker
+(which could not launch its fan-out). The hero's pure decision functions
+(`ci_loop.decide`, `freshness.decide`, `ship_gate.decide`, `recover.reconcile`, …) and
+substrate libraries carry over **unchanged**.
+
+### 10.2 Durability is the substrate's, not the engine's
+
+A Workflow's native resume (`resumeFromRunId`) is **same-session only** and **not
+load-bearing**. Cross-crash / cross-session / post-compaction durability is owned by the
+**engine-agnostic substrate** (§4): the per-issue Workflow is a **relaunch-and-reconcile
+driver** — on every entry it reads disk-state, recomputes gates from definition-doc
+frontmatter, and **skips completed steps** (`recover.reconcile`; the reality-wins rule
+§4.7). It takes **no load-bearing launch arguments** — it reconciles its inputs from the
+control-plane store keyed by `<work-item>`.
+
+### 10.3 Two layers: a controller session around the per-issue Workflow
+
+A background Workflow **cannot take live owner input mid-run**. So owner interaction lives
+in a **controller layer** (a session): it owns the queue, self-paces across context/usage
+limits, launches/relaunches the per-issue Workflow, and holds the **live owner-approval
+gate** (#14) — unattended, the run **parks** and never ships. The per-issue Workflow is the
+deterministic, gated, background chain that parks at every gate. **Auditability is
+structural:** each step is a validated, logged record (gate / confidence / assumptions)
+appended durably (`events.jsonl`, §4.6); a step that surfaces a **material assumption or
+low confidence parks rather than proceeds** — where an "assumption" is a *genuine
+unverified premise*, not a status note.

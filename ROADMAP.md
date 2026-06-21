@@ -7,7 +7,7 @@ your behalf, so a product-minded owner can live in the *what* while the heroes h
 The team today fields **the-architect** (spec → plan → tasks), **review-crew** (a five-specialist
 review panel + the spec/plan/tasks trio), **test-pilot** (behavioral proof in a real browser), and
 **workhorse** (the producer — Build → Verify → Ship to a ready-for-review PR; it never merges).
-Coming: an **operator** + **backlog/TPM** to run a queue of work autonomously, a **maintainability
+Coming: the **showrunner** + a **backlog/TPM** to run a queue of work autonomously, a **maintainability
 guardian**, and greenfield / productionize onramps.
 
 ## Where the plan lives
