@@ -692,6 +692,37 @@ The shared layer is the contract; the host-adaptation layer is a read-only map.
 Adding complexity to guarantee cross-host parity for edge cases is explicitly out of
 scope — the two hosts load the same skills, and the tool maps are the entire seam.
 
+### 7.4 SessionStart context bootstrap (Claude)
+
+A session started **directly from a slash command** (e.g. `/superheroes:architect-discovery`
+in a fresh worktree — superheroes' usual entry path) does **not** receive the harness's
+auto-injected context layer that a plain chat start gets: project `CLAUDE.md`, the
+`MEMORY.md` head, and the env block are all absent, and nothing expands the §7.1 host-map
+pointer's `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`. The only channel that survives the spawn
+is a `SessionStart` hook's `additionalContext`.
+
+On Claude Code, `hooks/session_start.py` (wired in `hooks.json` with `--host claude`) closes
+that gap. On every source — `startup`, `resume`, `clear`, `compact` — it injects a
+best-effort bootstrap block assembled by `lib/session_context.py`:
+
+- the **resolved absolute** plugin root + host-tool-map path, so the §7.1 pointer-line *Read*
+  lands on the real `hosts/<host>-tools.md` even when no variable expands;
+- the project `CLAUDE.md` chain, the user `~/.claude/CLAUDE.md`, an env block (date + git
+  email), and the auto-memory `MEMORY.md` head (keyed to the **main** repo, shared across
+  worktrees) — parity with a native start.
+
+It is **fail-soft**: each source is gathered independently; a missing/erroring one is omitted
+with a one-line stderr breadcrumb (never the file contents) and the hook always exits 0, never
+breaking a session. The post-compaction workhorse resume-brief is **additive** — appended to
+the same `additionalContext` only on `compact` with a current work-item; it never gates the
+bootstrap. **Codex** wires no `SessionStart` hook, so it gets no bootstrap (out of scope).
+
+Scope boundary: this fixes the host-map **Read** (model-resolved, so an injected absolute path
+is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib/` helpers through
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`, which the Bash tool does not expand — is a *different*
+layer that context injection cannot fix; it is tracked separately
+([#93](https://github.com/zwrose/superheroes/issues/93)) and the seam form here is unchanged.
+
 ---
 
 ## 8. Deferred conventions
