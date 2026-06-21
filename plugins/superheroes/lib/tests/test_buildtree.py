@@ -68,3 +68,9 @@ def test_record_unknown_schema_raises(tmp_path):
     f.write_text('{"schemaVersion": 999, "worktrees": []}')
     with pytest.raises(buildtree.RecordSchemaError):
         buildtree.record_read(str(f))
+# append to plugins/superheroes/lib/tests/test_buildtree.py
+def test_recognize_union():
+    assert buildtree.recognize(registered=True, on_record=False) is True   # crash-orphan
+    assert buildtree.recognize(registered=False, on_record=True) is True    # branch-less
+    assert buildtree.recognize(registered=True, on_record=True) is True
+    assert buildtree.recognize(registered=False, on_record=False) is False  # owner dir

@@ -85,3 +85,12 @@ def record_remove(record_file, path):
     """Idempotent remove by path."""
     record_write(record_file,
                  [w for w in record_read(record_file) if w.get("path") != path])
+
+
+# append to plugins/superheroes/lib/buildtree.py
+def recognize(*, registered, on_record):
+    """UFR-7: a directory is an actionable build worktree iff it is structurally
+    recognized (git-registered at a deterministic FR-1 path) OR present on the durable
+    record. Pure — the caller pre-computes `registered`/`on_record`; the record admits
+    only structurally-recognized worktrees, so it never lets an arbitrary directory in."""
+    return bool(registered) or bool(on_record)
