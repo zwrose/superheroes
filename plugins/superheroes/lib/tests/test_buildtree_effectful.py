@@ -221,3 +221,68 @@ def test_plan_sweep_excludes_open_and_unknown(tmp_path, monkeypatch):
                u["branch"]: {"pr_state": "unknown", "pr_head_oid": None}}
     cands = buildtree.plan_sweep(repo, pr_info, active_work_item="none")
     assert cands == []
+
+
+def test_teardown_incomplete_when_worktree_remove_fails(tmp_path, monkeypatch):
+    # UFR-5: `git worktree remove` itself fails and the leaf is still present -> incomplete
+    # (removed=False); the dangling worktree must be reported, never silently dropped.
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    real_git = buildtree._git
+    monkeypatch.setattr(buildtree, "_git", lambda cwd, *a:
+                        (1, "") if a[:1] == ("worktree",) else real_git(cwd, *a))
+    res = buildtree.teardown(repo, r["path"], r["branch"], buildtree.REMOVE_AND_DELETE)
+    assert res["removed"] is False and res["incomplete"] is True and res["ok"] is False
+    assert os.path.isdir(r["path"])          # preserved, not silently dropped
+
+
+def test_plan_sweep_skips_branchless_worktree(tmp_path, monkeypatch):
+    # code-001: a managed-root worktree with no branch (detached HEAD) is skipped, not a crash.
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    real_list = buildtree.list_worktrees
+    def fake_list(cwd):
+        rows = real_list(cwd)
+        for row in rows:
+            if row["path"] == a["path"]:
+                row["branch"] = None
+        return rows
+    monkeypatch.setattr(buildtree, "list_worktrees", fake_list)
+    assert buildtree.plan_sweep(repo, {}, active_work_item="none") == []
+
+
+def test_reclaim_create_survives_record_write_failure(tmp_path, monkeypatch):
+    # premortem-001: a failed record write (OSError) must NOT break create's never-raises
+    # contract -> still CREATED; the worktree is git-registered and the record self-heals.
+    repo = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(buildtree, "record_add",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r["outcome"] == buildtree.CREATED and os.path.isdir(r["path"])
+
+
+def test_reap_one_survives_record_remove_failure(tmp_path, monkeypatch):
+    # premortem-002: a failed record cleanup (OSError) after a successful teardown must NOT
+    # raise -> reap_one still returns the decision/result dict.
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    head = buildtree.rev_parse(repo, a["branch"])
+    monkeypatch.setattr(buildtree, "record_remove",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", head)
+    assert out["decision"] == buildtree.REMOVE_AND_DELETE
+    assert out["result"]["removed"] and not out["result"]["incomplete"]
+
+
+def test_plan_sweep_excludes_active_by_slug(tmp_path, monkeypatch):
+    # test-002: reach the slug-exclusion clause (wi == active_work_item) with real data.
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    pr_info = {a["branch"]: {"pr_state": "merged",
+                            "pr_head_oid": buildtree.rev_parse(repo, a["branch"])}}
+    assert buildtree.plan_sweep(repo, pr_info, active_work_item="wi-a") == []
+
+
+def test_split_leaf_no_hyphen():
+    # test-003: the no-hyphen branch returns (leaf, "").
+    assert buildtree.split_leaf("/x/plainleaf") == ("plainleaf", "")

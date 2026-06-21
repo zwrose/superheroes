@@ -87,6 +87,29 @@ def record_remove(record_file, path):
                  [w for w in record_read(record_file) if w.get("path") != path])
 
 
+def _record_add_safe(rec_file, entry):
+    """Never-raises record write for the effectful shell: a failed write (OSError) is
+    swallowed — the record is an accountability sidecar that self-heals on the next
+    sweep, and the worktree is already git-registered. A forward-version record
+    (RecordSchemaError) returns False so the caller fails closed (GATE_FAILCLOSED)."""
+    try:
+        record_add(rec_file, entry)
+        return True
+    except RecordSchemaError:
+        return False
+    except OSError:
+        return True
+
+
+def _record_remove_safe(rec_file, path):
+    """Never-raises record cleanup: swallow OSError (self-heals next sweep) and
+    RecordSchemaError (forward-version record; the teardown already succeeded)."""
+    try:
+        record_remove(rec_file, path)
+    except (OSError, RecordSchemaError):
+        pass
+
+
 # append to plugins/superheroes/lib/buildtree.py
 def recognize(*, registered, on_record):
     """UFR-7: a directory is an actionable build worktree iff it is structurally
@@ -203,11 +226,15 @@ def is_dirty(path):
 
 
 def branch_exists(cwd, branch):
+    if not branch:
+        return False
     rc, _ = _git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch)
     return rc == 0
 
 
 def rev_parse(cwd, branch):
+    if not branch:
+        return None
     rc, out = _git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch)
     return out.strip() if rc == 0 and out.strip() else None
 
@@ -243,17 +270,23 @@ CREATED = "created"
 def create(cwd, path, branch, rec_file, work_item, content_hash, *, existing_branch):
     """Effectful, internal to reclaim_or_create (kept separate for direct testing —
     the devserver.start split). `git worktree add` onto an absent/empty leaf, then
-    record (FR-9). If the add itself fails (e.g. a stale/locked registry entry the
-    filesystem-only emptiness check can't see) -> GATE_FAILCLOSED, never raises."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    record (FR-9). Never raises: an uncreatable parent, a failed `git worktree add`, or
+    a forward-version record (RecordSchemaError) all return GATE_FAILCLOSED; a failed
+    record write (OSError) is swallowed (the worktree is git-registered; the record
+    self-heals)."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except OSError:
+        return {"outcome": GATE_FAILCLOSED, "path": path, "branch": branch}
     if existing_branch:
         rc, _ = _git(cwd, "worktree", "add", path, branch)
     else:
         rc, _ = _git(cwd, "worktree", "add", "-b", branch, path)
     if rc != 0:
         return {"outcome": GATE_FAILCLOSED, "path": path, "branch": branch}
-    record_add(rec_file, {"workItem": work_item, "contentHash": content_hash,
-                          "branch": branch, "path": path})
+    if not _record_add_safe(rec_file, {"workItem": work_item, "contentHash": content_hash,
+                                       "branch": branch, "path": path}):
+        return {"outcome": GATE_FAILCLOSED, "path": path, "branch": branch}
     return {"outcome": CREATED, "path": path, "branch": branch}
 
 
@@ -277,8 +310,9 @@ def reclaim_or_create(cwd, work_item, content_hash, *, root=None, store_root=Non
     if registered and leaf_present and not prunable:
         if is_dirty(path):
             return {"outcome": PRESERVE_NOTIFY, "path": path, "branch": branch}
-        record_add(rec_file, {"workItem": work_item, "contentHash": content_hash,
-                              "branch": branch, "path": path})
+        if not _record_add_safe(rec_file, {"workItem": work_item, "contentHash": content_hash,
+                                           "branch": branch, "path": path}):
+            return {"outcome": GATE_FAILCLOSED, "path": path, "branch": branch}
         return {"outcome": REUSED, "path": path, "branch": branch}
 
     if registered and (prunable or not leaf_present):
@@ -332,7 +366,10 @@ def plan_sweep(cwd, pr_info, *, active_work_item, active_path=None,
     if wts is None:
         return []
     rec_file = record_path(cwd, store_root=store_root)
-    record = record_read(rec_file)
+    try:
+        record = record_read(rec_file)
+    except RecordSchemaError:
+        return []   # forward-version record -> fail closed (no sweep)
     rec_paths = {e.get("path") for e in record if e.get("path")}
     disk_paths = {w.get("path") for w in wts}
     mroot = managed_root(root)
@@ -341,8 +378,8 @@ def plan_sweep(cwd, pr_info, *, active_work_item, active_path=None,
     rec = plan_reconcile(disk, record)
     for e in rec["to_record"]:
         wi, ch = split_leaf(e["path"])
-        record_add(rec_file, {"workItem": wi, "contentHash": ch,
-                              "branch": e.get("branch"), "path": e["path"]})
+        _record_add_safe(rec_file, {"workItem": wi, "contentHash": ch,
+                                    "branch": e.get("branch"), "path": e["path"]})
     candidates = []
     for c in rec["candidates"]:
         path, branch = c.get("path"), c.get("branch")
@@ -352,6 +389,8 @@ def plan_sweep(cwd, pr_info, *, active_work_item, active_path=None,
             continue
         if path == active_path or wi == active_work_item:   # live-worktree invariant
             continue
+        if not branch:
+            continue   # branch-less/detached managed worktree -> can't reap-evaluate; preserve
         info = pr_info.get(branch, {})
         pr_state, pr_head = info.get("pr_state", "unknown"), info.get("pr_head_oid")
         dirty = is_dirty(path) if os.path.isdir(path) else False
@@ -376,5 +415,5 @@ def reap_one(cwd, path, branch, pr_state, pr_head_oid, *, store_root=None):
     decision = reap_decision(pr_state, dirty=dirty, branch_deletable=deletable)
     result = teardown(cwd, path, branch, decision)
     if result.get("removed") and not result.get("incomplete"):
-        record_remove(record_path(cwd, store_root=store_root), path)
+        _record_remove_safe(record_path(cwd, store_root=store_root), path)
     return {"decision": decision, "result": result}
