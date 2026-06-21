@@ -110,9 +110,12 @@ def probe(root, run=None):
             return p  # not signed in (a structured outcome, not an error)
         p["authenticated"] = True
 
-        rc, out, _err = _run(run, ["gh", "api", "user", "--jq", ".login"], cwd=root)
-        if rc == 0 and out.strip():
-            p["account"] = out.strip()  # best-effort, message-only
+        try:  # genuinely best-effort: a failed/slow account lookup is message-only and
+            rc, out, _err = _run(run, ["gh", "api", "user", "--jq", ".login"], cwd=root)
+            if rc == 0 and out.strip():
+                p["account"] = out.strip()
+        except Exception:  # must NOT fail the access check closed over a cosmetic read
+            pass
 
         rc, _out, _err = _run(run, ["git", "remote", "get-url", "origin"], cwd=root)
         if rc != 0:

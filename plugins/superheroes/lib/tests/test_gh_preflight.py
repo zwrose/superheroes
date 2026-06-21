@@ -46,8 +46,11 @@ def test_decide_no_remote():
 
 
 def test_decide_indeterminate_on_error():
+    # valid permissions + a set error: without the error gate this probe would PASS
+    # (perms.push is True), so asserting indeterminate uniquely pins error-precedence.
     probe = {"gh_installed": True, "authenticated": True, "remote_configured": True,
-             "permissions": None, "error": "HTTP 503 from api.github.com"}
+             "permissions": {"push": True, "pull": True},
+             "error": "HTTP 503 from api.github.com"}
     ok, cause, _ = gh_preflight.decide(probe, required="write")
     assert ok is False and cause == "indeterminate"
 
@@ -151,6 +154,7 @@ def test_probe_not_authenticated(monkeypatch):
     monkeypatch.setattr(gh_preflight.shutil, "which", lambda _name: "/usr/bin/gh")
     p = gh_preflight.probe(".", run=make_run({"auth status": FakeProc(1, stderr="no")}))
     assert p["gh_installed"] is True and p["authenticated"] is False
+    assert p["error"] is None  # structured exit, not an error — decide() relies on this
 
 
 def test_probe_no_remote(monkeypatch):
@@ -159,6 +163,7 @@ def test_probe_no_remote(monkeypatch):
     resp["remote get-url"] = FakeProc(2, stderr="No such remote 'origin'")
     p = gh_preflight.probe(".", run=make_run(resp))
     assert p["authenticated"] is True and p["remote_configured"] is False
+    assert p["error"] is None  # structured exit, not an error — decide() relies on this
 
 
 def test_probe_write_present(monkeypatch):
