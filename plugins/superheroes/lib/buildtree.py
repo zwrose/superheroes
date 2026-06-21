@@ -336,8 +336,10 @@ def teardown(cwd, path, branch, decision):
     (so a partial failure leaves a still-recognized worktree, never a branch-less one).
     Never `--force` (UFR-1 is enforced upstream by reap_decision). Idempotent and never
     raises (the devserver.teardown contract). Returns {ok, removed, branch_deleted,
-    incomplete}; `incomplete` (UFR-5) means the worktree went but the branch delete
-    failed — the caller keeps it on the record and notifies."""
+    incomplete}; `incomplete` (UFR-5) flags a partial
+    teardown the caller must keep on the record and notify about — either `git worktree
+    remove` failed and the leaf is still present (removed False), or the worktree was removed
+    but `git branch -D` failed (removed True, branch_deleted False)."""
     if decision not in (REMOVE_KEEP_BRANCH, REMOVE_AND_DELETE):
         return {"ok": True, "removed": False, "branch_deleted": False, "incomplete": False}
     rc, _ = _git(cwd, "worktree", "remove", path)

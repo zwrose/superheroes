@@ -51,9 +51,6 @@ def test_split_leaf_keeps_hyphenated_work_item():
     assert ch == "deadbeefdeadbeef"
 
 
-import pytest
-
-
 def _setup(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "wt"))
@@ -286,3 +283,25 @@ def test_plan_sweep_excludes_active_by_slug(tmp_path, monkeypatch):
 def test_split_leaf_no_hyphen():
     # test-003: the no-hyphen branch returns (leaf, "").
     assert buildtree.split_leaf("/x/plainleaf") == ("plainleaf", "")
+
+
+def test_plan_sweep_failcloses_on_forward_version_record(tmp_path, monkeypatch):
+    # test-001: a forward-version worktrees.json makes record_read raise RecordSchemaError;
+    # plan_sweep must fail closed with [] (no candidates), never crash.
+    repo = _setup(tmp_path, monkeypatch)
+    buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    rec_file = buildtree.record_path(repo)
+    os.makedirs(os.path.dirname(rec_file), exist_ok=True)
+    with open(rec_file, "w") as fh:
+        fh.write('{"schemaVersion": 999, "worktrees": []}')
+    assert buildtree.plan_sweep(repo, {}, active_work_item="none") == []
+
+
+def test_create_makedirs_failure_gate_failclosed(tmp_path, monkeypatch):
+    # test-002: an OSError creating the leaf's parent dir -> GATE_FAILCLOSED, never raises.
+    repo = _setup(tmp_path, monkeypatch)
+    def _boom(*a, **k):
+        raise OSError("no mkdir")
+    monkeypatch.setattr(buildtree.os, "makedirs", _boom)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r["outcome"] == buildtree.GATE_FAILCLOSED

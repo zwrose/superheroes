@@ -120,7 +120,10 @@ the build worktree's lifecycle via `buildtree` (`$LIB/buildtree.py`). Mint the b
   deterministic home is `~/.superheroes-worktrees/<checkout-key>/<work-item>-<content-hash>`).
 - `PRESERVE_NOTIFY` (a dirty existing tree, or a non-worktree directory occupying the path)
   → **GATE**: surface the path for the owner to resolve; never clobber (UFR-1).
-- `GATE_FAILCLOSED` (`git worktree add` itself failed) → **GATE**.
+- `GATE_FAILCLOSED` (`git worktree add` itself failed, or the durable record carries an
+  unknown future `schemaVersion` — in which case the worktree may already be git-registered
+  and is structurally recognized, so it reclaims cleanly once the schema conflict is
+  resolved) → **GATE**.
 
 **Backstop sweep + cleanup (FR-3/FR-4/FR-5/FR-10/FR-11).** On entry, after the tasks-gate
 check, run `buildtree.plan_sweep(ROOT, pr_info, active_work_item=WORK_ITEM,
