@@ -154,6 +154,116 @@ def test_resolve_artifact_reads_follow_the_artifact(tmp_path):
     assert mr.resolve_artifact(str(tmp_path), str(new_in), str(new_g), root=root) == str(new_in)
 
 
+def test_ufr7_interrupted_write_leaves_record_absent_not_torn(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.ensure_project_store(str(tmp_path), root=root)
+    import store_core as sc
+    def boom(path, text, **kw):
+        raise OSError("simulated mid-write abort")
+    monkeypatch.setattr(sc, "atomic_write", boom)
+    try:
+        mr.write_registry(str(tmp_path), mr.IN_REPO, None, root=root)
+    except OSError:
+        pass
+    assert not os.path.exists(mr.registry_path(str(tmp_path), root))  # absent, never half-written
+
+
+def test_ufr3_corrupt_registry_repaired_from_consistent_evidence(tmp_path, monkeypatch):
+    # UFR-3 repair clause composed end-to-end: a corrupt on-disk record + consistent evidence
+    # → the resolver treats the record as absent and repairs it from the evidence.
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("x")  # consistent in-repo evidence
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    root = str(tmp_path / "store")
+    d = mr.ensure_project_store(str(tmp_path), root=root)
+    import store_core as sc
+    sc.atomic_write(os.path.join(d, "registry.json"),
+                    json.dumps({"schemaVersion": 1, "storageMode": "bogus"}))  # parseable but invalid → corrupt
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["mode"] == mr.IN_REPO and r["source"] == "backfilled"            # repaired, not trusted
+    assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO
+
+
+def test_ufr8_chosen_but_unrecorded_reasks_and_keeps_calibration(tmp_path, monkeypatch):
+    import mode_reconcile as rc
+    import store_core as sc
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("keep")  # review-crew in-repo
+    g = str(tmp_path / "tp"); entry = os.path.join(g, "entries", "e1"); os.makedirs(entry)
+    open(os.path.join(entry, "profile.md"), "w").write("tpkeep")
+    sc.write_pointer(g, sc.derive_identifiers(str(tmp_path))["gitdir_hash"], "e1")  # test-pilot global → genuinely ambiguous
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: g if n == "test-pilot" else str(tmp_path / "x"))
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "write_registry", lambda *a, **k: None)  # the owner's choice never lands durably
+    rc.reconcile(str(tmp_path), chosen_mode=mr.IN_REPO, root=root)
+    assert mr.read_registry(str(tmp_path), root=root) is None                  # no unrecorded mode acted on
+    assert (tmp_path / ".claude" / "review-profile.md").read_text() == "keep"   # calibration intact
+    assert open(os.path.join(entry, "profile.md")).read() == "tpkeep"           # other calibration intact
+    # the choice was not recorded → the owner is asked again (the disagreement still surfaces)
+    assert any(s["type"] == "disagreement" for s in rc.gather_signals(str(tmp_path), root=root))
+
+
+def test_nf6_second_writer_skips_and_one_valid_record_lands(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.ensure_project_store(str(tmp_path), root=root)
+    with mr.config_lock(str(tmp_path), root=root) as got:
+        assert got is True
+        assert mr.write_registry(str(tmp_path), mr.GLOBAL, None, root=root) is None  # contended → skip, no block
+    assert mr.read_registry(str(tmp_path), root=root) is None         # the skipped write left no torn/partial record
+    rec = mr.write_registry(str(tmp_path), mr.GLOBAL, None, root=root)  # lock free now → the write lands
+    assert rec["storageMode"] == mr.GLOBAL                             # exactly one valid record (UFR-6 positive clause)
+    assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.GLOBAL
+
+
+def test_nf6_concurrent_store_creation_converges(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    a = mr.ensure_project_store(str(tmp_path), root=root)
+    b = mr.ensure_project_store(str(tmp_path), root=root)  # second "worktree" first-touch
+    assert a == b and os.path.isdir(os.path.join(a, ".git"))
+
+
+def test_nf6_holder_death_releases_lock_and_next_resolve_backfills(tmp_path, monkeypatch):
+    # The flock-over-file_lock win (UFR-7 "the next resolution finishes the work"): a holder
+    # that DIES leaves no stuck lock — the OS releases it — so the next resolve backfills.
+    import sys, time
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("x")  # consistent in-repo evidence
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    root = str(tmp_path / "store")
+    mr.ensure_project_store(str(tmp_path), root=root)
+    lock = os.path.join(mr.project_store_dir(str(tmp_path), root), "config.lock")
+    held = lock + ".held"
+    child = subprocess.Popen([sys.executable, "-c",
+        "import fcntl,os,time;"
+        f"fd=os.open({lock!r},os.O_CREAT|os.O_RDWR,0o644);fcntl.flock(fd,fcntl.LOCK_EX);"
+        f"open({held!r},'w').close();time.sleep(30)"])
+    try:
+        deadline = time.time() + 5
+        while not os.path.exists(held) and time.time() < deadline:
+            time.sleep(0.02)
+        assert os.path.exists(held)
+        with mr.config_lock(str(tmp_path), root=root) as got:
+            assert got is False                # genuinely held by the LIVE child
+    finally:
+        child.kill(); child.wait()             # holder DIES → OS releases the flock
+    # the dead holder left no stuck lock (unlike file_lock's TTL): the next resolve acquires
+    # the freed flock and backfills — the recovery file_lock could not give until its TTL.
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["mode"] == mr.IN_REPO and r["authoritative"] is True
+    assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO
+
+
+def test_nf1_config_key_deterministic_golden_for_remote(tmp_path):
+    # NF1: a pinned golden literal (not re-derived through the funcs under test) catches
+    # any determinism/truncation drift in the remote-keyed config key.
+    _init_repo(tmp_path); subprocess.run(["git", "-C", str(tmp_path), "remote", "add",
+                                          "origin", "git@github.com:o/r.git"], check=True)
+    assert mr.config_key(str(tmp_path)) == "6d5c8a7b6c8ca477"
+
+
 def test_evidence_agrees_with_hero_resolve_for_repo_root_cwd(tmp_path, monkeypatch):
     # Scope is deliberately a repo-root cwd: the probe anchors in-repo at the repo root while
     # review_store anchors at cwd, so they intentionally diverge for a sub-dir cwd (the probe is
