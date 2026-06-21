@@ -94,3 +94,28 @@ def recognize(*, registered, on_record):
     record. Pure — the caller pre-computes `registered`/`on_record`; the record admits
     only structurally-recognized worktrees, so it never lets an arbitrary directory in."""
     return bool(registered) or bool(on_record)
+
+
+# append to plugins/superheroes/lib/buildtree.py
+PRESERVE_NOTIFY = "preserve_notify"
+GATE_FAILCLOSED = "gate_failclosed"
+SKIP_OPEN = "skip_open"
+REMOVE_KEEP_BRANCH = "remove_keep_branch"
+REMOVE_AND_DELETE = "remove_and_delete"
+
+
+def reap_decision(pr_state, *, dirty, branch_deletable):
+    """Pure tiered/guard gate. Precedence: the dirty guard (UFR-1) wins over every tier
+    — never reap a dirty-or-undeterminable worktree, even on merge. Then the PR-state
+    tiers: merged -> full reap (FR-6) unless the branch must be preserved (UFR-6);
+    closed-unmerged -> remove the worktree, keep the branch (FR-7); open/parked -> skip
+    (UFR-3); unknown/indeterminate -> gate (UFR-2)."""
+    if dirty:
+        return PRESERVE_NOTIFY
+    if pr_state == "merged":
+        return REMOVE_AND_DELETE if branch_deletable else REMOVE_KEEP_BRANCH
+    if pr_state == "closed":
+        return REMOVE_KEEP_BRANCH
+    if pr_state == "open":
+        return SKIP_OPEN
+    return GATE_FAILCLOSED

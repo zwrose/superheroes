@@ -74,3 +74,25 @@ def test_recognize_union():
     assert buildtree.recognize(registered=False, on_record=True) is True    # branch-less
     assert buildtree.recognize(registered=True, on_record=True) is True
     assert buildtree.recognize(registered=False, on_record=False) is False  # owner dir
+# append to plugins/superheroes/lib/tests/test_buildtree.py
+def test_reap_decision_dirty_wins_over_every_tier():
+    for pr in ("merged", "closed", "open", "unknown"):
+        assert buildtree.reap_decision(pr, dirty=True, branch_deletable=True) == \
+            buildtree.PRESERVE_NOTIFY
+
+
+def test_reap_decision_merged_tier():
+    assert buildtree.reap_decision("merged", dirty=False, branch_deletable=True) == \
+        buildtree.REMOVE_AND_DELETE
+    # committed-ahead / undeterminable -> preserve the branch (UFR-6)
+    assert buildtree.reap_decision("merged", dirty=False, branch_deletable=False) == \
+        buildtree.REMOVE_KEEP_BRANCH
+
+
+def test_reap_decision_closed_and_open_and_unknown():
+    assert buildtree.reap_decision("closed", dirty=False, branch_deletable=False) == \
+        buildtree.REMOVE_KEEP_BRANCH                         # FR-7
+    assert buildtree.reap_decision("open", dirty=False, branch_deletable=False) == \
+        buildtree.SKIP_OPEN                                  # UFR-3
+    assert buildtree.reap_decision("unknown", dirty=False, branch_deletable=False) == \
+        buildtree.GATE_FAILCLOSED                            # UFR-2
