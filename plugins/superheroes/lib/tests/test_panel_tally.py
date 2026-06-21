@@ -115,3 +115,32 @@ def test_present_deferred_excludes_different_issue_at_same_location():
     deferred = {PT._identity(_f("a.py", 1, "bug one", "Important")): "Important"}
     other = _f("a.py", 1, "a different bug", "Important")
     assert PT.present_deferred([other], deferred) == 0
+
+
+def _terminal(gate="blocking", present=0, deferred=0, fix="completed", rnd=1, mx=7, brk=False):
+    return PT.decide_terminal(gate, present, deferred, fix, rnd, mx, brk)[0]
+
+
+def test_terminal_cannot_certify_wins_over_everything():
+    # coverage gap dominates even at the cap with a failed fix
+    assert _terminal(gate="cannot-certify", present=2, deferred=0, fix="failed", rnd=7, mx=7) == "cannot-certify"
+
+
+def test_terminal_fix_failed_is_halted_before_loop_state():
+    assert _terminal(gate="blocking", present=1, deferred=0, fix="failed") == "halted"
+
+
+def test_terminal_clean_when_no_blockers():
+    assert _terminal(gate="clean", present=0, deferred=0) == "clean"
+
+
+def test_terminal_continue_when_nondeferred_blockers_and_under_cap():
+    assert _terminal(gate="blocking", present=2, deferred=0, rnd=1, mx=7) == "continue"
+
+
+def test_terminal_clean_with_skips_when_all_blockers_deferred():
+    assert _terminal(gate="blocking", present=2, deferred=2, rnd=1, mx=7) == "clean-with-skips"
+
+
+def test_terminal_halted_at_cap_with_nondeferred_blockers():
+    assert _terminal(gate="blocking", present=2, deferred=0, rnd=7, mx=7) == "halted"

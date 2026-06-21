@@ -124,3 +124,40 @@ def present_deferred(compiled, deferred_set):
         if SEV_RANK.get(f.get("severity"), 99) >= SEV_RANK.get(deferred_sev, 99):
             n += 1
     return n
+
+
+# ── terminal decision (FR-8/9): strict precedence, delegating to loop_state ──
+_ACTION_TO_TERMINAL = {
+    "review": "continue",
+    "exit_clean": "clean",
+    "exit_skipped": "clean-with-skips",
+    "halt": "halted",
+}
+_TERMINAL_TO_ACTION = {
+    "continue": "review",
+    "clean": "exit_clean",
+    "clean-with-skips": "exit_skipped",
+    "cannot-certify": "halt",
+    "halted": "halt",
+}
+
+
+def _terminal_to_action(terminal):
+    """Map the panel terminal to a loop_state-vocabulary action so the durable record stays
+    readable through review_result.read_result's closed allow-list (the precise terminal rides
+    in the verdict's own field + the record's reason)."""
+    return _TERMINAL_TO_ACTION.get(terminal, "halt")
+
+
+def decide_terminal(gate, present_blocking, present_deferred_count, fix_status, rnd, max_rounds, breaker_halt):
+    """FR-9 precedence (first match wins): (1) cannot-certify; (2) halted on a failed fix step;
+    (3) loop_state's cap-halt / clean-with-skips / clean / continue. Never returns `clean` while
+    coverage is incomplete or a non-deferred blocker is unresolved."""
+    if gate == "cannot-certify":
+        return "cannot-certify", "a reviewer did not complete after its retry — coverage not certified"
+    if fix_status == "failed":
+        return "halted", "the fix step did not complete (failed or timed out)"
+    blocking_fixed = max(0, present_blocking - present_deferred_count)
+    action, _mandatory, reason = loop_state.decide(
+        blocking_fixed, present_deferred_count, rnd, max_rounds, bool(breaker_halt))
+    return _ACTION_TO_TERMINAL[action], reason
