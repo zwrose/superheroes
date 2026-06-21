@@ -83,6 +83,24 @@ surface; never resume unguarded, never silent-wedge.
 
 ### 0.3 Reconcile world → resume or start fresh
 
+**0.3.0 GitHub access preflight (fail-closed) — before any GitHub world-read.** Bind the
+events path early — `paths = control_plane.paths(ROOT, WORK_ITEM)`; `events =
+paths["events"]` — then run the access preflight **first in 0.3**, ahead of the `gh pr list`
+world-read below and worktree creation, so the gate precedes every GitHub operation
+(FR-1/FR-6, non-bypassable). Run `python3 "$LIB/gh_preflight.py" --required write --root
+"$ROOT"` and read its JSON verdict:
+
+- `ok:true` → proceed to the world-reads below.
+- `ok:false` → **parked-GATE**: `journal.append(events, "gate", detail=<verdict.message>)`
+  then `journal.append(events, "parked", detail=<verdict.cause>)`, surface `verdict.message`
+  (the cause + the exact `gh`/`git` fix command + the doc pointer), and **stop** — no
+  world-read, no worktree, no GitHub write.
+
+The preflight is **read-only** (the enforcer permits its `gh`/`git` reads) and caches
+nothing: it re-runs on every entry, so once the operator fixes the cause a re-run/relaunch
+re-probes and the run proceeds (FR-7). (The later `Establish paths` line re-binds the same
+`events` idempotently — leave it.)
+
 Gather world reads:
 - `store_ok` — True (store bootstrapped above).
 - `current_content_hash` — recompute via the-architect `identifiers.content_hash`
