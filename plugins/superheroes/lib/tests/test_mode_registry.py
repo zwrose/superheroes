@@ -98,6 +98,16 @@ def test_read_string_schema_version_is_corrupt_not_accepted(tmp_path):
     assert mr.read_registry(str(tmp_path), root=root) is None
 
 
+def test_read_bool_schema_version_is_corrupt_not_accepted(tmp_path):
+    # FIX test-002: a bool schemaVersion (True) must NOT be accepted as schemaVersion 1 —
+    # pins the isinstance(ver, bool) guard in read_registry.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"schemaVersion": True, "storageMode": "in-repo",
+                                     "remoteKey": None, "createdAt": "2026-06-21T00:00:00Z"})
+    assert mr.read_registry(str(tmp_path), root=root) is None
+
+
 def test_read_missing_schema_version_is_corrupt_not_accepted(tmp_path):
     # FIX 1: an absent schemaVersion (storageMode otherwise valid) is corrupt → absent.
     _init_repo(tmp_path)
@@ -259,7 +269,9 @@ def test_ufr8_chosen_but_unrecorded_reasks_and_keeps_calibration(tmp_path, monke
     monkeypatch.setattr(mr, "_hero_global_root", lambda n: g if n == "test-pilot" else str(tmp_path / "x"))
     root = str(tmp_path / "store")
     monkeypatch.setattr(mr, "write_registry", lambda *a, **k: None)  # the owner's choice never lands durably
-    rc.reconcile(str(tmp_path), chosen_mode=mr.IN_REPO, root=root)
+    out = rc.reconcile(str(tmp_path), chosen_mode=mr.IN_REPO, root=root)
+    assert out["action"] == "deferred"
+    assert out["written"] is False
     assert mr.read_registry(str(tmp_path), root=root) is None                  # no unrecorded mode acted on
     assert (tmp_path / ".claude" / "review-profile.md").read_text() == "keep"   # calibration intact
     assert open(os.path.join(entry, "profile.md")).read() == "tpkeep"           # other calibration intact

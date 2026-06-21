@@ -9,6 +9,7 @@ import json
 import os
 import sys
 
+import store_core
 import mode_registry as mr
 
 
@@ -62,7 +63,7 @@ def ack_signal(cwd, identity, root=None):
         return
     acks = read_acks(cwd, root)
     acks[identity] = True
-    mr.store_core.atomic_write(_ack_path(cwd, root), json.dumps(acks, indent=2))
+    store_core.atomic_write(_ack_path(cwd, root), json.dumps(acks, indent=2))
 
 
 def coalesce(cwd, root=None):
@@ -84,7 +85,7 @@ def reconcile(cwd, chosen_mode=None, root=None):
     if chosen_mode is not None:
         if chosen_mode not in (mr.IN_REPO, mr.GLOBAL):
             raise ValueError(f"invalid mode: {chosen_mode!r}")
-        remote_hash = mr.store_core.derive_identifiers(cwd)["remote_hash"]
+        remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
         written = mr.write_registry(cwd, chosen_mode, remote_hash, root, allow_migration=True)
         if written is None:
             sys.stderr.write(
@@ -97,9 +98,14 @@ def reconcile(cwd, chosen_mode=None, root=None):
     if mr.read_registry(cwd, root) is None:
         verdict = mr.evidence_verdict(mr.hero_evidence(cwd, root))
         if verdict in (mr.IN_REPO, mr.GLOBAL):
-            remote_hash = mr.store_core.derive_identifiers(cwd)["remote_hash"]
-            mr.write_registry(cwd, verdict, remote_hash, root)
-            return {"action": "backfilled", "mode": verdict, "signals": gather_signals(cwd, root)}
+            remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
+            wrote = mr.write_registry(cwd, verdict, remote_hash, root)
+            if wrote is None:
+                sys.stderr.write(
+                    "mode_reconcile: backfill could not be persisted (store contended or unwritable)\n")
+            return {"action": "backfilled" if wrote is not None else "deferred",
+                    "mode": verdict, "written": wrote is not None,
+                    "signals": gather_signals(cwd, root)}
     return {"action": "noop", "signals": gather_signals(cwd, root)}
 
 

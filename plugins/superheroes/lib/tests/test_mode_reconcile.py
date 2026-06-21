@@ -46,6 +46,7 @@ def test_coalesce_one_prompt_with_count_and_ack_suppresses(tmp_path):
     # greenfield → one provisional-mode signal
     p = rc.coalesce(str(tmp_path), root=root)
     assert p is not None and p["count"] == 1
+    assert isinstance(p["message"], str) and p["message"]
     rc.ack_signal(str(tmp_path), p["items"][0]["identity"], root=root)
     assert rc.coalesce(str(tmp_path), root=root) is None  # acked → suppressed until it changes
 
@@ -64,6 +65,17 @@ def test_reconcile_records_chosen_mode_and_disagreement_becomes_migration_pendin
     assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO  # recorded now
     # the out-of-place test-pilot global calibration is untouched → a migration-pending signal remains (move = I6)
     assert any(s["type"] == "migration-pending" for s in rc.gather_signals(str(tmp_path), root=root))
+
+
+def test_reconcile_backfills_consistent_in_repo_evidence(tmp_path, monkeypatch):
+    # FIX test-003: no-chosen-mode BACKFILL branch — consistent in-repo evidence, no registry.
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    out = rc.reconcile(str(tmp_path), root=root)
+    assert out["action"] == "backfilled"
+    assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO
 
 
 def test_reconcile_noop_when_consistent(tmp_path):
