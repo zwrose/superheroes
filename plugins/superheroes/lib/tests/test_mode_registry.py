@@ -152,3 +152,21 @@ def test_resolve_artifact_reads_follow_the_artifact(tmp_path):
     # a NEW artifact (neither exists) follows the recorded mode (in-repo)
     new_in = tmp_path / "new_i.txt"; new_g = tmp_path / "new_g.txt"
     assert mr.resolve_artifact(str(tmp_path), str(new_in), str(new_g), root=root) == str(new_in)
+
+
+def test_evidence_agrees_with_hero_resolve_for_repo_root_cwd(tmp_path, monkeypatch):
+    # Scope is deliberately a repo-root cwd: the probe anchors in-repo at the repo root while
+    # review_store anchors at cwd, so they intentionally diverge for a sub-dir cwd (the probe is
+    # the more-correct anchor; I2 aligns the heroes onto it — see plan "reads-follow-the-artifact").
+    import review_store, store as tp
+    _init_repo(tmp_path)
+    rc_root = str(tmp_path / "rc"); tp_root = str(tmp_path / "tp")
+    # review-crew in-repo; test-pilot global
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("p")
+    open(tp.create(str(tmp_path), "global", tp_root)["profile"], "w").write("p")  # seed test-pilot global profile
+    monkeypatch.setattr(review_store, "store_root", lambda: rc_root)
+    monkeypatch.setattr(tp, "store_root", lambda: tp_root)
+    locs = mr.hero_evidence(str(tmp_path))
+    assert locs["review-crew"] == review_store.resolve(str(tmp_path), "profile", rc_root)["location"]
+    assert locs["test-pilot"] == tp.resolve(str(tmp_path), tp_root)["location"]
