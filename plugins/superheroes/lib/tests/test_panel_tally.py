@@ -70,7 +70,7 @@ def test_round_gate_clean_when_all_complete_no_blockers():
 
 def test_round_gate_blocking_when_blocker_present():
     gate, conf, missing = PT.round_gate([_f("a.py", 1, "bug", "Important")], ["code"], ["code"])
-    assert gate == "blocking"
+    assert gate == "blocking" and conf == "high" and missing == []
 
 
 def test_round_gate_cannot_certify_when_a_reviewer_did_not_complete():
@@ -179,7 +179,7 @@ def test_tally_malformed_findings_file_is_failsafe_non_clean(tmp_path):
     os.makedirs(rd, exist_ok=True)
     open(os.path.join(rd, "findings-code.json"), "w").write("{ not json")
     v = PT.tally(str(tmp_path), 1, ["code"])
-    assert v["terminal"] != "clean"
+    assert v["terminal"] == "cannot-certify"
 
 
 def test_tally_fix_failed_yields_halted(tmp_path):
