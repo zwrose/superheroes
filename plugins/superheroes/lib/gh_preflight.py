@@ -145,3 +145,46 @@ def probe(root, run=None):
     except Exception as exc:  # timeout, OSError, anything — never propagate
         p["error"] = "%s: %s" % (type(exc).__name__, exc)
         return p
+
+
+def _parse_args(argv):
+    """(required, root) from `--required <w|r>` / `--root <dir>`; defaults write / '.'."""
+    required, root = "write", "."
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--required" and i + 1 < len(argv):
+            required = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--root" and i + 1 < len(argv):
+            root = argv[i + 1]
+            i += 2
+            continue
+        i += 1
+    return required, root
+
+
+def main(argv, run=None):
+    """probe -> decide -> JSON verdict on stdout. Exit 0 on pass, non-zero on any
+    fail. ALWAYS emits a JSON verdict — an internal error prints a fail-CLOSED
+    indeterminate verdict (with the exception text), so the remediation is never lost
+    to a traceback (cf. repo_doctor.main, but non-zero on failure)."""
+    try:
+        required, root = _parse_args(argv)
+        p = probe(root, run=run)
+        ok, cause, remediation = decide(p, required=required)
+        verdict = {"ok": ok, "cause": cause, "remediation": remediation,
+                   "account": p.get("account"), "repo": p.get("repo"),
+                   "message": message(p, ok, cause, remediation)}
+    except Exception as exc:  # fail-CLOSED catch-all
+        rem = _remediation("indeterminate", "write")
+        verdict = {"ok": False, "cause": "indeterminate", "remediation": rem,
+                   "account": None, "repo": None,
+                   "message": message({"error": "%s: %s" % (type(exc).__name__, exc)},
+                                      False, "indeterminate", rem)}
+    sys.stdout.write(json.dumps(verdict) + "\n")
+    return 0 if verdict["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

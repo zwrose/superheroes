@@ -188,3 +188,35 @@ def test_probe_never_raises_on_exception(monkeypatch):
     p = gh_preflight.probe(".", run=make_run({"auth status": boom}))  # must not raise
     assert p["error"] is not None
     assert gh_preflight.decide(p)[1] == "indeterminate"
+
+
+# ---- main(): CLI exit-code contract ----
+
+def test_main_pass_exit_zero(monkeypatch, capsys):
+    monkeypatch.setattr(gh_preflight.shutil, "which", lambda _name: "/usr/bin/gh")
+    resp = dict(_AUTHED)
+    resp["api repos/"] = FakeProc(0, stdout='{"push": true, "pull": true}')
+    rc = gh_preflight.main(["gh_preflight.py", "--required", "write", "--root", "."],
+                           run=make_run(resp))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["ok"] is True and out["cause"] is None
+
+
+def test_main_fail_exit_nonzero_with_cause_and_pointer(monkeypatch, capsys):
+    monkeypatch.setattr(gh_preflight.shutil, "which", lambda _name: None)
+    rc = gh_preflight.main(["gh_preflight.py", "--required", "write"], run=make_run({}))
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1 and out["ok"] is False and out["cause"] == "gh_missing"
+    assert gh_preflight.DOC in out["message"]
+
+
+def test_main_internal_error_emits_failclosed_json(monkeypatch, capsys):
+    # if probe itself somehow raised, main's catch-all still emits a fail-closed JSON
+    # verdict (never a bare traceback) and surfaces the error text (UFR-4).
+    def boom(_root, run=None):
+        raise RuntimeError("kaboom")
+    monkeypatch.setattr(gh_preflight, "probe", boom)
+    rc = gh_preflight.main(["gh_preflight.py", "--required", "write"], run=None)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1 and out["ok"] is False and out["cause"] == "indeterminate"
+    assert "kaboom" in out["message"]
