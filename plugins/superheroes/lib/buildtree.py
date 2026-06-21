@@ -131,3 +131,26 @@ def branch_deletable(local_tip, pr_head_oid, *, determinable):
     if not determinable:
         return False
     return bool(local_tip) and bool(pr_head_oid) and local_tip == pr_head_oid
+
+
+# append to plugins/superheroes/lib/buildtree.py
+def plan_reconcile(disk_entries, record_entries):
+    """Pure bidirectional reconcile (FR-5). `disk_entries`: recognized worktrees found
+    on disk (git-registered at a deterministic path). `record_entries`: the durable
+    record. Returns {to_record, candidates}: disk entries absent from the record (the
+    caller records them — accountability), and the union-by-path of disk and record (the
+    recognized set to evaluate for reaping, so a branch-less recorded worktree is
+    included)."""
+    rec_paths = {e.get("path") for e in record_entries if e.get("path")}
+    seen, to_record = set(), []
+    for e in disk_entries:
+        p = e.get("path")
+        if p and p not in rec_paths and p not in seen:
+            to_record.append(e)
+            seen.add(p)
+    by_path = {}
+    for e in list(record_entries) + list(disk_entries):
+        p = e.get("path")
+        if p and p not in by_path:
+            by_path[p] = e
+    return {"to_record": to_record, "candidates": list(by_path.values())}

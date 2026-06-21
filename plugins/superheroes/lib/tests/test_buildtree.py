@@ -106,3 +106,12 @@ def test_branch_deletable_fail_closed():
     assert buildtree.branch_deletable("abc", "abc", determinable=False) is False
     assert buildtree.branch_deletable(None, "abc", determinable=True) is False
     assert buildtree.branch_deletable("abc", None, determinable=True) is False
+# append to plugins/superheroes/lib/tests/test_buildtree.py
+def test_plan_reconcile_bidirectional():
+    disk = [{"path": "/wt/a", "branch": "superheroes/a-h1"},
+            {"path": "/wt/c", "branch": "superheroes/c-h3"}]   # c is a crash-orphan
+    record = [{"path": "/wt/a", "branch": "superheroes/a-h1"},
+              {"path": "/wt/b", "branch": "superheroes/b-h2"}]  # b is branch-less on disk
+    out = buildtree.plan_reconcile(disk, record)
+    assert [e["path"] for e in out["to_record"]] == ["/wt/c"]           # disk\record
+    assert sorted(e["path"] for e in out["candidates"]) == ["/wt/a", "/wt/b", "/wt/c"]
