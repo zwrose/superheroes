@@ -61,3 +61,30 @@ def test_compile_classifies_tradeoff_as_judgment_else_mechanical():
     out = {x["title"]: x for x in PT.compile_findings([j, m])}
     assert out["Trade-off call"]["classification"] == "judgment"
     assert out["One fix"]["classification"] == "mechanical"
+
+
+def test_round_gate_clean_when_all_complete_no_blockers():
+    gate, conf, missing = PT.round_gate([_f("a.py", 1, "nit", "Nit")], ["code", "security"], ["code", "security"])
+    assert gate == "clean" and conf == "high" and missing == []
+
+
+def test_round_gate_blocking_when_blocker_present():
+    gate, conf, missing = PT.round_gate([_f("a.py", 1, "bug", "Important")], ["code"], ["code"])
+    assert gate == "blocking"
+
+
+def test_round_gate_cannot_certify_when_a_reviewer_did_not_complete():
+    gate, conf, missing = PT.round_gate([], ["code", "security"], ["code"])
+    assert gate == "cannot-certify" and conf == "low"
+
+
+def test_round_gate_names_the_missing_review_angles():
+    gate, conf, missing = PT.round_gate([], ["code", "security", "architecture"], ["code"])
+    assert missing == ["security", "architecture"]
+
+
+def test_confidence_low_when_a_finding_lacks_verification_evidence():
+    bad = _f("a.py", 1, "bug", "Minor")
+    bad["evidence"] = ""
+    gate, conf, missing = PT.round_gate([bad], ["code"], ["code"])
+    assert conf == "low"

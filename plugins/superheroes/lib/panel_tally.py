@@ -87,3 +87,22 @@ def compile_findings(findings, context_files=None):
     for f in out:  # FR-4: deterministic mechanical/judgment classification (no action taken)
         f["classification"] = "judgment" if f.get("tradeoff") else "mechanical"
     return out
+
+
+# ── per-round gate + confidence (FR-5/6/7) ──
+def round_gate(compiled, expected_roster, completed_roster):
+    """Deterministic per-round verdict from the compiled findings + completion state.
+    Precedence: any reviewer that did not complete → `cannot-certify` (coverage gap). Returns
+    the `missing` (incomplete) reviewers too, so the verdict can NAME the missing review angles
+    (FR-5/UFR-2)."""
+    incomplete = [r for r in expected_roster if r not in completed_roster]
+    has_blocker = any(f.get("severity") in BLOCKING for f in compiled)
+    if incomplete:
+        gate = "cannot-certify"
+    elif has_blocker:
+        gate = "blocking"
+    else:
+        gate = "clean"
+    all_verifiable = all(bool(f.get("evidence")) for f in compiled)
+    confidence = "high" if (not incomplete and all_verifiable) else "low"
+    return gate, confidence, incomplete
