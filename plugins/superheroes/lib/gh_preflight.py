@@ -83,3 +83,65 @@ def message(probe, ok, cause, remediation):
     parts.append("Fix: %s" % remediation)
     parts.append("See %s" % DOC)
     return " — ".join(parts)
+
+
+def _run(run, args, cwd=None, timeout=10):
+    """Run a command; return (returncode, stdout, stderr). Raises on timeout/OSError
+    so probe()'s wrapper records it as `error` (fail-closed)."""
+    proc = run(args, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    return proc.returncode, (proc.stdout or ""), (proc.stderr or "")
+
+
+def probe(root, run=None):
+    """Best-effort world-read -> the probe dict decide() consumes. NEVER raises: any
+    exception or timeout becomes `error` (-> indeterminate). Reads only until the
+    first stop-condition; every call is read-only and time-bounded."""
+    if run is None:
+        run = subprocess.run
+    p = {"gh_installed": False, "authenticated": False, "account": None,
+         "remote_configured": False, "repo": None, "permissions": None, "error": None}
+    try:
+        if shutil.which("gh") is None:
+            return p
+        p["gh_installed"] = True
+
+        rc, _out, _err = _run(run, ["gh", "auth", "status"], cwd=root)
+        if rc != 0:
+            return p  # not signed in (a structured outcome, not an error)
+        p["authenticated"] = True
+
+        rc, out, _err = _run(run, ["gh", "api", "user", "--jq", ".login"], cwd=root)
+        if rc == 0 and out.strip():
+            p["account"] = out.strip()  # best-effort, message-only
+
+        rc, _out, _err = _run(run, ["git", "remote", "get-url", "origin"], cwd=root)
+        if rc != 0:
+            return p  # no remote configured (a structured outcome, not an error)
+        p["remote_configured"] = True
+
+        rc, out, err = _run(
+            run, ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
+            cwd=root)
+        if rc != 0 or not out.strip():
+            p["error"] = err.strip() or "could not resolve the repository on GitHub"
+            return p
+        p["repo"] = out.strip()
+
+        rc, out, err = _run(
+            run, ["gh", "api", "repos/" + p["repo"], "--jq", ".permissions"], cwd=root)
+        if rc != 0 or not out.strip():
+            p["error"] = err.strip() or "could not read repository permissions"
+            return p
+        try:
+            perms = json.loads(out)
+        except ValueError:
+            p["error"] = "unexpected permissions payload from GitHub"
+            return p
+        if isinstance(perms, dict):
+            p["permissions"] = perms
+        else:
+            p["error"] = "unexpected permissions payload from GitHub"
+        return p
+    except Exception as exc:  # timeout, OSError, anything — never propagate
+        p["error"] = "%s: %s" % (type(exc).__name__, exc)
+        return p
