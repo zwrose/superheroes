@@ -69,7 +69,8 @@ def test_create_then_reuse_clean(tmp_path, monkeypatch):
 def test_dirty_worktree_is_preserved_never_clobbered(tmp_path, monkeypatch):
     repo = _setup(tmp_path, monkeypatch)
     r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
-    (open(os.path.join(r["path"], "scratch"), "w")).write("uncommitted")
+    with open(os.path.join(r["path"], "scratch"), "w") as _fh:
+        _fh.write("uncommitted")
     r2 = buildtree.reclaim_or_create(repo, "wi-a", "h1")
     assert r2["outcome"] == buildtree.PRESERVE_NOTIFY
     assert os.path.exists(os.path.join(r["path"], "scratch"))     # not clobbered
@@ -79,7 +80,8 @@ def test_non_empty_non_worktree_leaf_is_surfaced_not_deleted(tmp_path, monkeypat
     repo = _setup(tmp_path, monkeypatch)
     p = buildtree.worktree_path(repo, "wi-a", "h1")
     os.makedirs(p)
-    open(os.path.join(p, "owner-file"), "w").write("precious")
+    with open(os.path.join(p, "owner-file"), "w") as _fh:
+        _fh.write("precious")
     r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
     assert r["outcome"] == buildtree.PRESERVE_NOTIFY
     assert os.path.exists(os.path.join(p, "owner-file"))          # never raw-deleted
@@ -164,7 +166,8 @@ def test_reap_one_revalidates_dirty_at_reap_time(tmp_path, monkeypatch):
     repo = _setup(tmp_path, monkeypatch)
     a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
     head = buildtree.rev_parse(repo, a["branch"])
-    open(os.path.join(a["path"], "scratch"), "w").write("became dirty after listing")
+    with open(os.path.join(a["path"], "scratch"), "w") as _fh:
+        _fh.write("became dirty after listing")
     out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", head)
     assert out["decision"] == buildtree.PRESERVE_NOTIFY     # FR-11: re-validated, not reaped
     assert os.path.isdir(a["path"])                          # preserved
@@ -201,7 +204,8 @@ def test_reap_one_committed_ahead_keeps_branch(tmp_path, monkeypatch):
     repo = _setup(tmp_path, monkeypatch)
     a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
     merged_head = buildtree.rev_parse(repo, a["branch"])
-    open(os.path.join(a["path"], "ahead"), "w").write("local-only work")
+    with open(os.path.join(a["path"], "ahead"), "w") as _fh:
+        _fh.write("local-only work")
     _git(a["path"], "add", "ahead")
     _git(a["path"], "commit", "-qm", "ahead")                 # local tip now != merged_head
     out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", merged_head)
@@ -325,3 +329,16 @@ def test_teardown_remove_and_delete_with_none_branch_is_clean(tmp_path, monkeypa
     res = buildtree.teardown(repo, r["path"], None, buildtree.REMOVE_AND_DELETE)
     assert res["removed"] is True and res["branch_deleted"] is False and res["incomplete"] is False
     assert not os.path.isdir(r["path"])
+
+
+def test_create_gate_failclosed_on_forward_version_record(tmp_path, monkeypatch):
+    # create()'s _record_add_safe-returns-False path: a forward-version worktrees.json makes
+    # record_add (via record_read) raise RecordSchemaError after a successful `git worktree
+    # add`, so reclaim_or_create fails closed with GATE_FAILCLOSED (never silently proceeds).
+    repo = _setup(tmp_path, monkeypatch)
+    rec_file = buildtree.record_path(repo)
+    os.makedirs(os.path.dirname(rec_file), exist_ok=True)
+    with open(rec_file, "w") as fh:
+        fh.write('{"schemaVersion": 999, "worktrees": []}')
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r["outcome"] == buildtree.GATE_FAILCLOSED
