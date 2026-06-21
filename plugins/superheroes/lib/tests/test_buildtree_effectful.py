@@ -108,3 +108,41 @@ def test_create_gate_failclosed_on_add_failure(tmp_path, monkeypatch):
                         (1, "") if a[:2] == ("worktree", "add") else real_git(cwd, *a))
     r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
     assert r["outcome"] == buildtree.GATE_FAILCLOSED
+
+
+def test_teardown_merged_removes_worktree_and_branch(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    res = buildtree.teardown(repo, r["path"], r["branch"], buildtree.REMOVE_AND_DELETE)
+    assert res["removed"] and res["branch_deleted"] and not res["incomplete"]
+    assert not os.path.isdir(r["path"])
+    assert not buildtree.branch_exists(repo, r["branch"])
+
+
+def test_teardown_closed_keeps_branch(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    res = buildtree.teardown(repo, r["path"], r["branch"], buildtree.REMOVE_KEEP_BRANCH)
+    assert res["removed"] and not res["branch_deleted"]
+    assert not os.path.isdir(r["path"])
+    assert buildtree.branch_exists(repo, r["branch"])             # FR-7 branch preserved
+
+
+def test_teardown_non_remove_decision_is_noop(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    res = buildtree.teardown(repo, r["path"], r["branch"], buildtree.PRESERVE_NOTIFY)
+    assert res["removed"] is False and os.path.isdir(r["path"])
+
+
+def test_teardown_incomplete_on_branch_delete_failure(tmp_path, monkeypatch):
+    # UFR-5: worktree removed but `git branch -D` fails -> incomplete (the dangling
+    # branch must be reported, never silently dropped).
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    real_git = buildtree._git
+    monkeypatch.setattr(buildtree, "_git", lambda cwd, *a:
+                        (1, "") if a[:2] == ("branch", "-D") else real_git(cwd, *a))
+    res = buildtree.teardown(repo, r["path"], r["branch"], buildtree.REMOVE_AND_DELETE)
+    assert res["removed"] and not res["branch_deleted"] and res["incomplete"]
+    assert not os.path.isdir(r["path"])                          # worktree-before-branch

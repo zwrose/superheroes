@@ -294,3 +294,27 @@ def reclaim_or_create(cwd, work_item, content_hash, *, root=None, store_root=Non
 
     # non-empty, not a recognized worktree -> never touch; surface for the owner.
     return {"outcome": PRESERVE_NOTIFY, "path": path, "branch": branch}
+
+
+# append to plugins/superheroes/lib/buildtree.py
+def teardown(cwd, path, branch, decision):
+    """Execute a reap decision. Removes the worktree checkout BEFORE deleting the branch
+    (so a partial failure leaves a still-recognized worktree, never a branch-less one).
+    Never `--force` (UFR-1 is enforced upstream by reap_decision). Idempotent and never
+    raises (the devserver.teardown contract). Returns {ok, removed, branch_deleted,
+    incomplete}; `incomplete` (UFR-5) means the worktree went but the branch delete
+    failed — the caller keeps it on the record and notifies."""
+    if decision not in (REMOVE_KEEP_BRANCH, REMOVE_AND_DELETE):
+        return {"ok": True, "removed": False, "branch_deleted": False, "incomplete": False}
+    rc, _ = _git(cwd, "worktree", "remove", path)
+    if rc != 0:
+        _git(cwd, "worktree", "prune")               # tolerate an already-gone leaf
+    removed = not os.path.exists(path)
+    if not removed:
+        return {"ok": False, "removed": False, "branch_deleted": False, "incomplete": True}
+    if decision == REMOVE_KEEP_BRANCH:
+        return {"ok": True, "removed": True, "branch_deleted": False, "incomplete": False}
+    rc, _ = _git(cwd, "branch", "-D", branch)
+    deleted = rc == 0 or not branch_exists(cwd, branch)
+    return {"ok": deleted, "removed": True, "branch_deleted": deleted,
+            "incomplete": not deleted}
