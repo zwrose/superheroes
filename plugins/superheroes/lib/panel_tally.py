@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Deterministic per-round + loop-terminal tally for the review-panel Workflow pattern.
+
+The single source of truth for the panel's per-round gate/confidence and the four loop
+terminals. It layers the spec's normalized vocabulary (`clean` / `blocking` / `cannot-certify`;
+loop terminals `continue` / `clean` / `clean-with-skips` / `cannot-certify` / `halted`) over the
+REUSED libs: it imports `loop_state.decide` (the continue/clean/skip/halt accounting),
+`circuit_breaker.finding_identity` (the `file::normalized_title` identity), and
+`review_result.write_result` (the atomic durable record) UNCHANGED. Every terminal is decided
+here, never in the JS shell; every read is fail-safe (a missing/malformed input biases to a
+non-clean outcome, never a silent `clean`). stdlib only.
+"""
+import argparse
+import json
+import os
+import sys
+
+import circuit_breaker
+import loop_state
+import review_result
+
+BLOCKING = ("Critical", "Important")
+SEV_RANK = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
+
+
+# ── run-key dir layout (panel_tally owns these; no scattered literals) ──
+def round_dir(run_dir, rnd):
+    return os.path.join(run_dir, "round-%d" % rnd)
+
+
+def findings_path(run_dir, rnd, reviewer):
+    return os.path.join(round_dir(run_dir, rnd), "findings-%s.json" % reviewer)
+
+
+def verdict_path(run_dir, rnd):
+    return os.path.join(round_dir(run_dir, rnd), "verdict.json")
+
+
+def deferred_set_path(run_dir):
+    return os.path.join(run_dir, "deferred-set.json")
+
+
+def result_path(run_dir):
+    return os.path.join(run_dir, "result.json")
+
+
+# ── compile / dedupe (FR-3) ──
+def _identity(f):
+    return circuit_breaker.finding_identity(f)
+
+
+def _merge_dims(a, b):
+    parts = []
+    for src in (a.get("dimension"), b.get("dimension")):
+        if not src:
+            continue
+        for p in str(src).split("+"):
+            p = p.strip()
+            if p and p not in parts:
+                parts.append(p)
+    return " + ".join(parts)
+
+
+def compile_findings(findings, context_files=None):
+    """Merge by identity (file::normalized_title): keep the higher severity, union dimensions.
+    Drop uncited findings (file/line None) and, when context_files is given, any finding whose
+    file is outside the reviewed material."""
+    by_id = {}
+    for f in findings:
+        if f.get("file") is None or f.get("line") is None:
+            continue
+        if context_files is not None and f.get("file") not in context_files:
+            continue
+        fid = _identity(f)
+        if fid in by_id:
+            ex = by_id[fid]
+            dims = _merge_dims(ex, f)
+            if SEV_RANK.get(f.get("severity"), 99) < SEV_RANK.get(ex.get("severity"), 99):
+                merged = dict(f)
+            else:
+                merged = dict(ex)
+            merged["dimension"] = dims
+            by_id[fid] = merged
+        else:
+            by_id[fid] = dict(f)
+    out = list(by_id.values())
+    for f in out:  # FR-4: deterministic mechanical/judgment classification (no action taken)
+        f["classification"] = "judgment" if f.get("tradeoff") else "mechanical"
+    return out
+
+
+# ── per-round gate + confidence (FR-5/6/7) ──
+def round_gate(compiled, expected_roster, completed_roster):
+    """Deterministic per-round verdict from the compiled findings + completion state.
+    Precedence: any reviewer that did not complete → `cannot-certify` (coverage gap). Returns
+    the `missing` (incomplete) reviewers too, so the verdict can NAME the missing review angles
+    (FR-5/UFR-2)."""
+    incomplete = [r for r in expected_roster if r not in completed_roster]
+    has_blocker = any(f.get("severity") in BLOCKING for f in compiled)
+    if incomplete:
+        gate = "cannot-certify"
+    elif has_blocker:
+        gate = "blocking"
+    else:
+        gate = "clean"
+    all_verifiable = all(bool(f.get("evidence")) for f in compiled)
+    confidence = "high" if (not incomplete and all_verifiable) else "low"
+    return gate, confidence, incomplete
+
+
+# ── deferral accounting (FR-10) ──
+def present_deferred(compiled, deferred_set):
+    """present-∩-deferred: count present BLOCKING findings whose identity was deferred and whose
+    current severity is no GREATER than the severity it was deferred at (a higher-severity or
+    different-substance re-flag is a new, non-deferred blocker). Mirrors loop_state's cumulative
+    present-∩-skip contract: a deferral for a finding no longer re-flagged simply stops counting."""
+    n = 0
+    for f in compiled:
+        if f.get("severity") not in BLOCKING:
+            continue
+        deferred_sev = deferred_set.get(_identity(f))
+        if deferred_sev is None:
+            continue
+        if SEV_RANK.get(f.get("severity"), 99) >= SEV_RANK.get(deferred_sev, 99):
+            n += 1
+    return n
+
+
+# ── terminal decision (FR-8/9): strict precedence, delegating to loop_state ──
+_ACTION_TO_TERMINAL = {
+    "review": "continue",
+    "exit_clean": "clean",
+    "exit_skipped": "clean-with-skips",
+    "halt": "halted",
+}
+_TERMINAL_TO_ACTION = {
+    "continue": "review",
+    "clean": "exit_clean",
+    "clean-with-skips": "exit_skipped",
+    "cannot-certify": "halt",
+    "halted": "halt",
+}
+
+
+def _terminal_to_action(terminal):
+    """Map the panel terminal to a loop_state-vocabulary action so the durable record stays
+    readable through review_result.read_result's closed allow-list (the precise terminal rides
+    in the verdict's own field + the record's reason)."""
+    return _TERMINAL_TO_ACTION.get(terminal, "halt")
+
+
+def decide_terminal(gate, present_blocking, present_deferred_count, fix_status, rnd, max_rounds, breaker_halt):
+    """FR-9 precedence (first match wins): (1) cannot-certify; (2) halted on a failed fix step;
+    (3) loop_state's cap-halt / clean-with-skips / clean / continue. Never returns `clean` while
+    coverage is incomplete or a non-deferred blocker is unresolved."""
+    if gate == "cannot-certify":
+        return "cannot-certify", "a reviewer did not complete after its retry — coverage not certified"
+    if fix_status == "failed":
+        return "halted", "the fix step did not complete (failed or timed out)"
+    blocking_fixed = max(0, present_blocking - present_deferred_count)
+    action, _mandatory, reason = loop_state.decide(
+        blocking_fixed, present_deferred_count, rnd, max_rounds, bool(breaker_halt))
+    return _ACTION_TO_TERMINAL[action], reason
+
+
+# ── fail-safe reads + persistence ──
+def _safe_read_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def _atomic_write_json(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _persist(run_dir, rnd, verdict):
+    _atomic_write_json(verdict_path(run_dir, rnd), verdict)
+    # durable terminal record via the review_result helper (unchanged); action in loop_state
+    # vocabulary keeps read_result happy, the precise terminal + reason ride in `reason`.
+    review_result.write_result(
+        result_path(run_dir), _terminal_to_action(verdict["terminal"]), rnd,
+        "%s: %s" % (verdict["terminal"], verdict.get("reason", "")))
+
+
+def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="completed", context_files=None):
+    """Run the deterministic tally for one round. Fail-safe across EVERY read — a missing/malformed
+    roster entry, findings file, or deferred-set biases to a non-clean terminal, never a silent
+    `clean`. Persists the verdict + a durable terminal record."""
+    try:
+        if not roster:
+            verdict = {"gate": "cannot-certify", "confidence": "low", "findings": [], "missing": [],
+                       "terminal": "cannot-certify", "reason": "empty reviewer set — nothing to certify"}
+            _persist(run_dir, rnd, verdict)
+            return verdict
+        completed, all_findings = [], []
+        for reviewer in roster:
+            data = _safe_read_json(findings_path(run_dir, rnd, reviewer), None)
+            if not isinstance(data, list):
+                continue  # not completed → coverage gap (fail-safe)
+            completed.append(reviewer)
+            all_findings.extend(data)
+        compiled = compile_findings(all_findings, context_files)
+        gate, confidence, missing = round_gate(compiled, roster, completed)
+        deferred_set = _safe_read_json(deferred_set_path(run_dir), {})
+        if not isinstance(deferred_set, dict):
+            deferred_set = {}  # malformed → nothing deferred → blockers count (non-clean bias)
+        present_blocking = sum(1 for f in compiled if f.get("severity") in BLOCKING)
+        pdef = present_deferred(compiled, deferred_set)
+        terminal, reason = decide_terminal(
+            gate, present_blocking, pdef, fix_status, rnd, max_rounds, breaker_halt)
+        if terminal == "cannot-certify" and missing:  # NAME the missing review angles (FR-5/UFR-2)
+            reason = "coverage incomplete — missing review angle(s): %s" % ", ".join(missing)
+        verdict = {"gate": gate, "confidence": confidence, "findings": compiled, "missing": missing,
+                   "terminal": terminal, "reason": reason}
+        _persist(run_dir, rnd, verdict)
+        return verdict
+    except Exception as exc:  # absolute fail-safe — any unforeseen error halts, never clean
+        verdict = {"gate": "cannot-certify", "confidence": "low", "findings": [], "missing": [],
+                   "terminal": "halted", "reason": "tally failed: %s" % exc}
+        try:
+            _persist(run_dir, rnd, verdict)
+        except Exception:
+            pass
+        return verdict
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="deterministic review-panel tally (review-crew)")
+    ap.add_argument("--run-dir", required=True)
+    ap.add_argument("--round", type=int, required=True, dest="rnd")
+    ap.add_argument("--roster", required=True, help="comma-separated reviewer names")
+    ap.add_argument("--max-rounds", type=int, default=7)
+    ap.add_argument("--breaker-halt", choices=["yes", "no"], default="no")
+    ap.add_argument("--fix-status", choices=["completed", "failed"], default="completed")
+    ap.add_argument("--context-files", default=None, help="comma-separated reviewed-file allowlist")
+    args = ap.parse_args(argv[1:])
+    roster = [r for r in args.roster.split(",") if r]
+    context_files = args.context_files.split(",") if args.context_files else None
+    verdict = tally(args.run_dir, args.rnd, roster, args.max_rounds,
+                    args.breaker_halt == "yes", args.fix_status, context_files)
+    sys.stdout.write(json.dumps(verdict, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
