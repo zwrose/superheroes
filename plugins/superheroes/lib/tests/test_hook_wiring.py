@@ -34,6 +34,19 @@ def test_hooks_json_registers_both_matchers_and_is_fail_closed():
         assert "||" in cmd and '"permissionDecision":"deny"' in cmd.replace("\\", "")
 
 
+def test_session_start_hook_declares_host_claude():
+    # finding C7: the subprocess hook tests only exercise the default host, so the
+    # wiring that actually passes `--host claude` to session_start.py is otherwise
+    # unguarded. Assert hooks.json declares it (and stays fail-soft via `|| true`).
+    cfg = json.load(open(_HOOKS))
+    cmds = [h["hooks"][0]["command"] for h in cfg["hooks"]["SessionStart"]]
+    ss = [c for c in cmds if "session_start.py" in c]
+    assert ss, "no SessionStart hook wires session_start.py"
+    for c in ss:
+        assert "--host claude" in c
+        assert "|| true" in c          # best-effort: a hook failure never breaks the session
+
+
 def test_enforcer_refuses_edit_to_itself():
     # the enforcer file, under the (merged) plugin root, is safety-machinery. classify_path
     # anchors against the real in-tree plugin root directly — no band_lib monkeypatch.
