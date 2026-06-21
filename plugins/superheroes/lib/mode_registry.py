@@ -48,6 +48,61 @@ def config_lock(cwd, root=None):
         os.close(fd)
 
 
+class UnknownSchemaVersion(Exception):
+    pass
+
+
+def registry_path(cwd, root=None):
+    return os.path.join(project_store_dir(cwd, root), "registry.json")
+
+
+def read_registry(cwd, root=None):
+    """Valid record, or None if absent/corrupt/semantically-invalid. Raise
+    UnknownSchemaVersion on a newer schemaVersion (fail-closed, NF2/UFR-4)."""
+    try:
+        with open(registry_path(cwd, root), encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rec, dict):
+        return None
+    ver = rec.get("schemaVersion")
+    if isinstance(ver, int) and ver > SCHEMA_VERSION:
+        raise UnknownSchemaVersion(
+            f"registry.json schemaVersion={ver} is newer than {SCHEMA_VERSION} — "
+            "update the plugin or migrate the file")
+    if rec.get("storageMode") not in (IN_REPO, GLOBAL):
+        return None  # parseable but invalid → corrupt (UFR-3)
+    return rec
+
+
+def _utc_now():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=None):
+    """Record the authoritative mode under the config lock. Refuse to change an
+    existing authoritative mode unless allow_migration (FR-3/UFR-1). Returns the
+    record, or None if skipped (lock contended) or refused."""
+    if mode not in (IN_REPO, GLOBAL):
+        raise ValueError(f"invalid storageMode: {mode!r}")
+    if ensure_project_store(cwd, root) is None:
+        return None
+    with config_lock(cwd, root) as got:
+        if not got:
+            return None  # NF5: another writer holds it — never block
+        existing = read_registry(cwd, root)
+        if existing and existing["storageMode"] != mode and not allow_migration:
+            return None
+        if existing and existing["storageMode"] == mode:
+            return existing
+        created = (existing or {}).get("createdAt") or (now or _utc_now())
+        rec = {"schemaVersion": SCHEMA_VERSION, "storageMode": mode,
+               "remoteKey": remote_key, "createdAt": created}
+        store_core.atomic_write(registry_path(cwd, root), json.dumps(rec, indent=2))
+        return rec
+
+
 def ensure_project_store(cwd, root=None):
     """Create the per-project store (git repo + meta.json). Idempotent and safe under
     concurrent first-touch by parallel worktrees (§4.2): makedirs(exist_ok), guarded
