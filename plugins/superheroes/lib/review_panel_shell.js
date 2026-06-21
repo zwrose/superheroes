@@ -44,7 +44,7 @@ async function tallyAgent(runDir, round, roster, maxRounds, breakerHalt, fixStat
   const cmd =
     `python3 plugins/superheroes/lib/panel_tally.py --run-dir ${shq(runDir)} --round ${round} ` +
     `--roster ${shq(roster.join(','))} --max-rounds ${maxRounds} ` +
-    `--breaker-halt ${breakerHalt} --fix-status ${fixStatus}`
+    `--breaker-halt ${shq(breakerHalt)} --fix-status ${shq(fixStatus)}`
   const out = await agent(
     `Run exactly this command and return ONLY its stdout JSON, unchanged:\n\n${cmd}`,
     { label: `tally:r${round}`, schema: VERDICT_SCHEMA }
