@@ -318,3 +318,63 @@ def teardown(cwd, path, branch, decision):
     deleted = rc == 0 or not branch_exists(cwd, branch)
     return {"ok": deleted, "removed": True, "branch_deleted": deleted,
             "incomplete": not deleted}
+
+
+# append to plugins/superheroes/lib/buildtree.py
+def plan_sweep(cwd, pr_info, *, active_work_item, active_path=None,
+               root=None, store_root=None):
+    """FR-5/FR-10: build the reap-candidate list to present for owner confirmation.
+    Fail-closed: an unreadable `git worktree list` -> [] (no candidates, record left
+    untouched). Records disk-found-but-unrecorded worktrees (FR-9 accountability) and
+    excludes the active run's worktree (FR-11 / the live-worktree invariant) — by its
+    path (`active_path`, structural) and by its work-item slug (belt-and-suspenders)."""
+    wts = list_worktrees(cwd)
+    if wts is None:
+        return []
+    rec_file = record_path(cwd, store_root=store_root)
+    record = record_read(rec_file)
+    rec_paths = {e.get("path") for e in record if e.get("path")}
+    disk_paths = {w.get("path") for w in wts}
+    mroot = managed_root(root)
+    disk = [{"path": w["path"], "branch": w.get("branch")}
+            for w in wts if w.get("path", "").startswith(mroot + os.sep)]
+    rec = plan_reconcile(disk, record)
+    for e in rec["to_record"]:
+        wi, ch = split_leaf(e["path"])
+        record_add(rec_file, {"workItem": wi, "contentHash": ch,
+                              "branch": e.get("branch"), "path": e["path"]})
+    candidates = []
+    for c in rec["candidates"]:
+        path, branch = c.get("path"), c.get("branch")
+        wi, ch = split_leaf(path)
+        # UFR-7 gate: act only on a recognized worktree (git-registered OR on-record).
+        if not recognize(registered=path in disk_paths, on_record=path in rec_paths):
+            continue
+        if path == active_path or wi == active_work_item:   # live-worktree invariant
+            continue
+        info = pr_info.get(branch, {})
+        pr_state, pr_head = info.get("pr_state", "unknown"), info.get("pr_head_oid")
+        dirty = is_dirty(path) if os.path.isdir(path) else False
+        deletable = branch_deletable(rev_parse(cwd, branch), pr_head,
+                                     determinable=pr_head is not None)
+        decision = reap_decision(pr_state, dirty=dirty, branch_deletable=deletable)
+        if decision in (REMOVE_KEEP_BRANCH, REMOVE_AND_DELETE):
+            candidates.append({"path": path, "branch": branch, "workItem": wi,
+                               "contentHash": ch, "decision": decision,
+                               "pr_state": pr_state, "pr_head_oid": pr_head})
+    return candidates
+
+
+def reap_one(cwd, path, branch, pr_state, pr_head_oid, *, store_root=None):
+    """Execute one approved reap, RE-VALIDATING against current state at reap time
+    (FR-11): re-read dirty, recompute branch_deletable, re-decide, then teardown. Clears
+    the record on a confirmed full reap (worktree gone, branch deleted-or-intentionally-
+    kept); keeps it on preserve/skip/gate/incomplete (UFR-5). Returns {decision, result}."""
+    dirty = is_dirty(path) if os.path.isdir(path) else False
+    deletable = branch_deletable(rev_parse(cwd, branch), pr_head_oid,
+                                 determinable=pr_head_oid is not None)
+    decision = reap_decision(pr_state, dirty=dirty, branch_deletable=deletable)
+    result = teardown(cwd, path, branch, decision)
+    if result.get("removed") and not result.get("incomplete"):
+        record_remove(record_path(cwd, store_root=store_root), path)
+    return {"decision": decision, "result": result}

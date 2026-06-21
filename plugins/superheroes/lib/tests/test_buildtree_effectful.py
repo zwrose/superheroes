@@ -146,3 +146,78 @@ def test_teardown_incomplete_on_branch_delete_failure(tmp_path, monkeypatch):
     res = buildtree.teardown(repo, r["path"], r["branch"], buildtree.REMOVE_AND_DELETE)
     assert res["removed"] and not res["branch_deleted"] and res["incomplete"]
     assert not os.path.isdir(r["path"])                          # worktree-before-branch
+
+
+def test_plan_sweep_lists_terminal_excludes_active_and_fail_closes(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")     # merged -> candidate
+    b = buildtree.reclaim_or_create(repo, "wi-b", "h2")     # active -> excluded by path
+    pr_info = {a["branch"]: {"pr_state": "merged", "pr_head_oid": buildtree.rev_parse(repo, a["branch"])},
+               b["branch"]: {"pr_state": "merged", "pr_head_oid": buildtree.rev_parse(repo, b["branch"])}}
+    # structural exclusion by active_path (slug intentionally non-matching to isolate it)
+    cands = buildtree.plan_sweep(repo, pr_info, active_work_item="none", active_path=b["path"])
+    paths = {c["path"] for c in cands}
+    assert a["path"] in paths and b["path"] not in paths    # active excluded (structural)
+    # fail-closed: an unreadable worktree list -> no candidates
+    monkeypatch.setattr(buildtree, "list_worktrees", lambda cwd: None)
+    assert buildtree.plan_sweep(repo, pr_info, active_work_item="wi-b") == []
+
+
+def test_reap_one_revalidates_dirty_at_reap_time(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    head = buildtree.rev_parse(repo, a["branch"])
+    open(os.path.join(a["path"], "scratch"), "w").write("became dirty after listing")
+    out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", head)
+    assert out["decision"] == buildtree.PRESERVE_NOTIFY     # FR-11: re-validated, not reaped
+    assert os.path.isdir(a["path"])                          # preserved
+
+
+def test_reap_one_clears_record_on_full_reap(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    head = buildtree.rev_parse(repo, a["branch"])
+    out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", head)
+    assert out["decision"] == buildtree.REMOVE_AND_DELETE
+    rec = buildtree.record_read(buildtree.record_path(repo))
+    assert all(e["path"] != a["path"] for e in rec)          # record cleared
+
+
+def test_reap_one_retains_record_on_incomplete_teardown(tmp_path, monkeypatch):
+    # UFR-5: a partial teardown (branch delete fails) must KEEP the entry on the
+    # record (never silently orphan the dangling branch).
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    head = buildtree.rev_parse(repo, a["branch"])
+    real_git = buildtree._git
+    monkeypatch.setattr(buildtree, "_git", lambda cwd, *ar:
+                        (1, "") if ar[:2] == ("branch", "-D") else real_git(cwd, *ar))
+    out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", head)
+    assert out["result"]["incomplete"] is True
+    rec = buildtree.record_read(buildtree.record_path(repo))
+    assert any(e["path"] == a["path"] for e in rec)          # retained, not orphaned
+
+
+def test_reap_one_committed_ahead_keeps_branch(tmp_path, monkeypatch):
+    # UFR-6 end-to-end on the merged tier: local tip ahead of the merged PR head ->
+    # remove the worktree but PRESERVE the branch.
+    repo = _setup(tmp_path, monkeypatch)
+    a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    merged_head = buildtree.rev_parse(repo, a["branch"])
+    open(os.path.join(a["path"], "ahead"), "w").write("local-only work")
+    _git(a["path"], "add", "ahead")
+    _git(a["path"], "commit", "-qm", "ahead")                 # local tip now != merged_head
+    out = buildtree.reap_one(repo, a["path"], a["branch"], "merged", merged_head)
+    assert out["decision"] == buildtree.REMOVE_KEEP_BRANCH
+    assert buildtree.branch_exists(repo, a["branch"])        # branch preserved (UFR-6)
+
+
+def test_plan_sweep_excludes_open_and_unknown(tmp_path, monkeypatch):
+    # UFR-3 (open) / UFR-2 (unknown) worktrees are never reap candidates.
+    repo = _setup(tmp_path, monkeypatch)
+    o = buildtree.reclaim_or_create(repo, "wi-open", "h1")
+    u = buildtree.reclaim_or_create(repo, "wi-unk", "h2")
+    pr_info = {o["branch"]: {"pr_state": "open", "pr_head_oid": buildtree.rev_parse(repo, o["branch"])},
+               u["branch"]: {"pr_state": "unknown", "pr_head_oid": None}}
+    cands = buildtree.plan_sweep(repo, pr_info, active_work_item="none")
+    assert cands == []
