@@ -212,15 +212,11 @@ say so before build if you'd prefer Y"). Never interrupt the owner for either.
 - **Budget.** If you're escalating on most runs, the threshold is too low — recalibrate
   toward ACT.
 
-**How to present an escalation** (use `AskUserQuestion`):
-
-- One decision, stated as a **what**, no jargon.
-- Pros/cons in **owner-currency** — money, time, risk, data, user experience — never
-  technical detail they'd have to take on faith.
-- Give your **recommended** option first (marked) with the reasoning, so the owner can
-  confirm in one step but still genuinely choose.
-- **Say whether it's reversible:** "we can change this later" vs "this is hard to undo" —
-  the single most useful thing for the owner to weigh.
+**How to present an escalation** — follow the rubric's recipe (`escalation-base.md`
+§"Presenting a GATE"): the decision and **why it matters**, 2–3 options each with an
+owner-currency pro/con and **whether it's reversible**, and your **recommended** option marked
+(or "close call — your call" when you have no confident pick). Stated as a plain *what*, never
+jargon the owner would have to take on faith.
 
 Record every **escalated** decision and the owner's call in *Key decisions & alternatives*.
 
