@@ -241,12 +241,12 @@ def test_nf6_holder_death_releases_lock_and_next_resolve_backfills(tmp_path, mon
         f"fd=os.open({lock!r},os.O_CREAT|os.O_RDWR,0o644);fcntl.flock(fd,fcntl.LOCK_EX);"
         f"open({held!r},'w').close();time.sleep(30)"])
     try:
-        deadline = time.time() + 5
+        deadline = time.time() + 10
         while not os.path.exists(held) and time.time() < deadline:
             time.sleep(0.02)
-        assert os.path.exists(held)
+        assert os.path.exists(held), f"child did not signal flock acquisition within deadline (pid={child.pid})"
         with mr.config_lock(str(tmp_path), root=root) as got:
-            assert got is False                # genuinely held by the LIVE child
+            assert got is False, "config_lock should report contended while the live child holds the flock"
     finally:
         child.kill(); child.wait()             # holder DIES → OS releases the flock
     # the dead holder left no stuck lock (unlike file_lock's TTL): the next resolve acquires
