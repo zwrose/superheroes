@@ -114,3 +114,41 @@ def test_evidence_global_via_pointer_is_read_only(tmp_path):
     locs = mr.hero_evidence(str(tmp_path), hero_roots={"review-crew": g, "test-pilot": str(tmp_path/"g2")})
     assert locs["review-crew"] == mr.GLOBAL
     assert not os.path.exists(os.path.join(entry, "keys.json"))  # probe healed nothing
+
+
+def test_resolve_registry_present_is_authoritative(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.GLOBAL, None, root=root)
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["mode"] == mr.GLOBAL and r["authoritative"] is True and r["source"] == "registry"
+
+
+def test_resolve_greenfield_is_provisional_global_without_writing(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["mode"] == mr.GLOBAL and r["authoritative"] is False and r["source"] == "provisional"
+    assert mr.read_registry(str(tmp_path), root=root) is None  # pure read wrote nothing
+
+
+def test_resolve_backfills_from_consistent_evidence(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir(); (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["mode"] == mr.IN_REPO and r["authoritative"] is True and r["source"] == "backfilled"
+    assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO  # synthesized
+
+
+def test_resolve_artifact_reads_follow_the_artifact(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, None, root=root)  # recorded mode = in-repo
+    only_global = tmp_path / "g.txt"; only_global.write_text("here")
+    in_repo = tmp_path / "i.txt"  # does not exist
+    assert mr.resolve_artifact(str(tmp_path), str(in_repo), str(only_global), root=root) == str(only_global)
+    # a NEW artifact (neither exists) follows the recorded mode (in-repo)
+    new_in = tmp_path / "new_i.txt"; new_g = tmp_path / "new_g.txt"
+    assert mr.resolve_artifact(str(tmp_path), str(new_in), str(new_g), root=root) == str(new_in)

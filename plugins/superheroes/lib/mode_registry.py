@@ -155,6 +155,31 @@ def evidence_verdict(hero_locs):
     return "disagree"
 
 
+def resolve(cwd, root=None):
+    """The shared band-wide mode resolver. Never blocks, never hits the network.
+    Raises UnknownSchemaVersion on a newer record (fail-closed)."""
+    rec = read_registry(cwd, root)
+    if rec is not None:
+        return {"mode": rec["storageMode"], "authoritative": True,
+                "source": "registry", "evidence": None}
+    verdict = evidence_verdict(hero_evidence(cwd, root))
+    if verdict in (IN_REPO, GLOBAL):
+        remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
+        write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention)
+        return {"mode": verdict, "authoritative": True, "source": "backfilled", "evidence": verdict}
+    return {"mode": GLOBAL, "authoritative": False, "source": "provisional", "evidence": verdict}
+
+
+def resolve_artifact(cwd, in_repo_path, global_path, root=None):
+    """FR-6: an EXISTING artifact resolves to where it physically lives; a NEW artifact
+    resolves by the recorded mode."""
+    if os.path.exists(in_repo_path):
+        return in_repo_path
+    if os.path.exists(global_path):
+        return global_path
+    return in_repo_path if resolve(cwd, root)["mode"] == IN_REPO else global_path
+
+
 def ensure_project_store(cwd, root=None):
     """Create the per-project store (git repo + meta.json). Idempotent and safe under
     concurrent first-touch by parallel worktrees (§4.2): makedirs(exist_ok), guarded
