@@ -1,4 +1,4 @@
-<!-- escalation-version: 1 -->
+<!-- escalation-version: 2 -->
 # escalation-base
 
 The source of truth for **when a superheroes skill escalates to the owner vs. decides
@@ -67,10 +67,17 @@ ground truth is not eligible for autonomy → it GATEs.
 
 ## Presenting a GATE (`AskUserQuestion`)
 
-One decision, stated as a **what**, no jargon. Pros/cons in **owner-currency** (money/time/risk/UX).
-The **recommended** option first (marked), with reasoning. **Say whether it's reversible** ("we can
-change this later" vs "this is hard to undo"). Batch multiple GATEs into one prompt at a logical
-boundary.
+A recipe, in order — the message before the prompt lays out:
+1. **The decision & why it matters** — one plain `what`, no jargon, and the owner-currency stake
+   (money / time / risk / data / UX) riding on it.
+2. **The options** — 2–3, each with a one-line pro and con in **owner-currency** (never technical
+   detail they'd take on faith), and **whether it's reversible** ("we can change this later" vs
+   "this is hard to undo").
+3. **Your recommendation** — the option you'd pick and why, in one line, marked `(Recommended)`. No
+   confident pick? Say so ("close call — your call") rather than feigning neutrality.
+
+Keep the `AskUserQuestion` option labels crisp — the framing lives in the message above. Batch
+multiple GATEs into one prompt at a logical boundary; never interrupt serially.
 
 ## Scope
 

@@ -19,8 +19,8 @@ never with jargon.
 
 <HARD-GATE>
 Do NOT author the spec, write any code, mint a work-item, or hand off until you
-have presented the requirements (the **what**) and the owner has explicitly
-approved them. And do NOT consider Discovery finished until the owner gives their
+have presented the framing (the **what**) and the owner has explicitly
+approved it. And do NOT consider Discovery finished until the owner gives their
 final approval of the written spec (step 8) — review-crew advises, the owner
 decides. A spec can be short; it cannot be skipped, and its gates cannot be
 self-approved — you may *record the owner's* explicit approval (step 8), but never
@@ -35,7 +35,7 @@ Create a TodoWrite item for each step and complete them in order:
 2. **Research check** → research only if it helps (and the owner consents to spend)
 3. **Requirements dialogue** (one question at a time; EARS phrasing; run the coverage checklist)
 4. **UI/UX** when relevant (hand the owner a Claude Design prompt)
-5. **Present requirements → owner approves the *what*** ← HARD GATE
+5. **Confirm the framing → owner approves the *what*** ← HARD GATE
 6. **Author the spec** via the `writing-specs` skill
 7. **Review-spec** (automated gate; fix findings before the owner spends time)
 8. **Owner review & final approval** ← terminal gate; then ready for Plan
@@ -88,7 +88,24 @@ if neither is available, say so and proceed. Report findings in **plain language
 Refine the idea through natural dialogue, capturing requirements in **EARS** form:
 
 - **One question per message.** Prefer multiple-choice; use `AskUserQuestion` for
-  genuine either/or decisions with approachable options.
+  genuine either/or decisions.
+- **Frame every consequential choice — recipe, in order.** A choice is
+  *consequential* when getting it wrong would change the spec's scope, an
+  owner-visible behavior, the `size`, or cost/risk the owner carries. For each one,
+  the message *before* the question lays out, in this order:
+  1. **The decision & why it matters** — one or two plain sentences: what's being
+     decided and what it changes for the owner. No internal jargon; if a term is
+     unavoidable, define it in the same breath.
+  2. **The options** — 2–3 named options, each with a one-line plain-language *pro*
+     and *con* (the real trade-off, not a restatement of the label).
+  3. **Your recommendation** — name the option you'd pick and why, in one line, and
+     mark it `(Recommended)` in the choices. No confident pick? Say so ("close call —
+     your call") rather than feigning neutrality.
+
+  Then ask: the `AskUserQuestion` option labels stay crisp — the framing already
+  lives in the message above — with `(Recommended)` on your pick. A *trivial*
+  confirmation (naming, a yes/no with one obvious default, a detail with no downside)
+  needs none of this; ask it in a line.
 - **Phrase each requirement as EARS** (the owner answers in plain language; you
   reflect it back as a constrained sentence and confirm):
   - Ubiquitous: *The system shall &lt;response&gt;.*
@@ -154,13 +171,20 @@ the spec instead.
 comparison **on graphical clients only** — it does **not** render in a terminal, so
 never rely on it; always have a plain-text description as the fallback.
 
-### 5. Present requirements → owner approves the *what* (HARD GATE)
+### 5. Confirm the framing → owner approves the *what* (HARD GATE)
 
-Present the requirements back in sections scaled to complexity — purpose, who it's
-for, functional requirements, the significant-unhappy-path behaviors, non-functional
-outcomes, UI/UX, definition of done, assumptions, constraints, out-of-scope. Ask
-after each section whether it's right. **Do not proceed past this gate until the
-owner explicitly approves the *what*.** Revise and re-present as needed.
+Present a compact **decision brief** the owner can digest in under a minute — not a
+replay of every requirement (that is the spec, which they review at step 8):
+- **One line each:** what this is, who it's for, and the `size` you're assigning.
+- **Load-bearing decisions** — the handful of calls that shape the work: the
+  resolutions you reached on the consequential questions, plus any default you chose
+  on the owner's behalf. One line each.
+- **Still open** — anything unresolved or assumed that the owner should rule on now.
+
+Ask: *"Does this framing look right? Anything to change before I write it up?"*
+**Do not proceed past this gate until the owner approves the framing.** Revise and
+re-present as needed. The full, requirement-by-requirement review happens **once**,
+on the authored spec (step 8) — not twice.
 
 Decide two things here **yourself** — never make the owner pick them:
 - **Title / slug** — choose a concise, accurate work-item title from the approved
@@ -241,3 +265,5 @@ automated review ran** — never claim a review that didn't happen:
 | "The owner's sure, skip research" | Confidence isn't correctness. Offer a quick prior-art check on consequential calls. |
 | "review-spec passed, that's done" | review-crew advises; the **owner** has the final say (step 8). |
 | "Owner approved the idea, start planning" | The HARD GATE needs explicit approval of the *what*, then the written spec, before Plan. |
+| "Restate every requirement so they can approve" | Step 5 is a compact decision brief, not a spec replay. The requirement-by-requirement review is the spec (step 8) — don't double-review. |
+| "They can infer the trade-offs from the options" | A consequential question carries its own why-it-matters, per-option pro/con, and a recommendation (step 3) — in plain language, before the ask. |
