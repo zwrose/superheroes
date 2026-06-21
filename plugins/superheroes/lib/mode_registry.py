@@ -4,9 +4,11 @@ Stdlib-only. The authoritative per-project mode record + the one shared resolver
 hero reads. Ships inert: this module is consumed by tests/CLI now, heroes/init later.
 """
 import datetime
+import fcntl
 import json
 import os
 import subprocess
+from contextlib import contextmanager
 
 import control_plane
 import store_core
@@ -25,6 +27,25 @@ def config_key(cwd):
 def project_store_dir(cwd, root=None):
     base = root or control_plane.store_root()
     return os.path.join(base, "projects", config_key(cwd))
+
+
+@contextmanager
+def config_lock(cwd, root=None):
+    """Advisory flock on the project store's config.lock (§4.4). Non-blocking
+    try-acquire: yields True if acquired, False if held by another process.
+    OS-released when the fd closes — a holder that dies leaves no stuck lock."""
+    d = project_store_dir(cwd, root)
+    os.makedirs(d, exist_ok=True)
+    fd = os.open(os.path.join(d, "config.lock"), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
 
 
 def ensure_project_store(cwd, root=None):

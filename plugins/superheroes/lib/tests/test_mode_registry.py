@@ -35,3 +35,15 @@ def test_ensure_project_store_is_idempotent(tmp_path):
     a = mr.ensure_project_store(str(tmp_path), root=root)
     b = mr.ensure_project_store(str(tmp_path), root=root)
     assert a == b  # same dir, no error on second touch
+
+
+def test_config_lock_is_nonblocking_and_exclusive(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.ensure_project_store(str(tmp_path), root=root)
+    with mr.config_lock(str(tmp_path), root=root) as got1:
+        assert got1 is True
+        with mr.config_lock(str(tmp_path), root=root) as got2:
+            assert got2 is False        # held by the outer context — never blocks
+    with mr.config_lock(str(tmp_path), root=root) as got3:
+        assert got3 is True             # released after the outer context closed
