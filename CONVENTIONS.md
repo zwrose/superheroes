@@ -261,10 +261,15 @@ updated: <date>
   `writing-plans` emits one). Our header adds the **build contract**: `size`, `gates`,
   and the SDD clips — subagent-driven-development is invoked with the worktree
   **pre-verified, not created**, and **without** `finishing-a-development-branch`; the
-  **producer enforces** both clips at invocation. We target **superpowers ≥ 6.0** (6.0
+  **producer enforces** both clips at invocation.
+  We target **superpowers ≥ 6.0** (6.0
   added the Global Constraints / per-task Interfaces blocks to `writing-plans` and the
   single-`task-reviewer` SDD flow); the wrap captures the body verbatim, so a newer
   `writing-plans` body flows through unchanged.
+  The build worktree the SDD clip pre-verifies is the **managed** worktree
+  (`lib/buildtree.py`, issue #77): a deterministic home under `~/.superheroes-worktrees/`,
+  reuse-on-entry, a durable record, and tiered fail-closed teardown — the producer owns its
+  create/reclaim/reap, replacing the prior ad-hoc "establish a clean worktree".
 
 ### 3.3 Location and convertibility
 
