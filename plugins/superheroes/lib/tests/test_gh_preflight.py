@@ -101,6 +101,15 @@ def test_message_indeterminate_surfaces_underlying_error():
     assert "HTTP 503" in msg  # UFR-4: the underlying error is surfaced
 
 
+def test_message_no_access_includes_account_and_repo():
+    # the no_access branch appends the active account + repo for the operator (UFR-3).
+    probe = _ok_probe(push=False)  # account='alice', repo='alice/repo'
+    ok, cause, rem = gh_preflight.decide(probe, required='write')
+    assert cause == 'no_access'
+    msg = gh_preflight.message(probe, ok, cause, rem)
+    assert 'alice' in msg and 'alice/repo' in msg and gh_preflight.DOC in msg
+
+
 # ---- probe(): injected-runner world-reads ----
 
 class FakeProc:

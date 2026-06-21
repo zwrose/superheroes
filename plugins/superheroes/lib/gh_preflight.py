@@ -148,7 +148,7 @@ def probe(root, run=None):
 
 
 def _parse_args(argv):
-    """(required, root) from `--required <w|r>` / `--root <dir>`; defaults write / '.'."""
+    """(required, root) from `--required write|read` / `--root <dir>`; defaults write / '.'."""
     required, root = "write", "."
     i = 1
     while i < len(argv):

@@ -95,6 +95,7 @@ world-read below and worktree creation, so the gate precedes every GitHub operat
   then `journal.append(events, "parked", detail=<verdict.cause>)`, surface `verdict.message`
   (the cause + the exact `gh`/`git` fix command + the doc pointer), and **stop** — no
   world-read, no worktree, no GitHub write.
+- **no parseable verdict** (the command exits non-zero with no JSON on stdout — e.g. a broken install where `$LIB/gh_preflight.py` is missing or `python3` cannot run it) → fail **closed**, exactly like `ok:false`: `journal.append(events, "gate", detail="gh_preflight emitted no verdict — check the plugin install")` then `journal.append(events, "parked", detail="indeterminate")`, surface that message, and **stop**. Absent an affirmative `ok:true`, the run never proceeds (FR-6).
 
 The preflight is **read-only** (the enforcer permits its `gh`/`git` reads) and caches
 nothing: it re-runs on every entry, so once the operator fixes the cause a re-run/relaunch
