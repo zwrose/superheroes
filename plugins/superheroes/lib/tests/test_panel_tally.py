@@ -103,6 +103,12 @@ def test_present_deferred_excludes_severity_escalation():
     assert PT.present_deferred([f], deferred) == 0
 
 
+def test_present_deferred_counts_severity_downgrade():
+    f = _f("a.py", 1, "bug", "Important")
+    deferred = {PT._identity(f): "Critical"}
+    assert PT.present_deferred([f], deferred) == 1
+
+
 def test_present_deferred_ignores_identities_not_present_this_round():
     f = _f("a.py", 1, "bug", "Important")
     deferred = {"other.py::stale": "Important"}
@@ -144,6 +150,10 @@ def test_terminal_clean_with_skips_when_all_blockers_deferred():
 
 def test_terminal_halted_at_cap_with_nondeferred_blockers():
     assert _terminal(gate="blocking", present=2, deferred=0, rnd=7, mx=7) == "halted"
+
+
+def test_terminal_halted_when_breaker_halt_set():
+    assert _terminal(gate="blocking", present=1, deferred=0, fix="completed", rnd=1, mx=7, brk=True) == "halted"
 
 
 def _seed(tmp_path, rnd, per_reviewer):
@@ -210,7 +220,7 @@ def test_tally_malformed_deferred_set_does_not_mint_clean_with_skips(tmp_path):
     _seed(tmp_path, 1, {"code": [_f("a.py", 1, "known issue", "Important")]})
     open(PT.deferred_set_path(str(tmp_path)), "w").write("{ not json")
     v = PT.tally(str(tmp_path), 1, ["code"])
-    assert v["terminal"] not in ("clean", "clean-with-skips")
+    assert v["terminal"] == "continue" and v["gate"] == "blocking"
 
 
 def test_tally_cannot_certify_names_missing_angle_and_reports_finishers(tmp_path):

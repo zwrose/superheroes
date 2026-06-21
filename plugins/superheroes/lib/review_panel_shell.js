@@ -13,13 +13,15 @@
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep, maxRounds = 7 }) {
   if (!reviewerSet || reviewerSet.length === 0) {
     // empty roster is rejected by the core; surface its verdict without dispatching anything.
-    return await tallyAgent(runDir, 1, reviewerSet, maxRounds, 'no', 'completed')
+    return await tallyAgent(runDir, 1, reviewerSet || [], maxRounds, 'no', 'completed')
   }
   let round = 1
   while (true) {
     // 1. Fan out the panel — each reviewer writes findings-<name>.json into round-<N>/.
     await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round)))
     // 2. Deterministic tally (the core decides gate/confidence/terminal + writes the durable record).
+    // breakerHalt is intentionally 'no' in this thin template (the loop is bounded by maxRounds);
+    // wiring circuit_breaker.py for early-halt-on-recurrence is the consumer's responsibility (#88/#89).
     const verdict = await tallyAgent(runDir, round, reviewerSet, maxRounds, 'no', 'completed')
     // 3. The shell's only decision: stop unless the core says continue.
     if (verdict.terminal !== 'continue') return verdict
@@ -42,8 +44,8 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round) {
 // Run panel_tally.py via a thin command-runner leaf agent; returns the parsed, schema-validated verdict.
 async function tallyAgent(runDir, round, roster, maxRounds, breakerHalt, fixStatus) {
   const cmd =
-    `python3 plugins/superheroes/lib/panel_tally.py --run-dir ${shq(runDir)} --round ${round} ` +
-    `--roster ${shq(roster.join(','))} --max-rounds ${maxRounds} ` +
+    `python3 plugins/superheroes/lib/panel_tally.py --run-dir ${shq(runDir)} --round ${shq(String(round))} ` +
+    `--roster ${shq(roster.join(','))} --max-rounds ${shq(String(maxRounds))} ` +
     `--breaker-halt ${shq(breakerHalt)} --fix-status ${shq(fixStatus)}`
   const out = await agent(
     `Run exactly this command and return ONLY its stdout JSON, unchanged:\n\n${cmd}`,
@@ -56,13 +58,18 @@ async function tallyAgent(runDir, round, roster, maxRounds, breakerHalt, fixStat
 // resolved/deferred report into deferred-set.json (the core reads it next round). Returns false on
 // fix-step failure/timeout (UFR-3) — the shell does NOT decide the outcome, the core does.
 async function runFixStep(fixStep, verdict, runDir) {
-  const blockers = verdict.findings.filter((f) => f.severity === 'Critical' || f.severity === 'Important')
-  const report = await fixStep(blockers, runDir) // caller's leaf agent; may return null on failure
-  if (!report) return false
-  await recordDeferred(report, verdict, runDir) // append deferred identities (+severity) to deferred-set.json
-  return true
+  try {
+    const blockers = verdict.findings.filter((f) => f.severity === 'Critical' || f.severity === 'Important')
+    const report = await fixStep(blockers, runDir) // caller's leaf agent; may return null on failure
+    if (!report) return false
+    await recordDeferred(report, verdict, runDir) // append deferred identities (+severity) to deferred-set.json
+    return true
+  } catch (e) {
+    return false
+  }
 }
 
+// VERDICT_SCHEMA mirrors panel_tally.py's gate/terminal vocabulary — the single source of truth.
 const VERDICT_SCHEMA = {
   type: 'object',
   required: ['gate', 'confidence', 'findings', 'terminal'],
