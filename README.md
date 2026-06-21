@@ -128,6 +128,8 @@ ready-for-review** and gets CI green on a branch brought up to date with its bas
 hands you a live dev server + a plain-language readout. It **never merges** — that's always
 yours.
 
+> **GitHub access:** workhorse needs `gh` signed in with **write** access to the repo (it never merges). A fail-closed preflight checks this at startup — see [GitHub access](plugins/superheroes/skills/workhorse/reference/github-access.md).
+
 ### Commands
 
 | Command | Use it to… |
