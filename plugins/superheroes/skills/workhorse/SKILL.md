@@ -126,7 +126,7 @@ the build worktree's lifecycle via `buildtree` (`$LIB/buildtree.py`). Mint the b
   resolved) → **GATE**.
 
 **Backstop sweep + cleanup (FR-3/FR-4/FR-5/FR-10/FR-11).** On entry, after the tasks-gate
-check, run `buildtree.plan_sweep(ROOT, pr_info, active_work_item=WORK_ITEM,
+check **and the `reclaim_or_create` above** (so `result` is available), run `buildtree.plan_sweep(ROOT, pr_info, active_work_item=WORK_ITEM,
 active_path=result["path"])` — where `result` is the step-0
 `reclaim_or_create` outcome and `pr_info` maps each candidate branch to its
 `{pr_state, pr_head_oid}` from `gh pr view --json state,headRefOid` — and **present the

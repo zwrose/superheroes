@@ -1,5 +1,6 @@
 # plugins/superheroes/lib/tests/test_buildtree.py
 import os
+import pytest
 import buildtree
 
 
@@ -28,7 +29,6 @@ def test_worktree_path_deterministic_and_namespaced(monkeypatch, tmp_path):
     monkeypatch.setattr(buildtree.control_plane, "checkout_key", lambda cwd: "KEY2")
     assert buildtree.worktree_path("/repo", "wi-abc123", "deadbeefdeadbeef") != p
 # append to plugins/superheroes/lib/tests/test_buildtree.py
-import pytest
 
 
 def _entry(path="/wt/a", wi="wi-a", ch="h1"):

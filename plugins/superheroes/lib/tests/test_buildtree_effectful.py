@@ -234,9 +234,15 @@ def test_teardown_incomplete_when_worktree_remove_fails(tmp_path, monkeypatch):
 
 
 def test_plan_sweep_skips_branchless_worktree(tmp_path, monkeypatch):
-    # code-001: a managed-root worktree with no branch (detached HEAD) is skipped, not a crash.
+    # A managed-root worktree with no branch (e.g. detached HEAD) is skipped by the
+    # `if not branch: continue` guard, never reaching the reap decision. The record is
+    # cleared so the candidate's branch comes ONLY from the patched branch-less disk
+    # listing (plan_reconcile would otherwise carry the recorded real branch); pr_info
+    # keyed by None as merged means that WITHOUT the guard the worktree would become a
+    # REMOVE_KEEP_BRANCH candidate, so an empty result proves the guard fired.
     repo = _setup(tmp_path, monkeypatch)
     a = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    buildtree.record_write(buildtree.record_path(repo), [])
     real_list = buildtree.list_worktrees
     def fake_list(cwd):
         rows = real_list(cwd)
@@ -245,7 +251,8 @@ def test_plan_sweep_skips_branchless_worktree(tmp_path, monkeypatch):
                 row["branch"] = None
         return rows
     monkeypatch.setattr(buildtree, "list_worktrees", fake_list)
-    assert buildtree.plan_sweep(repo, {}, active_work_item="none") == []
+    pr_info = {None: {"pr_state": "merged", "pr_head_oid": "deadbeef"}}
+    assert buildtree.plan_sweep(repo, pr_info, active_work_item="none") == []
 
 
 def test_reclaim_create_survives_record_write_failure(tmp_path, monkeypatch):
