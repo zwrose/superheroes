@@ -49,3 +49,62 @@ def test_split_leaf_keeps_hyphenated_work_item():
     wi, ch = buildtree.split_leaf("/x/managed-build-worktree-lifecycle-97eb06-deadbeefdeadbeef")
     assert wi == "managed-build-worktree-lifecycle-97eb06"
     assert ch == "deadbeefdeadbeef"
+
+
+import pytest
+
+
+def _setup(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "wt"))
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "state"))  # isolate control-plane store
+    return repo
+
+
+def test_create_then_reuse_clean(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    r1 = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r1["outcome"] == buildtree.CREATED and os.path.isdir(r1["path"])
+    r2 = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r2["outcome"] == buildtree.REUSED and r2["path"] == r1["path"]
+
+
+def test_dirty_worktree_is_preserved_never_clobbered(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    (open(os.path.join(r["path"], "scratch"), "w")).write("uncommitted")
+    r2 = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r2["outcome"] == buildtree.PRESERVE_NOTIFY
+    assert os.path.exists(os.path.join(r["path"], "scratch"))     # not clobbered
+
+
+def test_non_empty_non_worktree_leaf_is_surfaced_not_deleted(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    p = buildtree.worktree_path(repo, "wi-a", "h1")
+    os.makedirs(p)
+    open(os.path.join(p, "owner-file"), "w").write("precious")
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r["outcome"] == buildtree.PRESERVE_NOTIFY
+    assert os.path.exists(os.path.join(p, "owner-file"))          # never raw-deleted
+
+
+def test_leaf_missing_prunable_is_pruned_and_recreated(tmp_path, monkeypatch):
+    repo = _setup(tmp_path, monkeypatch)
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    import shutil
+    shutil.rmtree(r["path"])                                       # owner hand-deletes the leaf
+    r2 = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r2["outcome"] == buildtree.CREATED and os.path.isdir(r2["path"])
+    # the branch survived the prune+recreate
+    assert buildtree.branch_exists(repo, buildtree.branch_name("wi-a", "h1"))
+
+
+def test_create_gate_failclosed_on_add_failure(tmp_path, monkeypatch):
+    # `git worktree add` itself fails (e.g. a stale/locked registry entry) -> GATE,
+    # never raises, never builds over.
+    repo = _setup(tmp_path, monkeypatch)
+    real_git = buildtree._git
+    monkeypatch.setattr(buildtree, "_git", lambda cwd, *a:
+                        (1, "") if a[:2] == ("worktree", "add") else real_git(cwd, *a))
+    r = buildtree.reclaim_or_create(repo, "wi-a", "h1")
+    assert r["outcome"] == buildtree.GATE_FAILCLOSED

@@ -233,3 +233,64 @@ def split_leaf(path):
         wi, ch = leaf.rsplit("-", 1)
         return wi, ch
     return leaf, ""
+
+
+# append to plugins/superheroes/lib/buildtree.py
+REUSED = "reused"
+CREATED = "created"
+
+
+def create(cwd, path, branch, rec_file, work_item, content_hash, *, existing_branch):
+    """Effectful, internal to reclaim_or_create (kept separate for direct testing —
+    the devserver.start split). `git worktree add` onto an absent/empty leaf, then
+    record (FR-9). If the add itself fails (e.g. a stale/locked registry entry the
+    filesystem-only emptiness check can't see) -> GATE_FAILCLOSED, never raises."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if existing_branch:
+        rc, _ = _git(cwd, "worktree", "add", path, branch)
+    else:
+        rc, _ = _git(cwd, "worktree", "add", "-b", branch, path)
+    if rc != 0:
+        return {"outcome": GATE_FAILCLOSED, "path": path, "branch": branch}
+    record_add(rec_file, {"workItem": work_item, "contentHash": content_hash,
+                          "branch": branch, "path": path})
+    return {"outcome": CREATED, "path": path, "branch": branch}
+
+
+def reclaim_or_create(cwd, work_item, content_hash, *, root=None, store_root=None):
+    """FR-1/FR-2 reuse/create partition (never raises; adds no destructive primitive):
+      - recognized worktree, leaf present & healthy, clean -> REUSED
+      - leaf present, dirty/unreadable -> PRESERVE_NOTIFY (UFR-1, never clobber)
+      - registered-but-leaf-missing (prunable) -> prune + re-create on the surviving
+        branch (non-destructive — the tree is already gone, the branch ref is untouched)
+      - absent/empty leaf -> git worktree add (CREATED); the add itself failing -> GATE
+      - non-empty, not a recognized worktree -> PRESERVE_NOTIFY (surface, never delete)"""
+    path = worktree_path(cwd, work_item, content_hash, root=root)
+    branch = branch_name(work_item, content_hash)
+    rec_file = record_path(cwd, store_root=store_root)
+    wts = list_worktrees(cwd)
+    rows = [w for w in (wts or []) if w.get("path") == path]
+    registered = bool(rows)
+    prunable = any(w.get("prunable") for w in rows)
+    leaf_present = os.path.isdir(path)
+
+    if registered and leaf_present and not prunable:
+        if is_dirty(path):
+            return {"outcome": PRESERVE_NOTIFY, "path": path, "branch": branch}
+        record_add(rec_file, {"workItem": work_item, "contentHash": content_hash,
+                              "branch": branch, "path": path})
+        return {"outcome": REUSED, "path": path, "branch": branch}
+
+    if registered and (prunable or not leaf_present):
+        # the owner hand-deleted the leaf: prune the dangling registration, re-create on
+        # the surviving branch. Non-destructive; not a UFR-1 case.
+        _git(cwd, "worktree", "prune")
+        return create(cwd, path, branch, rec_file, work_item, content_hash,
+                      existing_branch=branch_exists(cwd, branch))
+
+    if leaf_empty_or_absent(path):
+        return create(cwd, path, branch, rec_file, work_item, content_hash,
+                      existing_branch=branch_exists(cwd, branch))
+
+    # non-empty, not a recognized worktree -> never touch; surface for the owner.
+    return {"outcome": PRESERVE_NOTIFY, "path": path, "branch": branch}
