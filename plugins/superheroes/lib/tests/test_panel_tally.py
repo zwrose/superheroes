@@ -144,3 +144,78 @@ def test_terminal_clean_with_skips_when_all_blockers_deferred():
 
 def test_terminal_halted_at_cap_with_nondeferred_blockers():
     assert _terminal(gate="blocking", present=2, deferred=0, rnd=7, mx=7) == "halted"
+
+
+def _seed(tmp_path, rnd, per_reviewer):
+    rd = os.path.join(str(tmp_path), "round-%d" % rnd)
+    os.makedirs(rd, exist_ok=True)
+    for reviewer, findings in per_reviewer.items():
+        with open(os.path.join(rd, "findings-%s.json" % reviewer), "w") as fh:
+            json.dump(findings, fh)
+
+
+def test_tally_empty_roster_rejected_as_cannot_certify(tmp_path):
+    v = PT.tally(str(tmp_path), 1, [], context_files=None)
+    assert v["terminal"] == "cannot-certify" and v["gate"] == "cannot-certify"
+
+
+def test_tally_clean_round_writes_durable_record(tmp_path):
+    _seed(tmp_path, 1, {"code": [], "security": []})
+    v = PT.tally(str(tmp_path), 1, ["code", "security"])
+    assert v["terminal"] == "clean" and v["gate"] == "clean"
+    rec = json.load(open(PT.result_path(str(tmp_path))))
+    assert rec["action"] == "exit_clean" and "clean" in rec["reason"]
+
+
+def test_tally_missing_findings_file_biases_cannot_certify_not_clean(tmp_path):
+    # security file absent → that reviewer did not complete → coverage gap, never silent clean
+    _seed(tmp_path, 1, {"code": []})
+    v = PT.tally(str(tmp_path), 1, ["code", "security"])
+    assert v["terminal"] == "cannot-certify"
+
+
+def test_tally_malformed_findings_file_is_failsafe_non_clean(tmp_path):
+    rd = os.path.join(str(tmp_path), "round-1")
+    os.makedirs(rd, exist_ok=True)
+    open(os.path.join(rd, "findings-code.json"), "w").write("{ not json")
+    v = PT.tally(str(tmp_path), 1, ["code"])
+    assert v["terminal"] != "clean"
+
+
+def test_tally_fix_failed_yields_halted(tmp_path):
+    _seed(tmp_path, 2, {"code": [_f("a.py", 1, "bug", "Important")]})
+    v = PT.tally(str(tmp_path), 2, ["code"], fix_status="failed")
+    assert v["terminal"] == "halted"
+
+
+def test_tally_is_deterministic_and_idempotent(tmp_path):
+    _seed(tmp_path, 1, {"code": [_f("a.py", 1, "bug", "Important")]})
+    a = PT.tally(str(tmp_path), 1, ["code"])
+    b = PT.tally(str(tmp_path), 1, ["code"])
+    assert a == b
+
+
+def test_tally_clean_with_skips_when_present_blocker_is_deferred(tmp_path):
+    blocker = _f("a.py", 1, "known issue", "Important")
+    _seed(tmp_path, 1, {"code": [blocker]})
+    with open(PT.deferred_set_path(str(tmp_path)), "w") as fh:
+        json.dump({PT._identity(blocker): "Important"}, fh)
+    v = PT.tally(str(tmp_path), 1, ["code"])
+    assert v["terminal"] == "clean-with-skips"
+
+
+def test_tally_malformed_deferred_set_does_not_mint_clean_with_skips(tmp_path):
+    # the most dangerous silent-clean vector: a corrupt deferred-set must NOT read as
+    # "everything deferred" → the present blocker still counts → never clean/clean-with-skips.
+    _seed(tmp_path, 1, {"code": [_f("a.py", 1, "known issue", "Important")]})
+    open(PT.deferred_set_path(str(tmp_path)), "w").write("{ not json")
+    v = PT.tally(str(tmp_path), 1, ["code"])
+    assert v["terminal"] not in ("clean", "clean-with-skips")
+
+
+def test_tally_cannot_certify_names_missing_angle_and_reports_finishers(tmp_path):
+    _seed(tmp_path, 1, {"code": [_f("a.py", 1, "bug", "Minor")]})  # security absent
+    v = PT.tally(str(tmp_path), 1, ["code", "security"])
+    assert v["terminal"] == "cannot-certify"
+    assert v["missing"] == ["security"] and "security" in v["reason"]
+    assert any(f["title"] == "bug" for f in v["findings"])  # the finisher's findings still reported

@@ -161,3 +161,93 @@ def decide_terminal(gate, present_blocking, present_deferred_count, fix_status, 
     action, _mandatory, reason = loop_state.decide(
         blocking_fixed, present_deferred_count, rnd, max_rounds, bool(breaker_halt))
     return _ACTION_TO_TERMINAL[action], reason
+
+
+# ── fail-safe reads + persistence ──
+def _safe_read_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def _atomic_write_json(path, obj):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, sort_keys=True)
+    os.replace(tmp, path)
+
+
+def _persist(run_dir, rnd, verdict):
+    _atomic_write_json(verdict_path(run_dir, rnd), verdict)
+    # durable terminal record via the review_result helper (unchanged); action in loop_state
+    # vocabulary keeps read_result happy, the precise terminal + reason ride in `reason`.
+    review_result.write_result(
+        result_path(run_dir), _terminal_to_action(verdict["terminal"]), rnd,
+        "%s: %s" % (verdict["terminal"], verdict.get("reason", "")))
+
+
+def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="completed", context_files=None):
+    """Run the deterministic tally for one round. Fail-safe across EVERY read — a missing/malformed
+    roster entry, findings file, or deferred-set biases to a non-clean terminal, never a silent
+    `clean`. Persists the verdict + a durable terminal record."""
+    try:
+        if not roster:
+            verdict = {"gate": "cannot-certify", "confidence": "low", "findings": [], "missing": [],
+                       "terminal": "cannot-certify", "reason": "empty reviewer set — nothing to certify"}
+            _persist(run_dir, rnd, verdict)
+            return verdict
+        completed, all_findings = [], []
+        for reviewer in roster:
+            data = _safe_read_json(findings_path(run_dir, rnd, reviewer), None)
+            if not isinstance(data, list):
+                continue  # not completed → coverage gap (fail-safe)
+            completed.append(reviewer)
+            all_findings.extend(data)
+        compiled = compile_findings(all_findings, context_files)
+        gate, confidence, missing = round_gate(compiled, roster, completed)
+        deferred_set = _safe_read_json(deferred_set_path(run_dir), {})
+        if not isinstance(deferred_set, dict):
+            deferred_set = {}  # malformed → nothing deferred → blockers count (non-clean bias)
+        present_blocking = sum(1 for f in compiled if f.get("severity") in BLOCKING)
+        pdef = present_deferred(compiled, deferred_set)
+        terminal, reason = decide_terminal(
+            gate, present_blocking, pdef, fix_status, rnd, max_rounds, breaker_halt)
+        if terminal == "cannot-certify" and missing:  # NAME the missing review angles (FR-5/UFR-2)
+            reason = "coverage incomplete — missing review angle(s): %s" % ", ".join(missing)
+        verdict = {"gate": gate, "confidence": confidence, "findings": compiled, "missing": missing,
+                   "terminal": terminal, "reason": reason}
+        _persist(run_dir, rnd, verdict)
+        return verdict
+    except Exception as exc:  # absolute fail-safe — any unforeseen error halts, never clean
+        verdict = {"gate": "cannot-certify", "confidence": "low", "findings": [], "missing": [],
+                   "terminal": "halted", "reason": "tally failed: %s" % exc}
+        try:
+            _persist(run_dir, rnd, verdict)
+        except Exception:
+            pass
+        return verdict
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="deterministic review-panel tally (review-crew)")
+    ap.add_argument("--run-dir", required=True)
+    ap.add_argument("--round", type=int, required=True, dest="rnd")
+    ap.add_argument("--roster", required=True, help="comma-separated reviewer names")
+    ap.add_argument("--max-rounds", type=int, default=7)
+    ap.add_argument("--breaker-halt", choices=["yes", "no"], default="no")
+    ap.add_argument("--fix-status", choices=["completed", "failed"], default="completed")
+    ap.add_argument("--context-files", default=None, help="comma-separated reviewed-file allowlist")
+    args = ap.parse_args(argv[1:])
+    roster = [r for r in args.roster.split(",") if r]
+    context_files = args.context_files.split(",") if args.context_files else None
+    verdict = tally(args.run_dir, args.rnd, roster, args.max_rounds,
+                    args.breaker_halt == "yes", args.fix_status, context_files)
+    sys.stdout.write(json.dumps(verdict, sort_keys=True) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
