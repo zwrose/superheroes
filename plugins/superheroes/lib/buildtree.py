@@ -119,3 +119,15 @@ def reap_decision(pr_state, *, dirty, branch_deletable):
     if pr_state == "open":
         return SKIP_OPEN
     return GATE_FAILCLOSED
+
+
+# append to plugins/superheroes/lib/buildtree.py
+def branch_deletable(local_tip, pr_head_oid, *, determinable):
+    """UFR-6, squash-safe, fail-closed. Deletable only when the comparison is
+    determinable AND the local branch tip is exactly the merged PR head — i.e. the
+    branch introduces no commits beyond what the PR merged. (Comparing to the PR head,
+    not default-branch ancestry, is what makes this squash-safe.) Any uncertainty or
+    divergence -> not deletable (preserve)."""
+    if not determinable:
+        return False
+    return bool(local_tip) and bool(pr_head_oid) and local_tip == pr_head_oid

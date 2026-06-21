@@ -96,3 +96,13 @@ def test_reap_decision_closed_and_open_and_unknown():
         buildtree.SKIP_OPEN                                  # UFR-3
     assert buildtree.reap_decision("unknown", dirty=False, branch_deletable=False) == \
         buildtree.GATE_FAILCLOSED                            # UFR-2
+# append to plugins/superheroes/lib/tests/test_buildtree.py
+def test_branch_deletable_only_when_tip_equals_pr_head():
+    assert buildtree.branch_deletable("abc", "abc", determinable=True) is True
+    assert buildtree.branch_deletable("abc", "def", determinable=True) is False  # ahead/diverged
+
+
+def test_branch_deletable_fail_closed():
+    assert buildtree.branch_deletable("abc", "abc", determinable=False) is False
+    assert buildtree.branch_deletable(None, "abc", determinable=True) is False
+    assert buildtree.branch_deletable("abc", None, determinable=True) is False
