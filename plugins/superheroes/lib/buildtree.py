@@ -154,3 +154,82 @@ def plan_reconcile(disk_entries, record_entries):
         if p and p not in by_path:
             by_path[p] = e
     return {"to_record": to_record, "candidates": list(by_path.values())}
+
+
+# append to plugins/superheroes/lib/buildtree.py
+def _git(cwd, *args):
+    """Run a git command; return (returncode, stdout). Never raises."""
+    try:
+        r = subprocess.run(["git", "-C", cwd, *args],
+                           capture_output=True, text=True, timeout=30)
+        return r.returncode, r.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+
+
+def list_worktrees(cwd):
+    """Parse `git worktree list --porcelain`. Returns a list of {path, branch, prunable}
+    on success (possibly empty), or **None** on a failed/garbled read (the fail-closed
+    signal: the sweep then reaps nothing and retains the record)."""
+    rc, out = _git(cwd, "worktree", "list", "--porcelain")
+    if rc != 0:
+        return None
+    entries, cur = [], None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            if cur is not None:
+                entries.append(cur)
+            cur = {"path": os.path.realpath(line[9:]), "branch": None, "prunable": False}
+        elif cur is None:
+            continue
+        elif line.startswith("branch "):
+            ref = line[7:]
+            cur["branch"] = ref[11:] if ref.startswith("refs/heads/") else ref
+        elif line.startswith("prunable"):
+            cur["prunable"] = True
+    if cur is not None:
+        entries.append(cur)
+    return entries
+
+
+def is_dirty(path):
+    """True if the worktree has uncommitted changes, OR if cleanliness cannot be
+    determined (fail-closed — an unreadable `git status` reads as dirty, so UFR-1
+    preserves it)."""
+    rc, out = _git(path, "status", "--porcelain")
+    if rc != 0:
+        return True
+    return out.strip() != ""
+
+
+def branch_exists(cwd, branch):
+    rc, _ = _git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch)
+    return rc == 0
+
+
+def rev_parse(cwd, branch):
+    rc, out = _git(cwd, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch)
+    return out.strip() if rc == 0 and out.strip() else None
+
+
+def leaf_empty_or_absent(path):
+    """True iff the path is absent or an empty directory (so `git worktree add` accepts
+    it). Fail-closed: an unreadable leaf is treated as non-empty (False) — never deleted,
+    never built over."""
+    if not os.path.exists(path):
+        return True
+    try:
+        return os.path.isdir(path) and not os.listdir(path)
+    except OSError:
+        return False
+
+
+def split_leaf(path):
+    """Parse (work_item, content_hash) from a deterministic leaf '<work-item>-<hash>'.
+    The content-hash is the final hyphen-delimited segment; the work-item slug (which
+    itself contains hyphens) is everything before it."""
+    leaf = os.path.basename(path.rstrip(os.sep))
+    if "-" in leaf:
+        wi, ch = leaf.rsplit("-", 1)
+        return wi, ch
+    return leaf, ""
