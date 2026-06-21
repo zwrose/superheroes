@@ -135,7 +135,7 @@ def write_keys_json(entry_dir, ident):
                  }, indent=2))
 
 
-def resolve_global(cwd, root, _consumer="store_core"):
+def resolve_global(cwd, root, _consumer="store_core", heal=True):
     """Find the live global entry for cwd via key pointers (remote preferred),
     self-healing dangling/stale pointers.
 
@@ -174,16 +174,16 @@ def resolve_global(cwd, root, _consumer="store_core"):
             f"{_consumer}: key disagreement — both keys point at live but "
             "different entries; preferring the remote-keyed entry\n")
 
-    # Self-heal: point both available keys at the chosen live entry.
+    # Self-heal: point both available keys at the chosen live entry (skipped when heal=False).
     healed = False
-    if gh and p_gitdir != entry_id:
+    if heal and gh and p_gitdir != entry_id:
         write_pointer(root, gh, entry_id)
         healed = True
-    if rh and p_remote != entry_id:
+    if heal and rh and p_remote != entry_id:
         write_pointer(root, rh, entry_id)
         healed = True
 
     entry_dir = os.path.join(root, "entries", entry_id)
-    if healed:
+    if heal and healed:
         write_keys_json(entry_dir, ident)
     return {"entry_id": entry_id, "dir": entry_dir, "healed": healed}
