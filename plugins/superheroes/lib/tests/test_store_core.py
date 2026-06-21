@@ -307,3 +307,22 @@ def test_normalize_remote_golden_values():
     assert sc.normalize_remote("ssh://git@github.com:22/org/repo.git") == "github.com/org/repo"
     assert sc.normalize_remote("") is None
     assert sc.normalize_remote(None) is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_global — heal=False read-only mode
+# ---------------------------------------------------------------------------
+
+def test_resolve_global_heal_false_is_read_only(tmp_path):
+    root = str(tmp_path / "store")
+    repo = tmp_path / "repo"; repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    ident = sc.derive_identifiers(str(repo))
+    entry = os.path.join(root, "entries", "e1"); os.makedirs(entry)
+    # only the gitdir pointer is healthy; the remote pointer is absent (a heal opportunity)
+    sc.write_pointer(root, ident["gitdir_hash"], "e1")
+    before = sorted(os.listdir(os.path.join(root, "keys")))
+    g = sc.resolve_global(str(repo), root, heal=False)
+    assert g is not None and g["entry_id"] == "e1" and g["healed"] is False
+    assert sorted(os.listdir(os.path.join(root, "keys"))) == before  # no new pointer written
+    assert not os.path.exists(os.path.join(entry, "keys.json"))      # no keys.json written
