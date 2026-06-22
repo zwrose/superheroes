@@ -294,6 +294,13 @@ def _build_parser():
     rg.add_argument("--work-item", required=True)
     rg.add_argument("--doc", required=True, choices=DOC_TYPES)
     rg.add_argument("--root", default=".")
+
+    rw = sub.add_parser("resolve-write",
+                        help="resolve the mode-aware write path, ensuring ignore coverage")
+    rw.add_argument("--work-item", required=True)
+    rw.add_argument("--doc", required=True, choices=DOC_TYPES)
+    rw.add_argument("--root", default=".")
+    rw.add_argument("--cwd", default=None)
     return p
 
 
@@ -301,6 +308,39 @@ def main(argv):
     args = _build_parser().parse_args(argv[1:])
     if args.cmd == "mint":
         sys.stdout.write(mint_work_item(args.title, args.nonce) + "\n")
+        return 0
+    if args.cmd == "resolve-write":
+        import architect_config, mode_registry
+        cwd = args.cwd or args.root
+        try:
+            d = resolve_work_item_dir(args.work_item, root=args.root, cwd=cwd)
+        except mode_registry.UnknownSchemaVersion as exc:
+            sys.stderr.write("definition_doc: storage mode could not be determined (%s) — "
+                             "repair the mode record first; refusing to guess.\n" % exc)
+            return 1
+        # In-repo + gitignored policy → ensure coverage or refuse (UFR-8). Record a provisional
+        # policy when none exists (UFR-1).
+        pol = architect_config.read_policy(cwd)
+        if pol is None:
+            rec = architect_config.analyze_repo(args.root)
+            if architect_config.write_policy(cwd, {**rec, "confirmed": False}) is None:
+                sys.stderr.write("definition_doc: note — provisional doc-policy could not be "
+                                 "recorded (store contended); proceeding.\n")
+            pol = {**rec, "confirmed": False}
+        # is_inrepo via a path-boundary check (not bare startswith, which false-positives on
+        # a sibling like /repo-backup): the resolved dir is under the repo root.
+        root_abs = os.path.abspath(args.root)
+        d_abs = os.path.abspath(d)
+        is_inrepo = d_abs == root_abs or d_abs.startswith(root_abs + os.sep)
+        if is_inrepo and pol.get("visibility") == architect_config.GITIGNORED:
+            if not architect_config.ensure_ignored(args.root, pol["location"]):
+                sys.stderr.write("definition_doc: refusing to write — the kept-local docs "
+                                 "location could not be kept out of version control "
+                                 "(already tracked or .gitignore unwritable). Resolve it "
+                                 "before writing.\n")
+                return 1
+        os.makedirs(d, exist_ok=True)
+        sys.stdout.write(os.path.join(d, args.doc + ".md") + "\n")
         return 0
     if args.cmd == "frontmatter":
         fm = frontmatter(

@@ -349,3 +349,72 @@ def test_resolve_propagates_unknown_schema(tmp_path, monkeypatch):
     monkeypatch.setattr(mode_registry, "resolve", boom)
     with pytest.raises(mode_registry.UnknownSchemaVersion):
         DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+
+
+import json as _json
+
+
+def _git_repo(path):
+    subprocess.run(["git", "init", "-q", path], check=True)
+    subprocess.run(["git", "-C", path, "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", path, "config", "user.name", "t"], check=True)
+
+
+def _resolve_write(tmp, doc="spec", store=None):
+    args = [sys.executable, _MODULE_PATH, "resolve-write", "--work-item", WI,
+            "--doc", doc, "--root", str(tmp), "--cwd", str(tmp)]
+    env = dict(os.environ)
+    return subprocess.run(args, capture_output=True, text=True, env=env)
+
+
+def test_resolve_write_prints_path_inrepo(tmp_path):
+    # A fresh repo with an in-repo spec anchors in-repo; the verb prints the .md path, exit 0.
+    d = os.path.join(str(tmp_path), "docs", "superheroes", WI)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "spec.md"), "w").write("x")
+    out = _resolve_write(tmp_path)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().endswith(os.path.join(WI, "spec.md"))
+
+
+def test_resolve_write_halts_on_unknown_schema(tmp_path):
+    # UFR-7: a NEWER registry schemaVersion is undeterminable → exit 1, no guessed write,
+    # an owner-facing message. Drop a newer-schema registry into the project store that
+    # mode_registry.resolve will read.
+    _git_repo(str(tmp_path))
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(_REPO_ROOT, "plugins/superheroes/lib"))
+    import mode_registry as _mr
+    store = _mr.project_store_dir(str(tmp_path))
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, "registry.json"), "w") as fh:
+        _json.dump({"schemaVersion": 999, "storageMode": "global",
+                    "remoteKey": None, "createdAt": "t"}, fh)
+    out = _resolve_write(tmp_path)
+    assert out.returncode == 1
+    assert "could not be determined" in out.stderr
+
+
+def test_resolve_write_refuses_gitignored_but_tracked(tmp_path):
+    # UFR-8: a gitignored policy whose location is already tracked cannot be kept local →
+    # refuse the write (exit 1, no exposed doc).
+    repo = str(tmp_path)
+    _git_repo(repo)
+    loc = os.path.join(repo, "docs", "superheroes")
+    os.makedirs(loc, exist_ok=True)
+    open(os.path.join(loc, "tracked.md"), "w").write("x")
+    subprocess.run(["git", "-C", repo, "add", "docs/superheroes/tracked.md"], check=True)
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(_REPO_ROOT, "plugins/superheroes/lib"))
+    import mode_registry as _mr, architect_config as _ac
+    # record an in-repo mode + a gitignored policy for this location
+    store = _mr.project_store_dir(repo)
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, "registry.json"), "w") as fh:
+        _json.dump({"schemaVersion": 1, "storageMode": "in-repo",
+                    "remoteKey": None, "createdAt": "t"}, fh)
+    _ac.write_policy(repo, {"location": "docs/superheroes",
+                            "visibility": "gitignored", "confirmed": True})
+    out = _resolve_write(tmp_path)
+    assert out.returncode == 1
+    assert "refusing to write" in out.stderr
