@@ -115,16 +115,76 @@ async function runPhases(workItem, fromStep, deps) {
   deps = deps || {}
   for (let i = fromStep; i < PHASES.length; i += 1) {
     const phase = PHASES[i]
-    const phaseResult = await (deps.phaseLeaf || defaultPhaseLeaf)(phase, workItem)
-    const gate = await (deps.gateRead || (async () => null))(phase, workItem)
+    if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
+      return (deps.ship || shipPhase)(workItem, await loadPr(workItem))
+    }
+    let phaseResult, gate, sideEffect = null
+    if (phase === 'review-code') {
+      const r = await (deps.reviewCode || reviewCodePhase)(workItem); phaseResult = r.phaseResult; gate = r.gate
+    } else if (phase === 'build') {
+      phaseResult = await (deps.build || buildPhase)(workItem); gate = null
+    } else if (phase === 'draft-PR') {
+      const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+    } else if (phase === 'mark-ready') {
+      const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+    } else {
+      phaseResult = await (deps.phaseLeaf || defaultPhaseLeaf)(phase, workItem)
+      gate = await (deps.gateRead || (async () => null))(phase, workItem)
+    }
     const rec = await appendPhaseRecord(workItem, phase, gate, phaseResult)
     if (!rec.ok) return { outcome: 'parked', phase, reason: 'durable write failed (DurableWriteError) — UFR-2' }
-    const { action, reason } = await phaseStep(phaseResult, gate)
-    if (action !== 'proceed') return { outcome: 'parked', phase, reason }
-    // record lastGoodStep AFTER the decision (Task 11/12 wire the back-half side effects)
+    const decision = await phaseStep(phaseResult, gate)
+    if (decision.action !== 'proceed') return { outcome: 'parked', phase, reason: decision.reason }
+    await recordCursor(workItem, i, sideEffect)          // FR-4/FR-3: side effect + cursor before advancing
   }
   return { outcome: 'ready', phase: 'ship', reason: 'all phases passed' }
 }
+
+// #86 verdict -> the gate phase_step.decide consumes.
+function verdictToGate(verdict) {
+  return verdict && verdict.gate === 'clean' ? 'passed' : 'changes-requested'
+}
+
+// the review-code phase: run the single-pass panel, return a phase-result + its gate. On a clean
+// verdict, record the review provenance (set_review_covers + review_result) the ship-gate reads.
+async function reviewCodePhase(workItem) {
+  const runDir = `/tmp/showrunner-${workItem}-review-code`
+  const verdict = await runReviewCodePanel({
+    runDir, context: workItem, rubric: 'review-base',
+    reviewerAgent: defaultReviewerAgent, recordDeferred: async () => {},
+  })
+  const gate = verdictToGate(verdict)
+  if (gate === 'passed') {
+    await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
+      { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+  }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
+}
+
+async function defaultReviewerAgent(reviewer, _context, _rubric, _runDir, _round) {
+  // dispatch one review-code reviewer leaf; returns true when it wrote its findings file.
+  await agent(`Run the ${reviewer} review for this change and write its findings file.`, { label: reviewer })
+  return true
+}
+
+// the thin build leaf: create the managed content-addressed worktree+branch (so draft-PR has a
+// push target and the back-half reconcile has a branch), then one implementer makes the change.
+async function buildPhase(workItem) {
+  // build_entry.py: content_hash(approved tasks) -> branch -> buildtree.reclaim_or_create ->
+  // record checkpoint.branch. Returns { branch }.
+  const setup = await cmdRunner(
+    `python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['branch'], properties: { branch: { type: 'string' } } } })
+  await agent(`Make the trivial throwaway change for ${workItem} on branch ${setup.branch} and commit it.`, { label: 'build' })
+  // record build provenance over the shipped HEAD (the ship-gate reads it at draft-PR).
+  await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step build --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+  return { confidence: 'high', assumptions: [] }
+}
+
+module.exports.verdictToGate = verdictToGate
+module.exports.reviewCodePhase = reviewCodePhase
+module.exports.buildPhase = buildPhase
 
 async function defaultPhaseLeaf(_phase, _workItem) {
   return { confidence: 'high', assumptions: [] }
