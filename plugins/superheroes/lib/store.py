@@ -141,10 +141,15 @@ def create(cwd, location, root):
             "state_dir": d["state_dir"]}
 
 
-def decide_location(env_value, interactive):
-    if env_value in ("in-repo", "global"):
-        return env_value
-    return "ask" if interactive else "global"
+def decide_location(env_value, interactive, cwd=None, root=None):
+    """Band-wide registry-aware create-time decision (CONVENTIONS §2.3/§2.4): env
+    override wins, else the recorded/backfilled band mode, else (interactive) 'ask' /
+    (headless) provisional 'global'. Delegates to the one shared resolver so
+    test-pilot and review-crew never diverge. Lazy import avoids an import cycle;
+    root defaults to the registry's own project store (NOT test-pilot's store_root)."""
+    import mode_registry
+    return mode_registry.decide_mode(
+        cwd if cwd is not None else os.getcwd(), env_value, interactive, root=root)
 
 
 def _parse_kv(args, flag, default=None):

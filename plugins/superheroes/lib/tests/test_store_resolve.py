@@ -74,11 +74,22 @@ def test_worktrees_share_an_entry(tmp_path):
     assert a["state_dir"] == b["state_dir"]
 
 
-def test_decide_location():
-    assert store.decide_location("in-repo", True) == "in-repo"
-    assert store.decide_location("global", False) == "global"
-    assert store.decide_location(None, True) == "ask"
-    assert store.decide_location(None, False) == "global"
+def test_decide_location_greenfield_delegates_to_decide_mode(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    assert store.decide_location("in-repo", True, cwd=repo, root=root) == "in-repo"
+    assert store.decide_location("global", False, cwd=repo, root=root) == "global"
+    assert store.decide_location(None, True, cwd=repo, root=root) == "ask"
+    assert store.decide_location(None, False, cwd=repo, root=root) == "global"
+    assert store.decide_location("bogus", True, cwd=repo, root=root) == "ask"  # invalid env falls through
+
+
+def test_decide_location_honors_recorded_mode(tmp_path):
+    import mode_registry as mr
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    mr.write_registry(repo, mr.IN_REPO, None, root=root)
+    assert store.decide_location(None, True, cwd=repo, root=root) == "in-repo"  # FR-4, no "ask"
 
 
 def test_resolve_global_self_heals_dangling_remote_pointer(tmp_path):
