@@ -168,11 +168,20 @@ def test_cli_mint(capsys):
     assert rc == 0 and out.strip() == WI
 
 
-def test_cli_path_and_dir(capsys):
-    rc, out = _run_main(["path", "--work-item", WI, "--doc", "spec", "--root", "/r"], capsys)
-    assert rc == 0 and out.strip() == "/r/docs/superheroes/%s/spec.md" % WI
-    rc, out = _run_main(["dir", "--work-item", WI, "--root", "/r"], capsys)
-    assert rc == 0 and out.strip() == "/r/docs/superheroes/" + WI
+def test_cli_path_and_dir(tmp_path):
+    # spec present in-repo → spec-anchored resolution returns the in-repo layout deterministically
+    d = os.path.join(str(tmp_path), "docs", "superheroes", WI)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "spec.md"), "w").write("x")
+    out = subprocess.run([sys.executable, _MODULE_PATH, "path", "--work-item", WI,
+                          "--doc", "plan", "--root", str(tmp_path)],
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == os.path.join(d, "plan.md")
+    dout = subprocess.run([sys.executable, _MODULE_PATH, "dir", "--work-item", WI,
+                           "--root", str(tmp_path)], capture_output=True, text=True)
+    assert dout.returncode == 0, dout.stderr
+    assert dout.stdout.strip() == d
 
 
 def test_cli_frontmatter_roundtrips(capsys):
@@ -275,6 +284,7 @@ def test_cli_set_then_read_gate_for_autonomous_doctypes(tmp_path, capsys, doc_ty
                         created="2026-06-14", updated="2026-06-14")
     d = tmp_path / "docs" / "superheroes" / wi
     d.mkdir(parents=True)
+    (d / "spec.md").write_text("x")
     (d / (doc_type + ".md")).write_text(DD.render_frontmatter(fm) + "\n# t\n", encoding="utf-8")
     rc = DD.main(["definition_doc.py", "set-gate", "--doc", doc_type, "--work-item", wi,
                   "--review", "passed", "--root", str(tmp_path)])
@@ -293,3 +303,49 @@ def test_work_item_dir_honors_location():
     assert DD.doc_path(WI, "spec", root="/r", location="docs/specs") == "/r/docs/specs/%s/spec.md" % WI
     # default unchanged (existing callers)
     assert DD.work_item_dir(WI, root="/r") == "/r/docs/superheroes/" + WI
+
+
+# --- resolve_work_item_dir (mode-aware, spec-anchored) ---------------------
+
+def _stub_mode(monkeypatch, mode, store):
+    import mode_registry, architect_config
+    monkeypatch.setattr(mode_registry, "resolve",
+                        lambda cwd, root=None: {"mode": mode})
+    monkeypatch.setattr(mode_registry, "project_store_dir",
+                        lambda cwd, root=None: store)
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: None)
+
+
+def test_resolve_new_workitem_global_goes_to_store(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "global", store)
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == os.path.join(store, "docs", WI)
+
+
+def test_resolve_new_workitem_inrepo_uses_location(tmp_path, monkeypatch):
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "in-repo", store)
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == os.path.join(str(tmp_path), "docs", "superheroes", WI)
+
+
+def test_resolve_anchors_on_existing_spec(tmp_path, monkeypatch):
+    # spec already exists in-repo; recorded mode says global → still resolves in-repo.
+    store = str(tmp_path / "store")
+    _stub_mode(monkeypatch, "global", store)
+    inrepo = os.path.join(str(tmp_path), "docs", "superheroes", WI)
+    os.makedirs(inrepo, exist_ok=True)
+    open(os.path.join(inrepo, "spec.md"), "w").write("x")
+    d = DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))
+    assert d == inrepo
+
+
+def test_resolve_propagates_unknown_schema(tmp_path, monkeypatch):
+    import mode_registry
+    def boom(cwd, root=None):
+        raise mode_registry.UnknownSchemaVersion("newer")
+    monkeypatch.setattr(mode_registry, "resolve", boom)
+    with pytest.raises(mode_registry.UnknownSchemaVersion):
+        DD.resolve_work_item_dir(WI, root=str(tmp_path), cwd=str(tmp_path))

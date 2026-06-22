@@ -75,6 +75,33 @@ def doc_path(work_item, doc_type, root=".", location="docs/superheroes"):
     return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
 
 
+def _in_repo_candidate(work_item, root, cwd):
+    import architect_config
+    pol = architect_config.read_policy(cwd)
+    location = pol["location"] if pol else architect_config.DEFAULT_LOCATION
+    return work_item_dir(work_item, root, location)
+
+
+def _global_candidate(work_item, cwd, store_root):
+    import mode_registry
+    return os.path.join(mode_registry.project_store_dir(cwd, store_root), "docs", work_item)
+
+
+def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
+    """Mode-aware, spec-anchored directory for a work-item's definition-docs.
+    Propagates mode_registry.UnknownSchemaVersion (UFR-7 — caller halts)."""
+    import mode_registry
+    in_repo = _in_repo_candidate(work_item, root, cwd)
+    global_dir = _global_candidate(work_item, cwd, store_root)
+    # Spec-anchor (UFR-2): an existing work-item lives wherever its spec is — keep docs together.
+    for cand in (in_repo, global_dir):
+        if os.path.isfile(os.path.join(cand, "spec.md")):
+            return cand
+    # No existing doc → the recorded mode decides (raises UnknownSchemaVersion if newer).
+    mode = mode_registry.resolve(cwd, store_root)["mode"]
+    return in_repo if mode == mode_registry.IN_REPO else global_dir
+
+
 # --- frontmatter (§3.1) ----------------------------------------------------
 
 def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
@@ -275,25 +302,33 @@ def main(argv):
     if args.cmd == "mint":
         sys.stdout.write(mint_work_item(args.title, args.nonce) + "\n")
         return 0
-    if args.cmd == "path":
-        sys.stdout.write(doc_path(args.work_item, args.doc, args.root) + "\n")
-        return 0
-    if args.cmd == "dir":
-        sys.stdout.write(work_item_dir(args.work_item, args.root) + "\n")
-        return 0
     if args.cmd == "frontmatter":
         fm = frontmatter(
             args.doc, args.work_item, size=args.size, parent=args.parent_item,
             issue=args.issue, created=args.created, updated=args.updated)
         sys.stdout.write(render_frontmatter(fm))
         return 0
-    if args.cmd == "set-gate":
-        result = set_gate(doc_path(args.work_item, args.doc, args.root), args.review)
-        sys.stdout.write(json.dumps(result) + "\n")
-        return 0
-    if args.cmd == "read-gate":
-        sys.stdout.write(read_gate(doc_path(args.work_item, args.doc, args.root)) + "\n")
-        return 0
+    try:
+        if args.cmd in ("path", "dir", "read-gate", "set-gate"):
+            d = resolve_work_item_dir(args.work_item, root=args.root, cwd=args.root)
+            if args.cmd == "path":
+                sys.stdout.write(os.path.join(d, f"{args.doc}.md") + "\n")
+                return 0
+            if args.cmd == "dir":
+                sys.stdout.write(d + "\n")
+                return 0
+            if args.cmd == "set-gate":
+                result = set_gate(os.path.join(d, f"{args.doc}.md"), args.review)
+                sys.stdout.write(json.dumps(result) + "\n")
+                return 0
+            if args.cmd == "read-gate":
+                sys.stdout.write(read_gate(os.path.join(d, f"{args.doc}.md")) + "\n")
+                return 0
+    except __import__("mode_registry").UnknownSchemaVersion as exc:
+        sys.stderr.write(
+            "definition_doc: storage mode could not be determined (%s) — repair the "
+            "project's mode record before continuing; refusing to guess a location.\n" % exc)
+        return 1
     return 2
 
 
