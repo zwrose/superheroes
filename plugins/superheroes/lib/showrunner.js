@@ -228,6 +228,39 @@ module.exports.recordCursor = recordCursor
 module.exports.draftPRPhase = draftPRPhase
 module.exports.markReadyPhase = markReadyPhase
 
+async function shipPhase(workItem, pr) {
+  // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date
+  // proceeds; the auto-sync of a behind branch is back-half deepening, so sync/give_up_notify/gate
+  // all park (FR-11: not merge-ready unless up to date).
+  const fresh = await cmdRunner(
+    `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
+  if (fresh.decision !== 'up_to_date') {
+    return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)
+  }
+  // ship_phase.py --step ci returns 'green' (no failing checks) or a ci_loop.decide value
+  // ('fix' | 'revert_and_gate'). The slice does not auto-fix CI, so anything but green parks.
+  const ci = await cmdRunner(
+    `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' }, reason: { type: 'string' } } } })
+  if (ci.decision !== 'green') {
+    return park(workItem, pr, ci.reason || 'CI could not be made green')
+  }
+  return park(workItem, pr, 'merge-ready: CI green and branch up to date — awaiting owner merge', true)
+}
+
+// park posts the readout (scrubbed) to the PR; on a failed post it records to the store (UFR-4).
+async function park(workItem, pr, reason, mergeReady) {
+  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(reason)}${prNum}`,
+    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+  return { outcome: mergeReady ? 'ready' : 'parked', phase: 'ship', reason }
+}
+
+module.exports.shipPhase = shipPhase
+module.exports.park = park
+
 async function defaultPhaseLeaf(_phase, _workItem) {
   return { confidence: 'high', assumptions: [] }
 }
