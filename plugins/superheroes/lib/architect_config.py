@@ -114,3 +114,31 @@ def analyze_repo(repo_root):
             break
     visibility = GITIGNORED if _gitignore_covers(repo_root, location) else COMMITTED
     return {"location": location, "visibility": visibility}
+
+
+def _is_tracked(repo_root, location):
+    """True iff git already tracks any file under `location` (run_git returns the file list
+    on rc 0, None otherwise — bool() is True only when something is tracked there)."""
+    return bool(store_core.run_git(repo_root, "ls-files", location))
+
+
+def ensure_ignored(repo_root, location):
+    """Ensure `location` is kept out of version control via a scoped ignore rule.
+    Returns False (could-not-ensure) when it is already tracked or .gitignore can't be
+    written — the caller then applies UFR-8 (refuse rather than write exposed)."""
+    if _is_tracked(repo_root, location):
+        return False  # an ignore rule cannot untrack an already-tracked path (→ UFR-8)
+    if _gitignore_covers(repo_root, location):
+        return True   # already ignored — idempotent no-op
+    rule = location.strip("/") + "/"
+    gi = os.path.join(repo_root, ".gitignore")
+    try:
+        existing = ""
+        if os.path.isfile(gi):
+            with open(gi, encoding="utf-8") as fh:
+                existing = fh.read()
+        sep = "" if (existing == "" or existing.endswith("\n")) else "\n"
+        store_core.atomic_write(gi, existing + sep + rule + "\n")
+    except OSError:
+        return False  # unwritable .gitignore (→ UFR-8)
+    return True

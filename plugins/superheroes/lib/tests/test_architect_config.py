@@ -91,3 +91,53 @@ def test_analyze_greenfield_defaults(tmp_path):
     rec = AC.analyze_repo(str(tmp_path))
     assert rec["location"] == AC.DEFAULT_LOCATION
     assert rec["visibility"] == AC.COMMITTED
+
+
+import subprocess
+
+
+def _git_init(path):
+    subprocess.run(["git", "init", "-q", path], check=True)
+    subprocess.run(["git", "-C", path, "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", path, "config", "user.name", "t"], check=True)
+
+
+def test_ensure_ignored_adds_scoped_rule(tmp_path):
+    repo = str(tmp_path)
+    _git_init(repo)
+    assert AC.ensure_ignored(repo, "docs/superheroes") is True
+    gi = open(os.path.join(repo, ".gitignore")).read()
+    assert "docs/superheroes/" in gi
+    # idempotent: second call adds no duplicate
+    AC.ensure_ignored(repo, "docs/superheroes")
+    assert open(os.path.join(repo, ".gitignore")).read().count("docs/superheroes/") == 1
+
+
+def test_ensure_ignored_refuses_already_tracked(tmp_path):
+    repo = str(tmp_path)
+    _git_init(repo)
+    os.makedirs(os.path.join(repo, "docs", "superheroes"), exist_ok=True)
+    with open(os.path.join(repo, "docs", "superheroes", "f.md"), "w") as fh:
+        fh.write("x")
+    subprocess.run(["git", "-C", repo, "add", "docs/superheroes/f.md"], check=True)
+    # location already tracked → an ignore rule won't untrack it → could-not-ensure
+    assert AC.ensure_ignored(repo, "docs/superheroes") is False
+
+
+def test_ensure_ignored_keeps_unrelated_visible(tmp_path):
+    repo = str(tmp_path)
+    _git_init(repo)
+    AC.ensure_ignored(repo, "docs/superheroes")
+    # an unrelated path is NOT ignored by the scoped rule
+    out = subprocess.run(["git", "-C", repo, "check-ignore", "src/app.py"],
+                         capture_output=True, text=True)
+    assert out.returncode != 0  # not ignored
+
+
+def test_ensure_ignored_refuses_unwritable_gitignore(tmp_path):
+    # The other half of UFR-8: a .gitignore that can't be written → could-not-ensure (False),
+    # not a silent exposed write. Force it by making .gitignore a directory.
+    repo = str(tmp_path)
+    _git_init(repo)
+    os.makedirs(os.path.join(repo, ".gitignore"))
+    assert AC.ensure_ignored(repo, "docs/superheroes") is False
