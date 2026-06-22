@@ -42,6 +42,18 @@ def gather_signals(cwd, root=None):
             sigs.append({"type": "migration-pending",
                          "identity": _sig_id("migration-pending", rec["storageMode"], *facts),
                          "detail": {"recorded": rec["storageMode"], "off": off}})
+    # I3 wiring obligation (#80): surface an in-repo provisional doc-policy through the one
+    # coalesced nudge. Read-only deferred import (the mode_registry._hero_global_root precedent).
+    if rec is not None and rec["storageMode"] == mr.IN_REPO:
+        try:
+            import architect_config
+            pol = architect_config.read_policy(cwd, root)
+        except Exception:
+            pol = None
+        if pol is not None and not pol.get("confirmed", False):
+            sigs.append({"type": "doc-policy-provisional",
+                         "identity": _sig_id("doc-policy-provisional"),
+                         "detail": {"location": pol.get("location")}})
     return sigs
 
 
