@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """superheroes (architect): definition-doc location + frontmatter helper (CONVENTIONS §3, §6.1).
 
-Phase 1 is deliberately MINIMAL and in-repo only: definition-docs live at
-`docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the target repo. Global
-mode, the project/registry store, and the unified resolver are deferred to 2a
-(CONVENTIONS §2.3/§4.2) — this module hard-codes the in-repo layout and takes a
-`--root` so callers can point at a repo root other than the cwd.
+Resolution is mode-aware (CONVENTIONS §2.3/§3.3): global mode → the I1 project
+store (`projects/<config-key>/docs/<work-item>/…`); in-repo mode → the location
+configured by the project's doc-policy. The doc-policy (where definition-docs live
+and whether they are committed or gitignored) is owned by `architect_config.py`
+and set up by `architect-init`.
 
 Two jobs:
   - mint + locate: freeze a `<work-item>` slug (§6.1, via the vendored

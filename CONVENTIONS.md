@@ -278,6 +278,9 @@ updated: <date>
   global → `projects/<config-key>/docs/<work-item>/…` in the **git-initialized project
   store** (§4.2), so global-mode definition-docs are versioned and diffable too. One file
   per doc-type per work-item.
+  the-architect now implements this: the prior in-repo-only hardcode is closed, and
+  the in-repo location plus committed/gitignored choice is the doc-policy established
+  by `architect-init`.
 - **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
   needs it.
