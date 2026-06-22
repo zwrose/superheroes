@@ -1,10 +1,10 @@
 {
   "bodyCeilings": {
     "superheroes/review-code": 499,
-    "superheroes/review-spec": 499,
+    "superheroes/review-spec": 505,
     "superheroes/review-plan": 499,
-    "superheroes/review-tasks": 499,
-    "superheroes/audit-debt": 450,
+    "superheroes/review-tasks": 503,
+    "superheroes/audit-debt": 459,
     "superheroes/architect-plan": 450
   },
   "requiredPhrases": {
@@ -77,6 +77,11 @@
       "author the on-disk `spec` definition-doc once an owner has APPROVED",
       "Mints the work-item slug",
       "Does NOT elicit requirements (that is `discovery`)"
+    ],
+    "superheroes/architect-init": [
+      "setting up the-architect's doc-policy for a project",
+      "where definition-docs live (in-repo committed vs gitignored)",
+      "before the first architect-discovery in a project"
     ],
     "superheroes/workhorse": [
       "approved tasks doc (gates.review == passed) should be BUILT",

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """superheroes (architect): definition-doc location + frontmatter helper (CONVENTIONS §3, §6.1).
 
-Phase 1 is deliberately MINIMAL and in-repo only: definition-docs live at
-`docs/superheroes/<work-item>/{spec,plan,tasks}.md` in the target repo. Global
-mode, the project/registry store, and the unified resolver are deferred to 2a
-(CONVENTIONS §2.3/§4.2) — this module hard-codes the in-repo layout and takes a
-`--root` so callers can point at a repo root other than the cwd.
+Resolution is mode-aware (CONVENTIONS §2.3/§3.3): global mode → the I1 project
+store (`projects/<config-key>/docs/<work-item>/…`); in-repo mode → the location
+configured by the project's doc-policy. The doc-policy (where definition-docs live
+and whether they are committed or gitignored) is owned by `architect_config.py`
+and set up by `architect-init`.
 
 Two jobs:
   - mint + locate: freeze a `<work-item>` slug (§6.1, via the vendored
@@ -35,6 +35,11 @@ import identifiers  # noqa: E402  (sibling import; see module docstring)
 
 SCHEMA_VERSION = 1
 DOC_TYPES = ("spec", "plan", "tasks")
+# The in-repo default docs location, kept in lock-step with architect_config.DEFAULT_LOCATION
+# (a connascence-of-value guard test asserts they match). Defined here too, rather than
+# imported, so these pure path helpers stay import-light (no module-load dependency on the
+# policy/mode stack — the deferred-import design).
+DEFAULT_LOCATION = "docs/superheroes"
 # Each doc-type's parent referent (§3.1): plan→spec, tasks→plan, spec→none.
 _PARENT_DOCTYPE = {"spec": None, "plan": "spec", "tasks": "plan"}
 
@@ -65,14 +70,75 @@ def mint_work_item(title, nonce=None):
     return identifiers.work_item_slug(title, nonce)
 
 
-def work_item_dir(work_item, root="."):
-    return os.path.join(root, "docs", "superheroes", work_item)
+def work_item_dir(work_item, root=".", location=DEFAULT_LOCATION):
+    return os.path.join(root, *location.split("/"), work_item)
 
 
-def doc_path(work_item, doc_type, root="."):
+def doc_path(work_item, doc_type, root=".", location=DEFAULT_LOCATION):
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
-    return os.path.join(work_item_dir(work_item, root), f"{doc_type}.md")
+    return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
+
+
+def _in_repo_candidate(work_item, root, cwd, store_root=None):
+    import architect_config
+    pol = architect_config.read_policy(cwd, store_root)
+    location = pol["location"] if pol else architect_config.DEFAULT_LOCATION
+    return work_item_dir(work_item, root, location)
+
+
+def _global_candidate(work_item, cwd, store_root):
+    import mode_registry
+    return os.path.join(mode_registry.project_store_dir(cwd, store_root), "docs", work_item)
+
+
+def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
+    """Mode-aware, spec-anchored directory for a work-item's definition-docs.
+    Propagates mode_registry.UnknownSchemaVersion (UFR-7 — caller halts)."""
+    import mode_registry
+    in_repo = _in_repo_candidate(work_item, root, cwd, store_root)
+    global_dir = _global_candidate(work_item, cwd, store_root)
+    # Spec-anchor (UFR-2): an existing work-item lives wherever its spec is — keep docs together.
+    for cand in (in_repo, global_dir):
+        if os.path.isfile(os.path.join(cand, "spec.md")):
+            return cand
+    # No existing doc → the recorded mode decides (raises UnknownSchemaVersion if newer).
+    mode = mode_registry.resolve(cwd, store_root)["mode"]
+    return in_repo if mode == mode_registry.IN_REPO else global_dir
+
+
+class IgnoreCoverageError(RuntimeError):
+    """A kept-local (gitignored) docs location could not be kept out of version control
+    (already tracked or .gitignore unwritable) — UFR-8; the write must be refused. The
+    offending location is the exception's single arg."""
+
+
+def resolve_write_path(work_item, doc_type, *, root, cwd=None, store_root=None):
+    """Resolve the mode-aware write path for a definition-doc and prepare it for writing:
+    ensure ignore coverage for a kept-local (gitignored) policy, record an
+    analysis-informed PROVISIONAL policy when none exists (UFR-1, only after the ignore
+    gate passes), and create the target directory. Returns the resolved `<doc>.md` path.
+
+    Raises mode_registry.UnknownSchemaVersion when the storage mode is undeterminable
+    (UFR-7) and IgnoreCoverageError when a gitignored location can't be kept untracked
+    (UFR-8). The `resolve-write` CLI verb is a thin wrapper over this."""
+    import architect_config
+    cwd = cwd if cwd is not None else root
+    d = resolve_work_item_dir(work_item, root=root, cwd=cwd, store_root=store_root)
+    pol = architect_config.read_policy(cwd, store_root)
+    is_new = pol is None
+    if is_new:
+        pol = {**architect_config.analyze_repo(root), "confirmed": False}
+    root_abs = os.path.abspath(root)
+    d_abs = os.path.abspath(d)
+    is_inrepo = d_abs == root_abs or d_abs.startswith(root_abs + os.sep)
+    if is_inrepo and pol.get("visibility") == architect_config.GITIGNORED:
+        if not architect_config.ensure_ignored(root, pol["location"]):
+            raise IgnoreCoverageError(pol["location"])
+    if is_new:
+        architect_config.write_policy(cwd, pol)  # provisional (UFR-1); store contention is non-fatal
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, doc_type + ".md")
 
 
 # --- frontmatter (§3.1) ----------------------------------------------------
@@ -292,6 +358,13 @@ def _build_parser():
     rg.add_argument("--root", default=".")
     rg.add_argument("--json", action="store_true",
                     help="emit {\"review\": <state>} on stdout (errors stay on stderr/non-zero)")
+
+    rw = sub.add_parser("resolve-write",
+                        help="resolve the mode-aware write path, ensuring ignore coverage")
+    rw.add_argument("--work-item", required=True)
+    rw.add_argument("--doc", required=True, choices=DOC_TYPES)
+    rw.add_argument("--root", default=".")
+    rw.add_argument("--cwd", default=None)
     return p
 
 
@@ -300,11 +373,22 @@ def main(argv):
     if args.cmd == "mint":
         sys.stdout.write(mint_work_item(args.title, args.nonce) + "\n")
         return 0
-    if args.cmd == "path":
-        sys.stdout.write(doc_path(args.work_item, args.doc, args.root) + "\n")
-        return 0
-    if args.cmd == "dir":
-        sys.stdout.write(work_item_dir(args.work_item, args.root) + "\n")
+    if args.cmd == "resolve-write":
+        import mode_registry
+        try:
+            path = resolve_write_path(args.work_item, args.doc,
+                                      root=args.root, cwd=args.cwd or args.root)
+        except mode_registry.UnknownSchemaVersion as exc:
+            sys.stderr.write("definition_doc: storage mode could not be determined (%s) — "
+                             "repair the mode record first; refusing to guess.\n" % exc)
+            return 1
+        except IgnoreCoverageError:
+            sys.stderr.write("definition_doc: refusing to write — the kept-local docs "
+                             "location could not be kept out of version control "
+                             "(already tracked or .gitignore unwritable). Resolve it "
+                             "before writing.\n")
+            return 1
+        sys.stdout.write(path + "\n")
         return 0
     if args.cmd == "frontmatter":
         fm = frontmatter(
@@ -312,17 +396,31 @@ def main(argv):
             issue=args.issue, created=args.created, updated=args.updated)
         sys.stdout.write(render_frontmatter(fm))
         return 0
-    if args.cmd == "set-gate":
-        result = set_gate(doc_path(args.work_item, args.doc, args.root), args.review)
-        sys.stdout.write(json.dumps(result) + "\n")
-        return 0
-    if args.cmd == "read-gate":
-        review = read_gate(doc_path(args.work_item, args.doc, args.root))
-        if getattr(args, "json", False):
-            sys.stdout.write(json.dumps({"review": review}) + "\n")
-        else:
-            sys.stdout.write(review + "\n")
-        return 0
+    try:
+        if args.cmd in ("path", "dir", "read-gate", "set-gate"):
+            d = resolve_work_item_dir(args.work_item, root=args.root, cwd=args.root)
+            if args.cmd == "path":
+                sys.stdout.write(os.path.join(d, f"{args.doc}.md") + "\n")
+                return 0
+            if args.cmd == "dir":
+                sys.stdout.write(d + "\n")
+                return 0
+            if args.cmd == "set-gate":
+                result = set_gate(os.path.join(d, f"{args.doc}.md"), args.review)
+                sys.stdout.write(json.dumps(result) + "\n")
+                return 0
+            if args.cmd == "read-gate":
+                review = read_gate(os.path.join(d, f"{args.doc}.md"))
+                if getattr(args, "json", False):   # the cmdRunner JSON bridge (errors stay stderr/non-zero)
+                    sys.stdout.write(json.dumps({"review": review}) + "\n")
+                else:
+                    sys.stdout.write(review + "\n")
+                return 0
+    except __import__("mode_registry").UnknownSchemaVersion as exc:
+        sys.stderr.write(
+            "definition_doc: storage mode could not be determined (%s) — repair the "
+            "project's mode record before continuing; refusing to guess a location.\n" % exc)
+        return 1
     return 2
 
 

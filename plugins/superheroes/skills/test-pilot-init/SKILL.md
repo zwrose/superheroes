@@ -17,6 +17,9 @@ seeding blocks. Two modes: **create** (nothing resolves) and **reconcile**
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 RES=$(python3 "$ROOT_DIR/lib/store.py" resolve)
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
+# FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
+NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+[ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
 `location: none` → create mode (Steps 2–6). Otherwise → reconcile (Step 7).
@@ -46,6 +49,12 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 LOC=$(python3 "$ROOT_DIR/lib/store.py" decide-location --interactive true)
 # "ask" -> AskUserQuestion: in-repo (committed, team-shared) vs global
 # (~/.claude/test-pilot/, zero git footprint). Headless runs get "global".
+# If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
+# If LOC is already in-repo/global → skip record, go straight to create.
+REC=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
+  echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
+fi
 PATHS=$(python3 "$ROOT_DIR/lib/store.py" create --location "$LOC")
 ```
 

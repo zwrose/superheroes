@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-06-19",
+  "recordedAt": "2026-06-21",
   "observations": [
     {
       "skill": "superheroes/audit-debt",
@@ -1761,6 +1761,132 @@
     {
       "skill": "superheroes/workhorse",
       "phrase": "review the tasks definition-doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "set up where the-architect should store its definition-docs for this project",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "set up where the-architect should store its definition-docs for this project",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "set up where the-architect should store its definition-docs for this project",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "configure whether specs and plans are committed in-repo or kept gitignored here",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "configure whether specs and plans are committed in-repo or kept gitignored here",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "configure whether specs and plans are committed in-repo or kept gitignored here",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "initialize the-architect's doc-policy before the first discovery in this repo",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "initialize the-architect's doc-policy before the first discovery in this repo",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "initialize the-architect's doc-policy before the first discovery in this repo",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "decide where the-architect writes spec, plan, and tasks docs for this project",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "decide where the-architect writes spec, plan, and tasks docs for this project",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "decide where the-architect writes spec, plan, and tasks docs for this project",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "begin discovery to turn a fuzzy idea into an approved spec",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "begin discovery to turn a fuzzy idea into an approved spec",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "begin discovery to turn a fuzzy idea into an approved spec",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "this project has no review profile yet, set one up",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "this project has no review profile yet, set one up",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/architect-init",
+      "phrase": "this project has no review profile yet, set one up",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false

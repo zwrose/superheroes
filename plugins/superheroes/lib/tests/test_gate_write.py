@@ -59,6 +59,9 @@ def test_canonical_path_matches_the_architect(tmp_path):
     # layout; pin the two equal so a layout change there (e.g. a versioned subdir) can't silently
     # drift gate_write's guard — which would re-open the wrong-file hole the guard exists to close.
     root = str(tmp_path / "repo")
+    os.makedirs(DD.work_item_dir(WI, root), exist_ok=True)
+    with open(DD.doc_path(WI, "spec", root), "w") as fh:
+        fh.write("x")
     for doc in ("spec", "plan", "tasks"):
         assert GW._canonical(root, WI, doc) == DD.doc_path(WI, doc, root)
 
@@ -92,6 +95,8 @@ def test_certify_downgrades_when_parent_not_approved(tmp_path, capsys):
 
 def test_certify_changes_requested_writes_through(tmp_path, capsys):
     root = _docs_root(tmp_path)
+    with open(DD.doc_path(WI, "spec", root), "w") as fh:
+        fh.write("x")
     _write(root, "plan")  # tasks parent (plan) irrelevant — review isn't 'passed'
     tasks = _write(root, "tasks")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "tasks", "--work-item", WI,
@@ -127,6 +132,8 @@ def test_certify_downgrades_when_parent_gate_unreadable(tmp_path, capsys):
 
 def test_certify_set_gate_failure_reports(tmp_path, capsys):
     root = _docs_root(tmp_path)
+    with open(DD.doc_path(WI, "spec", root), "w") as fh:
+        fh.write("x")
     canon = os.path.join(root, "docs", "superheroes", WI, "plan.md")
     with open(canon, "w", encoding="utf-8") as fh:
         fh.write("# malformed — no frontmatter\n")  # passes the -ef guard, fails set-gate
@@ -225,3 +232,45 @@ def test_certify_requires_review(tmp_path, capsys):
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
                    "--reviewed-path", plan, "--parent-doc", "spec", "--root", root)
     assert rc == 2 and out == "error:bad-args"
+
+
+# --- mode-aware resolver tests (Task 7) -----------------------------------
+
+def test_canonical_resolves_mode_aware(tmp_path):
+    import gate_write, definition_doc
+    wi = "wi-abc123"
+    # spec present in-repo → spec-anchored resolution equals the in-repo doc_path
+    d = os.path.join(str(tmp_path), "docs", "superheroes", wi)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "spec.md"), "w").write("x")
+    assert gate_write._canonical(str(tmp_path), wi, "plan") == \
+        definition_doc.doc_path(wi, "plan", str(tmp_path))
+
+
+def test_set_gate_targets_resolved_path(tmp_path, monkeypatch):
+    # When resolution points at the global store, the gate is written THERE, not in-repo.
+    import gate_write, definition_doc
+    wi = "wi-def456"
+    store_dir = os.path.join(str(tmp_path), "store", "docs", wi)
+    os.makedirs(store_dir, exist_ok=True)
+    monkeypatch.setattr(definition_doc, "resolve_work_item_dir",
+                        lambda work_item, *, root, cwd: store_dir)
+    captured = {}
+    monkeypatch.setattr(definition_doc, "set_gate",
+                        lambda path, review: captured.update(path=path))
+    gate_write._set_gate("plan", wi, "passed", str(tmp_path))
+    assert captured["path"] == os.path.join(store_dir, "plan.md")
+
+
+def test_doc_falls_back_to_in_repo_on_unknown_schema(tmp_path, monkeypatch):
+    # gate_write._doc degrades (not crashes) when the mode is undeterminable: a newer
+    # registry schema (UnknownSchemaVersion) falls back to the pure in-repo doc_path.
+    import gate_write, definition_doc, mode_registry
+
+    def boom(work_item, *, root, cwd):
+        raise mode_registry.UnknownSchemaVersion("newer")
+
+    monkeypatch.setattr(definition_doc, "resolve_work_item_dir", boom)
+    wi = "wi-fallback"
+    assert gate_write._doc(wi, "plan", str(tmp_path)) == \
+        definition_doc.doc_path(wi, "plan", str(tmp_path))

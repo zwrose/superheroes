@@ -103,3 +103,69 @@ def test_cli_resolve_emits_json(tmp_path, capsys):
     rc.main(["resolve", "--cwd", str(tmp_path), "--root", str(tmp_path / "store")])
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == mr.GLOBAL and out["source"] == "provisional"
+
+
+# append to test_mode_reconcile.py — load architect_config + stub read_policy
+def test_provisional_policy_emits_signal(tmp_path, monkeypatch):
+    import mode_reconcile, mode_registry, architect_config
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo",
+                                                "schemaVersion": 1, "remoteKey": None,
+                                                "createdAt": "t"})
+    monkeypatch.setattr(mode_registry, "hero_evidence", lambda cwd, root=None: {})
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": "docs/superheroes",
+                                                "visibility": "committed", "confirmed": False})
+    sigs = mode_reconcile.gather_signals(str(tmp_path), root=str(tmp_path / "s"))
+    assert any(s["type"] == "doc-policy-provisional" for s in sigs)
+
+
+def test_confirmed_policy_emits_no_signal(tmp_path, monkeypatch):
+    import mode_reconcile, mode_registry, architect_config
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo",
+                                                "schemaVersion": 1, "remoteKey": None,
+                                                "createdAt": "t"})
+    monkeypatch.setattr(mode_registry, "hero_evidence", lambda cwd, root=None: {})
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": "docs/superheroes",
+                                                "visibility": "committed", "confirmed": True})
+    sigs = mode_reconcile.gather_signals(str(tmp_path), root=str(tmp_path / "s"))
+    assert not any(s["type"] == "doc-policy-provisional" for s in sigs)
+
+
+def test_provisional_identity_is_stable(tmp_path, monkeypatch):
+    # Deterministic identity → a dismissed nudge stays dismissed across calls.
+    import mode_reconcile, mode_registry, architect_config
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo", "schemaVersion": 1,
+                                                "remoteKey": None, "createdAt": "t"})
+    monkeypatch.setattr(mode_registry, "hero_evidence", lambda cwd, root=None: {})
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": "docs/superheroes",
+                                                "visibility": "committed", "confirmed": False})
+    a = [s for s in mode_reconcile.gather_signals(str(tmp_path), root=str(tmp_path / "s"))
+         if s["type"] == "doc-policy-provisional"][0]
+    b = [s for s in mode_reconcile.gather_signals(str(tmp_path), root=str(tmp_path / "s"))
+         if s["type"] == "doc-policy-provisional"][0]
+    assert a["identity"] == b["identity"]
+
+
+def test_provisional_signal_ack_suppresses(tmp_path, monkeypatch):
+    # Acking the identity removes it from the coalesced prompt (mirrors the I1 ack test).
+    import mode_reconcile, mode_registry, architect_config
+    store = str(tmp_path / "s")
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo", "schemaVersion": 1,
+                                                "remoteKey": None, "createdAt": "t"})
+    monkeypatch.setattr(mode_registry, "hero_evidence", lambda cwd, root=None: {})
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": "docs/superheroes",
+                                                "visibility": "committed", "confirmed": False})
+    monkeypatch.setattr(mode_registry, "ensure_project_store", lambda cwd, root=None: store)
+    sig = [s for s in mode_reconcile.gather_signals(str(tmp_path), root=store)
+           if s["type"] == "doc-policy-provisional"][0]
+    mode_reconcile.ack_signal(str(tmp_path), sig["identity"], root=store)
+    coalesced = mode_reconcile.coalesce(str(tmp_path), root=store)
+    assert coalesced is None or all(
+        i["identity"] != sig["identity"] for i in coalesced["items"])

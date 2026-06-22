@@ -31,6 +31,7 @@ plain-language pros/cons.
 | `/superheroes:architect-plan` | Turn an approved spec into a technical **plan**. |
 | `/superheroes:architect-tasks` | Turn an approved plan into bite-sized, test-first **tasks**. |
 | `/superheroes:architect-spec` | Write the on-disk spec doc once requirements are approved (normally invoked by discovery). |
+| `/superheroes:architect-init` | Set the project's doc-policy: where definition-docs live and whether they are committed or gitignored. |
 
 First run in any project:
 
