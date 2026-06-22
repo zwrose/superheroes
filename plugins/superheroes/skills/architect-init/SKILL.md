@@ -1,6 +1,6 @@
 ---
 name: architect-init
-description: Use when setting up the-architect's doc-policy for a project — where definition-docs live (in-repo committed vs gitignored) and whether global mode applies. Idempotent: a confirmed policy is reported and preserved; a provisional policy reruns the interview. Run before the first architect-discovery in a project.
+description: "Use when setting up the-architect's doc-policy for a project — where definition-docs live (in-repo committed vs gitignored) and whether global mode applies. Idempotent: a confirmed policy is reported and preserved; a provisional policy reruns the interview. Run before the first architect-discovery in a project."
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
