@@ -94,7 +94,11 @@ node -e "require('./plugins/superheroes/lib/showrunner.js')"   # loads clean
   win even over a parking gate): `park_assumption` (FR-7), `park_low_confidence` (FR-8),
   `park_changes_requested` (FR-6), plus `park_pending` / `park_unexpected_gate`.
 - Composition: `showrunner_reviewcode_smoke.js` proves a blocking panel verdict maps to
-  `changes-requested` (`verdictToGate`), and the loop forwards a non-`proceed` action to a park.
+  `changes-requested` (`verdictToGate`). That a non-`proceed` action then parks is established by
+  the `runPhases` loop body (`if (decision.action !== 'proceed') return { outcome: 'parked', … }`)
+  together with the `phase_step.decide` park terminals (`test_phase_step.py`) and the
+  `showrunner_reconcile_smoke.js` park path — not by `showrunner_reviewcode_smoke.js` itself, which
+  asserts only the `verdictToGate` mapping.
 
 ### Demo 5 — UFR-1 startup refusal, UFR-2 durable-write park, UFR-4 readout fallback
 

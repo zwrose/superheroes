@@ -15,6 +15,9 @@ paths = control_plane.paths(os.getcwd(), a.work_item)
 cp = ckpt_lib.read(paths["checkpoint"]) or ckpt_lib.new(a.work_item, "")
 if a.read_pr:
     print(json.dumps({"pr": cp.get("pr")}))
+elif a.step is None:                                   # write path requires a step (fail closed, never int(None))
+    print(json.dumps({"ok": False, "error": "--step is required for the write path"}))
+    sys.exit(2)
 else:
     cp["lastGoodStep"] = int(a.step)
     side = json.loads(a.side) if a.side else {}

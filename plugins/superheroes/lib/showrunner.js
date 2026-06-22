@@ -252,10 +252,17 @@ async function shipPhase(workItem, pr) {
 // park posts the readout (scrubbed) to the PR; on a failed post it records to the store (UFR-4).
 async function park(workItem, pr, reason, mergeReady) {
   const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
-  await cmdRunner(
+  const rPost = await cmdRunner(
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(reason)}${prNum}`,
     { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
-  return { outcome: mergeReady ? 'ready' : 'parked', phase: 'ship', reason }
+  // UFR-4 detectability: if the readout reached neither the PR nor the store (e.g. a full disk failed
+  // both the journal and the store fallback), the owner gets no 'your turn' signal — surface that in
+  // the returned reason rather than reporting a clean park.
+  const delivered = rPost && (rPost.posted || rPost.recorded)
+  const reasonOut = delivered
+    ? reason
+    : `${reason} [warning: readout could not be delivered (${(rPost && rPost.error) || 'unknown'})]`
+  return { outcome: mergeReady ? 'ready' : 'parked', phase: 'ship', reason: reasonOut }
 }
 
 module.exports.shipPhase = shipPhase

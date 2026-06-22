@@ -11,7 +11,13 @@ ap.add_argument("--step", required=True, choices=["build", "review"])
 ap.add_argument("--work-item", required=True)
 a = ap.parse_args()
 paths = control_plane.paths(os.getcwd(), a.work_item)
-head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+_hp = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+head = _hp.stdout.strip()
+if _hp.returncode != 0 or not head:
+    # No resolvable HEAD -> record NO provenance (an empty head would let two empty-head records
+    # satisfy ship_gate's covers==head check). Fail closed; the draft-PR ship-gate then GATEs.
+    print(json.dumps({"ok": False, "error": "git rev-parse HEAD failed — provenance not recorded"}))
+    sys.exit(0)
 if a.step == "build":
     ship_gate.write_build(paths["provenance"], engine="subagent-driven-development", head=head)
 else:

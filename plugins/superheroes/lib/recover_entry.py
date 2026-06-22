@@ -48,7 +48,8 @@ def main():
     if store is None:
         return _park("control-plane store unusable")
     # Step-0 guard A: the enforcer PreToolUse hook must be armed before any write.
-    if subprocess.run([sys.executable, os.path.join(_HERE, "enforcer.py"), "selfcheck"]).returncode != 0:
+    if subprocess.run([sys.executable, os.path.join(_HERE, "enforcer.py"), "selfcheck"],
+                      capture_output=True).returncode != 0:   # capture: its JSON must not pollute our stdout
         return _park("enforcer hook not armed — refusing to run (fail closed)")
     # Step-0 guard B: the §4.4 startup + work-item leases (UFR-3 — a live holder fails the 2nd run).
     if not ref_lock.acquire_startup(store)[0]:

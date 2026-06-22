@@ -8,7 +8,11 @@ import buildtree, checkpoint as ckpt_lib, control_plane, docload
 
 ap = argparse.ArgumentParser(); ap.add_argument("--work-item", required=True); a = ap.parse_args()
 root = os.getcwd()
-ch = docload.content_hash_for(a.work_item, root)                  # §6.3, shared with recover_entry
+try:
+    ch = docload.content_hash_for(a.work_item, root)             # §6.3, shared with recover_entry
+except (OSError, ValueError) as e:                               # missing/malformed tasks doc -> fail closed
+    print(json.dumps({"error": "cannot content-hash tasks doc: %s" % e}))
+    sys.exit(1)
 branch = "superheroes/%s-%s" % (a.work_item, ch)
 res = buildtree.reclaim_or_create(root, a.work_item, ch)          # -> REUSED/CREATED/PRESERVE_NOTIFY/GATE_FAILCLOSED
 outcome = res.get("outcome") if isinstance(res, dict) else res    # reclaim_or_create returns {"outcome": ...}

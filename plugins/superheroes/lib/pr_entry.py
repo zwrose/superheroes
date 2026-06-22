@@ -61,6 +61,7 @@ else:  # mark-ready
     if decision == "gate":
         print(json.dumps({"ok": False, "reason": "PR isDraft unreadable — not flipping blind"})); sys.exit(0)
     if decision == "flip":
-        if subprocess.run(["gh", "pr", "ready", str(pr["number"])]).returncode != 0:
+        if subprocess.run(["gh", "pr", "ready", str(pr["number"])],
+                          capture_output=True).returncode != 0:   # capture: gh's success line must not pollute our stdout
             print(json.dumps({"ok": False, "reason": "gh pr ready failed — PR still draft"})); sys.exit(0)
     print(json.dumps({"ok": True}))
