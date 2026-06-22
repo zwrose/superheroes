@@ -67,11 +67,18 @@ async function showrunner({ workItem }) {
 const READGATE_SCHEMA = { type: 'object', required: ['review'], properties: { review: { type: 'string' } } }
 
 async function readGate(workItem, doc) {
-  const out = await cmdRunner(
-    `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
-    `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
-    { schema: READGATE_SCHEMA })
-  return out.review
+  // A failed read-gate (missing/malformed doc -> non-zero exit + empty stdout, so cmdRunner can't
+  // produce a valid object) must PARK, never crash the run: return an 'unreadable' sentinel that
+  // phase_step.decide maps to park_unexpected_gate.
+  try {
+    const out = await cmdRunner(
+      `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
+      `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
+      { schema: READGATE_SCHEMA })
+    return (out && out.review) || 'unreadable'
+  } catch (e) {
+    return 'unreadable'
+  }
 }
 
 const REVIEWED = new Set(['review-plan', 'review-tasks', 'review-code'])

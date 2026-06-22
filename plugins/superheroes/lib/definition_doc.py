@@ -182,6 +182,29 @@ def _frontmatter_bounds(text, path):
     return lines, end
 
 
+def read_frontmatter(path):
+    """Parse a definition-doc's §3.1 frontmatter into (frontmatter_dict, body) — the reader paired
+    with `render_frontmatter` (the writer), co-located so the two sides change in lockstep. `parent`
+    is parsed back into its nested {workItem, docType} mapping; other fields stay scalar. This is the
+    canonical frontmatter→dict reader (e.g. for the §6.3 content-hash); callers must not re-implement it.
+    """
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    lines, end = _frontmatter_bounds(text, path)
+    fm = {}
+    for ln in lines[1:end]:
+        m = re.match(r"([A-Za-z]+):\s*(.+)$", ln)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).strip()
+        if key == "parent" and val.startswith("{"):
+            pm = dict(re.findall(r"(\w+):\s*([\w-]+)", val))
+            fm["parent"] = {"workItem": pm.get("workItem"), "docType": pm.get("docType")}
+        else:
+            fm[key] = val
+    return fm, "\n".join(lines[end + 1:])
+
+
 def read_gate(path):
     """Return the definition-doc's gates.review value, parsed from the frontmatter.
 
