@@ -55,14 +55,23 @@ def _emit(token):
     sys.stdout.write(token + "\n")
 
 
+def _doc(work_item, doc, root):
+    """The doc's real path for the gate handshake: mode-aware (cwd defaults to the repo
+    root). If the mode is undeterminable (a newer registry schema → UnknownSchemaVersion),
+    fall back to the pure in-repo default so the gate guard degrades rather than crashes;
+    UFR-7's halt-with-notice belongs to the the-architect WRITE path (Task 6), not the gate
+    read/write. Only that specific exception is caught — any other error propagates."""
+    import mode_registry
+    try:
+        d = definition_doc.resolve_work_item_dir(work_item, root=root, cwd=root)
+    except mode_registry.UnknownSchemaVersion:
+        return definition_doc.doc_path(work_item, doc, root)
+    return os.path.join(d, doc + ".md")
+
+
 def _canonical(root, work_item, doc):
-    # definition_doc OWNS this layout — its doc_path() and set-gate/read-gate derive the same
-    # docs/superheroes/<work-item>/<doc>.md. We re-encode it here only so the samefile guard can
-    # run without a subprocess round-trip. test_gate_write.py::test_canonical_path_matches_the_architect
-    # PINS this equal to definition_doc's doc_path(), so the two copies cannot drift undetected —
-    # a layout change there (e.g. a versioned subdir) fails CI instead of silently re-opening the
-    # wrong-file hole this guard exists to close (arch-r3-001).
-    return os.path.join(root, "docs", "superheroes", work_item, doc + ".md")
+    # The guard compares the reviewed doc against the resolved canonical path with samefile.
+    return _doc(work_item, doc, root)
 
 
 def _same_file(a, b):
@@ -76,8 +85,7 @@ def _same_file(a, b):
 def _read_gate(doc, work_item, root):
     """Return (ok, value). On failure ok=False and value holds the error text."""
     try:
-        return True, definition_doc.read_gate(
-            definition_doc.doc_path(work_item, doc, root))
+        return True, definition_doc.read_gate(_doc(work_item, doc, root))
     except (ValueError, OSError) as exc:
         return False, str(exc)
 
@@ -88,8 +96,7 @@ def _set_gate(doc, work_item, review, root):
     Kept as a module-level helper (was a subprocess to definition_doc.py set-gate; now a
     direct call) so test seams that monkeypatch `gate_write._set_gate` survive the collapse."""
     try:
-        definition_doc.set_gate(
-            definition_doc.doc_path(work_item, doc, root), review)
+        definition_doc.set_gate(_doc(work_item, doc, root), review)
         return True, ""
     except (ValueError, OSError) as exc:
         return False, str(exc)
