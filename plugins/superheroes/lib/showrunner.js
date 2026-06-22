@@ -52,9 +52,36 @@ async function showrunner({ workItem }) {
   if (r.action === 'park_gate' || r.action === 'gate') {
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
+  // UFR-1: refuse to run if the spec hasn't been approved.
+  const specGate = await readGate(workItem, 'spec')
+  const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
+  if (startup.action !== 'proceed') {
+    return { outcome: 'parked', phase: 'startup', reason: startup.reason }
+  }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
-  return runPhases(workItem, r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0)
+  const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
+  return runPhases(workItem, fromStep, { gateRead: gateReadFor(workItem) })
+}
+
+const READGATE_SCHEMA = { type: 'object', required: ['review'], properties: { review: { type: 'string' } } }
+
+async function readGate(workItem, doc) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
+    `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
+    { schema: READGATE_SCHEMA })
+  return out.review
+}
+
+const REVIEWED = new Set(['review-plan', 'review-tasks', 'review-code'])
+function gateReadFor(workItem) {
+  return async (phase) => {
+    if (!REVIEWED.has(phase)) return null            // authoring phase: no review gate
+    if (phase === 'review-code') return null          // review-code's gate = the reviewPanel verdict (Task 10)
+    const doc = phase === 'review-plan' ? 'plan' : 'tasks'
+    return readGate(workItem, doc)
+  }
 }
 
 const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'build',
