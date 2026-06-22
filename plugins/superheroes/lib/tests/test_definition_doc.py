@@ -395,6 +395,34 @@ def test_resolve_write_halts_on_unknown_schema(tmp_path):
     assert "could not be determined" in out.stderr
 
 
+def test_default_location_matches_architect_config():
+    import architect_config
+    assert DD.DEFAULT_LOCATION == architect_config.DEFAULT_LOCATION
+
+
+def test_resolve_write_path_inrepo_returns_md(tmp_path):
+    d = os.path.join(str(tmp_path), "docs", "superheroes", WI)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "spec.md"), "w").write("x")  # anchor in-repo
+    got = DD.resolve_write_path(WI, "spec", root=str(tmp_path), cwd=str(tmp_path))
+    assert got == os.path.join(d, "spec.md")
+    assert os.path.isdir(d)
+
+
+def test_resolve_write_path_raises_ignore_coverage(tmp_path, monkeypatch):
+    import architect_config
+    d = os.path.join(str(tmp_path), "docs", "superheroes", WI)
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "spec.md"), "w").write("x")  # anchor in-repo
+    monkeypatch.setattr(architect_config, "read_policy",
+                        lambda cwd, root=None: {"location": "docs/superheroes",
+                                                "visibility": architect_config.GITIGNORED,
+                                                "confirmed": True})
+    monkeypatch.setattr(architect_config, "ensure_ignored", lambda repo, loc: False)
+    with pytest.raises(DD.IgnoreCoverageError):
+        DD.resolve_write_path(WI, "spec", root=str(tmp_path), cwd=str(tmp_path))
+
+
 def test_resolve_write_refuses_gitignored_but_tracked(tmp_path):
     # UFR-8: a gitignored policy whose location is already tracked cannot be kept local →
     # refuse the write (exit 1, no exposed doc).

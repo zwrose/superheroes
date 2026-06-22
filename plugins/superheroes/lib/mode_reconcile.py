@@ -52,7 +52,7 @@ def gather_signals(cwd, root=None):
             pol = None
         if pol is not None and not pol.get("confirmed", False):
             sigs.append({"type": "doc-policy-provisional",
-                         "identity": _sig_id("doc-policy-provisional"),
+                         "identity": _sig_id("doc-policy-provisional:" + str(pol.get("location"))),
                          "detail": {"location": pol.get("location")}})
     return sigs
 

@@ -35,6 +35,11 @@ import identifiers  # noqa: E402  (sibling import; see module docstring)
 
 SCHEMA_VERSION = 1
 DOC_TYPES = ("spec", "plan", "tasks")
+# The in-repo default docs location, kept in lock-step with architect_config.DEFAULT_LOCATION
+# (a connascence-of-value guard test asserts they match). Defined here too, rather than
+# imported, so these pure path helpers stay import-light (no module-load dependency on the
+# policy/mode stack — the deferred-import design).
+DEFAULT_LOCATION = "docs/superheroes"
 # Each doc-type's parent referent (§3.1): plan→spec, tasks→plan, spec→none.
 _PARENT_DOCTYPE = {"spec": None, "plan": "spec", "tasks": "plan"}
 
@@ -65,11 +70,11 @@ def mint_work_item(title, nonce=None):
     return identifiers.work_item_slug(title, nonce)
 
 
-def work_item_dir(work_item, root=".", location="docs/superheroes"):
+def work_item_dir(work_item, root=".", location=DEFAULT_LOCATION):
     return os.path.join(root, *location.split("/"), work_item)
 
 
-def doc_path(work_item, doc_type, root=".", location="docs/superheroes"):
+def doc_path(work_item, doc_type, root=".", location=DEFAULT_LOCATION):
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
     return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
@@ -100,6 +105,40 @@ def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
     # No existing doc → the recorded mode decides (raises UnknownSchemaVersion if newer).
     mode = mode_registry.resolve(cwd, store_root)["mode"]
     return in_repo if mode == mode_registry.IN_REPO else global_dir
+
+
+class IgnoreCoverageError(RuntimeError):
+    """A kept-local (gitignored) docs location could not be kept out of version control
+    (already tracked or .gitignore unwritable) — UFR-8; the write must be refused. The
+    offending location is the exception's single arg."""
+
+
+def resolve_write_path(work_item, doc_type, *, root, cwd=None, store_root=None):
+    """Resolve the mode-aware write path for a definition-doc and prepare it for writing:
+    ensure ignore coverage for a kept-local (gitignored) policy, record an
+    analysis-informed PROVISIONAL policy when none exists (UFR-1, only after the ignore
+    gate passes), and create the target directory. Returns the resolved `<doc>.md` path.
+
+    Raises mode_registry.UnknownSchemaVersion when the storage mode is undeterminable
+    (UFR-7) and IgnoreCoverageError when a gitignored location can't be kept untracked
+    (UFR-8). The `resolve-write` CLI verb is a thin wrapper over this."""
+    import architect_config
+    cwd = cwd if cwd is not None else root
+    d = resolve_work_item_dir(work_item, root=root, cwd=cwd, store_root=store_root)
+    pol = architect_config.read_policy(cwd, store_root)
+    is_new = pol is None
+    if is_new:
+        pol = {**architect_config.analyze_repo(root), "confirmed": False}
+    root_abs = os.path.abspath(root)
+    d_abs = os.path.abspath(d)
+    is_inrepo = d_abs == root_abs or d_abs.startswith(root_abs + os.sep)
+    if is_inrepo and pol.get("visibility") == architect_config.GITIGNORED:
+        if not architect_config.ensure_ignored(root, pol["location"]):
+            raise IgnoreCoverageError(pol["location"])
+    if is_new:
+        architect_config.write_policy(cwd, pol)  # provisional (UFR-1); store contention is non-fatal
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, doc_type + ".md")
 
 
 # --- frontmatter (§3.1) ----------------------------------------------------
@@ -310,42 +349,21 @@ def main(argv):
         sys.stdout.write(mint_work_item(args.title, args.nonce) + "\n")
         return 0
     if args.cmd == "resolve-write":
-        import architect_config, mode_registry
-        cwd = args.cwd or args.root
+        import mode_registry
         try:
-            d = resolve_work_item_dir(args.work_item, root=args.root, cwd=cwd)
+            path = resolve_write_path(args.work_item, args.doc,
+                                      root=args.root, cwd=args.cwd or args.root)
         except mode_registry.UnknownSchemaVersion as exc:
             sys.stderr.write("definition_doc: storage mode could not be determined (%s) — "
                              "repair the mode record first; refusing to guess.\n" % exc)
             return 1
-        # Resolve the policy; record an analysis-informed PROVISIONAL policy when none
-        # exists (UFR-1) — but only AFTER the UFR-8 ignore gate passes, so a refused write
-        # never leaves a stale provisional policy behind (premortem: a failed ensure_ignored
-        # used to persist the policy, wedging every later call).
-        pol = architect_config.read_policy(cwd)
-        is_new = pol is None
-        if is_new:
-            rec = architect_config.analyze_repo(args.root)
-            pol = {**rec, "confirmed": False}
-        # is_inrepo via a path-boundary check (not bare startswith, which false-positives on
-        # a sibling like /repo-backup): the resolved dir is under the repo root.
-        root_abs = os.path.abspath(args.root)
-        d_abs = os.path.abspath(d)
-        is_inrepo = d_abs == root_abs or d_abs.startswith(root_abs + os.sep)
-        if is_inrepo and pol.get("visibility") == architect_config.GITIGNORED:
-            if not architect_config.ensure_ignored(args.root, pol["location"]):
-                sys.stderr.write("definition_doc: refusing to write — the kept-local docs "
-                                 "location could not be kept out of version control "
-                                 "(already tracked or .gitignore unwritable). Resolve it "
-                                 "before writing.\n")
-                return 1
-        # The write can proceed → now safe to persist the provisional policy (UFR-1).
-        if is_new:
-            if architect_config.write_policy(cwd, pol) is None:
-                sys.stderr.write("definition_doc: note — provisional doc-policy could not be "
-                                 "recorded (store contended); proceeding.\n")
-        os.makedirs(d, exist_ok=True)
-        sys.stdout.write(os.path.join(d, args.doc + ".md") + "\n")
+        except IgnoreCoverageError:
+            sys.stderr.write("definition_doc: refusing to write — the kept-local docs "
+                             "location could not be kept out of version control "
+                             "(already tracked or .gitignore unwritable). Resolve it "
+                             "before writing.\n")
+            return 1
+        sys.stdout.write(path + "\n")
         return 0
     if args.cmd == "frontmatter":
         fm = frontmatter(

@@ -59,7 +59,9 @@ def test_canonical_path_matches_the_architect(tmp_path):
     # layout; pin the two equal so a layout change there (e.g. a versioned subdir) can't silently
     # drift gate_write's guard — which would re-open the wrong-file hole the guard exists to close.
     root = str(tmp_path / "repo")
-    os.makedirs(os.path.join(root, "docs", "superheroes", WI), exist_ok=True); open(os.path.join(root, "docs", "superheroes", WI, "spec.md"), "w").write("x")
+    os.makedirs(DD.work_item_dir(WI, root), exist_ok=True)
+    with open(DD.doc_path(WI, "spec", root), "w") as fh:
+        fh.write("x")
     for doc in ("spec", "plan", "tasks"):
         assert GW._canonical(root, WI, doc) == DD.doc_path(WI, doc, root)
 
@@ -93,7 +95,8 @@ def test_certify_downgrades_when_parent_not_approved(tmp_path, capsys):
 
 def test_certify_changes_requested_writes_through(tmp_path, capsys):
     root = _docs_root(tmp_path)
-    os.makedirs(os.path.join(root, "docs", "superheroes", WI), exist_ok=True); open(os.path.join(root, "docs", "superheroes", WI, "spec.md"), "w").write("x")
+    with open(DD.doc_path(WI, "spec", root), "w") as fh:
+        fh.write("x")
     _write(root, "plan")  # tasks parent (plan) irrelevant — review isn't 'passed'
     tasks = _write(root, "tasks")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "tasks", "--work-item", WI,
@@ -129,7 +132,8 @@ def test_certify_downgrades_when_parent_gate_unreadable(tmp_path, capsys):
 
 def test_certify_set_gate_failure_reports(tmp_path, capsys):
     root = _docs_root(tmp_path)
-    os.makedirs(os.path.join(root, "docs", "superheroes", WI), exist_ok=True); open(os.path.join(root, "docs", "superheroes", WI, "spec.md"), "w").write("x")
+    with open(DD.doc_path(WI, "spec", root), "w") as fh:
+        fh.write("x")
     canon = os.path.join(root, "docs", "superheroes", WI, "plan.md")
     with open(canon, "w", encoding="utf-8") as fh:
         fh.write("# malformed — no frontmatter\n")  # passes the -ef guard, fails set-gate

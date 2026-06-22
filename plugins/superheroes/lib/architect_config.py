@@ -1,5 +1,5 @@
-# plugins/superheroes/lib/architect_config.py
 #!/usr/bin/env python3
+# plugins/superheroes/lib/architect_config.py
 """the-architect doc-policy record + repo analyzer + scoped .gitignore-ensuring
 (CONVENTIONS §2.3/§3.3/§4.2). Stdlib-only. The in-repo-only doc-policy lives as
 doc-policy.json in the I1 project store; the mode authority (registry.json) is untouched."""
