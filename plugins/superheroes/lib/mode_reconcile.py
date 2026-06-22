@@ -48,7 +48,7 @@ def gather_signals(cwd, root=None):
         try:
             import architect_config
             pol = architect_config.read_policy(cwd, root)
-        except Exception:
+        except (OSError, ImportError, ValueError):
             pol = None
         if pol is not None and not pol.get("confirmed", False):
             sigs.append({"type": "doc-policy-provisional",

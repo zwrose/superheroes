@@ -141,3 +141,14 @@ def test_ensure_ignored_refuses_unwritable_gitignore(tmp_path):
     _git_init(repo)
     os.makedirs(os.path.join(repo, ".gitignore"))
     assert AC.ensure_ignored(repo, "docs/superheroes") is False
+
+
+def test_gitignore_covers_trusts_git_not_ignored(tmp_path):
+    # An ignore + negation pattern where git authoritatively says NOT ignored (rc 1);
+    # the textual fallback must not override git's verdict (premortem-003).
+    # `docs/superheroes/` + `!docs/superheroes/` makes git return rc 1 for the probe.
+    repo = str(tmp_path)
+    _git_init(repo)
+    with open(os.path.join(repo, ".gitignore"), "w") as fh:
+        fh.write("docs/superheroes/\n!docs/superheroes/\n")
+    assert AC._gitignore_covers(repo, "docs/superheroes") is False

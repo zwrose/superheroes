@@ -256,3 +256,17 @@ def test_set_gate_targets_resolved_path(tmp_path, monkeypatch):
                         lambda path, review: captured.update(path=path))
     gate_write._set_gate("plan", wi, "passed", str(tmp_path))
     assert captured["path"] == os.path.join(store_dir, "plan.md")
+
+
+def test_doc_falls_back_to_in_repo_on_unknown_schema(tmp_path, monkeypatch):
+    # gate_write._doc degrades (not crashes) when the mode is undeterminable: a newer
+    # registry schema (UnknownSchemaVersion) falls back to the pure in-repo doc_path.
+    import gate_write, definition_doc, mode_registry
+
+    def boom(work_item, *, root, cwd):
+        raise mode_registry.UnknownSchemaVersion("newer")
+
+    monkeypatch.setattr(definition_doc, "resolve_work_item_dir", boom)
+    wi = "wi-fallback"
+    assert gate_write._doc(wi, "plan", str(tmp_path)) == \
+        definition_doc.doc_path(wi, "plan", str(tmp_path))

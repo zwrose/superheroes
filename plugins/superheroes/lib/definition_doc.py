@@ -75,9 +75,9 @@ def doc_path(work_item, doc_type, root=".", location="docs/superheroes"):
     return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
 
 
-def _in_repo_candidate(work_item, root, cwd):
+def _in_repo_candidate(work_item, root, cwd, store_root=None):
     import architect_config
-    pol = architect_config.read_policy(cwd)
+    pol = architect_config.read_policy(cwd, store_root)
     location = pol["location"] if pol else architect_config.DEFAULT_LOCATION
     return work_item_dir(work_item, root, location)
 
@@ -91,7 +91,7 @@ def resolve_work_item_dir(work_item, *, root, cwd, store_root=None):
     """Mode-aware, spec-anchored directory for a work-item's definition-docs.
     Propagates mode_registry.UnknownSchemaVersion (UFR-7 — caller halts)."""
     import mode_registry
-    in_repo = _in_repo_candidate(work_item, root, cwd)
+    in_repo = _in_repo_candidate(work_item, root, cwd, store_root)
     global_dir = _global_candidate(work_item, cwd, store_root)
     # Spec-anchor (UFR-2): an existing work-item lives wherever its spec is — keep docs together.
     for cand in (in_repo, global_dir):
@@ -318,14 +318,14 @@ def main(argv):
             sys.stderr.write("definition_doc: storage mode could not be determined (%s) — "
                              "repair the mode record first; refusing to guess.\n" % exc)
             return 1
-        # In-repo + gitignored policy → ensure coverage or refuse (UFR-8). Record a provisional
-        # policy when none exists (UFR-1).
+        # Resolve the policy; record an analysis-informed PROVISIONAL policy when none
+        # exists (UFR-1) — but only AFTER the UFR-8 ignore gate passes, so a refused write
+        # never leaves a stale provisional policy behind (premortem: a failed ensure_ignored
+        # used to persist the policy, wedging every later call).
         pol = architect_config.read_policy(cwd)
-        if pol is None:
+        is_new = pol is None
+        if is_new:
             rec = architect_config.analyze_repo(args.root)
-            if architect_config.write_policy(cwd, {**rec, "confirmed": False}) is None:
-                sys.stderr.write("definition_doc: note — provisional doc-policy could not be "
-                                 "recorded (store contended); proceeding.\n")
             pol = {**rec, "confirmed": False}
         # is_inrepo via a path-boundary check (not bare startswith, which false-positives on
         # a sibling like /repo-backup): the resolved dir is under the repo root.
@@ -339,6 +339,11 @@ def main(argv):
                                  "(already tracked or .gitignore unwritable). Resolve it "
                                  "before writing.\n")
                 return 1
+        # The write can proceed → now safe to persist the provisional policy (UFR-1).
+        if is_new:
+            if architect_config.write_policy(cwd, pol) is None:
+                sys.stderr.write("definition_doc: note — provisional doc-policy could not be "
+                                 "recorded (store contended); proceeding.\n")
         os.makedirs(d, exist_ok=True)
         sys.stdout.write(os.path.join(d, args.doc + ".md") + "\n")
         return 0

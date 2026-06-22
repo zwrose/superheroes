@@ -90,6 +90,12 @@ def _gitignore_covers(repo_root, location):
     # run_git returns "" (stripped stdout) on rc 0 (ignored), None on non-zero/no-git.
     if out is not None:
         return True
+    # `check-ignore` returned non-zero: either git authoritatively says NOT ignored (rc 1),
+    # or git is unavailable (no repo / git missing). Trust git when it ran; only fall back to
+    # the textual scan when we are NOT in a git work tree (else a parent-ignore + negation like
+    # `docs/` + `!docs/superheroes/` would be mis-read as covered).
+    if store_core.run_git(repo_root, "rev-parse", "--is-inside-work-tree") is not None:
+        return False
     gi = os.path.join(repo_root, ".gitignore")
     try:
         with open(gi, encoding="utf-8") as fh:
