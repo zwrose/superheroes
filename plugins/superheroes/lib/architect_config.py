@@ -80,3 +80,37 @@ def write_policy(cwd, policy, root=None):
             return None
         store_core.atomic_write(policy_path(cwd, root), json.dumps(rec, indent=2))
         return rec
+
+
+def _gitignore_covers(repo_root, location):
+    """True iff git's ignore rules already cover `location`. Falls back to a textual
+    .gitignore scan when git isn't available (non-git dir / git missing)."""
+    probe = location.rstrip("/") + "/.superheroes-probe"
+    out = store_core.run_git(repo_root, "check-ignore", "-q", probe)
+    # run_git returns "" (stripped stdout) on rc 0 (ignored), None on non-zero/no-git.
+    if out is not None:
+        return True
+    gi = os.path.join(repo_root, ".gitignore")
+    try:
+        with open(gi, encoding="utf-8") as fh:
+            patterns = {ln.strip().rstrip("/") for ln in fh if ln.strip()
+                        and not ln.lstrip().startswith("#")}
+    except OSError:
+        return False
+    loc = location.strip("/")
+    parts = loc.split("/")
+    # match the dir or any parent prefix (e.g. "docs/" covers "docs/superheroes").
+    return any("/".join(parts[:i]) in patterns for i in range(1, len(parts) + 1))
+
+
+def analyze_repo(repo_root):
+    """Recommend {location, visibility} from the repo's existing documentation strategy."""
+    # Prefer a location superheroes already uses, else an existing docs dir, else the default.
+    candidates = ["docs/superheroes", "docs", "doc", "documentation"]
+    location = DEFAULT_LOCATION
+    for c in candidates:
+        if os.path.isdir(os.path.join(repo_root, c)):
+            location = "docs/superheroes" if c in ("docs", "docs/superheroes") else c
+            break
+    visibility = GITIGNORED if _gitignore_covers(repo_root, location) else COMMITTED
+    return {"location": location, "visibility": visibility}

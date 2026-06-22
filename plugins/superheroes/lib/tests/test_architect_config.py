@@ -71,3 +71,23 @@ def test_read_policy_rejects_out_of_repo_location(tmp_path):
             json.dump({"location": bad, "visibility": "committed"}, fh)
         got = AC.read_policy(str(tmp_path), root=store)
         assert got["location"] == AC.DEFAULT_LOCATION, bad
+
+
+def test_analyze_prefers_existing_superheroes_docs(tmp_path):
+    os.makedirs(str(tmp_path / "docs" / "superheroes" / "wi"), exist_ok=True)
+    rec = AC.analyze_repo(str(tmp_path))
+    assert rec["location"] == "docs/superheroes"
+
+
+def test_analyze_recommends_gitignored_when_docs_ignored(tmp_path):
+    os.makedirs(str(tmp_path / "docs"), exist_ok=True)
+    with open(str(tmp_path / ".gitignore"), "w") as fh:
+        fh.write("docs/\n")
+    rec = AC.analyze_repo(str(tmp_path))
+    assert rec["visibility"] == AC.GITIGNORED
+
+
+def test_analyze_greenfield_defaults(tmp_path):
+    rec = AC.analyze_repo(str(tmp_path))
+    assert rec["location"] == AC.DEFAULT_LOCATION
+    assert rec["visibility"] == AC.COMMITTED
