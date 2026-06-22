@@ -360,3 +360,67 @@ def test_evidence_agrees_with_hero_resolve_for_repo_root_cwd(tmp_path, monkeypat
     locs = mr.hero_evidence(str(tmp_path))
     assert locs["review-crew"] == review_store.resolve(str(tmp_path), "profile", rc_root)["location"]
     assert locs["test-pilot"] == tp.resolve(str(tmp_path), tp_root)["location"]
+
+
+def test_decide_mode_env_wins_without_touching_registry(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    assert mr.decide_mode(str(tmp_path), mr.IN_REPO, True, root=root) == mr.IN_REPO
+    assert mr.decide_mode(str(tmp_path), mr.GLOBAL, False, root=root) == mr.GLOBAL
+    assert mr.decide_mode(str(tmp_path), "bogus", True, root=root) == "ask"  # invalid env falls through
+    assert mr.read_registry(str(tmp_path), root=root) is None  # env path records nothing
+
+
+def test_decide_mode_recorded_mode_is_returned_not_asked(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, None, root=root)
+    # FR-4 / the #35 fix: a recorded mode is returned even when interactive — never "ask".
+    assert mr.decide_mode(str(tmp_path), None, True, root=root) == mr.IN_REPO
+
+
+def test_decide_mode_backfilled_mode_is_returned(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    root = str(tmp_path / "store")
+    assert mr.decide_mode(str(tmp_path), None, True, root=root) == mr.IN_REPO  # FR-6 (in-repo side)
+
+
+def test_decide_mode_backfills_global_evidence(tmp_path, monkeypatch):
+    # The plan's named "in-repo THEN global" regression: consistent GLOBAL evidence backfills
+    # global — kills a mutant that hardcodes IN_REPO on the backfill branch (FR-6, global side).
+    import store_core as sc
+    _init_repo(tmp_path)
+    g = str(tmp_path / "g_review-crew")
+    entry = os.path.join(g, "entries", "e1"); os.makedirs(entry)
+    open(os.path.join(entry, "review-profile.md"), "w").write("p")
+    sc.write_pointer(g, sc.derive_identifiers(str(tmp_path))["gitdir_hash"], "e1")
+    monkeypatch.setattr(mr, "_hero_global_root",
+                        lambda n: g if n == "review-crew" else str(tmp_path / ("x_" + n)))
+    root = str(tmp_path / "store")
+    assert mr.decide_mode(str(tmp_path), None, True, root=root) == mr.GLOBAL
+
+
+def test_decide_mode_greenfield_interactive_asks(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    assert mr.decide_mode(str(tmp_path), None, True, root=root) == "ask"
+
+
+def test_decide_mode_greenfield_headless_is_provisional_global_unrecorded(tmp_path):
+    # UFR-5: headless greenfield → provisional global, never frozen as authoritative.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    assert mr.decide_mode(str(tmp_path), None, False, root=root) == mr.GLOBAL
+    assert mr.read_registry(str(tmp_path), root=root) is None  # not recorded
+
+
+def test_decide_mode_propagates_unknown_schema_version(tmp_path):
+    # UFR-2: a newer registry fails closed THROUGH decide_mode — not swallowed.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    _write_raw(str(tmp_path), root, {"schemaVersion": 999, "storageMode": "in-repo"})
+    with pytest.raises(mr.UnknownSchemaVersion):
+        mr.decide_mode(str(tmp_path), None, True, root=root)

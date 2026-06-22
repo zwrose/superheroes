@@ -248,17 +248,36 @@ def test_resolve_decisions_colocates_with_profile(tmp_path):
     assert r["path"] == os.path.join(os.path.dirname(gpath), "review-decisions.json")
 
 
-@pytest.mark.parametrize("env,interactive,expected", [
-    ("in-repo", True, "in-repo"),
-    ("global", True, "global"),
-    ("global", False, "global"),
-    (None, True, "ask"),
-    (None, False, "global"),       # headless default
-    ("bogus", True, "ask"),        # invalid env ignored
-    ("bogus", False, "global"),
-])
-def test_decide_location(env, interactive, expected):
-    assert rs.decide_location(env, interactive) == expected
+def test_decide_location_greenfield_delegates_to_decide_mode(tmp_path):
+    repo = _init_repo(tmp_path / "r")
+    root = str(tmp_path / "store")
+    assert rs.decide_location("in-repo", True, cwd=repo, root=root) == "in-repo"   # env wins
+    assert rs.decide_location("global", False, cwd=repo, root=root) == "global"    # env wins
+    assert rs.decide_location(None, True, cwd=repo, root=root) == "ask"            # greenfield interactive
+    assert rs.decide_location(None, False, cwd=repo, root=root) == "global"        # greenfield headless
+    assert rs.decide_location("bogus", True, cwd=repo, root=root) == "ask"         # invalid env falls through
+
+
+def test_decide_location_honors_recorded_mode(tmp_path):
+    import mode_registry as mr
+    repo = _init_repo(tmp_path / "r")
+    root = str(tmp_path / "store")
+    mr.write_registry(repo, mr.GLOBAL, None, root=root)
+    # FR-4 / the #35 fix: a recorded mode is returned, never "ask", even interactive.
+    assert rs.decide_location(None, True, cwd=repo, root=root) == "global"
+
+
+def test_no_import_cycle_heroes_and_mode_registry():
+    # Import each module FIRST in a fresh interpreter — a top-level hero<->mode_registry
+    # cycle surfaces here (a plain importlib call can't: sys.modules is already warm from
+    # the module-level `import review_store as rs`).
+    import subprocess
+    import sys
+    libdir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for first in ("review_store", "store", "mode_registry"):
+        r = subprocess.run([sys.executable, "-c", f"import {first}"],
+                           cwd=libdir, capture_output=True, text=True)
+        assert r.returncode == 0, f"importing {first} first failed (cycle?): {r.stderr}"
 
 
 def _run_cli(args, cwd, home):
