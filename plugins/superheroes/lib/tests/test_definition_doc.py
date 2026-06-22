@@ -286,3 +286,10 @@ def test_cli_set_then_read_gate_for_autonomous_doctypes(tmp_path, capsys, doc_ty
     parsed = _parse_frontmatter((d / (doc_type + ".md")).read_text(encoding="utf-8"))
     jsonschema.validate(parsed, SCHEMA)
     assert parsed["gates"]["review"] == "passed" and parsed["status"] == "approved"
+
+
+def test_work_item_dir_honors_location():
+    assert DD.work_item_dir(WI, root="/r", location="docs/specs") == "/r/docs/specs/" + WI
+    assert DD.doc_path(WI, "spec", root="/r", location="docs/specs") == "/r/docs/specs/%s/spec.md" % WI
+    # default unchanged (existing callers)
+    assert DD.work_item_dir(WI, root="/r") == "/r/docs/superheroes/" + WI

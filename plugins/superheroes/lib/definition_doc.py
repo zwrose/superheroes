@@ -65,14 +65,14 @@ def mint_work_item(title, nonce=None):
     return identifiers.work_item_slug(title, nonce)
 
 
-def work_item_dir(work_item, root="."):
-    return os.path.join(root, "docs", "superheroes", work_item)
+def work_item_dir(work_item, root=".", location="docs/superheroes"):
+    return os.path.join(root, *location.split("/"), work_item)
 
 
-def doc_path(work_item, doc_type, root="."):
+def doc_path(work_item, doc_type, root=".", location="docs/superheroes"):
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
-    return os.path.join(work_item_dir(work_item, root), f"{doc_type}.md")
+    return os.path.join(work_item_dir(work_item, root, location), f"{doc_type}.md")
 
 
 # --- frontmatter (§3.1) ----------------------------------------------------
