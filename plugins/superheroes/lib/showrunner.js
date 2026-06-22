@@ -57,11 +57,54 @@ async function showrunner({ workItem }) {
   return runPhases(workItem, r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0)
 }
 
-// placeholder forward-declared; Task 8 implements runPhases.
-async function runPhases(_workItem, _fromStep) {
-  return { outcome: 'parked', phase: 'reconcile', reason: 'phase loop not yet wired' }
+const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'build',
+                'review-code', 'draft-PR', 'mark-ready', 'ship']
+
+const DECIDE_SCHEMA = {
+  type: 'object', required: ['action'],
+  properties: { action: { type: 'string' }, reason: { type: 'string' } },
+}
+
+async function phaseStep(phaseResult, gate) {
+  const pr = shq(JSON.stringify(phaseResult))
+  const g = gate === null || gate === undefined ? '' : ` --gate ${shq(gate)}`
+  return cmdRunner(
+    `python3 plugins/superheroes/lib/phase_step_cli.py --result ${pr}${g}`,
+    { schema: DECIDE_SCHEMA },
+  )
+}
+
+// returns { ok } — a false ok means journal_entry caught a DurableWriteError (UFR-2).
+async function appendPhaseRecord(workItem, phase, gate, phaseResult) {
+  const payload = shq(JSON.stringify({ phase, gate,
+    confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] }))
+  return cmdRunner(
+    `python3 plugins/superheroes/lib/journal_entry.py --work-item ${shq(workItem)} --payload ${payload}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } },
+  )
+}
+
+async function runPhases(workItem, fromStep, deps) {
+  deps = deps || {}
+  for (let i = fromStep; i < PHASES.length; i += 1) {
+    const phase = PHASES[i]
+    const phaseResult = await (deps.phaseLeaf || defaultPhaseLeaf)(phase, workItem)
+    const gate = await (deps.gateRead || (async () => null))(phase, workItem)
+    const rec = await appendPhaseRecord(workItem, phase, gate, phaseResult)
+    if (!rec.ok) return { outcome: 'parked', phase, reason: 'durable write failed (DurableWriteError) — UFR-2' }
+    const { action, reason } = await phaseStep(phaseResult, gate)
+    if (action !== 'proceed') return { outcome: 'parked', phase, reason }
+    // record lastGoodStep AFTER the decision (Task 11/12 wire the back-half side effects)
+  }
+  return { outcome: 'ready', phase: 'ship', reason: 'all phases passed' }
+}
+
+async function defaultPhaseLeaf(_phase, _workItem) {
+  return { confidence: 'high', assumptions: [] }
 }
 
 module.exports.showrunner = showrunner
 module.exports.cmdRunner = cmdRunner
 module.exports.reconcile = reconcile
+module.exports.runPhases = runPhases
+module.exports.PHASES = PHASES
