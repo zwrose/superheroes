@@ -13,7 +13,7 @@ try:
 except (OSError, ValueError) as e:                               # missing/malformed tasks doc -> fail closed
     print(json.dumps({"error": "cannot content-hash tasks doc: %s" % e}))
     sys.exit(0)   # exit 0 so the fail-closed JSON is reliably consumed (buildPhase parks on no branch)
-branch = "superheroes/%s-%s" % (a.work_item, ch)
+branch = buildtree.branch_name(a.work_item, ch)                  # canonical helper (no inline duplicate)
 res = buildtree.reclaim_or_create(root, a.work_item, ch)          # -> REUSED/CREATED/PRESERVE_NOTIFY/GATE_FAILCLOSED
 outcome = res.get("outcome") if isinstance(res, dict) else res    # reclaim_or_create returns {"outcome": ...}
 if outcome in ("gate_failclosed", "preserve_notify"):            # no clean usable worktree -> fail closed
