@@ -267,6 +267,8 @@ def _build_parser():
     rg.add_argument("--work-item", required=True)
     rg.add_argument("--doc", required=True, choices=DOC_TYPES)
     rg.add_argument("--root", default=".")
+    rg.add_argument("--json", action="store_true",
+                    help="emit {\"review\": <state>} on stdout (errors stay on stderr/non-zero)")
     return p
 
 
@@ -292,7 +294,11 @@ def main(argv):
         sys.stdout.write(json.dumps(result) + "\n")
         return 0
     if args.cmd == "read-gate":
-        sys.stdout.write(read_gate(doc_path(args.work_item, args.doc, args.root)) + "\n")
+        review = read_gate(doc_path(args.work_item, args.doc, args.root))
+        if getattr(args, "json", False):
+            sys.stdout.write(json.dumps({"review": review}) + "\n")
+        else:
+            sys.stdout.write(review + "\n")
         return 0
     return 2
 
