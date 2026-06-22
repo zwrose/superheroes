@@ -127,7 +127,9 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 WORK_ITEM="<the work-item directory name>"
 SIZE=$(grep -m1 '^size:' "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" | sed 's/^size: *//')
-TASKS=$(python3 "$ROOT_DIR/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc tasks --root "$ROOT")
+TASKS=$(python3 "$ROOT_DIR/lib/definition_doc.py" resolve-write \
+  --work-item "$WORK_ITEM" --doc tasks --root "$ROOT") \
+  || { echo "the-architect: cannot place the tasks safely (see message above) — not writing." >&2; exit 1; }
 python3 "$ROOT_DIR/lib/definition_doc.py" frontmatter \
   --doc tasks --work-item "$WORK_ITEM" --size "$SIZE" --parent-item "$WORK_ITEM"
 ```

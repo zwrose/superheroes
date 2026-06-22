@@ -78,6 +78,11 @@
       "Mints the work-item slug",
       "Does NOT elicit requirements (that is `discovery`)"
     ],
+    "superheroes/architect-init": [
+      "setting up the-architect's doc-policy for a project",
+      "where definition-docs live (in-repo committed vs gitignored)",
+      "before the first architect-discovery in a project"
+    ],
     "superheroes/workhorse": [
       "approved tasks doc (gates.review == passed) should be BUILT",
       "shipped to a ready-for-review PR",

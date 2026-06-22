@@ -18,7 +18,7 @@ every skill scores `pass`.
 
 ## Procedure
 
-### 1. Load all 14 skill descriptions
+### 1. Load all 15 skill descriptions
 
 Before judging any fixture phrase, read the `description:` frontmatter field of every
 skill SKILL.md in `plugins/superheroes/skills/`:
@@ -34,13 +34,14 @@ plugins/superheroes/skills/test-pilot-execute/SKILL.md
 plugins/superheroes/skills/test-pilot-init/SKILL.md
 plugins/superheroes/skills/test-pilot-plan/SKILL.md
 plugins/superheroes/skills/architect-discovery/SKILL.md
+plugins/superheroes/skills/architect-init/SKILL.md
 plugins/superheroes/skills/architect-plan/SKILL.md
 plugins/superheroes/skills/architect-tasks/SKILL.md
 plugins/superheroes/skills/architect-spec/SKILL.md
 plugins/superheroes/skills/workhorse/SKILL.md
 ```
 
-Judgment must be made in the context of ALL 14 descriptions simultaneously — not in
+Judgment must be made in the context of ALL 15 descriptions simultaneously — not in
 isolation — because activation is a selection among competing skills.
 
 ### 2. Load fixtures

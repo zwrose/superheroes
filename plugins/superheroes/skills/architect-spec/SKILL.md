@@ -44,8 +44,9 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
    ROOT=$(git rev-parse --show-toplevel)
-   SPEC=$(python3 "$ROOT_DIR/lib/definition_doc.py" path --work-item "$WORK_ITEM" --doc spec --root "$ROOT")
-   mkdir -p "$(dirname "$SPEC")"
+   SPEC=$(python3 "$ROOT_DIR/lib/definition_doc.py" resolve-write \
+     --work-item "$WORK_ITEM" --doc spec --root "$ROOT") \
+     || { echo "the-architect: cannot place the spec safely (see message above) — not writing." >&2; exit 1; }
    ```
 
 3. **Emit the §3.1 frontmatter** with the lib (a fresh spec is `status: draft`,
