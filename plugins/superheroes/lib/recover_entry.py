@@ -60,7 +60,14 @@ def main():
     cp = ckpt_lib.read(paths["checkpoint"])
     # Back-half (a branch exists): recompute the content-hash so reconcile can detect a stale spec;
     # front-half (no branch yet): None is expected and the Task-5 guard skips that gate.
-    chash = docload.content_hash_for(args.work_item, cwd) if (cp and cp.get("branch")) else None
+    # A missing/malformed tasks doc must NOT crash the leaf with no JSON (cmdRunner fails closed on
+    # empty stdout) — leave chash None so reconcile GATEs cleanly ("could not recompute … transient").
+    chash = None
+    if cp and cp.get("branch"):
+        try:
+            chash = docload.content_hash_for(args.work_item, cwd)
+        except (OSError, ValueError):
+            chash = None
     world = {"store_ok": True, "current_content_hash": chash,
              "pr": _read_pr(cp), "seeded_empty": True}
     print(json.dumps(recover.reconcile(cp, world)))

@@ -21,7 +21,10 @@ def _gh_pr(branch):
                         "--json", "number,url,isDraft,state"], capture_output=True, text=True)
     if r.returncode != 0:
         return "unknown"
-    arr = json.loads(r.stdout or "[]")
+    try:
+        arr = json.loads(r.stdout or "[]")
+    except ValueError:
+        return "unknown"                                 # malformed gh output -> fail closed
     return arr[0] if arr else None
 
 
@@ -43,8 +46,15 @@ if a.step == "draft":
                          capture_output=True, text=True)
     if out.returncode != 0:
         print(json.dumps({"ok": False, "reason": "gh pr create failed"})); sys.exit(0)
+    # Read the just-created PR back. A transient read failure must NOT be recorded as ok:true with
+    # pr=null (that loses the PR for ship/mark-ready, and the readout never reaches the PR thread).
+    # Park instead — on resume recover.pr_action adopts the now-existing PR (exactly-once preserved).
     pr = _gh_pr(branch)
-    print(json.dumps({"ok": True, "pr": pr if isinstance(pr, dict) else None}))
+    if not isinstance(pr, dict):
+        print(json.dumps({"ok": False,
+                          "reason": "PR created but read-back failed transiently — will adopt on resume"}))
+        sys.exit(0)
+    print(json.dumps({"ok": True, "pr": pr}))
 else:  # mark-ready
     pr = _gh_pr(branch)
     decision = pr_phase.mark_ready_action(pr)
