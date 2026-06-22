@@ -7,4 +7,9 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--result", required=True)   # JSON {confidence, assumptions}
 ap.add_argument("--gate", default=None)
 a = ap.parse_args()
-print(json.dumps(phase_step.decide(json.loads(a.result), a.gate)))
+try:
+    result = json.loads(a.result)
+except ValueError:                                 # malformed phase JSON -> fail closed (park)
+    print(json.dumps({"action": "park_unexpected_gate", "reason": "malformed --result phase JSON"}))
+    sys.exit(0)
+print(json.dumps(phase_step.decide(result, a.gate)))

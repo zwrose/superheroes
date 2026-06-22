@@ -135,7 +135,10 @@ async function runPhases(workItem, fromStep, deps) {
     if (!rec.ok) return { outcome: 'parked', phase, reason: 'durable write failed (DurableWriteError) — UFR-2' }
     const decision = await phaseStep(phaseResult, gate)
     if (decision.action !== 'proceed') return { outcome: 'parked', phase, reason: decision.reason }
-    await recordCursor(workItem, i, sideEffect)          // FR-4/FR-3: side effect + cursor before advancing
+    // FR-4/FR-3: persist the side effect + cursor BEFORE advancing. If that durable write fails, park
+    // rather than advance — advancing on an unrecorded cursor would lose record-before-advance.
+    const cur = await recordCursor(workItem, i, sideEffect)
+    if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
   }
   return { outcome: 'ready', phase: 'ship', reason: 'all phases passed' }
 }

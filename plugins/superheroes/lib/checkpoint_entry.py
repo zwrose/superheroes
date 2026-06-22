@@ -28,5 +28,8 @@ else:
         cp["pr"] = side["pr"]
     if side.get("ready") and isinstance(cp.get("pr"), dict):
         cp["pr"]["isDraft"] = False
-    ckpt_lib.write(paths["checkpoint"], cp)
+    try:
+        ckpt_lib.write(paths["checkpoint"], cp)
+    except OSError as e:                            # disk -> fail closed (runPhases parks on !ok)
+        print(json.dumps({"ok": False, "error": "checkpoint write failed: %s" % e})); sys.exit(0)
     print(json.dumps({"ok": True, "pr": cp.get("pr")}))
