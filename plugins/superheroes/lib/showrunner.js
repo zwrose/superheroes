@@ -186,6 +186,48 @@ module.exports.verdictToGate = verdictToGate
 module.exports.reviewCodePhase = reviewCodePhase
 module.exports.buildPhase = buildPhase
 
+const CKPT_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, pr: {} } }
+
+// recordCursor writes lastGoodStep (+ any side effect: { pr } or { ready }) BEFORE the loop
+// advances — so a crash resumes after this phase and never repeats an irreversible action (FR-4).
+async function recordCursor(workItem, step, sideEffect) {
+  const extra = sideEffect ? ` --json ${shq(JSON.stringify(sideEffect))}` : ''
+  return cmdRunner(
+    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --step ${shq(String(step))}${extra}`,
+    { schema: CKPT_SCHEMA })
+}
+
+async function loadPr(workItem) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`,
+    { schema: { type: 'object', required: ['pr'], properties: { pr: {} } } })
+  return out.pr
+}
+
+// draft-PR: pr_entry.py runs recover.pr_action (adopt/create exactly-once) + ship_gate.decide,
+// returns { pr: {number,url,isDraft} }. The pr is recorded as the cursor side effect (FR-4).
+async function draftPRPhase(workItem) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, pr: {}, reason: { type: 'string' } } } })
+  if (!out.ok) return { phaseResult: { confidence: 'low', assumptions: [out.reason || 'draft-PR gated'] }, sideEffect: null }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
+}
+
+// mark-ready: pr_entry.py world-reads isDraft (pr_phase.mark_ready_action), flips if needed,
+// returns { ready: true }. Idempotent on resume (an already-ready PR -> skip).
+async function markReadyPhase(workItem) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
+  if (!out.ok) return { phaseResult: { confidence: 'low', assumptions: [out.reason || 'mark-ready gated'] }, sideEffect: null }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { ready: true } }
+}
+
+module.exports.recordCursor = recordCursor
+module.exports.draftPRPhase = draftPRPhase
+module.exports.markReadyPhase = markReadyPhase
+
 async function defaultPhaseLeaf(_phase, _workItem) {
   return { confidence: 'high', assumptions: [] }
 }
