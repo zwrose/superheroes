@@ -28,6 +28,13 @@ post a results comment, and leave the PR ready for human spot-check.
 ## Flow
 
 1. **Resolve.** `store.py resolve`; read the profile and its config block.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
+   NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+   [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
+   ```
    Find plan records `<manifests_dir>/<key>.plan.json` for the current
    branch — default: every slot in sequence; an explicit slot argument
    narrows to one. None → run the test-pilot-plan skill first, then return.

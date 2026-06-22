@@ -66,6 +66,9 @@ RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
   || RES='{"location":"none","exists":false,"path":null}'
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
+# FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
+NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+[ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
 ```
 
 If `$LOCATION` is not `none` (a profile resolved at `$PROFILE`) → **Reconcile**
@@ -77,7 +80,13 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
   LOC=$(python3 "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
-  # If LOC is "ask", present the in-repo vs global AskUserQuestion, set LOC.
+  # If LOC is "ask" → present the in-repo-vs-global AskUserQuestion, set LOC to the owner's pick,
+  # then record it band-wide (FR-3) and create.
+  # If LOC is already in-repo/global → skip the record and go straight to create.
+  REC=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+  if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
+    echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
+  fi
   PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
 fi
 ```

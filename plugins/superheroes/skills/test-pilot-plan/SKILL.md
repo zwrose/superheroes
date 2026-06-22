@@ -27,6 +27,13 @@ test-pilot-execute.
 
 1. **Resolve.** `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/store.py" resolve` →
    `location: none` means run the test-pilot-init skill first, then return.
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
+   NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
+   [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
+   ```
 2. **Read the CATALOG** at `<blocks_dir>/CATALOG.md` IN FULL (blocking).
 3. **Analyze the diff.** `gh pr diff` (else
    `git diff <default-branch>...HEAD`). Identify what needs human-style

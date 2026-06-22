@@ -81,12 +81,16 @@ def resolve(cwd, kind, root):
             "entry_id": g["entry_id"] if g else None}
 
 
-def decide_location(env_value, interactive):
-    """Where to create when nothing resolved. Env override wins; else interactive
-    callers must ask; else (headless) default to global (zero-footprint)."""
-    if env_value in ("in-repo", "global"):
-        return env_value
-    return "ask" if interactive else "global"
+def decide_location(env_value, interactive, cwd=None, root=None):
+    """Where to create when nothing resolved — now band-wide registry-aware.
+    Delegates the mode decision to the shared resolver so review-crew and test-pilot
+    never diverge (CONVENTIONS §2.3/§2.4): env override wins, else the recorded/
+    backfilled band mode, else (interactive) 'ask' / (headless) provisional 'global'.
+    The lazy import avoids any import cycle with mode_registry; root defaults to the
+    registry's own project store (NOT review-crew's store_root)."""
+    import mode_registry
+    return mode_registry.decide_mode(
+        cwd if cwd is not None else os.getcwd(), env_value, interactive, root=root)
 
 
 def _parse_kv(args, flag):

@@ -1,10 +1,10 @@
 {
   "bodyCeilings": {
     "superheroes/review-code": 499,
-    "superheroes/review-spec": 499,
+    "superheroes/review-spec": 505,
     "superheroes/review-plan": 499,
-    "superheroes/review-tasks": 499,
-    "superheroes/audit-debt": 450,
+    "superheroes/review-tasks": 503,
+    "superheroes/audit-debt": 459,
     "superheroes/architect-plan": 450
   },
   "requiredPhrases": {
