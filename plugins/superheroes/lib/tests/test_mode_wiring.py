@@ -6,8 +6,11 @@ _SKILLS = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "skills")
 
 ASK_RECORD_SKILLS = ["review-init", "review-plan", "review-tasks",
-                     "review-spec", "review-code", "audit-debt"]
-NUDGE_SKILLS = ["review-init", "review-code", "audit-debt"]
+                     "review-spec", "review-code", "audit-debt", "test-pilot-init"]
+NUDGE_SKILLS = ["review-init", "review-code", "audit-debt",
+                "test-pilot-init", "test-pilot-plan", "test-pilot-execute"]
+# Snippet N uses $ROOT_DIR; these run skills must define it (the review-crew skills + test-pilot-init already do).
+ROOTDIR_SKILLS = ["test-pilot-plan", "test-pilot-execute"]
 
 
 def _skill(name):
@@ -31,3 +34,9 @@ def test_run_surfaces_coalesced_nudge(name):
     body = _skill(name)
     assert "mode_reconcile.py" in body and "signals" in body, \
         f"{name} must surface the coalesced reconcile nudge via mode_reconcile signals (FR-7/8)"
+
+
+@pytest.mark.parametrize("name", ROOTDIR_SKILLS)
+def test_nudge_skill_defines_root_dir(name):
+    assert "ROOT_DIR=" in _skill(name), \
+        f"{name} must define ROOT_DIR before the nudge snippet uses $ROOT_DIR"
