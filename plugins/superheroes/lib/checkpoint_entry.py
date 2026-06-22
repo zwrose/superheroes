@@ -20,7 +20,10 @@ elif a.step is None:                                   # write path requires a s
     sys.exit(2)
 else:
     cp["lastGoodStep"] = int(a.step)
-    side = json.loads(a.side) if a.side else {}
+    try:
+        side = json.loads(a.side) if a.side else {}
+    except ValueError:                                 # malformed --json side effect -> fail closed
+        print(json.dumps({"ok": False, "error": "malformed --json side effect"})); sys.exit(2)
     if "pr" in side:
         cp["pr"] = side["pr"]
     if side.get("ready") and isinstance(cp.get("pr"), dict):

@@ -155,8 +155,14 @@ async function reviewCodePhase(workItem) {
   })
   const gate = verdictToGate(verdict)
   if (gate === 'passed') {
-    await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
-      { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+    // If the review provenance can't be recorded, parking now (low confidence) is correct: advancing
+    // would later GATE permanently at the draft-PR ship-gate (no review evidence) with the cursor
+    // already past this phase — a dead-end. A low-confidence park lets a resume retry it.
+    const prov = await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
+      { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
+    if (!prov.ok) {
+      return { phaseResult: { confidence: 'low', assumptions: ['review provenance not recorded: ' + (prov.error || 'unknown')] }, gate }
+    }
   }
   return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
 }
@@ -172,13 +178,22 @@ async function defaultReviewerAgent(reviewer, _context, _rubric, _runDir, _round
 async function buildPhase(workItem) {
   // build_entry.py: content_hash(approved tasks) -> branch -> buildtree.reclaim_or_create ->
   // record checkpoint.branch. Returns { branch }.
+  // build_entry emits {branch} on success or {error} on a fail-closed setup failure — so the schema
+  // does NOT require branch; a missing branch parks (low confidence) instead of crashing on setup.branch.
   const setup = await cmdRunner(
     `python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['branch'], properties: { branch: { type: 'string' } } } })
+    { schema: { type: 'object', properties: { branch: { type: 'string' }, error: { type: 'string' } } } })
+  if (!setup.branch) {
+    return { confidence: 'low', assumptions: ['build setup failed: ' + (setup.error || 'no branch returned')] }
+  }
   await agent(`Make the trivial throwaway change for ${workItem} on branch ${setup.branch} and commit it.`, { label: 'build' })
-  // record build provenance over the shipped HEAD (the ship-gate reads it at draft-PR).
-  await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step build --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+  // record build provenance over the shipped HEAD (the ship-gate reads it at draft-PR). If it can't be
+  // recorded, park (low confidence) — advancing would dead-end at the ship-gate with no build evidence.
+  const prov = await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step build --work-item ${shq(workItem)}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
+  if (!prov.ok) {
+    return { confidence: 'low', assumptions: ['build provenance not recorded: ' + (prov.error || 'unknown')] }
+  }
   return { confidence: 'high', assumptions: [] }
 }
 

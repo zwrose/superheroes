@@ -19,8 +19,15 @@ if a.step == "freshness":
 else:
     paths = control_plane.paths(os.getcwd(), a.work_item)
     rounds, history = journal.ci_attempts(paths["events"])
-    failing = []  # a real CI read populates this; empty => green
-    if not failing:
+    # This thin slice does NOT read real CI (the real read + the bounded fix loop are deferred to
+    # #87-#90). It must NEVER claim 'green' — that would post a false "merge-ready: CI green" signal
+    # to the PR. Return an explicit 'unverified' so ship parks honestly. When a real CI read is wired
+    # here it populates `failing` and routes through ci_loop.decide (kept so the seam stays visible).
+    failing = None  # None = not read in this slice (distinct from [] = read-and-empty)
+    if failing is None:
+        print(json.dumps({"decision": "unverified",
+                          "reason": "CI not verified in this slice — confirm checks are green before merge"}))
+    elif not failing:
         print(json.dumps({"decision": "green"}))
     else:
         decision, reason = ci_loop.decide(failing, history, rounds + 1)

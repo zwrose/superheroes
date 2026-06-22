@@ -37,7 +37,10 @@ if a.step == "draft":
         print(json.dumps({"ok": True, "pr": world["pr"]})); sys.exit(0)
     # create: only after the ship-gate proves SDD build + review-code ran over HEAD.
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    prov = ship_gate.read_provenance(paths["provenance"])
+    try:
+        prov = ship_gate.read_provenance(paths["provenance"])
+    except ship_gate.ProvenanceError as e:           # corrupt provenance.json -> gate (fail closed)
+        print(json.dumps({"ok": False, "reason": "provenance unreadable: %s" % e})); sys.exit(0)
     from review_result import read_result
     decision = ship_gate.decide(prov, read_result(paths["review_result"]), head)
     if decision["action"] != "proceed":

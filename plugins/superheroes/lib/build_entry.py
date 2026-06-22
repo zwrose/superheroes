@@ -22,5 +22,9 @@ if outcome in ("gate_failclosed", "preserve_notify"):            # no clean usab
 paths = control_plane.paths(root, a.work_item)
 cp = ckpt_lib.read(paths["checkpoint"]) or ckpt_lib.new(a.work_item, branch)
 cp["branch"] = branch
-ckpt_lib.write(paths["checkpoint"], cp)
+try:
+    ckpt_lib.write(paths["checkpoint"], cp)
+except OSError as e:                                              # disk -> fail closed (no branch emitted)
+    print(json.dumps({"error": "checkpoint write failed: %s" % e}))
+    sys.exit(1)
 print(json.dumps({"branch": branch}))

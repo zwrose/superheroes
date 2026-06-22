@@ -18,9 +18,13 @@ if _hp.returncode != 0 or not head:
     # satisfy ship_gate's covers==head check). Fail closed; the draft-PR ship-gate then GATEs.
     print(json.dumps({"ok": False, "error": "git rev-parse HEAD failed — provenance not recorded"}))
     sys.exit(0)
-if a.step == "build":
-    ship_gate.write_build(paths["provenance"], engine="subagent-driven-development", head=head)
-else:
-    ship_gate.set_review_covers(paths["provenance"], head)
-    review_result.write_result(paths["review_result"], "exit_clean", 1, "review-code single-pass clean")
+try:
+    if a.step == "build":
+        ship_gate.write_build(paths["provenance"], engine="subagent-driven-development", head=head)
+    else:
+        ship_gate.set_review_covers(paths["provenance"], head)
+        review_result.write_result(paths["review_result"], "exit_clean", 1, "review-code single-pass clean")
+except (ship_gate.ProvenanceError, OSError) as e:   # corrupt provenance.json / disk -> fail closed
+    print(json.dumps({"ok": False, "error": "provenance write failed: %s" % e}))
+    sys.exit(0)
 print(json.dumps({"ok": True}))

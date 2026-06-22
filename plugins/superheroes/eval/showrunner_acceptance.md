@@ -68,11 +68,17 @@ node -e "require('./plugins/superheroes/lib/showrunner.js')"   # loads clean
 - **FR-2 never merges.** Structural: no `gh pr merge` (nor any `gh`/GraphQL merge form) appears
   anywhere in `showrunner.js` or any leaf. `grep -rnE "pr +merge|gh.+merge"` over the pipeline
   returns nothing. The terminal `shipPhase` parks; merge is the owner's.
-- **FR-10 mark-ready precedes the CI read; FR-11 not merge-ready unless up-to-date.**
+- **FR-10 mark-ready precedes the CI read; FR-11 not merge-ready unless up-to-date AND green.**
   `shipPhase` orders `freshness.decide` → `ci` and returns `merge-ready` **only** when the
-  branch is `up_to_date` **and** CI is `green`; any other freshness/CI result `park`s (not
-  ready). `showrunner_ship_smoke.js` asserts the park path (`OK: ship parks (not merge-ready)
-  when CI cannot go green`). `mark-ready` is its own phase ordered before `ship`'s CI read.
+  branch is `up_to_date` **and** CI is `green`; any other freshness/CI result `park`s (not ready).
+  `showrunner_ship_smoke.js` asserts the park path (`OK: ship parks (not merge-ready) when CI
+  cannot go green`). `mark-ready` is its own phase ordered before `ship`'s CI read.
+  **Honest CI in the slice:** because this slice does **not** read real CI (deferred to #87–#90),
+  `ship_phase.py --step ci` returns an explicit `unverified` decision — never a false `green` — so
+  the slice **parks honestly** ("CI not verified in this slice — confirm checks are green before
+  merge") rather than posting a `merge-ready: CI green` signal it cannot substantiate. The
+  `merge-ready` path is reachable only once a real CI read is wired (the `failing`/`ci_loop.decide`
+  seam is kept in `ship_phase.py` for that deepening).
 
 ### Demo 3 — kill/relaunch: no duplicate PR, no re-flip (FR-3, FR-4)
 

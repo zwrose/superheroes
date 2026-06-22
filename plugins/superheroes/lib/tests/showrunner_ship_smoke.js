@@ -3,7 +3,7 @@ const assert = require('assert')
 global.agent = async (p) => {
   if (p.includes('freshness')) return { decision: 'up_to_date' }
   if (p.includes('ship_phase') && p.includes('ci')) return { decision: 'revert_and_gate', reason: 'CI-fix round cap reached' }
-  if (p.includes('readout') || p.includes('pr_comment')) return { ok: true }
+  if (p.includes('readout') || p.includes('pr_comment')) return { posted: true }
   throw new Error('unexpected agent: ' + p.slice(0, 40))
 }
 global.log = () => {}
