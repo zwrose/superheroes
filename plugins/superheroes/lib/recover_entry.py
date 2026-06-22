@@ -28,8 +28,11 @@ def _read_pr(cp):
     branch = (cp or {}).get("branch")
     if not branch:
         return None
-    r = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "all",
-                        "--json", "number,state"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "all",
+                            "--json", "number,state"], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return "unknown"                                 # a hung gh read -> transient (reconcile GATEs)
     if r.returncode != 0:
         return "unknown"
     try:
@@ -48,8 +51,12 @@ def main():
     if store is None:
         return _park("control-plane store unusable")
     # Step-0 guard A: the enforcer PreToolUse hook must be armed before any write.
-    if subprocess.run([sys.executable, os.path.join(_HERE, "enforcer.py"), "selfcheck"],
-                      capture_output=True).returncode != 0:   # capture: its JSON must not pollute our stdout
+    try:
+        armed = subprocess.run([sys.executable, os.path.join(_HERE, "enforcer.py"), "selfcheck"],
+                               capture_output=True, timeout=10).returncode == 0  # capture: its JSON must not pollute our stdout
+    except subprocess.TimeoutExpired:
+        armed = False                                       # a hung self-check -> fail closed
+    if not armed:
         return _park("enforcer hook not armed — refusing to run (fail closed)")
     # Step-0 guard B: the §4.4 startup + work-item leases (UFR-3 — a live holder fails the 2nd run).
     if not ref_lock.acquire_startup(store)[0]:

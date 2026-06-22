@@ -17,8 +17,11 @@ branch = cp.get("branch", "")
 
 
 def _gh_pr(branch):
-    r = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "all",
-                        "--json", "number,url,isDraft,state"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "all",
+                            "--json", "number,url,isDraft,state"], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return "unknown"                                 # a hung gh read -> transient
     if r.returncode != 0:
         return "unknown"
     try:
@@ -37,7 +40,10 @@ if a.step == "draft":
         print(json.dumps({"ok": True, "pr": world["pr"]})); sys.exit(0)
     # create: only after the ship-gate proves SDD build + review-code ran over the SHIPPED HEAD —
     # the build branch's tip (what the PR ships), resolved from checkpoint.branch, not the cwd HEAD.
-    _hp = subprocess.run(["git", "rev-parse", branch or "HEAD"], capture_output=True, text=True)
+    try:
+        _hp = subprocess.run(["git", "rev-parse", branch or "HEAD"], capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        print(json.dumps({"ok": False, "reason": "git rev-parse timed out"})); sys.exit(0)
     head = _hp.stdout.strip()
     if _hp.returncode != 0 or not head:
         print(json.dumps({"ok": False, "reason": "cannot resolve branch HEAD for the ship-gate"})); sys.exit(0)
@@ -49,8 +55,12 @@ if a.step == "draft":
     decision = ship_gate.decide(prov, read_result(paths["review_result"]), head)
     if decision["action"] != "proceed":
         print(json.dumps({"ok": False, "reason": decision["reason"]})); sys.exit(0)
-    out = subprocess.run(["gh", "pr", "create", "--draft", "--fill", "--head", branch],
-                         capture_output=True, text=True)
+    try:
+        out = subprocess.run(["gh", "pr", "create", "--draft", "--fill", "--head", branch],
+                             capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        # the create may have landed server-side -> park; recover.pr_action adopts it on resume.
+        print(json.dumps({"ok": False, "reason": "gh pr create timed out — will adopt on resume"})); sys.exit(0)
     if out.returncode != 0:
         print(json.dumps({"ok": False, "reason": "gh pr create failed"})); sys.exit(0)
     # Read the just-created PR back. A transient read failure must NOT be recorded as ok:true with
@@ -68,7 +78,10 @@ else:  # mark-ready
     if decision == "gate":
         print(json.dumps({"ok": False, "reason": "PR isDraft unreadable — not flipping blind"})); sys.exit(0)
     if decision == "flip":
-        if subprocess.run(["gh", "pr", "ready", str(pr["number"])],
-                          capture_output=True).returncode != 0:   # capture: gh's success line must not pollute our stdout
+        try:                                             # capture: gh's success line must not pollute our stdout
+            rc = subprocess.run(["gh", "pr", "ready", str(pr["number"])], capture_output=True, timeout=60).returncode
+        except subprocess.TimeoutExpired:
+            print(json.dumps({"ok": False, "reason": "gh pr ready timed out — PR still draft"})); sys.exit(0)
+        if rc != 0:
             print(json.dumps({"ok": False, "reason": "gh pr ready failed — PR still draft"})); sys.exit(0)
     print(json.dumps({"ok": True}))

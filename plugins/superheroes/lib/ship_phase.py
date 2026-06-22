@@ -12,8 +12,11 @@ if a.step == "freshness":
     # is the branch up to date with base = does HEAD contain origin/<base> = is origin/<base> an
     # ancestor of HEAD. (rc 0 = yes/up-to-date, 1 = behind, other = unreadable -> gate.)
     base = "main"
-    rc = subprocess.run(["git", "merge-base", "--is-ancestor", f"origin/{base}", "HEAD"],
-                        capture_output=True).returncode
+    try:
+        rc = subprocess.run(["git", "merge-base", "--is-ancestor", f"origin/{base}", "HEAD"],
+                            capture_output=True, timeout=10).returncode
+    except subprocess.TimeoutExpired:
+        rc = 2                                           # a hung read -> unreadable -> freshness gate
     is_anc = True if rc == 0 else (False if rc == 1 else None)
     decision, _reason = freshness.decide(is_anc, 1)
     print(json.dumps({"decision": decision}))

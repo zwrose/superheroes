@@ -16,7 +16,10 @@ paths = control_plane.paths(os.getcwd(), a.work_item)
 # (otherwise a build that happens on a separate branch/worktree records a mismatched HEAD).
 cp = ckpt_lib.read(paths["checkpoint"]) or {}
 ref = cp.get("branch") or "HEAD"
-_hp = subprocess.run(["git", "rev-parse", ref], capture_output=True, text=True)
+try:
+    _hp = subprocess.run(["git", "rev-parse", ref], capture_output=True, text=True, timeout=10)
+except subprocess.TimeoutExpired:
+    print(json.dumps({"ok": False, "error": "git rev-parse timed out — provenance not recorded"})); sys.exit(0)
 head = _hp.stdout.strip()
 if _hp.returncode != 0 or not head:
     # No resolvable HEAD -> record NO provenance (an empty head would let two empty-head records
