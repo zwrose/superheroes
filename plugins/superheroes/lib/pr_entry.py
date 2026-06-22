@@ -35,8 +35,12 @@ if a.step == "draft":
         print(json.dumps({"ok": False, "reason": "PR read transient/merged — not creating a 2nd PR"})); sys.exit(0)
     if act == "adopt":
         print(json.dumps({"ok": True, "pr": world["pr"]})); sys.exit(0)
-    # create: only after the ship-gate proves SDD build + review-code ran over HEAD.
-    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    # create: only after the ship-gate proves SDD build + review-code ran over the SHIPPED HEAD —
+    # the build branch's tip (what the PR ships), resolved from checkpoint.branch, not the cwd HEAD.
+    _hp = subprocess.run(["git", "rev-parse", branch or "HEAD"], capture_output=True, text=True)
+    head = _hp.stdout.strip()
+    if _hp.returncode != 0 or not head:
+        print(json.dumps({"ok": False, "reason": "cannot resolve branch HEAD for the ship-gate"})); sys.exit(0)
     try:
         prov = ship_gate.read_provenance(paths["provenance"])
     except ship_gate.ProvenanceError as e:           # corrupt provenance.json -> gate (fail closed)

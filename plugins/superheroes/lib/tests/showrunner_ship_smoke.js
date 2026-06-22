@@ -11,6 +11,6 @@ const sr = require('../showrunner.js')
 ;(async () => {
   const out = await sr.shipPhase('wi', { number: 7 })
   assert.strictEqual(out.outcome, 'parked')
-  assert.ok(/CI/.test(out.reason))
+  assert.strictEqual(out.reason, 'CI-fix round cap reached')   // the Python-returned reason is passed through verbatim
   console.log('OK: ship parks (not merge-ready) when CI cannot go green')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

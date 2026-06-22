@@ -140,7 +140,9 @@ async function runPhases(workItem, fromStep, deps) {
     const cur = await recordCursor(workItem, i, sideEffect)
     if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
   }
-  return { outcome: 'ready', phase: 'ship', reason: 'all phases passed' }
+  // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
+  // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.
+  return { outcome: 'parked', phase: 'ship', reason: 'phase loop ended without reaching ship (no ship phase?)' }
 }
 
 // #86 verdict -> the gate phase_step.decide consumes.
