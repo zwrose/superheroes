@@ -1,0 +1,150 @@
+# Showrunner per-issue Workflow spine (thin slice) — acceptance evidence
+
+Work-item `showrunner-per-issue-workflow-spine-thin-slice-b70916` (issue #21, epic #85).
+This is the recorded evidence for the spec's definition of done.
+
+## Scope of this proof (read first)
+
+This is the **thin proof slice** (the approved Discovery framing): it proves that the
+control-flow-only `lib/showrunner.js` Workflow **composes** end-to-end over the existing
+substrate libs via the `#86` `cmdRunner`/leaf bridge, and that every per-phase **judgement**
+is a pure Python decider. Proof is delivered at two levels, both reproducible and CI-or-node
+runnable:
+
+- **Composition** — the `#86` stub-leaf node harnesses (`lib/tests/showrunner_*_smoke.js`):
+  inject the `agent()`/`parallel()`/`log()` globals, `require` the real `showrunner.js`, and
+  assert the orchestration wiring (which terminal, which fan-out, which park). Dev-time
+  (`node`), not CI — matching the `#86` `review_panel_harness.md` precedent.
+- **Unit** — the pure deciders under pytest (`lib/tests/test_*.py`), CI-gated. The judgement
+  lives here; `showrunner.js` only forwards it.
+
+**Deliberately deferred (not a gap):** a *live, production-style* unattended invocation — the
+Workflow run as a registered `meta`-carrying Workflow over real leaf agents, creating a real
+discardable PR — is **out of the thin-slice scope**. The owner-approved framing is that the
+Workflow "can be not invoked in production until everything is deepened, and the current path
+stays untouched." Wiring the real leaf agents, the production entrypoint, and the auto-fix
+loops is the **deepening** tracked by #87–#90. So below, each DoD demo is backed by its
+composition + unit evidence; where a demo's verb is "run it live," the evidence is the
+composition harness that exercises that exact control-flow branch plus the unit test that
+proves the decision, and the live-invocation boundary is called out. **No run transcript in
+this file is fabricated** — every command below is reproducible as written.
+
+## How to reproduce
+
+```bash
+# Unit (CI lane) — the deciders and lib touches:
+python3 -m pytest plugins/superheroes/lib/tests/ -q          # 830 passed
+
+# Full CI set (CLAUDE.md):
+python3 .github/scripts/validate_marketplace.py
+python3 .github/scripts/validate_hosts.py
+python3 .github/scripts/validate_skills.py
+python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ \
+  plugins/superheroes/eval/tests/ eval/lib/tests/ -q          # 1006 passed
+
+# Composition (dev-time, node) — the stub-leaf harnesses:
+node plugins/superheroes/lib/tests/showrunner_derisk_smoke.js
+node plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js
+node plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js
+node plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js
+node plugins/superheroes/lib/tests/showrunner_ship_smoke.js
+node -e "require('./plugins/superheroes/lib/showrunner.js')"   # loads clean
+```
+
+## DoD demo → evidence map
+
+### Demo 2 — full pipeline to a parked, ready-for-review, non-merged PR (FR-1, FR-2, FR-10, FR-11)
+
+- **Pipeline composes end-to-end.** `showrunner.js` assembles the ordered `PHASES`
+  (`plan → review-plan → tasks → review-tasks → build → review-code → draft-PR → mark-ready →
+  ship`) and loads clean (`node -e "require('./plugins/superheroes/lib/showrunner.js')"`). The
+  reconcile→startup-gate→loop→park control flow is exercised by `showrunner_reconcile_smoke.js`
+  (`OK: reconcile park_gate -> parked`) and the per-phase loop branches by the other smokes.
+- **FR-1 content-addressed branch.** The build leaf (`build_entry.py`) derives the branch
+  `superheroes/<work-item>-<content-hash>` from the approved tasks doc via the shared
+  `docload.content_hash_for` (§6.3). Parity is unit-proven by `test_docload.py`, and was
+  exercised for real by *this* work-item's own workhorse build, whose branch hash
+  `fed7cb4dd1a17752` byte-matches `docload.content_hash_for` over `tasks.md`.
+- **FR-2 never merges.** Structural: no `gh pr merge` (nor any `gh`/GraphQL merge form) appears
+  anywhere in `showrunner.js` or any leaf. `grep -rnE "pr +merge|gh.+merge"` over the pipeline
+  returns nothing. The terminal `shipPhase` parks; merge is the owner's.
+- **FR-10 mark-ready precedes the CI read; FR-11 not merge-ready unless up-to-date AND green.**
+  `shipPhase` orders `freshness.decide` → `ci` and returns `merge-ready` **only** when the
+  branch is `up_to_date` **and** CI is `green`; any other freshness/CI result `park`s (not ready).
+  `showrunner_ship_smoke.js` asserts the park path (`OK: ship parks (not merge-ready) when CI
+  cannot go green`). `mark-ready` is its own phase ordered before `ship`'s CI read.
+  **Honest CI in the slice:** because this slice does **not** read real CI (deferred to #87–#90),
+  `ship_phase.py --step ci` returns an explicit `unverified` decision — never a false `green` — so
+  the slice **parks honestly** ("CI not verified in this slice — confirm checks are green before
+  merge") rather than posting a `merge-ready: CI green` signal it cannot substantiate. The
+  `merge-ready` path is reachable only once a real CI read is wired (the `failing`/`ci_loop.decide`
+  seam is kept in `ship_phase.py` for that deepening).
+
+### Demo 3 — kill/relaunch: no duplicate PR, no re-flip (FR-3, FR-4)
+
+- **FR-3 resume skips completed phases.** `showrunner()` resumes at `Number(from_step) + 1`
+  (the phase after the last recorded cursor); front-half resume is unblocked by the
+  front-half-aware `recover.reconcile` (skips the content-hash gate pre-branch) — unit-proven
+  by `test_recover_front_half.py` (`continue` with no branch; still `gate`s in the back-half).
+- **FR-4 record-before-advance + exactly-once PR / idempotent re-flip.** `recordCursor` writes
+  `lastGoodStep` (+ the `{pr}`/`{ready}` side effect) **before** the loop advances. The draft-PR
+  decision is the already-tested `recover.pr_action` (adopt an existing open PR / create exactly
+  one / gate a merged-or-unknown read) — `test_recover.py`. The mark-ready decision is
+  `pr_phase.mark_ready_action`: an already-non-draft PR → `skip` (no re-flip), a missing/None
+  `isDraft` → `gate` — unit-proven by `test_pr_phase.py`.
+
+### Demo 4 — changes-requested park, park-on-assumption, park-on-low-confidence (FR-6, FR-7, FR-8)
+
+- `phase_step.decide` is the single decider; `test_phase_step.py` proves all six terminals and
+  the **safety ordering** (assumption / low-confidence are evaluated *before* the gate, so they
+  win even over a parking gate): `park_assumption` (FR-7), `park_low_confidence` (FR-8),
+  `park_changes_requested` (FR-6), plus `park_pending` / `park_unexpected_gate`.
+- Composition: `showrunner_reviewcode_smoke.js` proves a blocking panel verdict maps to
+  `changes-requested` (`verdictToGate`). That a non-`proceed` action then parks is established by
+  the `runPhases` loop body (`if (decision.action !== 'proceed') return { outcome: 'parked', … }`)
+  together with the `phase_step.decide` park terminals (`test_phase_step.py`) and the
+  `showrunner_reconcile_smoke.js` park path — not by `showrunner_reviewcode_smoke.js` itself, which
+  asserts only the `verdictToGate` mapping.
+
+### Demo 5 — UFR-1 startup refusal, UFR-2 durable-write park, UFR-4 readout fallback
+
+- **UFR-1.** `showrunner_startup_gate_smoke.js` (`OK: UFR-1 — unapproved (pending) spec refuses
+  to run`): a `pending` spec gate routes through `phase_step.decide` → `park_pending` at the
+  `startup` phase, before any phase work.
+- **UFR-2.** `journal_entry.py` catches `journal.DurableWriteError` and returns `{ok:false}`;
+  `runPhases` turns a false `ok` into a park (`durable write failed … UFR-2`) with completed
+  phases intact. The durable append/roundtrip is unit-proven by `test_journal_phase_record.py`.
+- **UFR-4.** `readout_post.py` always records a durable `parked` event first; on a failed PR
+  post it writes the readout to the store (`resume_brief`) and surfaces the error — never
+  silently dropped (the `except` fallback branch).
+
+### Demo 6 — review-code panel re-validates green, no regression (FR-16)
+
+- `showrunner.js` consumes `review_panel_shell.js` **verbatim** (`require('./review_panel_shell.js')`,
+  no fork). The deterministic gate/terminal/precedence matrix is unchanged and CI-green:
+  `test_panel_tally.py` → 30 passed. The on-demand agentic-wiring harness is unchanged
+  (`eval/review_panel_harness.md`). The single-pass derisk composing inside the Workflow is
+  proven by `showrunner_derisk_smoke.js` (`OK: reviewPanel composed single-pass with the 5
+  reviewers`).
+
+### Demo 7 — full band suite green, no regression (NFR)
+
+- `python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/
+  plugins/superheroes/eval/tests/ eval/lib/tests/ -q` → **1006 passed** (baseline 809 in
+  `lib/tests/` → **830** here; +21 across the full set).
+- `validate_marketplace.py`, `validate_hosts.py`, `validate_skills.py` → all ✓.
+
+## FR-15 (never writes the issue body)
+
+Structural, like FR-2: `grep -rnE "issue +edit|issue.+body|gh issue"` over `showrunner.js` and
+all leaves returns nothing. The run surfaces state only via the scrubbed PR `readout` /
+`pr_comment` path (`readout_post.py` → `pr_comment.upsert(pr, "results", …)`).
+
+## Throwaway-vehicle note
+
+The spec's test vehicle is a **throwaway** work-item; per the approved framing the proof is the
+recorded evidence above, not a retained change. Because the live production invocation is
+deferred (see Scope), no throwaway PR was opened against the repo — opening/closing one would be
+GitHub churn for evidence the composition + unit layers already establish. When #87–#90 wire the
+real entrypoint, the live unattended run (open → ready → green → discard) becomes the natural
+acceptance for that deepening.

@@ -32,15 +32,18 @@ def reconcile(checkpoint, world):
     if not checkpoint:
         return {"action": "world_derive", "reason": "no checkpoint — re-derive from reality"}
 
-    # (c) stale-spec cascade (§6.3): the approved tasks changed under the in-flight branch.
-    cur = world.get("current_content_hash")
-    if cur is None:
-        return {"action": "gate",
-                "reason": "could not recompute the tasks content-hash (transient) — not resuming blind"}
-    bh = _branch_hash(checkpoint.get("branch"))
-    if bh is not None and bh != cur:
-        return {"action": "gate",
-                "reason": "approved tasks changed since this run started (stale spec)"}
+    # (c) stale-spec cascade (§6.3) — only once a content-addressed branch exists (back-half).
+    #     Front-half phases (plan/tasks) have no branch yet, so a None content-hash is expected
+    #     and must NOT gate; resume by the cursor instead.
+    if checkpoint.get("branch"):
+        cur = world.get("current_content_hash")
+        if cur is None:
+            return {"action": "gate",
+                    "reason": "could not recompute the tasks content-hash (transient) — not resuming blind"}
+        bh = _branch_hash(checkpoint.get("branch"))
+        if bh is not None and bh != cur:
+            return {"action": "gate",
+                    "reason": "approved tasks changed since this run started (stale spec)"}
 
     # (d) the owner ended the work by merging.
     pr = world.get("pr")

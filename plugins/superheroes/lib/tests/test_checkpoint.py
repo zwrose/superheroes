@@ -1,5 +1,6 @@
 # plugins/superheroes/lib/tests/test_checkpoint.py
 import json
+import pytest
 import checkpoint as ck
 
 
@@ -33,3 +34,14 @@ def test_read_unknown_schema_fails_closed(tmp_path):
     p = tmp_path / "checkpoint.json"
     p.write_text(json.dumps({"schemaVersion": 999, "workItem": "wi"}))
     assert ck.read(str(p)) is None   # newer schema -> ignore, world-derive
+
+
+@pytest.mark.parametrize("phase", ["plan", "tasks"])
+def test_front_half_phase_roundtrips(tmp_path, phase):
+    import checkpoint
+    p = str(tmp_path / "checkpoint.json")
+    ck2 = checkpoint.new("wi", "")          # checkpoint.new(work_item, branch) — branch is required
+    ck2["phase"] = phase
+    ck2["lastGoodStep"] = 1
+    checkpoint.write(p, ck2)
+    assert checkpoint.read(p)["phase"] == phase
