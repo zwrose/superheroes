@@ -112,6 +112,14 @@ SAFETY_MACHINERY = (
     "session_start.py",       # workhorse resume hooks (resilience)
     "escalation-base.md",
     "review-base.md",
+    # shared review-and-fix loop (#104): the loop's deciders, its durable record, and its
+    # orchestration shell — anything its correctness or audit trail depends on (FR-24).
+    "panel_tally.py",         # terminal/accounting decider + rounds-assembler + resume + fail-closed
+    "loop_synthesis.py",      # panel synthesis drop/keep/normalize decider
+    "verify_gate.py",         # code-leg verify gate decider
+    "loop_readout.py",        # the audit-trail readout renderer
+    "review_result.py",       # the durable terminal-record writer (UFR-9)
+    "review_panel_shell.js",  # the loop orchestration incl. the last-resort fail-closed sentinel
 )
 
 
