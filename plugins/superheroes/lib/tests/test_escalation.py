@@ -107,6 +107,9 @@ def test_safety_machinery_set_members_are_pinned():
         "enforcer.py", "allowance.py", "model_tier.py", "hooks.json",
         "precompact.py", "session_start.py",
         "escalation-base.md", "review-base.md",
+        # shared review-and-fix loop (#104): deciders, durable record, and the orchestration shell
+        "panel_tally.py", "loop_synthesis.py", "verify_gate.py", "loop_readout.py",
+        "review_result.py", "review_panel_shell.js",
     }
 
 def _band_file(tmp_path, sub, name):

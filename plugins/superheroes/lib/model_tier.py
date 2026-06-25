@@ -22,27 +22,37 @@ DEFAULT_TIERS = {
     "reviewer": "sonnet",
     "reviewer-deep": "opus",       # security / architecture review
     "mechanical": "haiku",         # well-specified implementers, fixers, triage
+    "synthesis": "opus",           # panel synthesis: the strongest tier (loop-owned)
+    "fixer": "sonnet",             # default context = code-fixer (the mid-tier floor)
 }
 
 ROLES = tuple(DEFAULT_TIERS)
 
+# The single `fixer` role resolves by context (spec: one role, not two): a doc-reviser is
+# re-authoring design (strongest tier), a code-fixer works from a prose worklist (mid floor).
+_FIXER_BY_CONTEXT = {"code": "sonnet", "doc": "opus"}
 
-def resolve_model(role, overrides=None):
-    """Return the dispatch model name for `role`, or None to inherit the session
-    model. An unknown role, a non-dict `overrides`, or a malformed override value
-    falls back to DEFAULT_TIERS (fail-open — never raises on bad config)."""
+
+def resolve_model(role, overrides=None, context=None):
+    """Return the dispatch model name for `role`, or None to inherit the session model. An
+    unknown role, a non-dict `overrides`, or a malformed override value falls back to
+    DEFAULT_TIERS (fail-open). `context` selects the single `fixer` role's tier (code/doc);
+    a per-project override on `fixer` still wins over the context default."""
     if role not in DEFAULT_TIERS:
         role = "reviewer"  # safe capable default for an unrecognized role
+    default = DEFAULT_TIERS[role]
+    if role == "fixer" and context in _FIXER_BY_CONTEXT:
+        default = _FIXER_BY_CONTEXT[context]
     if not isinstance(overrides, dict):
-        return DEFAULT_TIERS[role]
+        return default
     v = overrides.get(role, _MISSING)
     if v is _MISSING:
-        return DEFAULT_TIERS[role]
+        return default
     if v is None:
         return None
     if isinstance(v, str) and v.strip():
         return v.strip()
-    return DEFAULT_TIERS[role]  # malformed (non-str / empty) -> default
+    return default  # malformed (non-str / empty) -> default
 
 
 def main(argv):
@@ -52,6 +62,7 @@ def main(argv):
     r = sub.add_parser("resolve")
     r.add_argument("--role", required=True)
     r.add_argument("--overrides", default=None, help="optional JSON {role: model}")
+    r.add_argument("--context", default=None, help="optional fixer context: code|doc")
     args = ap.parse_args(argv[1:])
     overrides = None
     if args.overrides:
@@ -59,7 +70,7 @@ def main(argv):
             overrides = json.loads(args.overrides)
         except (ValueError, json.JSONDecodeError):
             overrides = None  # fail-open
-    model = resolve_model(args.role, overrides)
+    model = resolve_model(args.role, overrides, args.context)
     sys.stdout.write(json.dumps({"role": args.role, "model": model}) + "\n")
     return 0
 

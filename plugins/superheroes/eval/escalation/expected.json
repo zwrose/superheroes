@@ -35,6 +35,12 @@
     {"path": "plugins/superheroes/hooks/hooks.json", "allow": false},
     {"path": "plugins/superheroes/hooks/precompact.py", "allow": false},
     {"path": "plugins/superheroes/hooks/session_start.py", "allow": false},
+    {"path": "plugins/superheroes/lib/panel_tally.py", "allow": false},
+    {"path": "plugins/superheroes/lib/loop_synthesis.py", "allow": false},
+    {"path": "plugins/superheroes/lib/verify_gate.py", "allow": false},
+    {"path": "plugins/superheroes/lib/loop_readout.py", "allow": false},
+    {"path": "plugins/superheroes/lib/review_result.py", "allow": false},
+    {"path": "plugins/superheroes/lib/review_panel_shell.js", "allow": false},
     {"path": "plugins/superheroes/lib/decisions.py", "allow": true},
     {"path": "their_app/loop_state.py", "allow": true}
   ]
