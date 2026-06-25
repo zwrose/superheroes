@@ -118,6 +118,12 @@ async function tallyAgent({ runDir, round, roster, maxRounds, synthesized = null
     extra += ` --synthesized ${shq(synthPath(runDir, round))}`
   }
   if (verifyResult) extra += ` --verify-result ${shq(verifyResult)}`
+  // Generic, decision-neutral extras seam (consumer-supplied; safe_extras re-filters in panel_tally):
+  // forward runDir/extras.json before each tally iff present, mirroring the --synthesized forward.
+  try {
+    const extrasPath = `${runDir}/extras.json`
+    if (require('fs').existsSync(extrasPath)) extra += ` --extras ${shq(extrasPath)}`
+  } catch (_) {}
   const cmd =
     `python3 plugins/superheroes/lib/panel_tally.py --run-dir ${shq(runDir)} --round ${shq(String(round))} ` +
     `--roster ${shq((roster || []).join(','))} --max-rounds ${shq(String(maxRounds))} ${extra}`

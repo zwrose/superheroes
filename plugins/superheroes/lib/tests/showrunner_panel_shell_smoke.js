@@ -44,7 +44,22 @@ async function main() {
   v = await reviewPanel({ ...base, fixStep: async () => null })  // null report => fix failure
   assert.strictEqual(v.terminal, 'halted', 'a failed fix step re-tallies and yields halted')
 
-  console.log('ok: loop shell sentinel + passthrough + continue/fix/clean')
+  // 5. extras seam: when runDir/extras.json exists, the tally command forwards --extras <path>.
+  const fs = require('fs'); const os = require('os'); const path = require('path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panelshell-'))
+  fs.writeFileSync(path.join(dir, 'extras.json'), JSON.stringify({ parentOrigin: 'plan' }))
+  let seenCmd = ''
+  global.agent = async (prompt, opts) => {
+    const label = (opts && opts.label) || ''
+    if (label.startsWith('tally')) { seenCmd = prompt; return { schemaVersion: 1, terminal: 'clean', gate: 'clean' } }
+    if (label === 'resume') return '1'
+    return null
+  }
+  await reviewPanel({ ...base, runKey: dir, runDir: dir })
+  assert.ok(seenCmd.includes('--extras') && seenCmd.includes(path.join(dir, 'extras.json')),
+    'tally must forward --extras <runDir>/extras.json when it exists')
+
+  console.log('ok: loop shell sentinel + passthrough + continue/fix/clean + extras seam')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
