@@ -37,9 +37,11 @@ def _read_pr(cp):
         return "unknown"
     try:
         arr = json.loads(r.stdout or "[]")
-    except ValueError:
-        return "unknown"
-    return {"number": arr[0]["number"], "state": arr[0]["state"].lower()} if arr else None
+        if not arr:
+            return None
+        return {"number": arr[0]["number"], "state": arr[0]["state"].lower()}
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "unknown"   # a 0-exit non-array / malformed payload -> transient (reconcile GATEs)
 
 
 def main():
@@ -61,7 +63,7 @@ def main():
     # Step-0 guard B: the §4.4 startup + work-item leases (UFR-3 — a live holder fails the 2nd run).
     if not ref_lock.acquire_startup(store)[0]:
         return _park("another run holds the per-checkout startup lock")
-    ok, _gen, reason = ref_lock.acquire(store, args.work_item)
+    ok, generation, reason = ref_lock.acquire(store, args.work_item)
     if not ok:
         return _park("work-item lease %s — another run is in progress (UFR-3)" % reason)
     paths = control_plane.paths(cwd, args.work_item)
@@ -78,7 +80,9 @@ def main():
             chash = None
     world = {"store_ok": True, "current_content_hash": chash,
              "pr": _read_pr(cp), "seeded_empty": True}
-    print(json.dumps(recover.reconcile(cp, world)))
+    out = recover.reconcile(cp, world)
+    out["generation"] = generation     # UFR-10: thread the entry generation to build_entry
+    print(json.dumps(out))
 
 
 if __name__ == "__main__":

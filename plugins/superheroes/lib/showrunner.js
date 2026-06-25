@@ -21,6 +21,8 @@ const CONFIG_SCHEMA = {
 }
 const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
 const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
+const RECORD_DEFERRED_SCHEMA = { type: 'object', required: ['ok'],
+  properties: { ok: {}, extras: {}, parentOrigin: {}, deferred: {} } }   // extras rides onto report.extras
 
 // Build the five caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
 function reviewCodeLeaves(tiers) {
@@ -69,10 +71,13 @@ function reviewCodeLeaves(tiers) {
   }
 
   const recordDeferred = async (report, _verdict, runDir) => {
-    await cmdRunner(
+    const out = await cmdRunner(
       `python3 plugins/superheroes/lib/record_deferred.py --run-dir ${shq(runDir)} ` +
       `--report ${shq(JSON.stringify(report || {}))}`,
-      { schema: OK_SCHEMA })
+      { schema: RECORD_DEFERRED_SCHEMA })
+    // Attach the computed readout-enrichment extras (fixes + accumulated parentOrigin) to the fix
+    // report so #104's shared shell threads it (report.extras -> tally -> readout). FR-6.
+    if (out && out.extras && report && typeof report === 'object') report.extras = out.extras
   }
 
   return { reviewerAgent, mergeAgent, synthesisLeaf, fixStep, recordDeferred }
@@ -96,6 +101,221 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 
 module.exports = { REVIEW_CODE_REVIEWERS }
 
+// The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
+const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
+                       'test-reviewer', 'premortem-reviewer']
+
+// the four caller-supplied doc-leg leaf wrappers the #104 shell expects (panel:true). Each is a
+// single leaf (no fan-out). Set as global.* before reviewPanel, exactly as runReviewCodePanel does.
+// NOTE: the findings filename is `findings-<full roster name>.json` — panel_tally reads the
+// roster verbatim (findings_path), and the tally is given the full DOC_REVIEWERS names, so the
+// reviewer write, the merge read, and the tally read MUST all use the same full names.
+async function docReviewerAgent(reviewer, context, rubric, runDir, round) {
+  await agent(
+    `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). Write findings to ` +
+    `${runDir}/round-${round}/findings-${reviewer}.json (a JSON array; [] if none).`,
+    { label: reviewer })
+  return true
+}
+async function docMergeAgent(runDir, round, reviewerSet) {
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py merge --run-dir ${shq(runDir)} ` +
+    `--round ${shq(String(round))} --roster ${shq((reviewerSet || []).join(','))}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, merged: {} } } })
+  return { runDir, round }   // merged.json on disk is what the synthesis leaf + tally read
+}
+async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
+  await agent(
+    `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
+    `Read the merged findings at ${runDir}/round-${round}/merged.json and the doc at ${context.docPath}; ` +
+    `per the synthesis-leaf prompt (plugins/superheroes/eval/synthesis-leaf.md) emit one ` +
+    `keep/drop/severity verdict per merged finding (keep-on-uncertain) and write the JSON array to ` +
+    `${runDir}/round-${round}/synthesis.json.`,
+    { label: `synthesis:r${round}` })
+  return { runDir, round }
+}
+async function docRecordDeferred(report, _verdict, runDir) {
+  // fix-report.json is a transient hand-off read by record-deferred immediately below; per-round
+  // overwrite is harmless (it is consumed before the next round writes it).
+  require('fs').writeFileSync(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
+    `--report ${shq(runDir + '/fix-report.json')}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, deferred: {} } } })
+}
+
+// the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
+// (with extras.parentOrigin for a parent-traced / GATE finding), or null on failure (#104 -> halted).
+async function docReviser(blockers, runDir, context) {
+  const out = await agent(
+    `You are the doc-reviser (fixStep) for the ${context.docType} doc at ${context.docPath}. ` +
+    `Per plugins/superheroes/eval/doc-reviser-leaf.md, resolve these blocking findings with targeted ` +
+    `revisions: ${JSON.stringify(blockers)}. Leave a parent-traced or GATE finding unresolved and ` +
+    `name it in extras.parentOrigin. Return ONLY the report JSON ` +
+    `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
+    { label: 'doc-reviser',
+      schema: { type: 'object', properties: { fixes: { type: 'array' }, deferred: { type: 'array' },
+                extras: { type: 'object' } } } })
+  return out || null
+}
+
+// run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
+async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
+  const context = { workItem, docType, docPath }
+  global.reviewerAgent = docReviewerAgent
+  global.mergeAgent = docMergeAgent
+  global.synthesisLeaf = docSynthesisLeaf
+  global.recordDeferred = docRecordDeferred
+  return reviewPanel({
+    reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
+    fixStep: (blockers, rd) => docReviser(blockers, rd, context),
+    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none' })
+}
+
+module.exports.DOC_REVIEWERS = DOC_REVIEWERS
+module.exports.runReviewDocPanel = runReviewDocPanel
+
+function docPathFor(workItem, doc) { return `docs/superheroes/${workItem}/${doc}.md` }
+function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
+
+// the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
+async function producePhase(phase, workItem) {
+  const doc = phase                                    // 'plan' | 'tasks'
+  // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
+  const draft = await usableDraft(workItem, doc)
+  if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
+  const authored = await agent(
+    `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
+    `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
+    `non-empty, no placeholder. Do NOT run review or record the review gate. Return ` +
+    `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
+    `{ identity, message }.`,
+    { label: `produce-${doc}`, model: await authorModel(),
+      schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+  if (authored == null) {
+    return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
+  }
+  // surface any produce-phase NOTIFY default in the durable ledger the boundary reads (UFR-2): a
+  // produce phase has no #104 loop record to ride, so it is named via the ledger, not the extras seam.
+  if (authored.notify && authored.notify.length) {
+    const ok = await appendNotify(workItem, authored.notify.map(
+      (n) => ({ phase: doc, identity: n && n.identity, message: n && n.message })))
+    if (!ok) {
+      // a NOTIFY default that can't be durably recorded must NOT be silently lost (UFR-2): park and
+      // name it. No marker is stamped yet, so a resume re-produces and retries the NOTIFY.
+      return { confidence: 'low', assumptions: ['produce NOTIFY default not durably recorded: ' +
+               authored.notify.map((n) => (n && n.message) || '').join('; ')] }
+    }
+  }
+  // stamp the content-bound completion signal deterministically (engine, not the LLM) — the body hash,
+  // so a crash before this leaves the marker absent/stale and the next entry re-produces (UFR-4).
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`,
+    { schema: { type: 'object', properties: { wrote: {} } } })
+  const after = await usableDraft(workItem, doc)
+  if (!after.usable) return { confidence: 'low', assumptions: [`produce step yielded no usable ${doc} draft`] } // UFR-4
+  return { confidence: 'high', assumptions: [] }
+}
+
+// the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
+async function reviewDocPhase(doc, workItem) {
+  const existing = await readGate(workItem, doc)
+  if (existing === 'passed') {
+    // cursor-lost re-entry guard (gate written, recordCursor failed): never re-run the panel and
+    // risk overwriting a correct passed (FR-8 passed-gate skip).
+    return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
+  }
+  const runDir = runDirFor(workItem, `review-${doc}`)
+  const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
+  // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
+  try { require('fs').writeFileSync(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
+  const gate = await gateForTerminal(verdict && verdict.terminal)
+  const sg = await cmdRunner(
+    `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
+    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`,
+    { schema: { type: 'object', properties: { review: {}, status: {} } } })
+  if (!sg || sg.review !== gate) {
+    // a failed durable gate write must NOT advance on un-recorded state (UFR-5) — park low-confidence,
+    // mirroring reviewCodePhase's provenance-write guard.
+    return { phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] }, gate }
+  }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
+}
+
+// thin front_half.py / registry decider bridges.
+async function gateForTerminal(terminal) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py gate-for-terminal --terminal ${shq(terminal || 'unknown')}`,
+    { schema: { type: 'object', required: ['gate'], properties: { gate: { type: 'string' } } } })
+  return (out && out.gate) || 'changes-requested'
+}
+async function usableDraft(workItem, doc) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)"`,
+    { schema: { type: 'object', required: ['usable'], properties: { usable: {} } } })
+  return { usable: !!(out && out.usable) }
+}
+async function authorModel() {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/model_tier_resolve.py --role author`,
+    { schema: { type: 'object', properties: { model: {} } } })
+  return (out && out.model) || undefined
+}
+// the durable per-work-item NOTIFY ledger (under the gitignored docs dir — run-local state).
+function notifyLedgerFor(workItem) { return `docs/superheroes/${workItem}/.notify.json` }
+async function appendNotify(workItem, entries) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py append-notify ` +
+    `--ledger ${shq(notifyLedgerFor(workItem))} --entries ${shq(JSON.stringify(entries || []))}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+  return !!(out && out.ok)   // false on a failed durable write — the caller must not silently lose it
+}
+
+module.exports.producePhase = producePhase
+module.exports.reviewDocPhase = reviewDocPhase
+module.exports.notifyLedgerFor = notifyLedgerFor
+
+// FR-7: compose the front-half run-outcome envelope (embedding each phase's #104 readout via
+// front_half render-outcome) and return a parked result. Reads best-effort per-phase terminal records
+// + the durable NOTIFY ledger; render_run_outcome tolerates missing records.
+async function frontHalfBoundary(workItem) {
+  const fs = require('fs')
+  const readJson = (p, dflt) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) { return dflt } }
+  const outcome = {
+    completed_phases: ['plan', 'review-plan', 'tasks', 'review-tasks'],
+    docs: { plan: docPathFor(workItem, 'plan'), tasks: docPathFor(workItem, 'tasks') },
+    notify: readJson(notifyLedgerFor(workItem), []),
+    phase_records: [
+      { phase: 'review-plan', record: readJson(`${runDirFor(workItem, 'review-plan')}/terminal-record.json`, null) },
+      { phase: 'review-tasks', record: readJson(`${runDirFor(workItem, 'review-tasks')}/terminal-record.json`, null) },
+    ],
+    readout_record_ok: true,
+  }
+  const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
+  let recordOk = true
+  try { fs.writeFileSync(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
+  // render-outcome prints TEXT (not JSON); call the leaf directly (no cmdRunner schema). If the
+  // outcome record could not be written, render has nothing to read -> flag UFR-6 in the reason.
+  const rendered = recordOk
+    ? await agent(
+        `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+        `python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`,
+        { label: 'lib' })
+    : null
+  const reason = (typeof rendered === 'string' && rendered.trim())
+    ? rendered
+    : recordOk
+      ? 'front-half complete: plan and tasks gated — parked at the front-half boundary, awaiting owner'
+      : '⚠️ front-half complete (plan and tasks gated) but the run-outcome record could not be written ' +
+        '— treat the durable readout as missing (UFR-6); awaiting owner'
+  return { outcome: 'parked', phase: 'front-half-boundary', reason }
+}
+
+module.exports.frontHalfBoundary = frontHalfBoundary
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
@@ -108,7 +328,8 @@ async function cmdRunner(cmd, { schema }) {
 
 const RECONCILE_SCHEMA = {
   type: 'object', required: ['action'],
-  properties: { action: { type: 'string' }, from_step: {}, reason: { type: 'string' } },
+  properties: { action: { type: 'string' }, from_step: {}, reason: { type: 'string' },
+    generation: {} },   // UFR-10: the lease generation recover_entry acquired, threaded to the build
 }
 
 // Reconcile-from-store: the leaf runs a small python that ensures the store, reads the
@@ -134,7 +355,16 @@ async function showrunner({ workItem }) {
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
-  return runPhases(workItem, fromStep, { gateRead: gateReadFor(workItem) })
+  // UFR-10 (#107): thread the lease generation recover_entry acquired into the workhorse build phase,
+  // so the build can fence (renew-then-fence) at every branch-mutating boundary.
+  const deps = { gateRead: gateReadFor(workItem), generation: r.generation }
+  // FR-7 (#108): native front-half wiring, behind the opt-in switch.
+  if (process.env.SUPERHEROES_FRONT_HALF === 'native') {
+    deps.produce = producePhase                  // plan / tasks authoring (author-only)
+    deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
+    deps.frontHalfBoundary = frontHalfBoundary   // park at the front-half boundary (FR-7)
+  }
+  return runPhases(workItem, fromStep, deps)
 }
 
 const READGATE_SCHEMA = { type: 'object', required: ['review'], properties: { review: { type: 'string' } } }
@@ -164,7 +394,7 @@ function gateReadFor(workItem) {
   }
 }
 
-const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'build',
+const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'workhorse',
                 'review-code', 'draft-PR', 'mark-ready', 'ship']
 
 const DECIDE_SCHEMA = {
@@ -195,18 +425,30 @@ async function runPhases(workItem, fromStep, deps) {
   deps = deps || {}
   for (let i = fromStep; i < PHASES.length; i += 1) {
     const phase = PHASES[i]
+    // FR-7: the native front-half ends at its boundary — park before entering the back-half
+    // (the 'workhorse' build phase, renamed from 'build' in #107), on a FRESH run AND on a RESUME
+    // (a resume re-enters at the build cursor, so the boundary must be checked at that phase, not
+    // merely after review-tasks).
+    if (deps.frontHalfBoundary && phase === 'workhorse') {
+      return deps.frontHalfBoundary(workItem)
+    }
     if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
       return (deps.ship || shipPhase)(workItem, await loadPr(workItem))
     }
     let phaseResult, gate, sideEffect = null
     if (phase === 'review-code') {
       const r = await (deps.reviewCode || reviewCodePhase)(workItem); phaseResult = r.phaseResult; gate = r.gate
-    } else if (phase === 'build') {
-      phaseResult = await (deps.build || buildPhase)(workItem); gate = null
+    } else if (phase === 'workhorse') {
+      phaseResult = await (deps.build || buildPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'draft-PR') {
       const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if (phase === 'mark-ready') {
       const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+    } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
+      const doc = phase === 'review-plan' ? 'plan' : 'tasks'
+      const r = await deps.reviewDoc(doc, workItem); phaseResult = r.phaseResult; gate = r.gate
+    } else if ((phase === 'plan' || phase === 'tasks') && deps.produce) {
+      phaseResult = await deps.produce(phase, workItem); gate = null
     } else {
       phaseResult = await (deps.phaseLeaf || defaultPhaseLeaf)(phase, workItem)
       gate = await (deps.gateRead || (async () => null))(phase, workItem)
@@ -276,29 +518,11 @@ async function reviewCodePhase(workItem) {
   return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
 }
 
-// the thin build leaf: create the managed content-addressed worktree+branch (so draft-PR has a
-// push target and the back-half reconcile has a branch), then one implementer makes the change.
-async function buildPhase(workItem) {
-  // build_entry.py: content_hash(approved tasks) -> branch -> buildtree.reclaim_or_create ->
-  // record checkpoint.branch. Returns { branch }.
-  // build_entry emits {branch} on success or {error} on a fail-closed setup failure — so the schema
-  // does NOT require branch; a missing branch parks (low confidence) instead of crashing on setup.branch.
-  const setup = await cmdRunner(
-    `python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', properties: { branch: { type: 'string' }, error: { type: 'string' } } } })
-  if (!setup.branch) {
-    return { confidence: 'low', assumptions: ['build setup failed: ' + (setup.error || 'no branch returned')] }
-  }
-  await agent(`Make the trivial throwaway change for ${workItem} on branch ${setup.branch} and commit it.`, { label: 'build' })
-  // record build provenance over the shipped HEAD (the ship-gate reads it at draft-PR). If it can't be
-  // recorded, park (low confidence) — advancing would dead-end at the ship-gate with no build evidence.
-  const prov = await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step build --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
-  if (!prov.ok) {
-    return { confidence: 'low', assumptions: ['build provenance not recorded: ' + (prov.error || 'unknown')] }
-  }
-  return { confidence: 'high', assumptions: [] }
-}
+// the native "workhorse" build phase (#87) — implement the approved tasks doc task-by-task with a
+// per-task review + bounded fix loop, one whole-branch final review, and provenance written once.
+// All of that orchestration lives in build_phase.js; the spine just delegates, threading the lease
+// generation reconcile() acquired so the build can fence every branch-mutating boundary (UFR-10).
+const buildPhase = (workItem, generation) => require('./build_phase.js').buildPhase(workItem, generation)
 
 module.exports.verdictToGate = verdictToGate
 module.exports.reviewCodePhase = reviewCodePhase

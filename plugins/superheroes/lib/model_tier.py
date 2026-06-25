@@ -24,6 +24,7 @@ DEFAULT_TIERS = {
     "mechanical": "haiku",         # well-specified implementers, fixers, triage
     "synthesis": "opus",           # panel synthesis: the strongest tier (loop-owned)
     "fixer": "sonnet",             # default context = code-fixer (the mid-tier floor)
+    "author": "opus",              # produce-plan / produce-tasks (front-half authoring, #88)
 }
 
 ROLES = tuple(DEFAULT_TIERS)

@@ -17,10 +17,10 @@ def test_records_deferred_set_and_extras(tmp_path):
     report = {"fixed": ["fixed a.py off-by-one"],
               "deferred": [{"id": "a.py::bug", "severity": "Important", "parentOrigin": "plan"},
                            {"id": "b.py::x", "severity": "Critical", "parentOrigin": "tasks"}]}
-    RD.record(str(tmp_path), report)
+    out = RD.record(str(tmp_path), report)
     assert json.loads((tmp_path / "deferred-set.json").read_text()) == {
         "a.py::bug": "Important", "b.py::x": "Critical"}
-    extras = json.loads((tmp_path / "extras.json").read_text())
+    extras = out["extras"]   # extras is returned (attached to report.extras), not written to a file
     assert extras["fixes"] == ["fixed a.py off-by-one"]
     phases = extras["parentOrigin"].split(", ")
     assert sorted(phases) == ["plan", "tasks"]  # FR-6: every distinct phase named
@@ -28,14 +28,14 @@ def test_records_deferred_set_and_extras(tmp_path):
 
 def test_parent_origin_merges_cumulatively_and_dedupes(tmp_path):
     RD.record(str(tmp_path), {"deferred": [{"id": "a::b", "severity": "Important", "parentOrigin": "plan"}]})
-    RD.record(str(tmp_path), {"deferred": [{"id": "a::b", "severity": "Important", "parentOrigin": "plan"},
+    out = RD.record(str(tmp_path), {"deferred": [{"id": "a::b", "severity": "Important", "parentOrigin": "plan"},
                                             {"id": "c::d", "severity": "Important", "parentOrigin": "build"}]})
-    extras = json.loads((tmp_path / "extras.json").read_text())
+    extras = out["extras"]   # cross-round accumulation via the on-disk parent-origin.json accumulator
     assert sorted(extras["parentOrigin"].split(", ")) == ["build", "plan"]  # run-scoped, deduped
 
 
 def test_no_parent_origin_omits_key_and_is_failsafe(tmp_path):
-    RD.record(str(tmp_path), {"fixed": [], "deferred": [{"id": "x::y", "severity": "Important"}]})
-    extras = json.loads((tmp_path / "extras.json").read_text())
+    out = RD.record(str(tmp_path), {"fixed": [], "deferred": [{"id": "x::y", "severity": "Important"}]})
+    extras = out["extras"]
     assert "parentOrigin" not in extras
     assert RD.record(str(tmp_path), "not a dict")["ok"] is True  # never raises

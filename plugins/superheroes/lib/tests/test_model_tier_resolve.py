@@ -55,3 +55,14 @@ def test_embedded_fallback_matches_the_core():
 def test_wrapper_cli_forwards_context(capsys):
     rc, out = _run(capsys, "--role", "fixer", "--context", "doc")
     assert rc == 0 and out["model"] == "opus" and out["degraded"] is False
+
+
+def test_author_role_resolves_to_opus():
+    # front-half (#88): the new `author` role (produce-plan / produce-tasks) is Opus, registered
+    # in all three pinned-equal dicts (DEFAULT_TIERS, KNOWN_ROLES, _FALLBACK).
+    core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core_author")
+    mto = _load(os.path.join(_HERE, "..", "model_tier_overrides.py"), "model_tier_overrides_author")
+    assert core.resolve_model("author") == "opus"
+    assert core.DEFAULT_TIERS.get("author") == "opus"
+    assert MTR._FALLBACK == core.DEFAULT_TIERS
+    assert set(mto.KNOWN_ROLES) == set(core.DEFAULT_TIERS)

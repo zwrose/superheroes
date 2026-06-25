@@ -6,7 +6,9 @@ import argparse, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import buildtree, checkpoint as ckpt_lib, control_plane, docload
 
-ap = argparse.ArgumentParser(); ap.add_argument("--work-item", required=True); a = ap.parse_args()
+ap = argparse.ArgumentParser(); ap.add_argument("--work-item", required=True)
+ap.add_argument("--generation", type=int, default=None)
+a = ap.parse_args()
 root = os.getcwd()
 try:
     ch = docload.content_hash_for(a.work_item, root)             # §6.3, shared with recover_entry
@@ -22,9 +24,11 @@ if outcome in ("gate_failclosed", "preserve_notify"):            # no clean usab
 paths = control_plane.paths(root, a.work_item)
 cp = ckpt_lib.read(paths["checkpoint"]) or ckpt_lib.new(a.work_item, branch)
 cp["branch"] = branch
+if a.generation is not None:
+    cp["lockGeneration"] = a.generation     # UFR-10: thread this run's generation (mint or reuse)
 try:
     ckpt_lib.write(paths["checkpoint"], cp)
 except OSError as e:                                              # disk -> fail closed (no branch emitted)
     print(json.dumps({"error": "checkpoint write failed: %s" % e}))
     sys.exit(0)   # exit 0 so the fail-closed JSON is reliably consumed (buildPhase parks on no branch)
-print(json.dumps({"branch": branch}))
+print(json.dumps({"branch": branch, "path": res.get("path")}))  # path = the build worktree (git reads run there)

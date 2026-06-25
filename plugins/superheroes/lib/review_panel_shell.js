@@ -27,6 +27,10 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     return _usable(v) ? v : _failClosed()
   }
   let round = await resumeRound(runDir) // UFR-7: resume at the round boundary from disk
+  let lastExtras = null                 // a fix step's extras (parentOrigin/escalation) ride forward
+  // UFR-7: a mid-loop resume must re-load the latest fix extras (in-memory only otherwise), else the
+  // resumed round's tally drops parentOrigin from the terminal record/readout.
+  try { lastExtras = JSON.parse(require('fs').readFileSync(`${runDir}/last-extras.json`, 'utf8')) } catch (_) {}
   while (true) {
     // 1. Fan out the panel — each reviewer writes findings-<name>.json into round-<N>/.
     await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round)))
@@ -52,19 +56,23 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round) }
       catch (e) { verifyResult = 'fail' }  // fail-closed: a verify that can't run blocks clean
     }
-    // 4. Deterministic tally — the core decides gate/terminal (+ internal circuit breaker).
+    // 4. Deterministic tally — the core decides gate/terminal (+ internal circuit breaker). A
+    // prior round's fix extras (parentOrigin/escalation) ride forward into the record/readout.
     const verdict = await tallyAgent({ runDir, round, roster: reviewerSet, maxRounds,
-                                       synthesized, verifyResult })
+                                       synthesized, verifyResult, extras: lastExtras })
     if (!_usable(verdict)) return _failClosed()
     // 5. The shell's only branch: stop unless the core says continue.
     if (verdict.terminal !== 'continue') return verdict
     // 6. Fix step (caller's). Detect failure/timeout; the CORE decides halted next round.
-    const fixOk = await runFixStep(fixStep, verdict, runDir)
-    if (!fixOk) {
+    const fix = await runFixStep(fixStep, verdict, runDir)
+    if (!fix.ok) {
       const failVerdict = await tallyAgent({ runDir, round, roster: reviewerSet, maxRounds,
-                                            synthesized, verifyResult, fixStatus: 'failed' })
+                                            synthesized, verifyResult, fixStatus: 'failed', extras: fix.extras || lastExtras })
       return _usable(failVerdict) ? failVerdict : _failClosed()
     }
+    lastExtras = fix.extras || lastExtras   // latest fix's extras win; persisted once a blocker is parent-traced
+    // persist to a stable per-run path so a mid-loop resume can re-load it (the reload above).
+    if (lastExtras) { try { require('fs').writeFileSync(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
     round += 1
   }
 }
@@ -111,19 +119,19 @@ async function verifyAgent(verifyCommand, runDir, round) {
 
 // Run panel_tally.py via a thin command-runner leaf agent; returns the parsed, schema-validated verdict.
 async function tallyAgent({ runDir, round, roster, maxRounds, synthesized = null,
-                           verifyResult = null, fixStatus = 'completed' }) {
+                           verifyResult = null, fixStatus = 'completed', extras = null }) {
   let extra = `--breaker-halt no --fix-status ${shq(fixStatus)}`
   if (synthesized) {
+    require('fs').mkdirSync(`${runDir}/round-${round}`, { recursive: true })   // round dir may not exist yet
     require('fs').writeFileSync(synthPath(runDir, round), JSON.stringify(synthesized))
     extra += ` --synthesized ${shq(synthPath(runDir, round))}`
   }
   if (verifyResult) extra += ` --verify-result ${shq(verifyResult)}`
-  // Generic, decision-neutral extras seam (consumer-supplied; safe_extras re-filters in panel_tally):
-  // forward runDir/extras.json before each tally iff present, mirroring the --synthesized forward.
-  try {
-    const extrasPath = `${runDir}/extras.json`
-    if (require('fs').existsSync(extrasPath)) extra += ` --extras ${shq(extrasPath)}`
-  } catch (_) {}
+  if (extras) {
+    require('fs').mkdirSync(`${runDir}/round-${round}`, { recursive: true })   // round dir may not exist yet
+    require('fs').writeFileSync(extrasPath(runDir, round), JSON.stringify(extras))
+    extra += ` --extras ${shq(extrasPath(runDir, round))}`
+  }
   const cmd =
     `python3 plugins/superheroes/lib/panel_tally.py --run-dir ${shq(runDir)} --round ${shq(String(round))} ` +
     `--roster ${shq((roster || []).join(','))} --max-rounds ${shq(String(maxRounds))} ${extra}`
@@ -139,12 +147,12 @@ async function runFixStep(fixStep, verdict, runDir) {
   try {
     const blockers = verdict.findings.filter((f) => f.severity === 'Critical' || f.severity === 'Important')
     const report = await fixStep(blockers, runDir) // caller's leaf agent; may return null on failure
-    if (!report) return false
+    if (!report) return { ok: false, extras: null }
     await recordDeferred(report, verdict, runDir) // append deferred identities (+severity) to deferred-set.json
-    return true
+    return { ok: true, extras: (report && report.extras) || null }
   } catch (e) {
     try { log(`review-panel: fix step failed, treating as fix failure -> halted: ${e && e.message ? e.message : e}`) } catch (_) {}
-    return false
+    return { ok: false, extras: null }
   }
 }
 
@@ -171,6 +179,7 @@ const VERIFY_SCHEMA = { type: 'object', required: ['result'],
 function synthPath(d, n) { return `${d}/round-${n}/synthesized.json` }
 function mergedPath(d, n) { return `${d}/round-${n}/merged.json` }
 function leafPath(d, n) { return `${d}/round-${n}/synthesis.json` }
+function extrasPath(d, n) { return `${d}/round-${n}/extras.json` }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 

@@ -3,8 +3,9 @@
 (FR-6 / FR-8 recordDeferred). From the code-fixer's report it (1) merges deferred finding
 identities (+severity) into deferred-set.json (the channel #104's tally reads); (2) read-merge-writes
 a run-scoped keyed {identity: phase} parent-origin accumulator; (3) derives the deduped, stable-joined
-parentOrigin string and writes the readout enrichment to extras.json ({fixes, parentOrigin?}) that
-the shell forwards to the tally. All writes atomic; never raises. No loop-decision logic. stdlib only."""
+parentOrigin string and RETURNS the readout enrichment ({fixes, parentOrigin?}) as `extras` — the
+recordDeferred wrapper attaches it to the fix report so #104's shared shell threads it
+(report.extras -> tally -> readout). All writes atomic; never raises. No loop-decision logic. stdlib only."""
 import argparse
 import json
 import os
@@ -55,8 +56,10 @@ def record(run_dir, report):
     extras = {"fixes": report.get("fixed") if isinstance(report.get("fixed"), list) else []}
     if phases:
         extras["parentOrigin"] = ", ".join(phases)
-    _atomic(os.path.join(run_dir, "extras.json"), extras)
-    return {"ok": True, "parentOrigin": extras.get("parentOrigin"), "deferred": len(deferred)}
+    # extras is RETURNED, not written to a file: the recordDeferred wrapper attaches it to the fix
+    # report so #104's shared shell threads it (report.extras -> tally -> readout). The deferred-set
+    # and parent-origin accumulator (above) remain the on-disk accounting #104's tally reads.
+    return {"ok": True, "extras": extras, "parentOrigin": extras.get("parentOrigin"), "deferred": len(deferred)}
 
 
 def main(argv):
