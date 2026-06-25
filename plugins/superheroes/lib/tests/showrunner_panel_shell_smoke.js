@@ -44,7 +44,23 @@ async function main() {
   v = await reviewPanel({ ...base, fixStep: async () => null })  // null report => fix failure
   assert.strictEqual(v.terminal, 'halted', 'a failed fix step re-tallies and yields halted')
 
-  console.log('ok: loop shell sentinel + passthrough + continue/fix/clean')
+  // 5. extras seam (#104 threaded design): a prior fix's extras, persisted to runDir/last-extras.json,
+  //    is reloaded on entry and forwarded to the tally as --extras <runDir>/round-<N>/extras.json.
+  const fs = require('fs'); const os = require('os'); const path = require('path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'panelshell-'))
+  fs.writeFileSync(path.join(dir, 'last-extras.json'), JSON.stringify({ parentOrigin: 'plan' }))
+  let seenCmd = ''
+  global.agent = async (prompt, opts) => {
+    const label = (opts && opts.label) || ''
+    if (label.startsWith('tally')) { seenCmd = prompt; return { schemaVersion: 1, terminal: 'clean', gate: 'clean' } }
+    if (label === 'resume') return '1'
+    return null
+  }
+  await reviewPanel({ ...base, runKey: dir, runDir: dir })
+  assert.ok(seenCmd.includes('--extras') && seenCmd.includes(path.join(dir, 'round-1', 'extras.json')),
+    'tally must forward --extras <runDir>/round-<N>/extras.json from the threaded extras')
+
+  console.log('ok: loop shell sentinel + passthrough + continue/fix/clean + extras seam')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

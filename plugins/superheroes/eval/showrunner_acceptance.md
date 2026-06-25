@@ -43,7 +43,7 @@ python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ \
   plugins/superheroes/eval/tests/ eval/lib/tests/ -q          # 1006 passed
 
 # Composition (dev-time, node) — the stub-leaf harnesses:
-node plugins/superheroes/lib/tests/showrunner_derisk_smoke.js
+node plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js
 node plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js
 node plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js
 node plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js
@@ -123,9 +123,9 @@ node -e "require('./plugins/superheroes/lib/showrunner.js')"   # loads clean
 - `showrunner.js` consumes `review_panel_shell.js` **verbatim** (`require('./review_panel_shell.js')`,
   no fork). The deterministic gate/terminal/precedence matrix is unchanged and CI-green:
   `test_panel_tally.py` → 30 passed. The on-demand agentic-wiring harness is unchanged
-  (`eval/review_panel_harness.md`). The single-pass derisk composing inside the Workflow is
-  proven by `showrunner_derisk_smoke.js` (`OK: reviewPanel composed single-pass with the 5
-  reviewers`).
+  (`eval/review_panel_harness.md`). The review-code panel composing inside the Workflow is
+  proven by `showrunner_reviewcode_loop_smoke.js` (the #89 deepening: the 5-reviewer panel
+  driven across every terminal — the single-pass derisk smoke it supersedes was retired).
 
 ### Demo 7 — full band suite green, no regression (NFR)
 
@@ -174,3 +174,24 @@ pure-decider unit tests); the live switched-on production run stays deferred to 
   verbatim.
 - **Switch-off unchanged (FR-9).** With `SUPERHEROES_FRONT_HALF` unset, `showrunner` injects no
   front-half deps and every pre-existing smoke + the full pytest suite pass untouched.
+
+## #89 — native review-code deepening (consumes #104)
+
+The `reviewCodePhase` is now the code-review consumer of the shared loop. Evidence, two levels:
+
+- **CI-gated pytest (the deterministic cores):**
+  - config (FR-3/FR-7): `python3 -m pytest plugins/superheroes/lib/tests/test_review_code_config.py -q`
+  - mechanical merge (FR-8): `python3 -m pytest plugins/superheroes/lib/tests/test_merge_findings.py -q`
+  - deferral + parentOrigin extras (FR-6/FR-8): `python3 -m pytest plugins/superheroes/lib/tests/test_record_deferred.py -q`
+  - multi-phase parentOrigin readout (FR-6): `python3 -m pytest plugins/superheroes/lib/tests/test_loop_readout.py -q`
+  - the loop's own deciders (unchanged, still green): `python3 -m pytest plugins/superheroes/lib/tests/test_panel_tally.py plugins/superheroes/lib/tests/test_ship_gate.py plugins/superheroes/lib/tests/test_model_tier_resolve.py -q`
+- **Dev-time node smokes (the JS control-flow):**
+  - the consumer across every terminal + the UFR-2 covers-stamp park:
+    `node plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js`
+  - the shared-shell extras seam: `node plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js`
+
+Each DoD acceptance maps to one of the above: each terminal reached through the consumer's leaves
+(smoke 1), the fail-closed negative path ending non-`clean` (smoke 1, scenario 5), the model tiers
+(test_review_code_config), the `parentOrigin` halt naming the phase (test_record_deferred +
+test_loop_readout + smoke 1, scenario 3), and the X′ covers stamp on `clean` (test_ship_gate + smoke 1,
+scenario 1). The live, production-style invocation remains the deepening boundary called out above.

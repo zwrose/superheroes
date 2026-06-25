@@ -58,3 +58,8 @@ def test_parent_origin_named_fr21():
 def test_record_missing_warned_ufr9():
     out = LR.render(_record(terminal="halted", recordMissing=True))
     assert "could not be written" in out.lower()
+
+
+def test_parent_origin_multi_phase_names_every_phase_fr6():
+    out = LR.render(_record(terminal="halted", parentOrigin="plan, tasks"))
+    assert "plan" in out and "tasks" in out and "upstream" in out.lower()

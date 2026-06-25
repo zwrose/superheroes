@@ -9,6 +9,8 @@ import checkpoint as ckpt_lib, control_plane, review_result, ship_gate
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True, choices=["build", "review"])
 ap.add_argument("--work-item", required=True)
+ap.add_argument("--round", type=int, default=1, help="the review loop's terminal round (review step)")
+ap.add_argument("--reason", default="review-code clean", help="review_result reason (review step)")
 a = ap.parse_args()
 paths = control_plane.paths(os.getcwd(), a.work_item)
 # The SHIPPED HEAD is the build branch's tip (the PR ships that branch), not the ambient cwd HEAD —
@@ -31,7 +33,7 @@ try:
         ship_gate.write_build(paths["provenance"], engine="subagent-driven-development", head=head)
     else:
         ship_gate.set_review_covers(paths["provenance"], head)
-        review_result.write_result(paths["review_result"], "exit_clean", 1, "review-code single-pass clean")
+        review_result.write_result(paths["review_result"], "exit_clean", a.round, a.reason)
 except (ship_gate.ProvenanceError, OSError) as e:   # corrupt provenance.json / disk -> fail closed
     print(json.dumps({"ok": False, "error": "provenance write failed: %s" % e}))
     sys.exit(0)
