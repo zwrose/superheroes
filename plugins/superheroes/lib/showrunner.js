@@ -98,6 +98,108 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
 module.exports.runReviewDocPanel = runReviewDocPanel
 
+function docPathFor(workItem, doc) { return `docs/superheroes/${workItem}/${doc}.md` }
+function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
+
+// the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
+async function producePhase(phase, workItem) {
+  const doc = phase                                    // 'plan' | 'tasks'
+  // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
+  const draft = await usableDraft(workItem, doc)
+  if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
+  const authored = await agent(
+    `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
+    `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
+    `non-empty, no placeholder. Do NOT run review or record the review gate. Return ` +
+    `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
+    `{ identity, message }.`,
+    { label: `produce-${doc}`, model: await authorModel(),
+      schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+  if (authored == null) {
+    return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
+  }
+  // surface any produce-phase NOTIFY default in the durable ledger the boundary reads (UFR-2): a
+  // produce phase has no #104 loop record to ride, so it is named via the ledger, not the extras seam.
+  if (authored.notify && authored.notify.length) {
+    const ok = await appendNotify(workItem, authored.notify.map(
+      (n) => ({ phase: doc, identity: n && n.identity, message: n && n.message })))
+    if (!ok) {
+      // a NOTIFY default that can't be durably recorded must NOT be silently lost (UFR-2): park and
+      // name it. No marker is stamped yet, so a resume re-produces and retries the NOTIFY.
+      return { confidence: 'low', assumptions: ['produce NOTIFY default not durably recorded: ' +
+               authored.notify.map((n) => (n && n.message) || '').join('; ')] }
+    }
+  }
+  // stamp the content-bound completion signal deterministically (engine, not the LLM) — the body hash,
+  // so a crash before this leaves the marker absent/stale and the next entry re-produces (UFR-4).
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`,
+    { schema: { type: 'object', properties: { wrote: {} } } })
+  const after = await usableDraft(workItem, doc)
+  if (!after.usable) return { confidence: 'low', assumptions: [`produce step yielded no usable ${doc} draft`] } // UFR-4
+  return { confidence: 'high', assumptions: [] }
+}
+
+// the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
+async function reviewDocPhase(doc, workItem) {
+  const existing = await readGate(workItem, doc)
+  if (existing === 'passed') {
+    // cursor-lost re-entry guard (gate written, recordCursor failed): never re-run the panel and
+    // risk overwriting a correct passed (FR-8 passed-gate skip).
+    return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
+  }
+  const runDir = runDirFor(workItem, `review-${doc}`)
+  const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
+  // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
+  try { require('fs').writeFileSync(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
+  const gate = await gateForTerminal(verdict && verdict.terminal)
+  const sg = await cmdRunner(
+    `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
+    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`,
+    { schema: { type: 'object', properties: { review: {}, status: {} } } })
+  if (!sg || sg.review !== gate) {
+    // a failed durable gate write must NOT advance on un-recorded state (UFR-5) — park low-confidence,
+    // mirroring reviewCodePhase's provenance-write guard.
+    return { phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] }, gate }
+  }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
+}
+
+// thin front_half.py / registry decider bridges.
+async function gateForTerminal(terminal) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py gate-for-terminal --terminal ${shq(terminal || 'unknown')}`,
+    { schema: { type: 'object', required: ['gate'], properties: { gate: { type: 'string' } } } })
+  return (out && out.gate) || 'changes-requested'
+}
+async function usableDraft(workItem, doc) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)"`,
+    { schema: { type: 'object', required: ['usable'], properties: { usable: {} } } })
+  return { usable: !!(out && out.usable) }
+}
+async function authorModel() {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/model_tier_resolve.py --role author`,
+    { schema: { type: 'object', properties: { model: {} } } })
+  return (out && out.model) || undefined
+}
+// the durable per-work-item NOTIFY ledger (under the gitignored docs dir — run-local state).
+function notifyLedgerFor(workItem) { return `docs/superheroes/${workItem}/.notify.json` }
+async function appendNotify(workItem, entries) {
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py append-notify ` +
+    `--ledger ${shq(notifyLedgerFor(workItem))} --entries ${shq(JSON.stringify(entries || []))}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+  return !!(out && out.ok)   // false on a failed durable write — the caller must not silently lose it
+}
+
+module.exports.producePhase = producePhase
+module.exports.reviewDocPhase = reviewDocPhase
+module.exports.notifyLedgerFor = notifyLedgerFor
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
