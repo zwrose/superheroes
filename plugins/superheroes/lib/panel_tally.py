@@ -59,8 +59,12 @@ def assemble_rounds(run_dir):
         names = os.listdir(run_dir)
     except OSError:
         return []
-    nums = sorted(int(m.group(1)) for m in (_ROUND_RE.match(n) for n in names)
-                  if m and os.path.isdir(os.path.join(run_dir, m.string)))
+    nums = []
+    for name in names:
+        m = _ROUND_RE.match(name)
+        if m and os.path.isdir(os.path.join(run_dir, name)):
+            nums.append(int(m.group(1)))
+    nums.sort()
     rounds = []
     for n in nums:
         v = _safe_read_json(verdict_path(run_dir, n), None)
@@ -244,6 +248,9 @@ def _persist_or_failclosed(run_dir, rnd, verdict, compiled, missing):
                   "findings": compiled, "missing": missing, "drops": verdict.get("drops", []),
                   "terminal": "halted",
                   "reason": "durable record write failed (%s) — failing closed" % exc}
+        for k in ("fixes", "deferred", "parentOrigin"):
+            if k in verdict:
+                halted[k] = verdict[k]
         try:
             _persist(run_dir, rnd, halted)
         except Exception:
@@ -271,18 +278,20 @@ def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="co
                        "reason": "empty reviewer set — nothing to certify"}
             verdict.update(safe_extras)
             return _persist_or_failclosed(run_dir, rnd, verdict, [], [])
+        # Completion is derived from the round's findings files regardless of leg, so a panel
+        # leg with a missing reviewer still trips cannot-certify (UFR-1), not a false clean on
+        # incomplete coverage.
+        completed = [r for r in roster
+                     if isinstance(_safe_read_json(findings_path(run_dir, rnd, r), None), list)]
         if isinstance(synthesized, dict):                      # panel leg: judgment already done
             compiled = synthesized.get("findings", [])
             drops = synthesized.get("drops", [])
-            completed = list(roster)                           # synthesis implies all reviewers ran
         else:                                                  # single-reviewer leg: compile raw
-            completed, all_findings = [], []
-            for reviewer in roster:
-                data = _safe_read_json(findings_path(run_dir, rnd, reviewer), None)
-                if not isinstance(data, list):
-                    continue
-                completed.append(reviewer)
-                all_findings.extend(data)
+            all_findings = []
+            for reviewer in completed:
+                data = _safe_read_json(findings_path(run_dir, rnd, reviewer), [])
+                if isinstance(data, list):
+                    all_findings.extend(data)
             compiled = compile_findings(all_findings, context_files)
             drops = []
         gate, confidence, missing = round_gate(compiled, roster, completed)

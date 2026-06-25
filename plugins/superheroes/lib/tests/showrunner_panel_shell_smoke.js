@@ -38,6 +38,12 @@ async function main() {
   v = await reviewPanel({ ...base })
   assert.strictEqual(v.terminal, 'clean', 'continue then clean must loop once then exit clean')
 
+  // 4. fix step fails -> the shell re-tallies with fixStatus 'failed' (the core decides halted).
+  tallyQueue = [{ schemaVersion: 1, terminal: 'continue', gate: 'blocking', findings: [] },
+                { schemaVersion: 1, terminal: 'halted', gate: 'blocking', reason: 'fix failed' }]
+  v = await reviewPanel({ ...base, fixStep: async () => null })  // null report => fix failure
+  assert.strictEqual(v.terminal, 'halted', 'a failed fix step re-tallies and yields halted')
+
   console.log('ok: loop shell sentinel + passthrough + continue/fix/clean')
 }
 

@@ -24,11 +24,27 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // 1. Fan out the panel — each reviewer writes findings-<name>.json into round-<N>/.
     await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round)))
     // 2. Panel-only synthesis (FR-11): mechanical merge -> Opus leaf -> deterministic consume.
+    // A throw from a caller-supplied merge/leaf must NOT escape before the fail-closed tally; a
+    // null/failed synthesis degrades to the raw compile (keep-on-uncertain — no finding dropped),
+    // logged for detectability.
     let synthesized = null
-    if (legKind.panel) synthesized = await synthesizeRound(reviewerSet, context, rubric, runDir, round)
+    if (legKind.panel) {
+      try {
+        synthesized = await synthesizeRound(reviewerSet, context, rubric, runDir, round)
+      } catch (e) {
+        try { log(`review-panel r${round}: synthesis threw (${e && e.message ? e.message : e}) — falling back to raw compile`) } catch (_) {}
+        synthesized = null
+      }
+      if (!synthesized) {
+        try { log(`review-panel r${round}: synthesis produced no result — falling back to raw compile (no findings dropped)`) } catch (_) {}
+      }
+    }
     // 3. Code-leg verify gate (FR-17): run the project verify command, classify pass/fail/timeout.
     let verifyResult = null
-    if (legKind.code) verifyResult = await verifyAgent(verifyCommand, runDir, round)
+    if (legKind.code) {
+      try { verifyResult = await verifyAgent(verifyCommand, runDir, round) }
+      catch (e) { verifyResult = 'fail' }  // fail-closed: a verify that can't run blocks clean
+    }
     // 4. Deterministic tally — the core decides gate/terminal (+ internal circuit breaker).
     const verdict = await tallyAgent({ runDir, round, roster: reviewerSet, maxRounds,
                                        synthesized, verifyResult })
@@ -60,8 +76,8 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round) {
 async function resumeRound(runDir) {
   const out = await agent(
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-    `python3 -c "import sys; sys.path.insert(0,'plugins/superheroes/lib'); import panel_tally; ` +
-    `print(panel_tally.resume_round(${shq(runDir)}))"`,
+    `python3 -c 'import sys; sys.path.insert(0,"plugins/superheroes/lib"); import panel_tally; ` +
+    `print(panel_tally.resume_round(sys.argv[1]))' ${shq(runDir)}`,
     { label: 'resume' })
   const n = parseInt(String(out).trim(), 10)
   return Number.isFinite(n) && n >= 1 ? n : 1
