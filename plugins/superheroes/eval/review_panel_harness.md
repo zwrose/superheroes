@@ -24,3 +24,33 @@ harness is the behavioral track). Invoke as a single Workflow; do NOT fan out wi
 
 **Pass criteria:** each case's observed terminal matches the expected terminal; case 5 shows the
 keyed dir fully overwritten (no duplicate findings). Record results in `eval/RESULTS.md`.
+
+## Shared review-and-fix loop scenarios (#104)
+
+Each row drives the loop with stand-in reviewers/fixers (no real consumer) and asserts the terminal.
+The deterministic per-FR assertions are pinned in pytest (test_panel_tally / test_loop_synthesis /
+test_verify_gate / test_loop_readout / test_escalation); these end-to-end rows prove the shell wires
+them together.
+
+| Scenario | leg | terminal |
+| --- | --- | --- |
+| clean first round (no findings) | panel-doc | clean |
+| blocking finding fixed, verified clean on mandatory re-review | panel-doc | clean |
+| non-blocker deferred | panel-doc | clean-with-skips |
+| finding deferred then acted on a later round (FR-16) | panel-doc | clean / clean-with-skips |
+| reviewer won't report -> one re-dispatch -> cannot-certify | panel-doc | cannot-certify |
+| recurring finding / no-net-progress | panel-doc | halted |
+| cap reached (panel cap 7) | panel-doc | halted |
+| cap reached (whole-branch cap 3) | panel-code | halted |
+| unresolvable blocker (fixer escalates) | panel-code | halted |
+| code leg verify passes | code-review | clean |
+| code leg verify fails / times out (UFR-4) | code-review | halted |
+| fixer false-done -> re-surfaced (UFR-5) | panel-doc | (continues, never exits on the claim) |
+| fixer silent -> bounded wait (UFR-6) | panel-doc | halted |
+| durable write fails (UFR-9) | any | halted (recordMissing if even the halt can't be written) |
+| panel synthesis: merge dup / normalize severity / drop-with-reason keep-uncertain | panel | (clean or continue) |
+| panel drops a blocking-tagged finding (UFR-10) | panel | drop flagged distinctly in the readout |
+| fixer edits a protected component (FR-24) | code-review | refused -> halted |
+| escalation traces upstream (FR-21) | any | halted, readout names the phase |
+| interrupted run resumes at the round boundary (UFR-7/8) | any | resumes, no fix re-applied |
+| plan-doc and tasks-doc runs are independent (FR-22) | doc x2 | neither affects the other |
