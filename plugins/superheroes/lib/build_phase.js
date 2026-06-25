@@ -29,9 +29,12 @@ async function buildPhase(workItem, generation) {
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await cmdRunner(
     `python3 ${LIB}/build_entry.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
-    { label: 'build-setup', schema: { type: 'object', properties: { branch: { type: 'string' }, error: { type: 'string' } } } })
+    { label: 'build-setup', schema: { type: 'object', properties: { branch: { type: 'string' }, path: { type: 'string' }, error: { type: 'string' } } } })
   if (!setup.branch) return park('build setup failed: ' + (setup.error || 'no branch'))
   const branch = setup.branch
+  // The build branch is checked out in a SEPARATE managed build worktree (build_entry -> buildtree);
+  // every git read/write below must operate there, not in the showrunner's main checkout.
+  const wt = setup.path
   // UFR-8: zero executable tasks -> finish without building.
   const tasks = (await cmdRunner(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`,
     { label: 'task-list', schema: { type: 'object' } })).tasks || []
@@ -39,33 +42,39 @@ async function buildPhase(workItem, generation) {
   // Reconcile-driven loop: reality (commits + records) wins; any ambiguity parks. Bounded by a
   // guard so a non-progressing reconcile can never spin forever.
   const validIds = tasks.map((t) => t.id).join(',')
+  let lastAction = 'none'      // last reconcile action + gathered state, for guard-bound diagnosability
+  let lastState = {}
   for (let guard = 0; guard < tasks.length * 4 + 8; guard += 1) {
     const state = await cmdRunner(
-      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)}`,
+      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
       { label: 'build_state_cli.py gather', schema: { type: 'object' } })
+    lastState = state
     const d = await cmdRunner(
       `python3 ${LIB}/build_progress_cli.py --state ${shq(JSON.stringify({ ...state, task_list: tasks }))}`,
       { label: 'build_progress_cli.py', schema: { type: 'object', required: ['action'] } })
+    lastAction = d.action
     if (d.action === 'complete') return ok()
     if (d.action === 'park') return park(d.reason || 'build_progress parked')
     if (d.action === 'reset_uncommitted') {
       // Fence before any worktree mutation (UFR-10: the plan requires a fence before every
       // commit/RESET), and park honestly if the reset itself fails (UFR-6).
       if (!(await fenceOrPark(workItem, generation))) return park('lease lost before reset — park (UFR-10)')
-      const rr = await resetUncommitted(branch)
+      const rr = await resetUncommitted(wt, branch)
       if (!rr.ok) return park('could not reset uncommitted changes: ' + (rr.error || 'unknown'))
       continue
     }
     if (d.action === 'build_task') {
-      const r = await buildOneTask(workItem, generation, d.resume_at, branch, validIds)
+      const r = await buildOneTask(workItem, generation, d.resume_at, branch, validIds, wt)
       if (r.parked) return park(r.reason); continue
     }
     if (d.action === 'review_task') {
-      const r = await reviewOneTask(workItem, generation, d.resume_at, branch)
+      const r = await reviewOneTask(workItem, generation, d.resume_at, branch, wt)
       if (r.parked) return park(r.reason); continue
     }
     if (d.action === 'final_review') {
-      const fr = await runFinalReview(workItem, branch)
+      const fr = await runFinalReview(workItem, generation, branch, wt)
+      // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
+      // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
       if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
       await recordFinalReviewClean(workItem); continue
     }
@@ -75,14 +84,16 @@ async function buildPhase(workItem, generation) {
     }
     return park('unexpected reconcile action: ' + d.action)
   }
-  return park('build loop exceeded its guard bound without completing')
+  return park('build loop exceeded its guard bound without completing (last action: ' + lastAction
+    + ', committed: ' + ((lastState.committed_task_ids || []).length)
+    + ', unmapped: ' + (lastState.unmapped_commits || 0) + ')')
 }
 
 // Reset ONLY uncommitted/untracked changes; never discard a commit (UFR-12). Returns {ok,error?}
 // so a failed reset parks honestly (UFR-6) rather than spinning to the guard bound.
-async function resetUncommitted(branch) {
+async function resetUncommitted(wt, branch) {
   return agent(
-    `In the build worktree on branch ${branch}, reset only uncommitted state: `
+    `In the build worktree at ${wt} (branch ${branch}), reset only uncommitted state: `
     + `git checkout -- . && git clean -fd . — do NOT touch any commit. `
     + `Return JSON {"ok":true} on success or {"ok":false,"error":"<reason>"}.`,
     { label: 'reset-uncommitted', schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
@@ -111,14 +122,14 @@ async function fenceOrPark(workItem, generation) {
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
-async function buildOneTask(workItem, generation, task, branch, validIds) {
+async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
   let attempt = 1
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     const worker = await agent(
-      `On branch ${branch}, implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+      `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
       + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
       + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
       + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
@@ -126,7 +137,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds) {
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       const chk = await cmdRunner(
-        `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)}`,
+        `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
         { label: 'build_state_cli.py gather', schema: { type: 'object' } })
       if ((chk.unmapped_commits || 0) > 0) {
         return { parked: true, reason: 'a commit lacks its Task-Id trailer — park (UFR-7)' }
@@ -135,7 +146,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds) {
         `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
         + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
         { label: 'journal_entry.py', schema: { type: 'object', required: ['ok'] } })
-      return reviewLoop(workItem, generation, task, branch)
+      return reviewLoop(workItem, generation, task, branch, wt)
     }
     const rec = await cmdRunner(
       `python3 ${LIB}/worker_recovery_cli.py --attempt ${attempt} --signal ${shq(worker.signal || 'needs_context')}`,
@@ -146,12 +157,12 @@ async function buildOneTask(workItem, generation, task, branch, validIds) {
 }
 
 // A committed-but-unreviewed task (UFR-7) is taken up at review without rebuilding.
-async function reviewOneTask(workItem, generation, task, branch) {
-  return reviewLoop(workItem, generation, task, branch)
+async function reviewOneTask(workItem, generation, task, branch, wt) {
+  return reviewLoop(workItem, generation, task, branch, wt)
 }
 
 // The bespoke two-verdict review + bounded fix loop (FR-4..7, UFR-4/5). Never uses reviewPanel.
-async function reviewLoop(workItem, generation, task, branch) {
+async function reviewLoop(workItem, generation, task, branch, wt) {
   const fixerModel = (await cmdRunner(
     `python3 ${LIB}/model_tier_resolve.py --role fixer --context code`,
     { label: 'model_tier_resolve.py', schema: { type: 'object' } })).model
@@ -186,7 +197,7 @@ async function reviewLoop(workItem, generation, task, branch) {
       return { parked: true, reason: 'lease lost before fix — park (UFR-10)' }
     }
     await agent(
-      `On branch ${branch}, fix these Task ${task.id} findings and commit with trailer `
+      `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
       + `"Task-Id: ${task.id}": ${JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))}`,
       { label: 'fixer', model: fixerModel })
     history.push({ round, findings: review.findings || [] })
@@ -194,7 +205,7 @@ async function reviewLoop(workItem, generation, task, branch) {
   }
 }
 
-async function runFinalReview(workItem, branch) {
+async function runFinalReview(workItem, generation, branch, wt) {
   const verify = (await cmdRunner(`python3 ${LIB}/verify_command_cli.py`,
     { label: 'verify_command_cli.py', schema: { type: 'object', required: ['command'] } })).command || 'none'
   const reviewerModel = (await cmdRunner(
@@ -210,7 +221,7 @@ async function runFinalReview(workItem, branch) {
   // The #104 shell resolves these caller leaves from global scope (showrunner.js:13-15).
   global.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
     await agent(
-      `Review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
+      `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Write findings-generalist.json into round-${round}/.`,
       { label: `reviewer:${round}`, model: reviewerModel })
     return true
@@ -223,7 +234,10 @@ async function runFinalReview(workItem, branch) {
     fs.writeFileSync(p, JSON.stringify(set))
   }
   const fixStep = async (blockers) => {
-    await agent(`On ${branch}, fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+    // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
+    // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
+    if (!(await fenceOrPark(workItem, generation))) return null
+    await agent(`In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
       { label: 'final-fixer', model: fixerModel })
     return { fixed: blockers.map((b) => b.id || b.title) }
   }

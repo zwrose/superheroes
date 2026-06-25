@@ -14,7 +14,7 @@ function makeAgent(routes) {
 const bp = require('../build_phase.js')
 const BASE = [
   ['read-gate --doc tasks', 'passed'],
-  ['build_entry.py', { branch: 'superheroes/wi-abc' }],
+  ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
   ['task_list_cli.py', { tasks: [{ id: '1', title: 'A' }] }],
   ['build_state_cli.py gather', { committed_task_ids: ['1'], unmapped_commits: 0 }],
 ]

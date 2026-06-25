@@ -28,10 +28,12 @@ const TASK = { id: '1', title: 'A' }
     ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ['task_review_cli.py', { action: 'complete', blocking: [], minors: [], cannot_verify: [] }],
   ])
-  let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1,2')
+  let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1,2', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a clean task should not park')
   assert.ok(gatherPrompt.includes("--valid-ids '1,2'"),
     'the write-time trailer check must score against the FULL valid-id set, not just this task')
+  assert.ok(gatherPrompt.includes("--worktree '/tmp/wt'"),
+    'the write-time gather must read git from the build worktree, not the ambient cwd')
 
   // (2) Worker stuck (plan_wrong) -> recovery says park (UFR-3).
   global.agent = makeAgent([
@@ -39,7 +41,7 @@ const TASK = { id: '1', title: 'A' }
     ['worker_recovery_cli.py', { action: 'park', reason: 'plan wrong' }],
     ['worker', { ok: false, signal: 'plan_wrong' }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'worker plan_wrong should park (UFR-3)')
 
   // (3) Review parks (cap reached) -> park (UFR-4).
@@ -50,12 +52,12 @@ const TASK = { id: '1', title: 'A' }
     ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' },
                  findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }],
   ])
-  r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc')
+  r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'unconverged review should park (UFR-4)')
 
   // (4) Fence lost before a build write -> park (UFR-10).
   global.agent = makeAgent([['fence_cli.py', { ok: false, reason: 'lease lost' }]])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'fence-lost should park before any write (UFR-10)')
 
   // (5) Converging fix loop: round 1 blocking -> review -> fix; round 2 clean -> complete.
@@ -76,7 +78,7 @@ const TASK = { id: '1', title: 'A' }
                  findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }],
     ['fixer', ''],
   ])
-  r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc')
+  r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a converging fix loop should complete, not park')
 
   console.log('ok: build_phase per-task (FR-6/UFR-3/4/5/10)')

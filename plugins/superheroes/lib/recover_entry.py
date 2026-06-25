@@ -37,9 +37,11 @@ def _read_pr(cp):
         return "unknown"
     try:
         arr = json.loads(r.stdout or "[]")
-    except ValueError:
-        return "unknown"
-    return {"number": arr[0]["number"], "state": arr[0]["state"].lower()} if arr else None
+        if not arr:
+            return None
+        return {"number": arr[0]["number"], "state": arr[0]["state"].lower()}
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "unknown"   # a 0-exit non-array / malformed payload -> transient (reconcile GATEs)
 
 
 def main():

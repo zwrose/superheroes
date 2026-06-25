@@ -31,4 +31,4 @@ try:
 except OSError as e:                                              # disk -> fail closed (no branch emitted)
     print(json.dumps({"error": "checkpoint write failed: %s" % e}))
     sys.exit(0)   # exit 0 so the fail-closed JSON is reliably consumed (buildPhase parks on no branch)
-print(json.dumps({"branch": branch}))
+print(json.dumps({"branch": branch, "path": res.get("path")}))  # path = the build worktree (git reads run there)

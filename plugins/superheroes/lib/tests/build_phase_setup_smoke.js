@@ -18,7 +18,7 @@ const bp = require('../build_phase.js')
   // Zero-task: gate passed, setup returns a branch, task_list returns [] -> finish (UFR-8).
   global.agent = makeAgent([
     ['read-gate --doc tasks', 'passed'],
-    ['build_entry.py', { branch: 'superheroes/wi-abc' }],
+    ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
     ['task_list_cli.py', { tasks: [] }],
   ])
   let r = await bp.buildPhase('wi', 5)

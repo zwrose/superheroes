@@ -29,6 +29,8 @@ def test_build_entry_writes_lock_generation(tmp_path, monkeypatch):
     env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
     out = subprocess.run([sys.executable, ENTRY, "--work-item", "wi", "--generation", "7"],
                          cwd=repo, env=env, capture_output=True, text=True)
-    assert "branch" in json.loads(out.stdout)
+    res = json.loads(out.stdout)
+    assert "branch" in res
+    assert "path" in res            # build_entry now also emits the managed build-worktree path
     cp = ckpt_lib.read(control_plane.paths(repo, "wi")["checkpoint"])
     assert cp["lockGeneration"] == 7

@@ -28,13 +28,13 @@ const bp = require('../build_phase.js')
   // Clean single-round final review -> terminal 'clean'.
   global.agent = makeAgent(routes)
   tally = [{ schemaVersion: 1, gate: 'clean', terminal: 'clean', findings: [] }]
-  let r = await bp.runFinalReview('wi', 'superheroes/wi-abc')
+  let r = await bp.runFinalReview('wi', 5, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.terminal, 'clean')
 
   // A halted final review -> terminal 'halted' (the caller will park, UFR-4).
   global.agent = makeAgent(routes)
   tally = [{ schemaVersion: 1, gate: 'cannot-certify', terminal: 'halted', findings: [] }]
-  r = await bp.runFinalReview('wi', 'superheroes/wi-abc')
+  r = await bp.runFinalReview('wi', 5, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.terminal, 'halted')
   console.log('ok: build_phase final review clean + halted (FR-8/UFR-4)')
 })()
