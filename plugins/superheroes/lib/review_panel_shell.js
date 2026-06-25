@@ -23,7 +23,8 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
                             maxRounds = 7, legKind = {}, verifyCommand = 'none' }) {
   runDir = runDir || runKey
   if (!reviewerSet || reviewerSet.length === 0) {
-    return await tallyAgent({ runDir, round: 1, roster: reviewerSet || [], maxRounds })
+    const v = await tallyAgent({ runDir, round: 1, roster: reviewerSet || [], maxRounds })
+    return _usable(v) ? v : _failClosed()
   }
   let round = await resumeRound(runDir) // UFR-7: resume at the round boundary from disk
   while (true) {
