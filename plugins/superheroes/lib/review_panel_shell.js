@@ -13,6 +13,12 @@
 // legKind = { panel: bool, code: bool }. CONTROL FLOW ONLY — every decision is computed in
 // panel_tally.py / loop_synthesis.py / verify_gate.py (protected Python); this shell only
 // detects events and forwards. The shell is itself in SAFETY_MACHINERY (FR-24).
+function _usable(v) { return v && typeof v.terminal === 'string' }
+function _failClosed() {
+  // UFR-9 last-resort: no usable verdict from the tally -> fail closed, never a clean advance.
+  return { schemaVersion: 1, terminal: 'halted', recordMissing: true,
+           reason: 'tally produced no usable verdict — failing closed' }
+}
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep,
                             maxRounds = 7, legKind = {}, verifyCommand = 'none' }) {
   runDir = runDir || runKey
@@ -48,18 +54,15 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // 4. Deterministic tally — the core decides gate/terminal (+ internal circuit breaker).
     const verdict = await tallyAgent({ runDir, round, roster: reviewerSet, maxRounds,
                                        synthesized, verifyResult })
-    if (!verdict || typeof verdict.terminal !== 'string') {
-      // UFR-9 last-resort: the tally process gave no usable verdict -> fail closed, never clean.
-      return { schemaVersion: 1, terminal: 'halted', recordMissing: true,
-               reason: 'tally produced no usable verdict — failing closed' }
-    }
+    if (!_usable(verdict)) return _failClosed()
     // 5. The shell's only branch: stop unless the core says continue.
     if (verdict.terminal !== 'continue') return verdict
     // 6. Fix step (caller's). Detect failure/timeout; the CORE decides halted next round.
     const fixOk = await runFixStep(fixStep, verdict, runDir)
     if (!fixOk) {
-      return await tallyAgent({ runDir, round, roster: reviewerSet, maxRounds,
-                               synthesized, verifyResult, fixStatus: 'failed' })
+      const failVerdict = await tallyAgent({ runDir, round, roster: reviewerSet, maxRounds,
+                                            synthesized, verifyResult, fixStatus: 'failed' })
+      return _usable(failVerdict) ? failVerdict : _failClosed()
     }
     round += 1
   }

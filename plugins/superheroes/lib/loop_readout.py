@@ -37,20 +37,22 @@ def render(record):
     fixes = record.get("fixes") or []
     lines += ["### Fixes made"] + (["- %s" % f for f in fixes] if fixes else ["- (none)"]) + [""]
     deferred = record.get("deferred") or []
-    lines += ["### Deferred (non-blocking)"] + (
-        ["- %s — %s" % (d.get("title", "?"), d.get("reason", "")) for d in deferred]
-        if deferred else ["- (none)"]) + [""]
+    def _row(d):
+        return ("- %s — %s" % (d.get("title", "?"), d.get("reason", "")) if isinstance(d, dict)
+                else "- %s" % str(d))
+    lines += ["### Deferred (non-blocking)"] + ([_row(d) for d in deferred] if deferred else ["- (none)"]) + [""]
     drops = record.get("drops") or []
-    ordinary = [d for d in drops if not d.get("was_blocking_tagged")]
-    blocking = [d for d in drops if d.get("was_blocking_tagged")]
+    ordinary = [d for d in drops if isinstance(d, dict) and not d.get("was_blocking_tagged")]
+    blocking = [d for d in drops if isinstance(d, dict) and d.get("was_blocking_tagged")]
+    nondict = [d for d in drops if not isinstance(d, dict)]
     lines += ["### Dropped as unsubstantiated"] + (
-        ["- %s — %s" % (d.get("title", "?"), d.get("reason", "")) for d in ordinary]
-        if ordinary else ["- (none)"]) + [""]
+        [_row(d) for d in ordinary] + ["- %s" % str(d) for d in nondict]
+        if (ordinary or nondict) else ["- (none)"]) + [""]
     if blocking:
         lines += ["### ⚠️ Dropped findings a reviewer had tagged BLOCKING — review these",
                   "_A reviewer marked these Critical/Important; synthesis dropped them. Confirm the "
                   "loop did not discard a real blocker._"]
-        lines += ["- %s — %s" % (d.get("title", "?"), d.get("reason", "")) for d in blocking] + [""]
+        lines += [_row(d) for d in blocking] + [""]
     return "\n".join(lines).rstrip() + "\n"
 
 
