@@ -23,6 +23,7 @@ _FALLBACK = {
     "mechanical": "haiku",
     "synthesis": "opus",
     "fixer": "sonnet",
+    "author": "opus",
 }
 
 
