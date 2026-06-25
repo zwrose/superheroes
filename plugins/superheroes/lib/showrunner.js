@@ -35,7 +35,8 @@ async function cmdRunner(cmd, { schema }) {
 
 const RECONCILE_SCHEMA = {
   type: 'object', required: ['action'],
-  properties: { action: { type: 'string' }, from_step: {}, reason: { type: 'string' } },
+  properties: { action: { type: 'string' }, from_step: {}, reason: { type: 'string' },
+    generation: {} },   // UFR-10: the lease generation recover_entry acquired, threaded to the build
 }
 
 // Reconcile-from-store: the leaf runs a small python that ensures the store, reads the
@@ -61,7 +62,10 @@ async function showrunner({ workItem }) {
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
-  return runPhases(workItem, fromStep, { gateRead: gateReadFor(workItem) })
+  // UFR-10: thread the lease generation recover_entry acquired into the workhorse build phase, so the
+  // build can fence (renew-then-fence) at every branch-mutating boundary.
+  const generation = r.generation
+  return runPhases(workItem, fromStep, { gateRead: gateReadFor(workItem), generation })
 }
 
 const READGATE_SCHEMA = { type: 'object', required: ['review'], properties: { review: { type: 'string' } } }
@@ -91,7 +95,7 @@ function gateReadFor(workItem) {
   }
 }
 
-const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'build',
+const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'workhorse',
                 'review-code', 'draft-PR', 'mark-ready', 'ship']
 
 const DECIDE_SCHEMA = {
@@ -128,8 +132,8 @@ async function runPhases(workItem, fromStep, deps) {
     let phaseResult, gate, sideEffect = null
     if (phase === 'review-code') {
       const r = await (deps.reviewCode || reviewCodePhase)(workItem); phaseResult = r.phaseResult; gate = r.gate
-    } else if (phase === 'build') {
-      phaseResult = await (deps.build || buildPhase)(workItem); gate = null
+    } else if (phase === 'workhorse') {
+      phaseResult = await (deps.build || buildPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'draft-PR') {
       const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if (phase === 'mark-ready') {
@@ -185,29 +189,11 @@ async function defaultReviewerAgent(reviewer, _context, _rubric, _runDir, _round
   return true
 }
 
-// the thin build leaf: create the managed content-addressed worktree+branch (so draft-PR has a
-// push target and the back-half reconcile has a branch), then one implementer makes the change.
-async function buildPhase(workItem) {
-  // build_entry.py: content_hash(approved tasks) -> branch -> buildtree.reclaim_or_create ->
-  // record checkpoint.branch. Returns { branch }.
-  // build_entry emits {branch} on success or {error} on a fail-closed setup failure — so the schema
-  // does NOT require branch; a missing branch parks (low confidence) instead of crashing on setup.branch.
-  const setup = await cmdRunner(
-    `python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', properties: { branch: { type: 'string' }, error: { type: 'string' } } } })
-  if (!setup.branch) {
-    return { confidence: 'low', assumptions: ['build setup failed: ' + (setup.error || 'no branch returned')] }
-  }
-  await agent(`Make the trivial throwaway change for ${workItem} on branch ${setup.branch} and commit it.`, { label: 'build' })
-  // record build provenance over the shipped HEAD (the ship-gate reads it at draft-PR). If it can't be
-  // recorded, park (low confidence) — advancing would dead-end at the ship-gate with no build evidence.
-  const prov = await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step build --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
-  if (!prov.ok) {
-    return { confidence: 'low', assumptions: ['build provenance not recorded: ' + (prov.error || 'unknown')] }
-  }
-  return { confidence: 'high', assumptions: [] }
-}
+// the native "workhorse" build phase (#87) — implement the approved tasks doc task-by-task with a
+// per-task review + bounded fix loop, one whole-branch final review, and provenance written once.
+// All of that orchestration lives in build_phase.js; the spine just delegates, threading the lease
+// generation reconcile() acquired so the build can fence every branch-mutating boundary (UFR-10).
+const buildPhase = (workItem, generation) => require('./build_phase.js').buildPhase(workItem, generation)
 
 module.exports.verdictToGate = verdictToGate
 module.exports.reviewCodePhase = reviewCodePhase
