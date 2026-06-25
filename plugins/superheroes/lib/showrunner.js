@@ -8,20 +8,93 @@ const REVIEW_CODE_REVIEWERS = [
   'test-reviewer', 'premortem-reviewer',
 ]
 
-// The slice's derisk: review-code's 5-reviewer panel, single-pass (maxRounds:1, no auto-fix).
-// reviewerAgent / recordDeferred are the #86 caller-supplied leaf wrappers.
-async function runReviewCodePanel({ runDir, context, rubric, reviewerAgent, recordDeferred }) {
-  global.reviewerAgent = reviewerAgent
-  global.recordDeferred = recordDeferred
+const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
+const ADVANCE_TERMINALS = new Set(['clean', 'clean-with-skips'])
+
+const FIX_REPORT_SCHEMA = {
+  type: 'object',
+  properties: { fixed: { type: 'array' }, deferred: { type: 'array' } },
+}
+const CONFIG_SCHEMA = {
+  type: 'object', required: ['verifyCommand'],
+  properties: { verifyCommand: { type: 'string' }, tiers: { type: 'object' } },
+}
+const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
+const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
+
+// Build the five caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
+function reviewCodeLeaves(tiers) {
+  const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
+
+  const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
+    const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
+    await agent(
+      `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
+      `${rubric} rubric, and write your findings array to ` +
+      `${runDir}/round-${round}/findings-${reviewer}.json ([] if nothing to flag).`,
+      withModel(model, { label: `${reviewer}:r${round}` }))
+    return true
+  }
+
+  const mergeAgent = async (runDir, round, reviewerSet) => {
+    await agent(
+      `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+      `python3 plugins/superheroes/lib/merge_findings.py --run-dir ${shq(runDir)} ` +
+      `--round ${shq(String(round))} --roster ${shq(reviewerSet.join(','))}`,
+      { label: `merge:r${round}` })
+    return true
+  }
+
+  const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
+    await agent(
+      `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding in ` +
+      `${runDir}/round-${round}/merged.json decide keep/drop + the rubric-justified severity ` +
+      `(keep-on-uncertain; never decide the loop terminal). Write the verdict array to ` +
+      `${runDir}/round-${round}/synthesis.json.`,
+      withModel(tiers.synthesis, { label: `synthesis:r${round}` }))
+    return true
+  }
+
+  // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
+  const fixStep = async (blockers, runDir) => {
+    const out = await agent(
+      `You are the code-fixer. For each blocking finding below, attempt a real fix and COMMIT it to ` +
+      `the change under review. If a finding traces to an upstream phase (plan, tasks, or build) rather ` +
+      `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
+      `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
+      `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
+      `Blocking findings:\n${JSON.stringify(blockers)}`,
+      withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+    return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
+  }
+
+  const recordDeferred = async (report, _verdict, runDir) => {
+    await cmdRunner(
+      `python3 plugins/superheroes/lib/record_deferred.py --run-dir ${shq(runDir)} ` +
+      `--report ${shq(JSON.stringify(report || {}))}`,
+      { schema: OK_SCHEMA })
+  }
+
+  return { reviewerAgent, mergeAgent, synthesisLeaf, fixStep, recordDeferred }
+}
+
+// Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
+async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves }) {
+  global.reviewerAgent = leaves.reviewerAgent
+  global.mergeAgent = leaves.mergeAgent
+  global.synthesisLeaf = leaves.synthesisLeaf
+  global.recordDeferred = leaves.recordDeferred
   return reviewPanel({
     reviewerSet: REVIEW_CODE_REVIEWERS,
     context, rubric, runKey: runDir, runDir,
-    fixStep: async () => ({}),   // defer-only stub; never reached at maxRounds:1
-    maxRounds: 1,
+    fixStep: leaves.fixStep,
+    maxRounds: 7,
+    legKind: { panel: true, code: true },
+    verifyCommand,
   })
 }
 
-module.exports = { runReviewCodePanel, REVIEW_CODE_REVIEWERS }
+module.exports = { REVIEW_CODE_REVIEWERS }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
@@ -157,32 +230,50 @@ function verdictToGate(verdict) {
   return verdict && verdict.gate === 'clean' ? 'passed' : 'changes-requested'
 }
 
-// the review-code phase: run the single-pass panel, return a phase-result + its gate. On a clean
-// verdict, record the review provenance (set_review_covers + review_result) the ship-gate reads.
-async function reviewCodePhase(workItem) {
-  const runDir = `/tmp/showrunner-${workItem}-review-code`
-  const verdict = await runReviewCodePanel({
-    runDir, context: workItem, rubric: 'review-base',
-    reviewerAgent: defaultReviewerAgent, recordDeferred: async () => {},
-  })
-  const gate = verdictToGate(verdict)
-  if (gate === 'passed') {
-    // If the review provenance can't be recorded, parking now (low confidence) is correct: advancing
-    // would later GATE permanently at the draft-PR ship-gate (no review evidence) with the cursor
-    // already past this phase — a dead-end. A low-confidence park lets a resume retry it.
-    const prov = await cmdRunner(`python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
-      { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
-    if (!prov.ok) {
-      return { phaseResult: { confidence: 'low', assumptions: ['review provenance not recorded: ' + (prov.error || 'unknown')] }, gate }
-    }
-  }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
+// Render the loop's uniform readout (from its own verdict record, which carries parentOrigin via the
+// extras channel) and post it at the park (no PR yet -> readout_post records to the store). FR-6/UFR-1.
+async function renderAndPostReadout(workItem, runDir, verdict) {
+  const recPath = `${runDir}/terminal-record.json`
+  try { require('fs').writeFileSync(recPath, JSON.stringify(verdict || {})) } catch (_) {}
+  const text = await agent(
+    `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+    `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`,
+    { label: 'readout' })
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
+    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
 }
 
-async function defaultReviewerAgent(reviewer, _context, _rubric, _runDir, _round) {
-  // dispatch one review-code reviewer leaf; returns true when it wrote its findings file.
-  await agent(`Run the ${reviewer} review for this change and write its findings file.`, { label: reviewer })
-  return true
+// the review-code phase: drive the shared loop, map its terminal to advance/park, stamp covers on a
+// pure `clean` (X'), and surface the readout at a park. Returns { phaseResult, gate } for runPhases.
+async function reviewCodePhase(workItem) {
+  const runDir = `/tmp/showrunner-${workItem}-review-code`
+  const cfg = await cmdRunner(
+    `python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`,
+    { schema: CONFIG_SCHEMA })
+  const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {})
+  const verdict = await runReviewCodePanel({
+    runDir, context: workItem, rubric: 'review-base',
+    verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves,
+  })
+  const terminal = (verdict && verdict.terminal) || 'halted'
+  // #104's advance/park mapping, read off the terminal (plan Key decision 2).
+  if (!ADVANCE_TERMINALS.has(terminal)) {
+    await renderAndPostReadout(workItem, runDir, verdict)   // names parentOrigin at the review-phase park
+    return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested' }
+  }
+  // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
+  // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
+  if (terminal === 'clean') {
+    const prov = await cmdRunner(
+      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
+      { schema: PROV_SCHEMA })
+    if (!prov.ok) {
+      // UFR-2: the covers-stamp write failed -> park (low confidence), do NOT assert ship-ready.
+      return { phaseResult: { confidence: 'low', assumptions: ['review covers stamp not recorded: ' + (prov.error || 'unknown')] }, gate: 'changes-requested' }
+    }
+  }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
 }
 
 // the thin build leaf: create the managed content-addressed worktree+branch (so draft-PR has a
@@ -211,6 +302,7 @@ async function buildPhase(workItem) {
 
 module.exports.verdictToGate = verdictToGate
 module.exports.reviewCodePhase = reviewCodePhase
+module.exports.runReviewCodePanel = runReviewCodePanel
 module.exports.buildPhase = buildPhase
 
 const CKPT_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, pr: {} } }
