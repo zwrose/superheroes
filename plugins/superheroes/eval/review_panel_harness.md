@@ -54,3 +54,4 @@ them together.
 | escalation traces upstream (FR-21) | any | halted, readout names the phase |
 | interrupted run resumes at the round boundary (UFR-7/8) | any | resumes, no fix re-applied |
 | plan-doc and tasks-doc runs are independent (FR-22) | doc x2 | neither affects the other |
+| fixStep extras (parentOrigin) forwarded to the tally + readout | panel-doc | clean; round-N/extras.json written, --extras passed (#88) |
