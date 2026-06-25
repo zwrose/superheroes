@@ -1,0 +1,36 @@
+# plugins/superheroes/lib/tests/test_build_entry_generation.py
+import json, os, subprocess, sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import control_plane, checkpoint as ckpt_lib
+HERE = os.path.dirname(__file__)
+ENTRY = os.path.join(HERE, "..", "build_entry.py")
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True,
+                   env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                            GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t"))
+
+
+def test_build_entry_writes_lock_generation(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "x", "-q")
+    # minimal approved tasks doc so content_hash_for succeeds
+    d = os.path.join(repo, "docs", "superheroes", "wi")
+    os.makedirs(d)
+    open(os.path.join(d, "tasks.md"), "w").write(
+        "---\nsuperheroes: doc\ndocType: tasks\nworkItem: wi\n"
+        "parent: {workItem: wi, docType: plan}\nsize: large\n"
+        "gates: {review: passed}\n---\n# t\n")
+    # The in-process reader (control_plane/checkpoint, below) must use the SAME store the
+    # subprocess writes to — set it on this process's env, not just the subprocess's.
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run([sys.executable, ENTRY, "--work-item", "wi", "--generation", "7"],
+                         cwd=repo, env=env, capture_output=True, text=True)
+    res = json.loads(out.stdout)
+    assert "branch" in res
+    assert "path" in res            # build_entry now also emits the managed build-worktree path
+    cp = ckpt_lib.read(control_plane.paths(repo, "wi")["checkpoint"])
+    assert cp["lockGeneration"] == 7
