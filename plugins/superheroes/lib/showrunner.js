@@ -217,15 +217,22 @@ async function frontHalfBoundary(workItem) {
     readout_record_ok: true,
   }
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
-  try { fs.writeFileSync(outPath, JSON.stringify(outcome)) } catch (_) {}
-  // render-outcome prints TEXT (not JSON), so call the leaf directly (no cmdRunner schema).
-  const rendered = await agent(
-    `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-    `python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`,
-    { label: 'lib' })
-  const reason = typeof rendered === 'string' && rendered.trim()
+  let recordOk = true
+  try { fs.writeFileSync(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
+  // render-outcome prints TEXT (not JSON); call the leaf directly (no cmdRunner schema). If the
+  // outcome record could not be written, render has nothing to read -> flag UFR-6 in the reason.
+  const rendered = recordOk
+    ? await agent(
+        `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+        `python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`,
+        { label: 'lib' })
+    : null
+  const reason = (typeof rendered === 'string' && rendered.trim())
     ? rendered
-    : 'front-half complete: plan and tasks gated — parked at the front-half boundary, awaiting owner'
+    : recordOk
+      ? 'front-half complete: plan and tasks gated — parked at the front-half boundary, awaiting owner'
+      : '⚠️ front-half complete (plan and tasks gated) but the run-outcome record could not be written ' +
+        '— treat the durable readout as missing (UFR-6); awaiting owner'
   return { outcome: 'parked', phase: 'front-half-boundary', reason }
 }
 
@@ -336,6 +343,12 @@ async function runPhases(workItem, fromStep, deps) {
   deps = deps || {}
   for (let i = fromStep; i < PHASES.length; i += 1) {
     const phase = PHASES[i]
+    // FR-7: the native front-half ends at its boundary — park before entering the back-half (build),
+    // on a FRESH run AND on a RESUME (a resume re-enters at the build cursor, so the boundary must be
+    // checked at the build phase, not merely after review-tasks).
+    if (deps.frontHalfBoundary && phase === 'build') {
+      return deps.frontHalfBoundary(workItem)
+    }
     if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
       return (deps.ship || shipPhase)(workItem, await loadPr(workItem))
     }
@@ -365,11 +378,6 @@ async function runPhases(workItem, fromStep, deps) {
     // rather than advance — advancing on an unrecorded cursor would lose record-before-advance.
     const cur = await recordCursor(workItem, i, sideEffect)
     if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
-    // FR-7: when the native front-half is on, the run ends at the front-half boundary — it parks with
-    // the run-outcome envelope after review-tasks and does NOT begin the build.
-    if (deps.frontHalfBoundary && phase === 'review-tasks') {
-      return deps.frontHalfBoundary(workItem)
-    }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.

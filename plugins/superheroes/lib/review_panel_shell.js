@@ -28,6 +28,9 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   }
   let round = await resumeRound(runDir) // UFR-7: resume at the round boundary from disk
   let lastExtras = null                 // a fix step's extras (parentOrigin/escalation) ride forward
+  // UFR-7: a mid-loop resume must re-load the latest fix extras (in-memory only otherwise), else the
+  // resumed round's tally drops parentOrigin from the terminal record/readout.
+  try { lastExtras = JSON.parse(require('fs').readFileSync(`${runDir}/last-extras.json`, 'utf8')) } catch (_) {}
   while (true) {
     // 1. Fan out the panel — each reviewer writes findings-<name>.json into round-<N>/.
     await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round)))
@@ -68,6 +71,8 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       return _usable(failVerdict) ? failVerdict : _failClosed()
     }
     lastExtras = fix.extras || lastExtras   // latest fix's extras win; persisted once a blocker is parent-traced
+    // persist to a stable per-run path so a mid-loop resume can re-load it (the reload above).
+    if (lastExtras) { try { require('fs').writeFileSync(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
     round += 1
   }
 }

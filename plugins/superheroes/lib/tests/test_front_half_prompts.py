@@ -12,7 +12,7 @@ def test_produce_leaf_prompt_present_and_versioned():
     t = _read("produce-leaf.md")
     assert "produce-leaf-version: 1" in t
     assert "author-only" in t.lower()
-    assert "do not" in t.lower() and "review" in t.lower()      # no review fan-out
+    assert "Do NOT run review-plan / review-tasks" in t          # the specific no-review-fanout instruction
     assert "completion signal" in t.lower()                      # records completion (FR-8/UFR-4)
 
 

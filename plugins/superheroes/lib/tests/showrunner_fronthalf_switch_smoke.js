@@ -38,7 +38,18 @@ async function main() {
   try { await sr.runPhases('wi', 0, depsOff) } catch (_) {}
   assert.deepStrictEqual(seen2, ['leaf:plan', 'leaf:review-plan', 'leaf:tasks', 'leaf:review-tasks'],
     'switch-off path runs the unchanged defaultPhaseLeaf for every front-half phase')
-  console.log('ok: front-half switch + runPhases branches + boundary park')
+
+  // (c) RESUME into the back-half (fromStep=4=build) with the front-half on: parks at the boundary,
+  // never builds — the boundary guard sits at the build phase, so it is resume-safe (FR-7).
+  const seenR = []
+  const depsR = {
+    frontHalfBoundary: async () => ({ outcome: 'parked', phase: 'front-half-boundary', reason: 'boundary' }),
+    build: async () => { seenR.push('build'); return { confidence: 'high', assumptions: [] } },
+  }
+  const rr = await sr.runPhases('wi', 4, depsR)
+  assert.strictEqual(rr.phase, 'front-half-boundary', 'resume into build parks at the boundary (FR-7)')
+  assert.deepStrictEqual(seenR, [], 'build is NOT reached on a resume into the back-half')
+  console.log('ok: front-half switch + runPhases branches + boundary park (incl. resume)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

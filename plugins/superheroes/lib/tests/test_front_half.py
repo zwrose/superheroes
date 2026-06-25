@@ -49,6 +49,8 @@ def test_usable_when_signal_matches_and_content_complete():
 def test_not_usable_when_signal_missing():
     assert fh.is_usable_draft(_GOOD, "", "h1") is False
     assert fh.is_usable_draft(_GOOD, None, "h1") is False
+    assert fh.is_usable_draft(_GOOD, "h1", "") is False     # no expected signal (e.g. unhashable doc)
+    assert fh.is_usable_draft(_GOOD, "h1", None) is False
 
 
 def test_not_usable_when_signal_stale_mismatch():
@@ -67,8 +69,10 @@ def test_not_usable_when_required_section_empty():
 
 
 def test_not_usable_when_placeholder_token_present():
-    txt = _GOOD.replace("Real overview text.", "TBD")
-    assert fh.is_usable_draft(txt, "h1", "h1", required_sections=("Overview",)) is False
+    # every _PLACEHOLDER alternate must be caught (a finished doc carries none of them).
+    for token in ("TBD", "{{frontmatter}}", "<!-- AUTHOR GUIDANCE x -->", "similar to Task 3"):
+        txt = _GOOD.replace("Real overview text.", token)
+        assert fh.is_usable_draft(txt, "h1", "h1", required_sections=("Overview",)) is False, token
 
 
 def test_not_usable_when_no_frontmatter_or_empty_body():
