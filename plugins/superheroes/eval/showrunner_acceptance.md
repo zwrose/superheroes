@@ -148,3 +148,29 @@ deferred (see Scope), no throwaway PR was opened against the repo — opening/cl
 GitHub churn for evidence the composition + unit layers already establish. When #87–#90 wire the
 real entrypoint, the live unattended run (open → ready → green → discard) becomes the natural
 acceptance for that deepening.
+
+## Native front-half (#88) — evidence map
+
+The front-half phases are proven at the same two levels as the spine slice (composition smokes +
+pure-decider unit tests); the live switched-on production run stays deferred to the controller era
+(#22–#24), exactly as the #21 slice scoped.
+
+- **Pure deciders (CI lane).** `front_half.gate_for_terminal` / `is_usable_draft` / `render_run_outcome`
+  / `merge_findings` / `record_deferred` / `append_notify` are unit-proven both branches by
+  `test_front_half.py`; the content-bound completion signal by `test_front_half_usable.py`. The
+  `author` model role is proven by `test_model_tier_resolve.py::test_author_role_resolves_to_opus`.
+- **Composition (dev-time, node).** `showrunner_fronthalf_panel_smoke.js` (the panel-doc leg wires the
+  five reviewers + merge/synthesis/tally), `showrunner_fronthalf_phase_smoke.js` (terminal→gate map +
+  idempotent passed-gate skip + the gate-write guard), `showrunner_fronthalf_produce_smoke.js` (produce
+  resume / re-produce / park / notify — the produce-without-review seam), `showrunner_fronthalf_switch_smoke.js`
+  (opt-in routing + the boundary park + the unchanged switch-off path, FR-9), `showrunner_fronthalf_boundary_smoke.js`
+  (FR-7: the run-outcome envelope is composed via `render-outcome`, not dead code),
+  `showrunner_fronthalf_extras_smoke.js` (the D-4 extras transport).
+- **FR-7 boundary realized.** With the switch on, a passed `review-tasks` returns
+  `{outcome:'parked', phase:'front-half-boundary'}` (the rendered run-outcome envelope embedding each
+  phase's #104 readout) and the run never begins Build — proven by the switch + boundary smokes.
+- **Consume-not-fork (FR-2).** No loop-decision logic (terminal vocabulary, circuit breaker, panel
+  synthesis) lives outside the `reviewPanel` call-site; `showrunner.js` `require`s `review_panel_shell.js`
+  verbatim.
+- **Switch-off unchanged (FR-9).** With `SUPERHEROES_FRONT_HALF` unset, `showrunner` injects no
+  front-half deps and every pre-existing smoke + the full pytest suite pass untouched.
