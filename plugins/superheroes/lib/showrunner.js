@@ -23,6 +23,81 @@ async function runReviewCodePanel({ runDir, context, rubric, reviewerAgent, reco
 
 module.exports = { runReviewCodePanel, REVIEW_CODE_REVIEWERS }
 
+// The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
+const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
+                       'test-reviewer', 'premortem-reviewer']
+
+// the four caller-supplied doc-leg leaf wrappers the #104 shell expects (panel:true). Each is a
+// single leaf (no fan-out). Set as global.* before reviewPanel, exactly as runReviewCodePanel does.
+// NOTE: the findings filename is `findings-<full roster name>.json` — panel_tally reads the
+// roster verbatim (findings_path), and the tally is given the full DOC_REVIEWERS names, so the
+// reviewer write, the merge read, and the tally read MUST all use the same full names.
+async function docReviewerAgent(reviewer, context, rubric, runDir, round) {
+  await agent(
+    `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). Write findings to ` +
+    `${runDir}/round-${round}/findings-${reviewer}.json (a JSON array; [] if none).`,
+    { label: reviewer })
+  return true
+}
+async function docMergeAgent(runDir, round, reviewerSet) {
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py merge --run-dir ${shq(runDir)} ` +
+    `--round ${shq(String(round))} --roster ${shq((reviewerSet || []).join(','))}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, merged: {} } } })
+  return { runDir, round }   // merged.json on disk is what the synthesis leaf + tally read
+}
+async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
+  await agent(
+    `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
+    `Read the merged findings at ${runDir}/round-${round}/merged.json and the doc at ${context.docPath}; ` +
+    `per the synthesis-leaf prompt (plugins/superheroes/eval/synthesis-leaf.md) emit one ` +
+    `keep/drop/severity verdict per merged finding (keep-on-uncertain) and write the JSON array to ` +
+    `${runDir}/round-${round}/synthesis.json.`,
+    { label: `synthesis:r${round}` })
+  return { runDir, round }
+}
+async function docRecordDeferred(report, _verdict, runDir) {
+  // fix-report.json is a transient hand-off read by record-deferred immediately below; per-round
+  // overwrite is harmless (it is consumed before the next round writes it).
+  require('fs').writeFileSync(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  await cmdRunner(
+    `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
+    `--report ${shq(runDir + '/fix-report.json')}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, deferred: {} } } })
+}
+
+// the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
+// (with extras.parentOrigin for a parent-traced / GATE finding), or null on failure (#104 -> halted).
+async function docReviser(blockers, runDir, context) {
+  const out = await agent(
+    `You are the doc-reviser (fixStep) for the ${context.docType} doc at ${context.docPath}. ` +
+    `Per plugins/superheroes/eval/doc-reviser-leaf.md, resolve these blocking findings with targeted ` +
+    `revisions: ${JSON.stringify(blockers)}. Leave a parent-traced or GATE finding unresolved and ` +
+    `name it in extras.parentOrigin. Return ONLY the report JSON ` +
+    `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
+    { label: 'doc-reviser',
+      schema: { type: 'object', properties: { fixes: { type: 'array' }, deferred: { type: 'array' },
+                extras: { type: 'object' } } } })
+  return out || null
+}
+
+// run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
+async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
+  const context = { workItem, docType, docPath }
+  global.reviewerAgent = docReviewerAgent
+  global.mergeAgent = docMergeAgent
+  global.synthesisLeaf = docSynthesisLeaf
+  global.recordDeferred = docRecordDeferred
+  return reviewPanel({
+    reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
+    fixStep: (blockers, rd) => docReviser(blockers, rd, context),
+    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none' })
+}
+
+module.exports.DOC_REVIEWERS = DOC_REVIEWERS
+module.exports.runReviewDocPanel = runReviewDocPanel
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).

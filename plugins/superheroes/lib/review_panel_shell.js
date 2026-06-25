@@ -117,6 +117,7 @@ async function tallyAgent({ runDir, round, roster, maxRounds, synthesized = null
                            verifyResult = null, fixStatus = 'completed', extras = null }) {
   let extra = `--breaker-halt no --fix-status ${shq(fixStatus)}`
   if (synthesized) {
+    require('fs').mkdirSync(`${runDir}/round-${round}`, { recursive: true })   // round dir may not exist yet
     require('fs').writeFileSync(synthPath(runDir, round), JSON.stringify(synthesized))
     extra += ` --synthesized ${shq(synthPath(runDir, round))}`
   }
