@@ -18,6 +18,11 @@ import sys
 import circuit_breaker
 import loop_state
 import review_result
+import re
+
+SCHEMA_VERSION = 1
+_ROUND_RE = re.compile(r"^round-(\d+)$")
+_VERIFY_OK = (None, "pass", "skipped")  # None=doc leg; skipped=unverified project; pass=ok
 
 BLOCKING = ("Critical", "Important")
 SEV_RANK = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
@@ -42,6 +47,45 @@ def deferred_set_path(run_dir):
 
 def result_path(run_dir):
     return os.path.join(run_dir, "result.json")
+
+
+def assemble_rounds(run_dir):
+    """Build circuit_breaker's [{round, findings}] from the panel's own verdict.json records,
+    excluding any identity in the run's deferred-set (mirrors load_rounds' skip-exclusion, but
+    reads the panel layout — verdict.json/deferred-set.json — not compiled.json/resolutions.json)."""
+    deferred = _safe_read_json(deferred_set_path(run_dir), {})
+    skip = set(deferred.keys()) if isinstance(deferred, dict) else set()
+    try:
+        names = os.listdir(run_dir)
+    except OSError:
+        return []
+    nums = sorted(int(m.group(1)) for m in (_ROUND_RE.match(n) for n in names)
+                  if m and os.path.isdir(os.path.join(run_dir, m.string)))
+    rounds = []
+    for n in nums:
+        v = _safe_read_json(verdict_path(run_dir, n), None)
+        if not isinstance(v, dict):
+            continue
+        findings = [f for f in v.get("findings", [])
+                    if circuit_breaker.finding_identity(f) not in skip]
+        rounds.append({"round": n, "findings": findings})
+    return rounds
+
+
+def resume_round(run_dir):
+    """UFR-7: the round to (re)start at = max(N : round-N/verdict.json is valid JSON) + 1, or 1.
+    A round is 'fully saved' iff its verdict.json exists and parses; a partial round (dir but no
+    verdict) is discarded and re-run."""
+    best = 0
+    try:
+        names = os.listdir(run_dir)
+    except OSError:
+        return 1
+    for name in names:
+        m = _ROUND_RE.match(name)
+        if m and isinstance(_safe_read_json(verdict_path(run_dir, int(m.group(1))), None), dict):
+            best = max(best, int(m.group(1)))
+    return best + 1
 
 
 # ── compile / dedupe (FR-3) ──
@@ -189,45 +233,98 @@ def _persist(run_dir, rnd, verdict):
         "%s: %s" % (verdict["terminal"], verdict.get("reason", "")))
 
 
-def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="completed", context_files=None):
-    """Run the deterministic tally for one round. Fail-safe across EVERY read — a missing/malformed
-    roster entry, findings file, or deferred-set biases to a non-clean terminal, never a silent
-    `clean`. Persists the verdict + a durable terminal record."""
+def _persist_or_failclosed(run_dir, rnd, verdict, compiled, missing):
+    """Persist the verdict; on a durable-write failure fail CLOSED to `halted` (UFR-9), and if
+    even the halt record cannot be written, flag `recordMissing` on the returned result."""
+    try:
+        _persist(run_dir, rnd, verdict)
+        return verdict
+    except Exception as exc:
+        halted = {"schemaVersion": SCHEMA_VERSION, "gate": "cannot-certify", "confidence": "low",
+                  "findings": compiled, "missing": missing, "drops": verdict.get("drops", []),
+                  "terminal": "halted",
+                  "reason": "durable record write failed (%s) — failing closed" % exc}
+        try:
+            _persist(run_dir, rnd, halted)
+        except Exception:
+            halted["recordMissing"] = True
+        return halted
+
+
+def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="completed",
+          context_files=None, synthesized=None, verify_result=None, extras=None):
+    """Deterministic per-round tally. Fail-safe across EVERY read — a missing/malformed input
+    biases to a non-clean terminal, never a silent `clean`. On panel legs `synthesized`
+    (loop_synthesis output) replaces the raw compile; `verify_result` gates a code leg's clean
+    terminal (FR-17/UFR-4); the circuit breaker is computed internally from this run's verdicts
+    (UFR-2); `extras` (fixes/deferred/parentOrigin) ride into the record for the readout. A
+    durable-write failure fails closed to `halted` with `recordMissing` (UFR-9)."""
+    extras = extras if isinstance(extras, dict) else {}
+    # Only readout-enrichment keys ride in from the caller — never the decision/terminal fields,
+    # so a caller's extras can't overwrite a fail-closed `halted` (UFR-9) or any gate field.
+    safe_extras = {k: extras[k] for k in ("fixes", "deferred", "parentOrigin") if k in extras}
     try:
         if not roster:
-            verdict = {"gate": "cannot-certify", "confidence": "low", "findings": [], "missing": [],
-                       "terminal": "cannot-certify", "reason": "empty reviewer set — nothing to certify"}
-            _persist(run_dir, rnd, verdict)
-            return verdict
-        completed, all_findings = [], []
-        for reviewer in roster:
-            data = _safe_read_json(findings_path(run_dir, rnd, reviewer), None)
-            if not isinstance(data, list):
-                continue  # not completed → coverage gap (fail-safe)
-            completed.append(reviewer)
-            all_findings.extend(data)
-        compiled = compile_findings(all_findings, context_files)
+            verdict = {"schemaVersion": SCHEMA_VERSION, "gate": "cannot-certify",
+                       "confidence": "low", "findings": [], "missing": [], "drops": [],
+                       "terminal": "cannot-certify",
+                       "reason": "empty reviewer set — nothing to certify"}
+            verdict.update(safe_extras)
+            return _persist_or_failclosed(run_dir, rnd, verdict, [], [])
+        if isinstance(synthesized, dict):                      # panel leg: judgment already done
+            compiled = synthesized.get("findings", [])
+            drops = synthesized.get("drops", [])
+            completed = list(roster)                           # synthesis implies all reviewers ran
+        else:                                                  # single-reviewer leg: compile raw
+            completed, all_findings = [], []
+            for reviewer in roster:
+                data = _safe_read_json(findings_path(run_dir, rnd, reviewer), None)
+                if not isinstance(data, list):
+                    continue
+                completed.append(reviewer)
+                all_findings.extend(data)
+            compiled = compile_findings(all_findings, context_files)
+            drops = []
         gate, confidence, missing = round_gate(compiled, roster, completed)
         deferred_set = _safe_read_json(deferred_set_path(run_dir), {})
         if not isinstance(deferred_set, dict):
-            deferred_set = {}  # malformed → nothing deferred → blockers count (non-clean bias)
+            deferred_set = {}
         present_blocking = sum(1 for f in compiled if f.get("severity") in BLOCKING)
         pdef = present_deferred(compiled, deferred_set)
+        # Internal circuit breaker (UFR-2): prior rounds from disk + this round's findings,
+        # skip-set excluded — computed here (protected) so the breaker decision isn't in the shell.
+        skip = set(deferred_set.keys())
+        # Exclude THIS round from the disk-read history (it may already be persisted from a
+        # prior idempotent call) and append the current findings exactly once — otherwise a
+        # re-call would double-count round rnd and trip a false recurrence-halt.
+        prior = [r for r in assemble_rounds(run_dir) if r["round"] != rnd]
+        history = prior + [{"round": rnd, "findings": [
+            f for f in compiled if circuit_breaker.finding_identity(f) not in skip]}]
+        brk = circuit_breaker.check_circuit_breaker(history, max_rounds)
+        breaker_halt = bool(breaker_halt) or brk["halt"]
         terminal, reason = decide_terminal(
             gate, present_blocking, pdef, fix_status, rnd, max_rounds, breaker_halt)
-        if terminal == "cannot-certify" and missing:  # NAME the missing review angles (FR-5/UFR-2)
+        # Verify gate (FR-17/UFR-4): a code leg's clean terminal requires verify to have passed.
+        if terminal in ("clean", "clean-with-skips") and verify_result not in _VERIFY_OK:
+            terminal = "halted"
+            reason = ("verify command timed out — cannot certify clean" if verify_result == "timeout"
+                      else "verify command failed — cannot certify clean")
+        if terminal == "cannot-certify" and missing:
             reason = "coverage incomplete — missing review angle(s): %s" % ", ".join(missing)
-        verdict = {"gate": gate, "confidence": confidence, "findings": compiled, "missing": missing,
+        verdict = {"schemaVersion": SCHEMA_VERSION, "gate": gate, "confidence": confidence,
+                   "findings": compiled, "missing": missing, "drops": drops,
                    "terminal": terminal, "reason": reason}
-        _persist(run_dir, rnd, verdict)
-        return verdict
+        verdict.update(safe_extras)
+        return _persist_or_failclosed(run_dir, rnd, verdict, compiled, missing)
     except Exception as exc:  # absolute fail-safe — any unforeseen error halts, never clean
-        verdict = {"gate": "cannot-certify", "confidence": "low", "findings": [], "missing": [],
-                   "terminal": "halted", "reason": "tally failed: %s" % exc}
+        verdict = {"schemaVersion": SCHEMA_VERSION, "gate": "cannot-certify", "confidence": "low",
+                   "findings": [], "missing": [], "drops": [], "terminal": "halted",
+                   "reason": "tally failed: %s" % exc}
+        verdict.update(safe_extras)
         try:
             _persist(run_dir, rnd, verdict)
         except Exception:
-            pass
+            verdict["recordMissing"] = True
         return verdict
 
 
@@ -240,11 +337,17 @@ def main(argv):
     ap.add_argument("--breaker-halt", choices=["yes", "no"], default="no")
     ap.add_argument("--fix-status", choices=["completed", "failed"], default="completed")
     ap.add_argument("--context-files", default=None, help="comma-separated reviewed-file allowlist")
+    ap.add_argument("--synthesized", default=None, help="loop_synthesis output JSON (panel legs)")
+    ap.add_argument("--verify-result", default=None, help="pass|fail|timeout|skipped (code legs)")
+    ap.add_argument("--extras", default=None, help="extras JSON (fixes/deferred/parentOrigin)")
     args = ap.parse_args(argv[1:])
     roster = [r for r in args.roster.split(",") if r]
     context_files = args.context_files.split(",") if args.context_files else None
+    synthesized = _safe_read_json(args.synthesized, None) if args.synthesized else None
+    extras = _safe_read_json(args.extras, None) if args.extras else None
     verdict = tally(args.run_dir, args.rnd, roster, args.max_rounds,
-                    args.breaker_halt == "yes", args.fix_status, context_files)
+                    args.breaker_halt == "yes", args.fix_status, context_files,
+                    synthesized=synthesized, verify_result=args.verify_result, extras=extras)
     sys.stdout.write(json.dumps(verdict, sort_keys=True) + "\n")
     return 0
 

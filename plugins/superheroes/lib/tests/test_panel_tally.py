@@ -229,3 +229,92 @@ def test_tally_cannot_certify_names_missing_angle_and_reports_finishers(tmp_path
     assert v["terminal"] == "cannot-certify"
     assert v["missing"] == ["security"] and "security" in v["reason"]
     assert any(f["title"] == "bug" for f in v["findings"])  # the finisher's findings still reported
+
+
+def test_schema_version_on_every_verdict(tmp_path):
+    _seed(tmp_path, 1, {"code": []})
+    v = PT.tally(str(tmp_path), 1, ["code"])
+    assert v["schemaVersion"] == PT.SCHEMA_VERSION
+
+
+def test_synthesized_findings_used_instead_of_compiling(tmp_path):
+    # raw findings on disk have a blocker; the synthesized set dropped it -> clean
+    _seed(tmp_path, 1, {"code": [_f("a.py", 1, "bug", "Important")]})
+    synth = {"findings": [], "drops": [{"id": "a.py::bug", "title": "bug",
+             "reason": "stale", "was_blocking_tagged": True}]}
+    v = PT.tally(str(tmp_path), 1, ["code"], synthesized=synth)
+    assert v["terminal"] == "clean"
+    assert v["drops"][0]["was_blocking_tagged"] is True
+
+
+def test_verify_fail_blocks_clean(tmp_path):
+    _seed(tmp_path, 1, {"code": []})  # would be clean
+    v = PT.tally(str(tmp_path), 1, ["code"], verify_result="fail")
+    assert v["terminal"] == "halted" and "verify" in v["reason"].lower()
+
+
+def test_verify_timeout_named_distinctly(tmp_path):
+    _seed(tmp_path, 1, {"code": []})
+    v = PT.tally(str(tmp_path), 1, ["code"], verify_result="timeout")
+    assert v["terminal"] == "halted" and "timed out" in v["reason"].lower()
+
+
+def test_verify_pass_allows_clean(tmp_path):
+    _seed(tmp_path, 1, {"code": []})
+    assert PT.tally(str(tmp_path), 1, ["code"], verify_result="pass")["terminal"] == "clean"
+
+
+def test_verify_skipped_allows_clean_unverified(tmp_path):
+    _seed(tmp_path, 1, {"code": []})
+    assert PT.tally(str(tmp_path), 1, ["code"], verify_result="skipped")["terminal"] == "clean"
+
+
+def test_resume_round_is_one_when_empty(tmp_path):
+    assert PT.resume_round(str(tmp_path)) == 1
+
+
+def test_resume_round_skips_partial_round(tmp_path):
+    # round 1 fully saved (verdict.json), round 2 partial (dir only) -> resume at 2
+    _seed(tmp_path, 1, {"code": []})
+    PT.tally(str(tmp_path), 1, ["code"])              # writes round-1/verdict.json
+    os.makedirs(os.path.join(str(tmp_path), "round-2"), exist_ok=True)  # partial, no verdict
+    assert PT.resume_round(str(tmp_path)) == 2
+
+
+def test_recurring_blocker_halts_via_internal_breaker(tmp_path):
+    blk = [_f("a.py", 1, "bug", "Important")]
+    _seed(tmp_path, 1, {"code": blk}); PT.tally(str(tmp_path), 1, ["code"])
+    _seed(tmp_path, 2, {"code": blk}); v = PT.tally(str(tmp_path), 2, ["code"])
+    assert v["terminal"] == "halted"  # same blocker recurred -> circuit breaker
+
+
+def test_extras_threaded_into_verdict(tmp_path):
+    _seed(tmp_path, 1, {"code": []})
+    extras = {"fixes": ["did a thing"], "parentOrigin": "plan"}
+    v = PT.tally(str(tmp_path), 1, ["code"], extras=extras)
+    assert v["fixes"] == ["did a thing"] and v["parentOrigin"] == "plan"
+
+
+def test_extras_cannot_override_decision_fields(tmp_path):
+    # a caller's extras must never overwrite terminal/gate (UFR-9: keep the sentinel fail-closed)
+    _seed(tmp_path, 1, {"code": [_f("a.py", 1, "bug", "Important")]})  # would be `continue`
+    v = PT.tally(str(tmp_path), 1, ["code"], extras={"terminal": "clean", "gate": "clean"})
+    assert v["terminal"] == "continue" and v["gate"] == "blocking"
+
+
+def test_no_net_progress_halts_via_internal_breaker(tmp_path):
+    # distinct blockers each round (no recurrence) but a non-decreasing count -> criterion 2 halt
+    v = None
+    for n, titles in [(1, ["a", "b"]), (2, ["c", "d"]), (3, ["e", "f"])]:
+        _seed(tmp_path, n, {"code": [_f("f%d.py" % i, 1, t, "Important")
+                                     for i, t in enumerate(titles)]})
+        v = PT.tally(str(tmp_path), n, ["code"])
+    assert v["terminal"] == "halted"  # blocking count 2 -> 2 -> 2, no net progress
+
+
+def test_write_failure_fails_closed_with_record_missing(tmp_path, monkeypatch):
+    _seed(tmp_path, 1, {"code": []})
+    monkeypatch.setattr(PT, "_atomic_write_json",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    v = PT.tally(str(tmp_path), 1, ["code"])
+    assert v["terminal"] == "halted" and v.get("recordMissing") is True
