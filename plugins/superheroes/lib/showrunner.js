@@ -200,6 +200,37 @@ module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.notifyLedgerFor = notifyLedgerFor
 
+// FR-7: compose the front-half run-outcome envelope (embedding each phase's #104 readout via
+// front_half render-outcome) and return a parked result. Reads best-effort per-phase terminal records
+// + the durable NOTIFY ledger; render_run_outcome tolerates missing records.
+async function frontHalfBoundary(workItem) {
+  const fs = require('fs')
+  const readJson = (p, dflt) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) { return dflt } }
+  const outcome = {
+    completed_phases: ['plan', 'review-plan', 'tasks', 'review-tasks'],
+    docs: { plan: docPathFor(workItem, 'plan'), tasks: docPathFor(workItem, 'tasks') },
+    notify: readJson(notifyLedgerFor(workItem), []),
+    phase_records: [
+      { phase: 'review-plan', record: readJson(`${runDirFor(workItem, 'review-plan')}/terminal-record.json`, null) },
+      { phase: 'review-tasks', record: readJson(`${runDirFor(workItem, 'review-tasks')}/terminal-record.json`, null) },
+    ],
+    readout_record_ok: true,
+  }
+  const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
+  try { fs.writeFileSync(outPath, JSON.stringify(outcome)) } catch (_) {}
+  // render-outcome prints TEXT (not JSON), so call the leaf directly (no cmdRunner schema).
+  const rendered = await agent(
+    `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+    `python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`,
+    { label: 'lib' })
+  const reason = typeof rendered === 'string' && rendered.trim()
+    ? rendered
+    : 'front-half complete: plan and tasks gated — parked at the front-half boundary, awaiting owner'
+  return { outcome: 'parked', phase: 'front-half-boundary', reason }
+}
+
+module.exports.frontHalfBoundary = frontHalfBoundary
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
@@ -238,7 +269,13 @@ async function showrunner({ workItem }) {
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
-  return runPhases(workItem, fromStep, { gateRead: gateReadFor(workItem) })
+  const deps = { gateRead: gateReadFor(workItem) }
+  if (process.env.SUPERHEROES_FRONT_HALF === 'native') {
+    deps.produce = producePhase                  // plan / tasks authoring (author-only)
+    deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
+    deps.frontHalfBoundary = frontHalfBoundary   // park at the front-half boundary (FR-7)
+  }
+  return runPhases(workItem, fromStep, deps)
 }
 
 const READGATE_SCHEMA = { type: 'object', required: ['review'], properties: { review: { type: 'string' } } }
@@ -311,6 +348,11 @@ async function runPhases(workItem, fromStep, deps) {
       const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if (phase === 'mark-ready') {
       const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+    } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
+      const doc = phase === 'review-plan' ? 'plan' : 'tasks'
+      const r = await deps.reviewDoc(doc, workItem); phaseResult = r.phaseResult; gate = r.gate
+    } else if ((phase === 'plan' || phase === 'tasks') && deps.produce) {
+      phaseResult = await deps.produce(phase, workItem); gate = null
     } else {
       phaseResult = await (deps.phaseLeaf || defaultPhaseLeaf)(phase, workItem)
       gate = await (deps.gateRead || (async () => null))(phase, workItem)
@@ -323,6 +365,11 @@ async function runPhases(workItem, fromStep, deps) {
     // rather than advance — advancing on an unrecorded cursor would lose record-before-advance.
     const cur = await recordCursor(workItem, i, sideEffect)
     if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
+    // FR-7: when the native front-half is on, the run ends at the front-half boundary — it parks with
+    // the run-outcome envelope after review-tasks and does NOT begin the build.
+    if (deps.frontHalfBoundary && phase === 'review-tasks') {
+      return deps.frontHalfBoundary(workItem)
+    }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.
