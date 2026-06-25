@@ -50,3 +50,8 @@ def test_embedded_fallback_matches_the_core():
     # is now the in-tree sibling (repointed from plugins/superheroes/lib/model_tier.py).
     core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core")
     assert MTR._FALLBACK == core.DEFAULT_TIERS
+
+
+def test_wrapper_cli_forwards_context(capsys):
+    rc, out = _run(capsys, "--role", "fixer", "--context", "doc")
+    assert rc == 0 and out["model"] == "opus" and out["degraded"] is False

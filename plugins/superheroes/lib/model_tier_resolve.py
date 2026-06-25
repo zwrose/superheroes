@@ -21,6 +21,8 @@ _FALLBACK = {
     "reviewer": "sonnet",
     "reviewer-deep": "opus",
     "mechanical": "haiku",
+    "synthesis": "opus",
+    "fixer": "sonnet",
 }
 
 
@@ -33,6 +35,7 @@ def main(argv):
     ap = argparse.ArgumentParser(description="model-tier resolver (superheroes)")
     ap.add_argument("--role", required=True)
     ap.add_argument("--overrides", default=None)
+    ap.add_argument("--context", default=None, help="optional fixer context: code|doc")
     args = ap.parse_args(argv[1:])
 
     overrides = None
@@ -42,7 +45,7 @@ def main(argv):
         except (ValueError, json.JSONDecodeError):
             overrides = None  # fail-open
     try:
-        model = model_tier.resolve_model(args.role, overrides)
+        model = model_tier.resolve_model(args.role, overrides, args.context)
         sys.stdout.write(json.dumps({"role": args.role, "model": model,
                                      "degraded": False}) + "\n")
         return 0
