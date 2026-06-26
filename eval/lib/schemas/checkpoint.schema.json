@@ -4,7 +4,7 @@
   "title": "superheroes checkpoint.json (CONVENTIONS §4.3)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "workItem", "issue", "size", "phase", "gates", "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep", "updatedAt"],
+  "required": ["schemaVersion", "workItem", "issue", "size", "phase", "gates", "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep", "lastGoodPhase", "updatedAt"],
   "definitions": {
     "gate": { "enum": ["pending", "passed", "changes-requested"] }
   },
@@ -40,7 +40,11 @@
         }
       ]
     },
-    "lastGoodStep": { "type": "string" },
+    "lastGoodStep": { "type": ["integer", "null"], "minimum": 0 },
+    "lastGoodPhase": {
+      "type": ["string", "null"],
+      "enum": [null, "plan", "review-plan", "tasks", "review-tasks", "workhorse", "review-code", "draft-PR", "mark-ready", "ship"]
+    },
     "updatedAt": { "type": "string" }
   }
 }

@@ -51,7 +51,7 @@ VALID = {
         "phase": "tasks", "gates": {"spec": "passed", "plan": "passed", "tasks": "pending"},
         "patternsPin": "0123456789abcdef", "branch": "superheroes/add-toggle-abc123-0123456789abcdef",
         "lockGeneration": 7, "pr": {"number": 42, "url": "https://example/pr/42"},
-        "lastGoodStep": "step-3", "updatedAt": "2026-06-14T00:00:00Z"},
+        "lastGoodStep": 3, "lastGoodPhase": "tasks", "updatedAt": "2026-06-14T00:00:00Z"},
     "queue.schema.json": {
         "schemaVersion": 1,
         "items": [{"workItem": "add-toggle-abc123", "issue": 42, "state": "queued", "order": 0}]},

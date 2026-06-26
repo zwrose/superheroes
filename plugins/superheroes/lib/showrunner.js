@@ -459,7 +459,7 @@ async function runPhases(workItem, fromStep, deps) {
     if (decision.action !== 'proceed') return { outcome: 'parked', phase, reason: decision.reason }
     // FR-4/FR-3: persist the side effect + cursor BEFORE advancing. If that durable write fails, park
     // rather than advance — advancing on an unrecorded cursor would lose record-before-advance.
-    const cur = await recordCursor(workItem, i, sideEffect)
+    const cur = await recordCursor(workItem, i, phase, sideEffect)
     if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
@@ -531,12 +531,13 @@ module.exports.buildPhase = buildPhase
 
 const CKPT_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, pr: {} } }
 
-// recordCursor writes lastGoodStep (+ any side effect: { pr } or { ready }) BEFORE the loop
+// recordCursor writes lastGoodStep + lastGoodPhase (+ any side effect: { pr } or { ready }) BEFORE the loop
 // advances — so a crash resumes after this phase and never repeats an irreversible action (FR-4).
-async function recordCursor(workItem, step, sideEffect) {
+async function recordCursor(workItem, step, phase, sideEffect) {
   const extra = sideEffect ? ` --json ${shq(JSON.stringify(sideEffect))}` : ''
   return cmdRunner(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --step ${shq(String(step))}${extra}`,
+    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} ` +
+    `--step ${shq(String(step))} --phase ${shq(phase)}${extra}`,
     { schema: CKPT_SCHEMA })
 }
 

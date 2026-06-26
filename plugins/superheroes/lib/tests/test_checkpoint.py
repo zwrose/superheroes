@@ -1,24 +1,31 @@
 # plugins/superheroes/lib/tests/test_checkpoint.py
 import json
+import os
+import subprocess
+import sys
 import pytest
 import checkpoint as ck
+import control_plane
 
 
 def test_new_has_locked_43_fields():
     c = ck.new("wi", "superheroes/wi-abc123", issue=42, size="medium")
     for k in ("schemaVersion", "workItem", "issue", "size", "phase", "gates",
-              "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep"):
+              "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep",
+              "lastGoodPhase"):
         assert k in c
     assert c["workItem"] == "wi" and c["branch"] == "superheroes/wi-abc123"
-    assert c["phase"] == "build" and c["lastGoodStep"] is None
+    assert c["phase"] == "build" and c["lastGoodStep"] is None and c["lastGoodPhase"] is None
 
 
 def test_write_read_roundtrip_stamps_updatedat(tmp_path):
     p = str(tmp_path / "checkpoint.json")
-    ck.write(p, ck.new("wi", "b"))
+    c = ck.new("wi", "b", last_good_step=2, last_good_phase="tasks")
+    ck.write(p, c)
     got = ck.read(p)
     assert got["workItem"] == "wi" and got["updatedAt"]
     assert got["schemaVersion"] == ck.SCHEMA_VERSION
+    assert got["lastGoodStep"] == 2 and got["lastGoodPhase"] == "tasks"
 
 
 def test_read_missing_is_none(tmp_path):
@@ -33,7 +40,43 @@ def test_read_unparseable_is_none(tmp_path):
 def test_read_unknown_schema_fails_closed(tmp_path):
     p = tmp_path / "checkpoint.json"
     p.write_text(json.dumps({"schemaVersion": 999, "workItem": "wi"}))
-    assert ck.read(str(p)) is None   # newer schema -> ignore, world-derive
+    got = ck.read(str(p))
+    assert got["_incompatible"] is True
+    assert "schema" in got["reason"]
+
+
+def test_read_numeric_cursor_without_phase_is_incompatible(tmp_path):
+    p = tmp_path / "checkpoint.json"
+    c = ck.new("wi", "b", last_good_step=2)
+    c.pop("lastGoodPhase")
+    p.write_text(json.dumps(c))
+    got = ck.read(str(p))
+    assert got["_incompatible"] is True
+    assert "lastGoodPhase" in got["reason"]
+
+
+def test_read_allows_missing_phase_when_no_cursor(tmp_path):
+    p = tmp_path / "checkpoint.json"
+    c = ck.new("wi", "b")
+    c.pop("lastGoodPhase")
+    p.write_text(json.dumps(c))
+    got = ck.read(str(p))
+    assert got["lastGoodStep"] is None
+    assert got["lastGoodPhase"] is None
+
+
+def test_checkpoint_entry_writes_phase_with_step(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    entry = os.path.join(os.path.dirname(__file__), "..", "checkpoint_entry.py")
+    out = subprocess.check_output(
+        [sys.executable, entry, "--work-item", "wi", "--step", "4", "--phase", "workhorse"],
+        cwd=os.getcwd(),
+        text=True,
+    )
+    assert json.loads(out)["ok"] is True
+    got = ck.read(control_plane.paths(os.getcwd(), "wi")["checkpoint"])
+    assert got["lastGoodStep"] == 4
+    assert got["lastGoodPhase"] == "workhorse"
 
 
 @pytest.mark.parametrize("phase", ["plan", "tasks"])
@@ -43,5 +86,6 @@ def test_front_half_phase_roundtrips(tmp_path, phase):
     ck2 = checkpoint.new("wi", "")          # checkpoint.new(work_item, branch) — branch is required
     ck2["phase"] = phase
     ck2["lastGoodStep"] = 1
+    ck2["lastGoodPhase"] = phase
     checkpoint.write(p, ck2)
     assert checkpoint.read(p)["phase"] == phase
