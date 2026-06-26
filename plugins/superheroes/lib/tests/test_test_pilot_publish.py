@@ -236,6 +236,59 @@ def test_publish_rejects_invalid_trusted_generation_before_remote_action(tmp_pat
     assert calls == []
 
 
+def test_publish_rejects_status_generation_mismatch_before_remote_action(tmp_path):
+    status_path, data = _status(tmp_path, generation=3)
+    calls = []
+
+    result = publish.publish(
+        "issue-90",
+        "abc123",
+        str(status_path),
+        store=data["store"],
+        generation=4,
+        local_head=lambda: calls.append("local_head") or "abc123",
+        renew=lambda *args: calls.append("renew") or True,
+        fence_ok=lambda *args: calls.append("fence") or True,
+        push=lambda *args, **kwargs: calls.append("push") or True,
+        read_pr_head=lambda branch: calls.append("read") or "abc123",
+        write_status=lambda *args: calls.append("write"),
+    )
+
+    assert result["verdict"] == "park"
+    assert "status lock generation" in result["reason"]
+    assert calls == []
+
+
+def test_publish_parks_when_non_force_push_fails(tmp_path):
+    status_path, data = _status(tmp_path)
+    calls = []
+    written = []
+
+    result = publish.publish(
+        "issue-90",
+        "abc123",
+        str(status_path),
+        renew=lambda store, work_item, generation: calls.append(("renew", store, work_item, generation)) or True,
+        fence_ok=lambda store, work_item, generation: calls.append(("fence", store, work_item, generation)) or True,
+        local_head=lambda: "abc123",
+        store=data["store"],
+        generation=4,
+        push=lambda branch, force=False, head=None: calls.append(("push", branch, force, head)) or False,
+        read_pr_head=lambda branch: calls.append(("read_pr_head", branch)) or "abc123",
+        write_status=lambda path, status: written.append((path, status)) or status,
+    )
+
+    assert result["verdict"] == "park"
+    assert "non-force push" in result["reason"]
+    assert calls == [
+        ("renew", data["store"], "issue-90", 4),
+        ("fence", data["store"], "issue-90", 4),
+        ("read_pr_head", "codex/issue-90"),
+        ("push", "codex/issue-90", False, "abc123"),
+    ]
+    assert written == []
+
+
 def test_publish_refuses_protected_branch_before_any_remote_action(tmp_path):
     status_path, _ = _status(tmp_path, branch="main")
     calls = []

@@ -90,19 +90,19 @@ function reviewCodeLeaves(tiers, opts) {
 }
 
 // Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
-async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves }) {
+async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree }) {
   global.reviewerAgent = leaves.reviewerAgent
   global.mergeAgent = leaves.mergeAgent
   global.synthesisLeaf = leaves.synthesisLeaf
   global.recordDeferred = leaves.recordDeferred
-  return reviewPanel({
+  return withTargetCommandPrompts(worktree, () => reviewPanel({
     reviewerSet: REVIEW_CODE_REVIEWERS,
     context, rubric, runKey: runDir, runDir,
     fixStep: leaves.fixStep,
     maxRounds: 7,
     legKind: { panel: true, code: true },
     verifyCommand,
-  })
+  }))
 }
 
 module.exports = { REVIEW_CODE_REVIEWERS }
@@ -324,6 +324,29 @@ module.exports.frontHalfBoundary = frontHalfBoundary
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function safeRunKey(s) { return String(s).replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 120) || 'target' }
+function inWorktree(cmd, worktree) {
+  return worktree ? `cd ${shq(worktree)} && ${cmd}` : cmd
+}
+function targetCommandPrompt(prompt, worktree) {
+  if (!worktree || typeof prompt !== 'string') return prompt
+  if (!prompt.startsWith('Run exactly this')) return prompt
+  const idx = prompt.lastIndexOf('\n\n')
+  if (idx < 0) return prompt
+  const prefix = prompt.slice(0, idx + 2)
+  const cmd = prompt.slice(idx + 2)
+  if (!cmd.trim() || cmd.trim().startsWith('cd ')) return prompt
+  return `${prefix}${inWorktree(cmd, worktree)}`
+}
+async function withTargetCommandPrompts(worktree, fn) {
+  if (!worktree) return fn()
+  const originalAgent = global.agent
+  global.agent = async (prompt, opts) => originalAgent(targetCommandPrompt(prompt, worktree), opts)
+  try {
+    return await fn()
+  } finally {
+    global.agent = originalAgent
+  }
+}
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
 async function cmdRunner(cmd, { schema }) {
@@ -732,15 +755,16 @@ async function reviewCodePhase(workItem, opts) {
       return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${opts.expectedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
     }
   }
+  const targetWorktree = opts.worktree || null
   const cfg = await cmdRunner(
-    `python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`,
+    inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree),
     { schema: CONFIG_SCHEMA })
   const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
     target: { worktree: opts.worktree, head: opts.expectedHead },
   })
   const verdict = await runReviewCodePanel({
     runDir, context: workItem, rubric: 'review-base',
-    verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves,
+    verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
   const finalHead = opts.expectedHead

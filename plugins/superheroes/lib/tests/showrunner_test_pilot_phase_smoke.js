@@ -401,6 +401,10 @@ async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
         ],
       }
     },
+    retryDecide: async (_passResult, _history, changedFiles) => {
+      if (changedFiles) return { action: 'rerun_all', failedStepIds: ['s1', 's2'] }
+      return { action: 'fix_batch', failedStepIds: ['s1', 's2'], summary: 'Fix browser app failures' }
+    },
     dispatchFixBatch: async (failures) => {
       dispatchFailures = failures
       return { ok: true, commitShas: ['fix111'], changedFiles: ['web/settings.js'], head: 'fix111' }
@@ -462,6 +466,15 @@ async function knownDependencyRerunsFailedAndAffectedSubset() {
         ],
       }
     },
+    retryDecide: async (_passResult, _history, changedFiles, dependencyMap) => {
+      if (changedFiles) {
+        const affected = dependencyMap && Array.isArray(dependencyMap['web/settings.js'])
+          ? dependencyMap['web/settings.js']
+          : []
+        return { action: 'rerun_subset', failedStepIds: ['s1'], stepIds: ['s1', ...affected].sort() }
+      }
+      return { action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }
+    },
     dispatchFixBatch: async () => ({ ok: true, commitShas: ['fix222'], changedFiles: ['web/settings.js'], head: 'fix222' }),
     ensureCleanWorktreeAfterFix: async () => ({ ok: true }),
     reconcileCommittedMutations: async () => ({ ok: true, commitShas: ['fix222'], head: 'fix222' }),
@@ -479,6 +492,7 @@ async function dirtyFixLeftoversParkBehindInjectedWorktreeGuard() {
       action: 'aggregated',
       records: [{ stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true }],
     }),
+    retryDecide: async () => ({ action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }),
     dispatchFixBatch: async () => { dispatches += 1; return { ok: true, dirty: true } },
     ensureCleanWorktreeAfterFix: async () => ({ ok: false, reason: 'dirty fix leftovers after lease reset failed' }),
   }))

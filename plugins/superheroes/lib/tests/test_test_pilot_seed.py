@@ -191,13 +191,13 @@ def test_restore_baseline_parks_on_clean_failure():
     assert "clean failed" in result["reason"]
 
 
-def test_restore_baseline_recleans_successfully_cleaned_records_when_later_clean_fails():
+def test_restore_baseline_reapplies_successfully_cleaned_records_when_later_clean_fails():
     engine = FakeEngine(fail={"clean_branch": "feat/y"})
     result = seed.restore_baseline([_record_for("feat/x"), _record_for("feat/y")], engine)
 
     assert result["action"] == "park"
     assert "clean failed" in result["reason"]
-    assert engine.calls.count(("clean", "feat/x", False)) == 2
+    assert engine.calls[-1] == ("apply", "feat/x", False, False)
 
 
 def test_restore_baseline_recleans_successfully_applied_records_when_reapply_fails():

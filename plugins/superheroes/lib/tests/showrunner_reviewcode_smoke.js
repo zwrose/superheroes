@@ -20,9 +20,15 @@ const sr = require('../showrunner.js')
     const label = opts && opts.label
     if (label === 'lib' && prompt.includes('git -C')) return 'head-1\n'
     if (label === 'resume') return '1'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
+    if (label === 'lib' && prompt.includes('review_code_config.py')) {
+      assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')
+      return { verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} }
+    }
     if (label && label.startsWith('tally')) return { terminal: 'clean', gate: 'clean', findings: [] }
-    if (label && label.startsWith('verify')) return { result: 'pass' }
+    if (label && label.startsWith('verify')) {
+      assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')
+      return { result: 'pass' }
+    }
     if (label && label.startsWith('synthesis')) return { findings: [], drops: [] }
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
     return true
@@ -37,6 +43,8 @@ const sr = require('../showrunner.js')
     'targeted stabilization uses the caller-provided fresh runDir')
   assert.ok(promptLog.some((p) => p.includes('Target worktree: /tmp/build-worktree') && p.includes('Expected head: head-1')),
     'review leaves receive explicit worktree/head context')
+  assert.ok(promptLog.some((p) => p.includes("cd '/tmp/build-worktree' &&") && p.includes('panel_tally.py')),
+    'targeted stabilization runs panel commands from the explicit worktree')
   assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--worktree') && p.includes('--head')),
     'provenance restamp is bound to explicit worktree/head')
 

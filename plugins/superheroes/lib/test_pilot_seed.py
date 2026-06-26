@@ -203,6 +203,14 @@ def _clean_compensation(records, engine):
             pass
 
 
+def _reapply_compensation(records, engine):
+    for record in reversed(records):
+        try:
+            engine.apply(record, dry_run=False, allow_protected=False)
+        except Exception:
+            pass
+
+
 def prepare_records(records, engine=None, budget=None):
     """Validate, dry-run, apply, and verify seed data before browser execution."""
     engine = engine or EngineAdapter()
@@ -268,7 +276,7 @@ def restore_baseline(records, engine=None, budget=None):
             engine.clean(record, allow_protected=False)
             cleaned.append(record)
         except Exception as exc:
-            _clean_compensation(cleaned, engine)
+            _reapply_compensation(cleaned, engine)
             msg = str(exc).replace("-", " ")
             if "protected target refusal" in msg.lower():
                 return _park("clean failed: protected target refusal: %s" % exc)

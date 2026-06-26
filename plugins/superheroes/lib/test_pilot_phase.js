@@ -806,98 +806,16 @@ async function retryDecision(deps, passResult, history, changedFiles, dependency
     if (typeof deps.retryDecide === 'function') {
       return await deps.retryDecide(passResult, history, changedFiles, dependencyMap)
     }
-    return defaultRetryDecision(passResult, history, changedFiles, dependencyMap)
+    return { action: 'park_retry_decision_failed', reason: 'test-pilot retry decision unavailable' }
   } catch (err) {
     return { action: 'park_retry_decision_failed', reason: `test-pilot retry decision failed: ${message(err)}` }
   }
-}
-
-function defaultRetryDecision(passResult, history, changedFiles, dependencyMap) {
-  const batches = fixBatches(history)
-  const failed = failedBrowserRecords(passResult)
-  if (changedFiles !== undefined && batches.length) return rerunDecision(passResult, changedFiles, dependencyMap)
-  if (failed.length && batches.length >= 3) {
-    return {
-      action: 'park_cap_reached',
-      reason: 'reached 3 browser fix batches with failed browser steps remaining',
-    }
-  }
-  const noProgress = lastTwoSameWithoutProgress(batches)
-  if (failed.length && noProgress) {
-    return {
-      action: 'park_no_progress',
-      reason: `two consecutive browser fix batches made no progress: ${noProgress}`,
-    }
-  }
-  const failures = collectAppBugFailures(passResult)
-  if (failures.length) {
-    return {
-      action: 'fix_batch',
-      failedStepIds: failures.map((failure) => failure.stepId),
-      summary: failureSummary(failures),
-    }
-  }
-  if (failed.length) {
-    return {
-      action: 'park_unclassified_failure',
-      reason: 'one or more browser failures are not app-bug failures',
-    }
-  }
-  return { action: 'passed' }
 }
 
 function fixBatches(history) {
   return Array.isArray(history)
     ? history.filter((entry) => entry && (entry.type === 'browser_fix_batch' || entry.type === 'fix_batch'))
     : []
-}
-
-function rerunDecision(passResult, changedFiles, dependencyMap) {
-  const failedStepIds = failedBrowserRecords(passResult).map((record) => stepKey(record))
-  const affectedStepIds = affectedSteps(changedFiles, dependencyMap)
-  if (affectedStepIds === null) return { action: 'rerun_all', failedStepIds }
-  return {
-    action: 'rerun_subset',
-    failedStepIds,
-    affectedStepIds,
-    stepIds: [...new Set(failedStepIds.concat(affectedStepIds))].sort(),
-  }
-}
-
-function affectedSteps(changedFiles, dependencyMap) {
-  if (!dependencyMap || typeof dependencyMap !== 'object') return null
-  const affected = new Set()
-  for (const file of normalizeStrings(changedFiles)) {
-    const mapped = dependencyMap[file]
-    if (!Array.isArray(mapped)) return null
-    for (const stepId of mapped) {
-      if (stepId !== undefined && stepId !== null && stepId !== '') affected.add(String(stepId))
-    }
-  }
-  return [...affected].sort()
-}
-
-function lastTwoSameWithoutProgress(batches) {
-  if (batches.length < 2) return null
-  const prev = batches[batches.length - 2]
-  const latest = batches[batches.length - 1]
-  const prevSummary = scrubFailureSummary(prev.summary)
-  const latestSummary = scrubFailureSummary(latest.summary)
-  if (prevSummary && prevSummary === latestSummary && !madeProgress(prev) && !madeProgress(latest)) {
-    return latestSummary
-  }
-  return null
-}
-
-function madeProgress(batch) {
-  const before = batch && batch.before && typeof batch.before === 'object' ? batch.before : {}
-  const after = batch && batch.after && typeof batch.after === 'object' ? batch.after : {}
-  for (const stepId of Object.keys(before)) {
-    if ((before[stepId] === 'failed' || before[stepId] === 'fail') && (after[stepId] === 'passed' || after[stepId] === 'pass')) {
-      return true
-    }
-  }
-  return false
 }
 
 function failureSummary(failures) {
