@@ -58,6 +58,13 @@ function applicableDeps(extra) {
       records: [{ stepId: 's1', status: 'passed', notes: 'observed page load', browserExecuted: true }],
       coverageRationale: 'covers branch state',
     }),
+    reviewCode: async (_workItem, opts) => ({
+      gate: 'passed',
+      head: opts.expectedHead,
+      changed: false,
+      reviewCoverageHead: opts.expectedHead,
+      verifyPassedHead: opts.expectedHead,
+    }),
     writeStatus: async () => ({ ok: true }),
   }, extra || {})
 }
@@ -447,6 +454,47 @@ async function threeFixBatchesParkIfFailuresRemain() {
   assert.match(out.assumptions[0], /3 browser fix batches/)
 }
 
+async function reviewCodeMutationForcesBrowserRevalidationWithoutConsumingBrowserFixBudget() {
+  let browserPasses = 0
+  let reviewCalls = 0
+  let dispatches = 0
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    requireReviewCode: true,
+    budgetCheck: async () => ({ ok: true }),
+    runBrowserPass: async () => {
+      browserPasses += 1
+      return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [{ id: 's1', status: 'passed' }] }
+    },
+    aggregateResults: async () => ({
+      action: 'aggregated',
+      records: [{ stepId: 's1', status: 'passed', browserExecuted: true }],
+    }),
+    reviewCode: async (_workItem, opts) => {
+      reviewCalls += 1
+      assert.strictEqual(opts.browserFixBatchCount, 0)
+      if (reviewCalls === 1) return { gate: 'passed', head: 'review-fix-1', changed: true, reviewCoverageHead: 'review-fix-1', verifyPassedHead: 'review-fix-1' }
+      return { gate: 'passed', head: 'review-fix-1', changed: false, reviewCoverageHead: 'review-fix-1', verifyPassedHead: 'review-fix-1' }
+    },
+    dispatchFixBatch: async () => { dispatches += 1; return { ok: true } },
+  }))
+
+  assert.strictEqual(out.confidence, 'high')
+  assert.strictEqual(browserPasses, 2)
+  assert.strictEqual(reviewCalls, 2)
+  assert.strictEqual(dispatches, 0)
+}
+
+async function reviewCodeCleanWithSkipsParksBecauseNoCoversStamp() {
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    requireReviewCode: true,
+    budgetCheck: async () => ({ ok: true }),
+    reviewCode: async () => ({ gate: 'passed', terminal: 'clean-with-skips', head: 'abc123' }),
+  }))
+
+  assert.strictEqual(out.confidence, 'low')
+  assert.match(out.assumptions[0], /clean-with-skips/)
+}
+
 function helperContractsCoverFailureCollectionAndMutationReconciliation() {
   const failures = collectAppBugFailures({
     records: [
@@ -495,6 +543,8 @@ async function phaseOrderAndGate() {
   await knownDependencyRerunsFailedAndAffectedSubset()
   await dirtyFixLeftoversParkBehindInjectedWorktreeGuard()
   await threeFixBatchesParkIfFailuresRemain()
+  await reviewCodeMutationForcesBrowserRevalidationWithoutConsumingBrowserFixBudget()
+  await reviewCodeCleanWithSkipsParksBecauseNoCoversStamp()
   helperContractsCoverFailureCollectionAndMutationReconciliation()
   await phaseOrderAndGate()
   console.log('OK: test-pilot phase skeleton smokes passed')

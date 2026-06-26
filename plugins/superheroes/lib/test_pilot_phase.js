@@ -176,6 +176,7 @@ async function testPilotPhase(workItem, generation, deps) {
   let combinedAggregated = null
   let rerunScope = null
   let browserRecords = records
+  let stabilizationCycle = 0
   while (true) {
     const budget = await budgetCheck(deps, 'browser-pass', {
       workItem,
@@ -234,7 +235,34 @@ async function testPilotPhase(workItem, generation, deps) {
     combinedAggregated = mergeAggregatedEvidence(combinedAggregated, aggregated)
 
     const evidenceProblem = resultEvidenceProblem(combinedAggregated, records)
-    if (!evidenceProblem) break
+    if (!evidenceProblem) {
+      const stabilization = await stabilizeReviewCode(deps, workItem, context, retryState, combinedAggregated, records)
+      if (!stabilization.ok) {
+        wrote = await writeRetryStatus(deps, workItem, context, retryState, combinedAggregated, records, stabilization.reason)
+        if (!wrote.ok) return low(wrote.reason)
+        return low(stabilization.reason)
+      }
+      if (stabilization.changed) {
+        stabilizationCycle += 1
+        if (stabilizationCycle > 2) {
+          const reason = 'review-code stabilization cycle cap reached'
+          wrote = await writeRetryStatus(deps, workItem, context, retryState, combinedAggregated, records, reason)
+          if (!wrote.ok) return low(wrote.reason)
+          return low(reason)
+        }
+        retryState.currentHead = stabilization.head || retryState.currentHead
+        retryState.reviewStabilizationCycle = stabilizationCycle
+        retryState.reviewCoverageHead = stabilization.reviewCoverageHead || stabilization.head
+        rerunScope = { action: 'rerun_all', reason: 'review-code changed branch' }
+        browserRecords = records
+        combinedAggregated = null
+        continue
+      }
+      retryState.reviewStabilizationCycle = stabilizationCycle
+      retryState.reviewCoverageHead = stabilization.reviewCoverageHead || retryState.currentHead
+      retryState.verifyPassedHead = stabilization.verifyPassedHead || retryState.currentHead
+      break
+    }
 
     const failed = failedBrowserRecords(aggregated)
     if (!failed.length) {
@@ -342,16 +370,17 @@ async function testPilotPhase(workItem, generation, deps) {
     verdict: 'applicable',
     workItem,
     branch: context.branch,
-    head: context.head,
+    head: retryState.currentHead,
     browserEvidenceHead: retryState.browserEvidenceHead,
     records: mergeAllowedSkippedResults(combinedAggregated.records, records),
     fixBatchHistory: retryState.fixBatchHistory,
     browserPasses: retryState.browserPasses,
     artifacts: artifactResult.artifacts,
     prPosting: artifactResult.posting || artifactResult.prPosting,
-    baseline: context.baseline || { head: context.head },
-    review: context.review || { head: context.head },
-    remotePr: context.remotePr || context.remotePR || { head: context.head },
+    baseline: context.baseline || { head: retryState.currentHead },
+    review: context.review || { head: retryState.reviewCoverageHead || retryState.currentHead },
+    verify: context.verify || { result: 'pass', head: retryState.verifyPassedHead || retryState.currentHead },
+    remotePr: context.remotePr || context.remotePR || { head: retryState.currentHead },
   }
   if (combinedAggregated.coverageRationale || plan.coverageRationale) {
     finalStatus.coverageRationale = combinedAggregated.coverageRationale || plan.coverageRationale
@@ -937,10 +966,61 @@ function recordsForRerun(records, rerunScope) {
     .filter((record) => record.steps.length)
 }
 
+async function stabilizeReviewCode(deps, workItem, context, retryState, aggregated, records) {
+  const needsReview = fixBatches(retryState.fixBatchHistory).length > 0 ||
+    (typeof deps.alwaysStabilizeReviewCode === 'function' && deps.alwaysStabilizeReviewCode())
+  if (!needsReview && typeof deps.reviewCode !== 'function') {
+    return { ok: true, changed: false, reviewCoverageHead: retryState.currentHead, verifyPassedHead: retryState.currentHead }
+  }
+  if (!needsReview && deps.requireReviewCode !== true) {
+    return { ok: true, changed: false, reviewCoverageHead: retryState.currentHead, verifyPassedHead: retryState.currentHead }
+  }
+  if (retryState.reviewStabilizationCycle >= 2) {
+    return { ok: false, reason: 'review-code stabilization cycle cap reached' }
+  }
+  if (typeof deps.reviewCode !== 'function') {
+    return { ok: false, reason: 'review-code stabilization leaf unavailable' }
+  }
+  const cycle = (retryState.reviewStabilizationCycle || 0) + 1
+  const before = retryState.currentHead
+  let result
+  try {
+    result = await deps.reviewCode(workItem, {
+      purpose: 'test-pilot-stabilization',
+      worktree: context.worktree,
+      expectedHead: before,
+      runDirSuffix: `test-pilot-${cycle}-${before}`,
+      cycle,
+      browserFixBatchCount: fixBatches(retryState.fixBatchHistory).length,
+      records,
+      aggregated,
+    })
+  } catch (err) {
+    return { ok: false, reason: `review-code stabilization failed: ${message(err)}` }
+  }
+  if (!result || result.ok === false || result.gate === 'changes-requested' ||
+      (result.phaseResult && result.phaseResult.confidence === 'low')) {
+    return { ok: false, reason: (result && (result.reason || (result.phaseResult && result.phaseResult.assumptions && result.phaseResult.assumptions[0]))) || 'review-code stabilization parked' }
+  }
+  if (result.terminal === 'clean-with-skips') {
+    return { ok: false, reason: 'review-code stabilization clean-with-skips produced no covers stamp' }
+  }
+  const after = result.head || result.headAfter || result.currentHead || before
+  const changed = after !== before || result.changed === true || result.mutated === true
+  return {
+    ok: true,
+    changed,
+    head: after,
+    reviewCoverageHead: result.reviewCoverageHead || result.covers || after,
+    verifyPassedHead: result.verifyPassedHead || result.verifyHead || after,
+  }
+}
+
 async function writeRetryStatus(deps, workItem, context, retryState, aggregated, records, reason) {
   return writeStatus(deps, workItem, milestoneStatus(context, workItem, 'browser-retry-parked', {
     planRecords: records,
     fixBatchHistory: retryState.fixBatchHistory,
+    reviewStabilizationCycle: retryState.reviewStabilizationCycle || 0,
     browserEvidenceHead: retryState.browserEvidenceHead,
     lastBrowserResult: aggregated,
     reason,
@@ -1007,4 +1087,5 @@ module.exports = {
   dispatchFixBatch,
   ensureCleanWorktreeAfterFix,
   reconcileCommittedMutations,
+  stabilizeReviewCode,
 }

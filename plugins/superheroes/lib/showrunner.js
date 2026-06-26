@@ -26,15 +26,20 @@ const RECORD_DEFERRED_SCHEMA = { type: 'object', required: ['ok'],
   properties: { ok: {}, extras: {}, parentOrigin: {}, deferred: {} } }   // extras rides onto report.extras
 
 // Build the five caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
-function reviewCodeLeaves(tiers) {
+function reviewCodeLeaves(tiers, opts) {
+  opts = opts || {}
   const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
+  const target = opts.target || {}
+  const targetSuffix = target.worktree || target.head
+    ? `\n\nTarget worktree: ${target.worktree || process.cwd()}\nExpected head: ${target.head || 'current HEAD'}`
+    : ''
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
     const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
     await agent(
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
       `${rubric} rubric, and write your findings array to ` +
-      `${runDir}/round-${round}/findings-${reviewer}.json ([] if nothing to flag).`,
+      `${runDir}/round-${round}/findings-${reviewer}.json ([] if nothing to flag).${targetSuffix}`,
       withModel(model, { label: `${reviewer}:r${round}` }))
     return true
   }
@@ -66,7 +71,7 @@ function reviewCodeLeaves(tiers) {
       `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
       `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
       `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
-      `Blocking findings:\n${JSON.stringify(blockers)}`,
+      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
       withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
     return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
   }
@@ -491,12 +496,21 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
 
 // the review-code phase: drive the shared loop, map its terminal to advance/park, stamp covers on a
 // pure `clean` (X'), and surface the readout at a park. Returns { phaseResult, gate } for runPhases.
-async function reviewCodePhase(workItem) {
-  const runDir = `/tmp/showrunner-${workItem}-review-code`
+async function reviewCodePhase(workItem, opts) {
+  opts = opts || {}
+  const runDir = opts.runDir || `/tmp/showrunner-${workItem}-review-code`
+  if (opts.expectedHead) {
+    const actual = await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
+    if (!actual || actual !== opts.expectedHead) {
+      return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${opts.expectedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
+    }
+  }
   const cfg = await cmdRunner(
     `python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`,
     { schema: CONFIG_SCHEMA })
-  const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {})
+  const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
+    target: { worktree: opts.worktree, head: opts.expectedHead },
+  })
   const verdict = await runReviewCodePanel({
     runDir, context: workItem, rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves,
@@ -510,8 +524,11 @@ async function reviewCodePhase(workItem) {
   // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
   // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
+    const targetArgs = opts.worktree || opts.expectedHead
+      ? ` --worktree ${shq(opts.worktree || process.cwd())}${opts.expectedHead ? ` --head ${shq(opts.expectedHead)}` : ''}`
+      : ''
     const prov = await cmdRunner(
-      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
+      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
       { schema: PROV_SCHEMA })
     if (!prov.ok) {
       // UFR-2: the covers-stamp write failed -> park (low confidence), do NOT assert ship-ready.
@@ -519,6 +536,21 @@ async function reviewCodePhase(workItem) {
     }
   }
   return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
+}
+
+async function resolveHead(worktree, ref) {
+  const cmd = worktree
+    ? `git -C ${shq(worktree)} rev-parse ${shq(ref || 'HEAD')}`
+    : `git rev-parse ${shq(ref || 'HEAD')}`
+  try {
+    const out = await agent(
+      `Run exactly this command and return ONLY its stdout, unchanged:\n\n${cmd}`,
+      { label: 'lib' })
+    const text = String(out || '').trim()
+    return text || null
+  } catch (_) {
+    return null
+  }
 }
 
 // the native "workhorse" build phase (#87) — implement the approved tasks doc task-by-task with a
