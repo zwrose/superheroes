@@ -105,10 +105,13 @@ def ensure_artifacts(pr_number, key, plan_body, results_body, poster=None,
                 "artifacts": {"plan": "pr-comment", "results": "pr-comment"}}
     fallback = {}
     try:
-        fallback["plan"] = fallback_writer.write_fallback(
-            plans_dir, key, "plan", plan_body)
-        fallback["results"] = fallback_writer.write_fallback(
-            plans_dir, key, "results", results_body)
+        for family, body in (("plan", plan_body), ("results", results_body)):
+            path = fallback_writer.write_fallback(plans_dir, key, family, body)
+            if path is None and hasattr(fallback_writer, "fallback_path"):
+                path = fallback_writer.fallback_path(plans_dir, key, family)
+            if not path:
+                raise RuntimeError("%s fallback path missing after write" % family)
+            fallback[family] = path
     except Exception as exc:
         return {"action": "park",
                 "reason": "PR posting failed and fallback artifacts failed: %s" % exc,

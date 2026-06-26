@@ -55,9 +55,11 @@ def test_dev_server_blank_profile_command_falls_through(tmp_path):
     assert r["source"] == "package.json" and r["command"] == "npm run dev"
 
 
-def test_dev_server_package_unsafe_script_name_has_no_argv(tmp_path):
+def test_dev_server_package_unsafe_script_name_has_no_argv(tmp_path, monkeypatch):
+    monkeypatch.setattr(detect, "_DEV_SCRIPT_PREFERENCE", ("dev;bad",))
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"dev;bad": "vite"}}))
     r = detect.detect_dev_server(str(tmp_path), profile=None)
 
-    assert r["source"] == "none"
-    assert r["command"] is None
+    assert r["source"] == "package.json"
+    assert r["command"] == "npm run dev;bad"
+    assert "argv" not in r

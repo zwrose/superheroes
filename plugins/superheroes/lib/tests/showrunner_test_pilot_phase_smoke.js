@@ -105,6 +105,45 @@ async function productionWrapperHandlesNotApplicableWithoutMissingLeaf() {
   }
 }
 
+async function productionManagedServerUsesLifecycleHelperAroundBrowserRun() {
+  const previousAgent = global.agent
+  const commands = []
+  let browserRan = false
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_server_config_cli.py launch')) {
+      commands.push('launch')
+      return {
+        verdict: 'managed',
+        shell: false,
+        baseUrl: 'http://localhost:3000',
+        allowedOrigins: ['http://localhost:3000'],
+        handle: { pid: 123, port: 3000 },
+      }
+    }
+    if (prompt.includes('test_pilot_server_config_cli.py finish')) {
+      commands.push('finish')
+      return { source: 'browser', steps: [{ id: 's1', status: 'passed' }] }
+    }
+    return previousAgent(prompt)
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    const out = await deps.withManagedServer(
+      { verdict: 'managed', shell: false, baseUrl: 'http://localhost:3000', allowedOrigins: ['http://localhost:3000'] },
+      async (activeServer) => {
+        browserRan = true
+        assert.strictEqual(activeServer.handle.pid, 123)
+        return { source: 'browser', steps: [{ id: 's1', status: 'passed' }] }
+      },
+    )
+    assert.deepStrictEqual(commands, ['launch', 'finish'])
+    assert.strictEqual(browserRan, true)
+    assert.strictEqual(out.source, 'browser')
+  } finally {
+    global.agent = previousAgent
+  }
+}
+
 async function uncertainApplicabilityParks() {
   const out = await testPilotPhase('wi', 3, {
     resolveContext: async () => baseContext(),
@@ -585,6 +624,7 @@ async function phaseOrderAndGate() {
 ;(async () => {
   await notApplicableProceeds()
   await productionWrapperHandlesNotApplicableWithoutMissingLeaf()
+  await productionManagedServerUsesLifecycleHelperAroundBrowserRun()
   await uncertainApplicabilityParks()
   await emptyApplicablePlanParks()
   await missingSetupParksBeforeBrowser()

@@ -26,6 +26,8 @@ class FakeEngine:
         assert allow_protected is False
         self.calls.append(("apply", record["branch"], dry_run, allow_protected))
         key = "apply_dry_run" if dry_run else "apply"
+        if self.fail.get("%s_branch" % key) == record["branch"]:
+            raise ValueError("%s failed for %s" % (key, record["branch"]))
         if self.fail.get(key):
             raise ValueError(self.fail[key])
         if not dry_run and not self.preserve_status_after_apply:
@@ -43,6 +45,8 @@ class FakeEngine:
     def clean(self, record, *, allow_protected=False):
         assert allow_protected is False
         self.calls.append(("clean", record["branch"], allow_protected))
+        if self.fail.get("clean_branch") == record["branch"]:
+            raise ValueError("clean failed for %s" % record["branch"])
         if self.fail.get("clean"):
             raise ValueError(self.fail["clean"])
         return {"ok": True, "key": "feat%2Fx", "cleaned": ["scenario-a"]}
@@ -68,6 +72,12 @@ def _record():
         "steps": [{"id": "step-1", "instruction": "Open page",
                    "expected": "Dashboard loads", "scenarioIds": ["scenario-a"]}],
     }
+
+
+def _record_for(branch):
+    record = _record()
+    record["branch"] = branch
+    return record
 
 
 def test_prepare_validates_and_dry_runs_before_apply_and_browser():
@@ -111,6 +121,15 @@ def test_prepare_parks_on_partial_apply_failure():
         ("apply", "feat/x", True, False),
         ("apply", "feat/x", False, False),
     ]
+
+
+def test_prepare_cleans_successfully_applied_records_when_later_apply_fails():
+    engine = FakeEngine(fail={"apply_branch": "feat/y"})
+    result = seed.prepare_records([_record_for("feat/x"), _record_for("feat/y")], engine)
+
+    assert result["action"] == "park"
+    assert "apply failed" in result["reason"]
+    assert ("clean", "feat/x", False) in engine.calls
 
 
 def test_prepare_parks_on_live_lock():
@@ -170,3 +189,21 @@ def test_restore_baseline_parks_on_clean_failure():
     result = seed.restore_baseline([_record()], engine)
     assert result["action"] == "park"
     assert "clean failed" in result["reason"]
+
+
+def test_restore_baseline_recleans_successfully_cleaned_records_when_later_clean_fails():
+    engine = FakeEngine(fail={"clean_branch": "feat/y"})
+    result = seed.restore_baseline([_record_for("feat/x"), _record_for("feat/y")], engine)
+
+    assert result["action"] == "park"
+    assert "clean failed" in result["reason"]
+    assert engine.calls.count(("clean", "feat/x", False)) == 2
+
+
+def test_restore_baseline_recleans_successfully_applied_records_when_reapply_fails():
+    engine = FakeEngine(fail={"apply_branch": "feat/y"})
+    result = seed.restore_baseline([_record_for("feat/x"), _record_for("feat/y")], engine)
+
+    assert result["action"] == "park"
+    assert "apply failed" in result["reason"]
+    assert engine.calls.count(("clean", "feat/x", False)) == 2

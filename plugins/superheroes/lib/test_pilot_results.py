@@ -61,12 +61,22 @@ def aggregate_browser_results(raw_results, scrubber=None, byte_limits=None):
         if problem:
             return _park(problem)
         step_id = step.get("id") or step.get("stepId") or step.get("step_id")
-        records.append({
+        record = {
             "stepId": str(step_id),
             "status": step.get("status") or step.get("result") or "unknown",
             "notes": notes,
             "browserExecuted": True,
-        })
+        }
+        failure_type = step.get("failureType") or step.get("failure_type") or step.get("kind")
+        if failure_type is not None:
+            record["failureType"] = str(failure_type)
+        for field in ("summary", "message"):
+            if step.get(field):
+                text, problem = _scrub(step.get(field), scrubber, diagnostic_limit)
+                if problem:
+                    return _park(problem)
+                record[field] = text
+        records.append(record)
     result = {
         "action": "aggregated",
         "source": _source(raw_results),

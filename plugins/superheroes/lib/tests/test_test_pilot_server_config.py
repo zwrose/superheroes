@@ -5,6 +5,7 @@ import sys
 import pytest
 
 import test_pilot_server_config as cfg
+import test_pilot_server_config_cli as cli
 
 
 def test_profile_argv_resolves_to_managed_context():
@@ -186,3 +187,53 @@ def test_cli_resolve_prints_server_context_json(tmp_path):
     result = json.loads(proc.stdout)
     assert result["verdict"] == "managed"
     assert result["command"] == ["npm", "run", "dev"]
+
+
+def test_cli_launch_and_finish_expose_lifecycle_helper_json(tmp_path, monkeypatch, capsys):
+    context = tmp_path / "context.json"
+    outcome = tmp_path / "outcome.json"
+    context.write_text(json.dumps({
+        "verdict": "managed",
+        "workItem": "issue-90",
+        "baseUrl": "http://localhost:3000",
+        "readinessUrl": "http://localhost:3000/",
+        "port": 3000,
+        "command": ["npm", "run", "dev"],
+        "shell": False,
+    }))
+    outcome.write_text(json.dumps({"source": "browser", "steps": [{"id": "s1", "status": "passed"}]}))
+
+    monkeypatch.setattr(cfg.devserver, "start", lambda *a, **k: {
+        "pid": 123,
+        "port": 3000,
+        "command": ["npm", "run", "dev"],
+        "_proc": object(),
+    })
+    monkeypatch.setattr(cfg.devserver, "poll_healthy", lambda *a, **k: True)
+    torn_down = []
+    monkeypatch.setattr(cfg.devserver, "teardown", torn_down.append)
+
+    assert cli.main([
+        "test_pilot_server_config_cli.py",
+        "launch",
+        "--context-json",
+        str(context),
+    ]) == 0
+    launched = json.loads(capsys.readouterr().out)
+    launched_path = tmp_path / "launched.json"
+    launched_path.write_text(json.dumps(launched))
+
+    assert cli.main([
+        "test_pilot_server_config_cli.py",
+        "finish",
+        "--context-json",
+        str(launched_path),
+        "--outcome-json",
+        str(outcome),
+    ]) == 0
+    finished = json.loads(capsys.readouterr().out)
+
+    assert launched["handle"]["pid"] == 123
+    assert "_proc" not in launched["handle"]
+    assert finished["source"] == "browser"
+    assert torn_down == [{"pid": 123, "port": 3000, "command": ["npm", "run", "dev"]}]

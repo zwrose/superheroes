@@ -195,6 +195,14 @@ def _dry_run(records, engine):
     return None
 
 
+def _clean_compensation(records, engine):
+    for record in reversed(records):
+        try:
+            engine.clean(record, allow_protected=False)
+        except Exception:
+            pass
+
+
 def prepare_records(records, engine=None, budget=None):
     """Validate, dry-run, apply, and verify seed data before browser execution."""
     engine = engine or EngineAdapter()
@@ -216,10 +224,13 @@ def prepare_records(records, engine=None, budget=None):
     problem = _dry_run(records, engine)
     if problem:
         return problem
+    applied = []
     for record in records:
         try:
             engine.apply(record, dry_run=False, allow_protected=False)
+            applied.append(record)
         except Exception as exc:
+            _clean_compensation(applied, engine)
             msg = str(exc).replace("-", " ")
             if "protected target refusal" in msg.lower():
                 return _park("protected target refusal: %s" % exc)
@@ -251,18 +262,24 @@ def restore_baseline(records, engine=None, budget=None):
     problem = _dry_run(records, engine)
     if problem:
         return problem
+    cleaned = []
     for record in records:
         try:
             engine.clean(record, allow_protected=False)
+            cleaned.append(record)
         except Exception as exc:
+            _clean_compensation(cleaned, engine)
             msg = str(exc).replace("-", " ")
             if "protected target refusal" in msg.lower():
                 return _park("clean failed: protected target refusal: %s" % exc)
             return _park("clean failed: %s" % exc)
+    applied = []
     for record in records:
         try:
             engine.apply(record, dry_run=False, allow_protected=False)
+            applied.append(record)
         except Exception as exc:
+            _clean_compensation(applied, engine)
             return _park("apply failed: %s" % exc)
     verified = _verify_seeded(records, engine)
     if verified.get("action") == "verified":

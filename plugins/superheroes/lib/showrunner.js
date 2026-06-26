@@ -518,12 +518,31 @@ print(json.dumps(ctx))
     },
 
     withManagedServer: async (serverContext, run) => {
-      const out = await agent(
-        `Start this managed dev server with argv and shell=false, wait until ready, run the provided browser task, ` +
-        `and tear it down on every terminal path. Server context JSON: ${JSON.stringify(serverContext)}. ` +
-        `Return ONLY the browser task JSON.`,
-        { label: 'test-pilot-server', schema: { type: 'object' } })
-      return out || run(serverContext)
+      const launchPath = writeJson('server-launch-context', serverContext)
+      const launched = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py launch ` +
+        `--context-json ${shq(launchPath)}`,
+        { type: 'object' })
+      if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
+        return launched
+      }
+      try {
+        const outcome = await run(launched)
+        const contextPath = writeJson('server-finish-context', launched)
+        const outcomePath = writeJson('server-finish-outcome', outcome || {})
+        return cli(
+          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
+          { type: 'object' })
+      } catch (err) {
+        const contextPath = writeJson('server-finish-context', launched)
+        const outcomePath = writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
+        await cli(
+          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
+          { type: 'object' })
+        throw err
+      }
     },
 
     seedRecords: async (records) => {

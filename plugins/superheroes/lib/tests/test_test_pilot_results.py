@@ -27,6 +27,24 @@ def test_aggregate_accepts_browser_evidence_and_scrubs_byte_capped_diagnostics()
     assert result["coverageRationale"] == "Exercises the user-visible save path"
 
 
+def test_aggregate_preserves_browser_failure_classification_and_summary():
+    raw = dict(_raw(), steps=[{
+        "id": "step-2",
+        "status": "failed",
+        "failureType": "test_bug",
+        "summary": "Selector changed",
+        "message": "Expected save button to exist",
+        "notes": "No app regression observed",
+    }])
+
+    result = results.aggregate_browser_results(raw, lambda s: s, {"diagnostics": 2000})
+
+    record = result["records"][0]
+    assert record["failureType"] == "test_bug"
+    assert record["summary"] == "Selector changed"
+    assert record["message"] == "Expected save button to exist"
+
+
 @pytest.mark.parametrize("source", ["synthetic", "unit", None])
 def test_aggregate_rejects_synthetic_or_non_browser_evidence(source):
     raw = dict(_raw(), source=source)

@@ -115,6 +115,28 @@ def test_ensure_artifacts_writes_both_fallbacks_if_either_post_fails():
     assert result["fallback"]["results"]
 
 
+def test_ensure_artifacts_default_fallback_reports_written_paths(monkeypatch):
+    poster = Poster(fail_family="results")
+    writes = []
+
+    def write_fallback(plans_dir, key, family, body):
+        writes.append((plans_dir, key, family, body))
+
+    monkeypatch.setattr(artifacts.pr_comment, "write_fallback", write_fallback)
+    monkeypatch.setattr(
+        artifacts.pr_comment,
+        "fallback_path",
+        lambda plans_dir, key, family: "/tmp/%s.%s.md" % (key, family),
+    )
+
+    result = artifacts.ensure_artifacts(90, "feat%2Fx", "plan", "results",
+                                        poster=poster)
+
+    assert {write[2] for write in writes} == {"plan", "results"}
+    assert result["artifacts"]["plan"] == "/tmp/feat%2Fx.plan.md"
+    assert result["artifacts"]["results"] == "/tmp/feat%2Fx.results.md"
+
+
 def test_ensure_artifacts_parks_when_post_and_required_fallback_fail():
     poster = Poster(fail_family="plan")
 
