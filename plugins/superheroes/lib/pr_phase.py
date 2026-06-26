@@ -15,3 +15,12 @@ def mark_ready_action(pr):
     if draft is False:
         return "skip"
     return "gate"          # isDraft missing / None / non-bool -> fail closed, never flip blind
+
+
+def mark_ready_status_action(status_result):
+    """Gate mark-ready on the durable test-pilot readiness result."""
+    if not isinstance(status_result, dict):
+        return {"action": "gate", "reason": "test-pilot status unreadable"}
+    if status_result.get("ok") is True:
+        return {"action": "proceed"}
+    return {"action": "gate", "reason": status_result.get("reason") or "test-pilot status not ready"}
