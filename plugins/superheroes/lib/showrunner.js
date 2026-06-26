@@ -2,6 +2,7 @@
 // Control-flow-only native Workflow (the #86 review_panel_shell.js posture): the script
 // forwards decisions; every judgement is a pure Python decider or a #86 shell.
 const { reviewPanel } = require('./review_panel_shell.js')
+const { testPilotPhase } = require('./test_pilot_phase.js')
 
 const REVIEW_CODE_REVIEWERS = [
   'architecture-reviewer', 'code-reviewer', 'security-reviewer',
@@ -395,7 +396,7 @@ function gateReadFor(workItem) {
 }
 
 const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'workhorse',
-                'review-code', 'draft-PR', 'mark-ready', 'ship']
+                'review-code', 'draft-PR', 'test-pilot', 'mark-ready', 'ship']
 
 const DECIDE_SCHEMA = {
   type: 'object', required: ['action'],
@@ -442,6 +443,8 @@ async function runPhases(workItem, fromStep, deps) {
       phaseResult = await (deps.build || buildPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'draft-PR') {
       const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+    } else if (phase === 'test-pilot') {
+      phaseResult = await (deps.testPilot || testPilotPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'mark-ready') {
       const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
@@ -571,6 +574,7 @@ async function markReadyPhase(workItem) {
 module.exports.recordCursor = recordCursor
 module.exports.draftPRPhase = draftPRPhase
 module.exports.markReadyPhase = markReadyPhase
+module.exports.testPilotPhase = testPilotPhase
 
 async function shipPhase(workItem, pr) {
   // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date

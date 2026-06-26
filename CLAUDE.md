@@ -77,7 +77,8 @@ Every PR and push to `main` runs `.github/workflows/ci.yml`:
 4. `pytest` over plugin lib/eval tests + the band-level eval harness — scripts
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
    `eval/lib/` (identifier reference impls, artifact schemas, and the
-   activation-result CI gate). Schema tests need `jsonschema`.
+   activation-result CI gate). The plugin lib tests include a pytest wrapper that
+   runs the showrunner Node smoke tests. Schema tests need `jsonschema`.
 
 Run all steps locally before pushing:
 

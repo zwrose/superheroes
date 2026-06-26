@@ -49,6 +49,7 @@ jobs:
         # Single pytest process is safe: the four plugins merged into one superheroes
         # plugin lib tree (no shared module basenames), and eval/lib/identifiers.py was
         # removed, so the historical sys.path collision is resolved.
+        # The superheroes lib tests include a pytest wrapper for showrunner Node smokes.
         run: |
           python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
 
