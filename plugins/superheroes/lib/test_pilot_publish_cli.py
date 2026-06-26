@@ -16,10 +16,20 @@ def main(argv):
     publish.add_argument("--work-item", required=True)
     publish.add_argument("--head", required=True)
     publish.add_argument("--status-json", required=True)
+    publish.add_argument("--expected-branch")
+    publish.add_argument("--store")
+    publish.add_argument("--generation", type=int)
     args = ap.parse_args(argv[1:])
 
     if args.cmd == "publish":
-        result = test_pilot_publish.publish(args.work_item, args.head, args.status_json)
+        result = test_pilot_publish.publish(
+            args.work_item,
+            args.head,
+            args.status_json,
+            expected_branch=args.expected_branch,
+            store=args.store,
+            generation=args.generation,
+        )
         sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
         return 0
     return 2

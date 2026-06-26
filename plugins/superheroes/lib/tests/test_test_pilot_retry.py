@@ -47,6 +47,16 @@ def test_app_bug_failures_are_collected_into_one_fix_batch():
     assert "settings-save" in result["summary"]
 
 
+def test_records_payload_failures_are_collected_into_fix_batch():
+    result = retry.decide(
+        {"records": [{"stepId": "login-submit", "status": "failed", "failureType": "app_bug"}]},
+        history=[],
+    )
+
+    assert result["action"] == "fix_batch"
+    assert result["failedStepIds"] == ["login-submit"]
+
+
 def test_after_three_fix_batches_remaining_failed_step_parks():
     history = [_batch("a"), _batch("b"), _batch("c")]
     result = retry.decide(_pass_result(_failed("login-submit")), history=history)

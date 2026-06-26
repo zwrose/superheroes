@@ -43,7 +43,7 @@
     "lastGoodStep": { "type": ["integer", "null"], "minimum": 0 },
     "lastGoodPhase": {
       "type": ["string", "null"],
-      "enum": [null, "plan", "review-plan", "tasks", "review-tasks", "workhorse", "review-code", "draft-PR", "mark-ready", "ship"]
+      "enum": [null, "plan", "review-plan", "tasks", "review-tasks", "workhorse", "review-code", "draft-PR", "test-pilot", "mark-ready", "ship"]
     },
     "updatedAt": { "type": "string" }
   }

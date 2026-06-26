@@ -85,6 +85,26 @@ async function notApplicableProceeds() {
   assert.strictEqual(statuses[0].head, 'abc123')
 }
 
+async function productionWrapperHandlesNotApplicableWithoutMissingLeaf() {
+  const previousAgent = global.agent
+  global.agent = async (prompt) => {
+    if (prompt.includes('python3 -c') && prompt.includes('detect.detect_dev_server')) {
+      return baseContext({ workItem: 'wi', generation: 3, pr: { number: 7 }, diff: { files: ['docs/readme.md'] }, detectors: {} })
+    }
+    if (prompt.includes('test_pilot_applicability_cli.py decide')) {
+      return { verdict: 'not_applicable', rationale: 'docs-only change' }
+    }
+    if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
+    return previousAgent(prompt)
+  }
+  try {
+    const out = await sr.defaultTestPilotPhase('wi', 3)
+    assert.strictEqual(out.confidence, 'high')
+  } finally {
+    global.agent = previousAgent
+  }
+}
+
 async function uncertainApplicabilityParks() {
   const out = await testPilotPhase('wi', 3, {
     resolveContext: async () => baseContext(),
@@ -564,6 +584,7 @@ async function phaseOrderAndGate() {
 
 ;(async () => {
   await notApplicableProceeds()
+  await productionWrapperHandlesNotApplicableWithoutMissingLeaf()
   await uncertainApplicabilityParks()
   await emptyApplicablePlanParks()
   await missingSetupParksBeforeBrowser()

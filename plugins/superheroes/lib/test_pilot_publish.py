@@ -20,11 +20,22 @@ def _read_status(path):
     return data
 
 
-def _default_push(branch, force=False):
+def _default_local_head():
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _default_push(branch, force=False, head=None):
     if force:
         return False
+    src = head or "HEAD"
     result = subprocess.run(
-        ["git", "push", "origin", "HEAD:%s" % branch],
+        ["git", "push", "origin", "%s:refs/heads/%s" % (src, branch)],
         capture_output=True,
         text=True,
         timeout=60,
@@ -55,18 +66,35 @@ def _generation(status):
 
 
 def publish(work_item, head, status_json, *, renew=None, fence_ok=None, push=None,
-            read_pr_head=None, write_status=None):
+            read_pr_head=None, write_status=None, local_head=None,
+            expected_branch=None, store=None, generation=None,
+            protected_branches=None):
     """Publish the tested head to the existing PR branch and mark status ready last."""
     try:
         status = _read_status(status_json)
     except (OSError, ValueError) as exc:
         return _park("malformed status JSON: %s" % exc)
 
-    branch = status.get("branch")
-    store = status.get("store") or control_plane.ensure_store(os.getcwd())
-    generation = _generation(status)
+    branch = expected_branch or status.get("branch")
+    if expected_branch and status.get("branch") != expected_branch:
+        return _park("status branch does not match trusted PR branch")
+    status_store = status.get("store")
+    if store and status_store and os.path.realpath(str(status_store)) != os.path.realpath(str(store)):
+        return _park("status store does not match trusted control-plane store")
+    if not store:
+        store = control_plane.ensure_store(os.getcwd())
+    status_generation = _generation(status)
+    if generation is None:
+        generation = status_generation
+    elif not isinstance(generation, int) or generation <= 0:
+        return _park("trusted lock generation is missing or invalid")
+    elif status_generation is not None and generation != status_generation:
+        return _park("status lock generation does not match trusted generation")
     if not isinstance(branch, str) or not branch.strip():
         return _park("branch missing from status JSON")
+    protected = set(protected_branches or ["main", "master"])
+    if branch in protected:
+        return _park("refusing to publish test-pilot head to protected/default branch")
     if not store:
         return _park("control-plane store unavailable")
     if generation is None:
@@ -77,6 +105,11 @@ def publish(work_item, head, status_json, *, renew=None, fence_ok=None, push=Non
     push = push or _default_push
     read_pr_head = read_pr_head or _default_read_pr_head
     write_status = write_status or _default_write_status
+    local_head = local_head or _default_local_head
+
+    current = local_head() if callable(local_head) else local_head
+    if current != head:
+        return _park("local HEAD does not equal final tested head")
 
     if not renew(store, work_item, generation):
         return _park("lease renewal failed before publish")
@@ -87,7 +120,7 @@ def publish(work_item, head, status_json, *, renew=None, fence_ok=None, push=Non
     if not before:
         return _park("existing PR branch is required before publish")
 
-    if not push(branch, force=False):
+    if not push(branch, force=False, head=head):
         return _park("non-force push to PR branch failed")
 
     remote_head = read_pr_head(branch)

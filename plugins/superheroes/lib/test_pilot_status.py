@@ -102,6 +102,8 @@ def _fallback_present(artifacts):
     fallback = artifacts.get("fallback") or artifacts.get("fallbacks")
     if isinstance(fallback, list) and fallback:
         return True
+    if isinstance(fallback, dict) and fallback.get("plan") and fallback.get("results"):
+        return True
     return bool(artifacts.get("fallbackPlan") and artifacts.get("fallbackResults"))
 
 

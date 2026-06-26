@@ -123,6 +123,12 @@ def scrub(text):
 
 
 def fallback_path(plans_dir, key, family):
+    if family not in MARKER_FAMILIES:
+        raise ValueError(f"unknown marker family {family!r}")
+    if not _valid_marker_key(key):
+        raise ValueError(
+            f"fallback key {key!r} is not a sanitized artifact key; derive it "
+            f"with store.artifact_key()")
     suffix = ".results.md" if family == "results" else ".md"
     return os.path.join(plans_dir, f"{key}{suffix}")
 

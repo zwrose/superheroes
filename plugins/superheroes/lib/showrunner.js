@@ -323,6 +323,7 @@ async function frontHalfBoundary(workItem) {
 module.exports.frontHalfBoundary = frontHalfBoundary
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
+function safeRunKey(s) { return String(s).replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 120) || 'target' }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
 async function cmdRunner(cmd, { schema }) {
@@ -417,6 +418,210 @@ async function phaseStep(phaseResult, gate) {
   )
 }
 
+async function defaultTestPilotPhase(workItem, generation) {
+  return testPilotPhase(workItem, generation, testPilotDeps(workItem, generation))
+}
+
+function testPilotDeps(workItem, generation) {
+  const fs = require('fs')
+  const path = require('path')
+  const os = require('os')
+  const runDir = path.join(os.tmpdir(), `showrunner-${workItem}-test-pilot`)
+  fs.mkdirSync(runDir, { recursive: true })
+  const writeJson = (name, value) => {
+    const p = path.join(runDir, `${name}.json`)
+    fs.writeFileSync(p, JSON.stringify(value || {}))
+    return p
+  }
+  const jsonCommand = (cmd, schema) => cmdRunner(cmd, { schema: schema || { type: 'object' } })
+  const cli = (cmd, schema) => jsonCommand(cmd, schema || { type: 'object' })
+  const keyFor = (branch) => encodeURIComponent(branch || workItem).replace(/~/g, '%7E')
+
+  return {
+    resolveContext: async () => cli(
+      `python3 -c ${shq(`
+import json, os, subprocess, sys, urllib.parse
+sys.path.insert(0, 'plugins/superheroes/lib')
+import checkpoint, control_plane, detect, engine, store
+def git(*args):
+    r = subprocess.run(['git', *args], capture_output=True, text=True, timeout=10)
+    return r.stdout.strip() if r.returncode == 0 else ''
+paths = control_plane.paths(os.getcwd(), ${JSON.stringify(workItem)})
+cp = checkpoint.read(paths['checkpoint']) or {}
+root = git('rev-parse', '--show-toplevel') or os.getcwd()
+head = git('rev-parse', 'HEAD')
+branch = cp.get('branch') or git('rev-parse', '--abbrev-ref', 'HEAD')
+res = store.resolve(os.getcwd(), store.store_root())
+trusted_store = control_plane.ensure_store(root)
+profile = {}
+profile_error = None
+if res.get('profile'):
+    try:
+        profile = engine.load_profile_config(res['profile'])
+    except Exception as exc:
+        profile_error = str(exc)
+base = profile.get('baseUrl') or profile.get('base_url')
+allowed = profile.get('allowedOrigins') or profile.get('allowed_origins') or ([base] if base else [])
+browser_tools = profile.get('browserTools') or profile.get('browser_tools') or profile.get('browserTool')
+files = subprocess.run(['git', 'diff', '--name-only', 'main...HEAD'], capture_output=True, text=True, timeout=20)
+changed = [line for line in files.stdout.splitlines() if line]
+ctx = {
+  'workItem': ${JSON.stringify(workItem)}, 'generation': ${JSON.stringify(generation)},
+  'worktree': root, 'branch': branch, 'head': head, 'pr': cp.get('pr'), 'store': trusted_store,
+  'profile': profile or None, 'profileError': profile_error,
+  'baseUrl': base, 'allowedOrigins': allowed,
+  'browserTool': {'source': 'profile', 'tools': browser_tools} if browser_tools else None,
+  'diff': {'files': changed},
+  'detectors': detect.detect_dev_server(root, profile),
+}
+print(json.dumps(ctx))
+`)}`,
+      { type: 'object' }),
+
+    decideApplicability: async (context) => {
+      const diff = writeJson('applicability-diff', context.diff || {})
+      const detectors = writeJson('applicability-detectors', context.detectors || {})
+      const profile = writeJson('applicability-profile', context.profile || {})
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_applicability_cli.py decide ` +
+        `--diff-json ${shq(diff)} --detectors-json ${shq(detectors)} --profile-json ${shq(profile)}`,
+        { type: 'object', required: ['verdict'] })
+    },
+
+    derivePlan: async (context) => agent(
+      `You are the test-pilot plan leaf for work-item ${workItem}. Derive a browser test plan for ` +
+      `the current branch head ${context.head}. Return ONLY JSON ` +
+      `{"records":[{"branch":${JSON.stringify(context.branch)},"steps":[{"id","instruction","expected","scenarioIds":[]}]}],` +
+      `"coverageRationale":"..."}. Use concise stable step ids; include scenarioIds when seed scenarios are needed.`,
+      { label: 'test-pilot-plan', schema: { type: 'object', required: ['records'], properties: { records: { type: 'array' } } } }),
+
+    preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records || [] }),
+
+    prepareArtifacts: async ({ plan, records, context }) => {
+      const pr = context.pr && context.pr.number
+      if (!pr) return { action: 'park', reason: 'test-pilot artifacts require a draft PR number' }
+      const planPath = writeJson('plan-artifact', { key: keyFor(context.branch), records })
+      const resultsPath = writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(context.branch))}`,
+        { type: 'object' })
+    },
+
+    resolveServer: async (context) => {
+      const profile = writeJson('server-profile', context.profile || {})
+      const detection = writeJson('server-detection', context.detectors || {})
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py resolve ` +
+        `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
+        { type: 'object' })
+    },
+
+    withManagedServer: async (serverContext, run) => {
+      const out = await agent(
+        `Start this managed dev server with argv and shell=false, wait until ready, run the provided browser task, ` +
+        `and tear it down on every terminal path. Server context JSON: ${JSON.stringify(serverContext)}. ` +
+        `Return ONLY the browser task JSON.`,
+        { label: 'test-pilot-server', schema: { type: 'object' } })
+      return out || run(serverContext)
+    },
+
+    seedRecords: async (records) => {
+      const recordsPath = writeJson('seed-records', records)
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py prepare --records-json ${shq(recordsPath)}`,
+        { type: 'object' })
+    },
+
+    runBrowserPass: async (browserContext) => agent(
+      `Run the test-pilot browser pass for work-item ${workItem}. Stay within baseUrl/allowedOrigins and return ONLY JSON ` +
+      `{"source":"browser","baseUrl":${JSON.stringify(browserContext.baseUrl)},"steps":[{"id","status","notes","browserExecuted":true,"failureType"?,"summary"?}]}. ` +
+      `Browser context: ${JSON.stringify(browserContext)}`,
+      { label: 'test-pilot-browser', schema: { type: 'object' } }),
+
+    aggregateResults: async (rawResults) => {
+      const raw = writeJson('browser-raw', rawResults)
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_results_cli.py aggregate --raw-json ${shq(raw)}`,
+        { type: 'object' })
+    },
+
+    budgetCheck: async (_phase, payload) => {
+      const counts = writeJson('budget-counts', payload && payload.counts ? payload.counts : {
+        browserPasses: payload && payload.rerunScope ? 1 : 0,
+        browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
+      })
+      const out = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_budget_cli.py decide --counts-json ${shq(counts)}`,
+        { type: 'object' })
+      return out.action === 'within_budget' ? { ok: true } : { ok: false, reason: out.reason || 'test-pilot budget exceeded' }
+    },
+
+    retryDecide: async (passResult, history, changedFiles, dependencyMap) => {
+      const passPath = writeJson('retry-pass', passResult)
+      const histPath = writeJson('retry-history', history || [])
+      const depPath = dependencyMap ? writeJson('retry-deps', dependencyMap) : null
+      const changed = (changedFiles || []).map((f) => ` --changed-file ${shq(f)}`).join('')
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_retry_cli.py decide --pass-json ${shq(passPath)} ` +
+        `--history-json ${shq(histPath)}${changed}${depPath ? ` --dependency-json ${shq(depPath)}` : ''}`,
+        { type: 'object' })
+    },
+
+    dispatchFixBatch: async (failures, details) => agent(
+      `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
+      `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
+      `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
+      { label: 'test-pilot-fixer', schema: { type: 'object' } }),
+
+    reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
+      runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
+    })),
+
+    restoreBaseline: async (records, details) => {
+      const recordsPath = writeJson('restore-records', records)
+      const out = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py restore-baseline --records-json ${shq(recordsPath)}`,
+        { type: 'object' })
+      if (out.action === 'park' || out.ok === false) return out
+      return Object.assign({}, out, { baseline: { head: details.head, restored: true, status: out.status } })
+    },
+
+    ensureFinalArtifacts: async (payload) => {
+      const pr = payload.context.pr && payload.context.pr.number
+      if (!pr) return { action: 'park', reason: 'final results artifact requires a PR number' }
+      const planPath = writeJson('final-plan-artifact', { key: keyFor(payload.context.branch), records: payload.records })
+      const resultsPath = writeJson('final-results-artifact', Object.assign({ key: keyFor(payload.context.branch) }, payload.aggregated || {}))
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(payload.context.branch))}`,
+        { type: 'object' })
+    },
+
+    publishReady: async (_wi, head, payload) => {
+      const statusPath = writeJson('publish-status', {
+        branch: payload.context.branch,
+        store: payload.context.store,
+        generation,
+      })
+      const storeArg = payload.context.store ? ` --store ${shq(payload.context.store)}` : ''
+      const generationArg = generation ? ` --generation ${shq(String(generation))}` : ''
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_publish_cli.py publish --work-item ${shq(workItem)} ` +
+        `--head ${shq(head)} --status-json ${shq(statusPath)} --expected-branch ${shq(payload.context.branch)} ` +
+        `${storeArg}${generationArg}`,
+        { type: 'object' })
+    },
+
+    writeStatus: async (status) => {
+      const statusPath = writeJson('status-write', status)
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
+        { type: 'object', required: ['ok'] })
+    },
+  }
+}
+
 // returns { ok } — a false ok means journal_entry caught a DurableWriteError (UFR-2).
 async function appendPhaseRecord(workItem, phase, gate, phaseResult) {
   const payload = shq(JSON.stringify({ phase, gate,
@@ -449,7 +654,7 @@ async function runPhases(workItem, fromStep, deps) {
     } else if (phase === 'draft-PR') {
       const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if (phase === 'test-pilot') {
-      phaseResult = await (deps.testPilot || testPilotPhase)(workItem, deps.generation); gate = null
+      phaseResult = await (deps.testPilot || defaultTestPilotPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'mark-ready') {
       const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
@@ -498,7 +703,10 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
 // pure `clean` (X'), and surface the readout at a park. Returns { phaseResult, gate } for runPhases.
 async function reviewCodePhase(workItem, opts) {
   opts = opts || {}
-  const runDir = opts.runDir || `/tmp/showrunner-${workItem}-review-code`
+  const runDir = opts.runDir || (opts.runDirSuffix
+    ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
+    : `/tmp/showrunner-${workItem}-review-code`)
+  const initialHead = opts.expectedHead || null
   if (opts.expectedHead) {
     const actual = await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
     if (!actual || actual !== opts.expectedHead) {
@@ -516,16 +724,22 @@ async function reviewCodePhase(workItem, opts) {
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
+  const finalHead = opts.expectedHead
+    ? await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
+    : null
+  if (opts.expectedHead && !finalHead) {
+    return { phaseResult: { confidence: 'low', assumptions: ['review-code final target head could not be resolved'] }, gate: 'changes-requested', terminal, head: null, changed: false }
+  }
   // #104's advance/park mapping, read off the terminal (plan Key decision 2).
   if (!ADVANCE_TERMINALS.has(terminal)) {
     await renderAndPostReadout(workItem, runDir, verdict)   // names parentOrigin at the review-phase park
-    return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested' }
+    return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
   }
   // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
   // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
     const targetArgs = opts.worktree || opts.expectedHead
-      ? ` --worktree ${shq(opts.worktree || process.cwd())}${opts.expectedHead ? ` --head ${shq(opts.expectedHead)}` : ''}`
+      ? ` --worktree ${shq(opts.worktree || process.cwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
       : ''
     const prov = await cmdRunner(
       `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
@@ -535,7 +749,15 @@ async function reviewCodePhase(workItem, opts) {
       return { phaseResult: { confidence: 'low', assumptions: ['review covers stamp not recorded: ' + (prov.error || 'unknown')] }, gate: 'changes-requested' }
     }
   }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
+  return {
+    phaseResult: { confidence: 'high', assumptions: [] },
+    gate: 'passed',
+    terminal,
+    head: finalHead,
+    changed: !!(initialHead && finalHead && initialHead !== finalHead),
+    reviewCoverageHead: terminal === 'clean' ? (finalHead || undefined) : undefined,
+    verifyPassedHead: finalHead || undefined,
+  }
 }
 
 async function resolveHead(worktree, ref) {
@@ -607,6 +829,8 @@ module.exports.recordCursor = recordCursor
 module.exports.draftPRPhase = draftPRPhase
 module.exports.markReadyPhase = markReadyPhase
 module.exports.testPilotPhase = testPilotPhase
+module.exports.defaultTestPilotPhase = defaultTestPilotPhase
+module.exports.testPilotDeps = testPilotDeps
 
 async function shipPhase(workItem, pr) {
   // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date

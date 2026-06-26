@@ -33,6 +33,20 @@ def test_recover_entry_parks_when_cursor_phase_does_not_match_phase_list():
     assert "tasks" in r["reason"]
 
 
+def test_recover_entry_accepts_test_pilot_cursor_in_current_phase_list():
+    r = recover_entry._phase_cursor_guard(
+        {"lastGoodStep": 7, "lastGoodPhase": "test-pilot"},
+    )
+    assert r is None
+
+
+def test_recover_entry_accepts_mark_ready_cursor_after_test_pilot_insert():
+    r = recover_entry._phase_cursor_guard(
+        {"lastGoodStep": 8, "lastGoodPhase": "mark-ready"},
+    )
+    assert r is None
+
+
 def test_unreadable_content_hash_gates_not_resumes_blind():
     r = recover.reconcile(CKPT, {**OK_WORLD, "current_content_hash": None})
     assert r["action"] == "gate"

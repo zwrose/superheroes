@@ -17,7 +17,7 @@ import ref_lock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CURRENT_PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
-                  "review-code", "draft-PR", "mark-ready", "ship"]
+                  "review-code", "draft-PR", "test-pilot", "mark-ready", "ship"]
 
 
 def _park(reason):

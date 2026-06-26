@@ -28,7 +28,10 @@ def _steps(pass_result):
     if not isinstance(pass_result, dict):
         return []
     steps = pass_result.get("steps")
-    return steps if isinstance(steps, list) else []
+    if isinstance(steps, list):
+        return steps
+    records = pass_result.get("records")
+    return records if isinstance(records, list) else []
 
 
 def _step_id(step):

@@ -40,5 +40,33 @@ const sr = require('../showrunner.js')
   assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--worktree') && p.includes('--head')),
     'provenance restamp is bound to explicit worktree/head')
 
+  promptLog = []
+  let gitHeads = ['head-1\n', 'head-2\n']
+  global.agent = async (prompt, opts) => {
+    promptLog.push(prompt)
+    const label = opts && opts.label
+    if (label === 'lib' && prompt.includes('git -C')) return gitHeads.shift() || 'head-2\n'
+    if (label === 'resume') return '1'
+    if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
+    if (label && label.startsWith('tally')) return { terminal: 'clean', gate: 'clean', findings: [] }
+    if (label && label.startsWith('verify')) return { result: 'pass' }
+    if (label && label.startsWith('synthesis')) return { findings: [], drops: [] }
+    if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
+    return true
+  }
+  const changed = await sr.reviewCodePhase('wi-targeted', {
+    worktree: '/tmp/build-worktree',
+    expectedHead: 'head-1',
+    runDirSuffix: 'test-pilot-2-head-1',
+  })
+  assert.strictEqual(changed.gate, 'passed')
+  assert.strictEqual(changed.head, 'head-2')
+  assert.strictEqual(changed.changed, true)
+  assert.strictEqual(changed.reviewCoverageHead, 'head-2')
+  assert.ok(promptLog.some((p) => p.includes('/tmp/showrunner-wi-targeted-review-code-test-pilot-2-head-1')),
+    'runDirSuffix creates fresh targeted review-code loop state')
+  assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--head') && p.includes('head-2')),
+    'review-code restamps the post-fix final head')
+
   console.log('OK: panel verdict maps to gate (clean->passed, else->changes-requested)')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

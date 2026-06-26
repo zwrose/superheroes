@@ -82,6 +82,12 @@ def test_ready_applicable_requires_artifacts_and_fallback_when_posting_failed():
     )
     assert status.ready_applicable(with_fallback, HEAD)["ok"] is True
 
+    with_writer_fallback = _applicable(
+        prPosting={"ok": False},
+        artifacts={"plan": "plan.md", "results": "results.md", "fallback": {"plan": "plan.md", "results": "results.md"}},
+    )
+    assert status.ready_applicable(with_writer_fallback, HEAD)["ok"] is True
+
 
 def test_ready_applicable_requires_fresh_baseline_review_verify_and_remote_pr():
     assert status.ready_applicable(_applicable(baseline={"head": "old"}), HEAD)["ok"] is False
