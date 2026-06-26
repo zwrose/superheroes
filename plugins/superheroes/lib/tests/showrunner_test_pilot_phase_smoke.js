@@ -65,6 +65,9 @@ function applicableDeps(extra) {
       reviewCoverageHead: opts.expectedHead,
       verifyPassedHead: opts.expectedHead,
     }),
+    restoreBaseline: async (_records, details) => ({ ok: true, baseline: { head: details.head, restored: true } }),
+    ensureFinalArtifacts: async (payload) => ({ ok: true, artifacts: Object.assign({}, payload.artifacts, { results: 'final-results.md' }), posting: { ok: true } }),
+    publishReady: async (_workItem, head) => ({ ok: true, remotePr: { branch: 'codex/example', head } }),
     writeStatus: async () => ({ ok: true }),
   }, extra || {})
 }
@@ -510,6 +513,40 @@ function helperContractsCoverFailureCollectionAndMutationReconciliation() {
   assert.match(unreconciled.reason, /committed mutations/)
 }
 
+async function finalReadinessRestoresBaselinePublishesArtifactsAndRemoteHeadBeforeReadyStatus() {
+  const calls = []
+  const statuses = []
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: true }),
+    runBrowserPass: async () => { calls.push('browser'); return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [{ id: 's1', status: 'passed' }] } },
+    aggregateResults: async () => { calls.push('aggregate'); return { action: 'aggregated', records: [{ stepId: 's1', status: 'passed', browserExecuted: true }] } },
+    reviewCode: async (_workItem, opts) => { calls.push('reviewCode'); return { gate: 'passed', head: opts.expectedHead, changed: false, reviewCoverageHead: opts.expectedHead, verifyPassedHead: opts.expectedHead } },
+    restoreBaseline: async (_records, details) => { calls.push('restoreBaseline'); return { ok: true, baseline: { head: details.head, restored: true } } },
+    ensureFinalArtifacts: async (payload) => {
+      calls.push('ensureFinalArtifacts')
+      assert.strictEqual(payload.baseline.head, 'abc123')
+      return { ok: true, artifacts: { plan: 'plan.md', results: 'final-results.md' }, posting: { ok: true } }
+    },
+    publishReady: async (_workItem, head, payload) => {
+      calls.push('publishReady')
+      assert.strictEqual(payload.baseline.head, head)
+      assert.strictEqual(payload.artifacts.results, 'final-results.md')
+      return { ok: true, remotePr: { branch: 'codex/example', head } }
+    },
+    writeStatus: async (status) => { calls.push(`writeStatus:${status.milestone || status.verdict}`); statuses.push(status); return { ok: true } },
+  }))
+
+  assert.strictEqual(out.confidence, 'high')
+  assert.ok(calls.indexOf('restoreBaseline') > calls.indexOf('reviewCode'))
+  assert.ok(calls.indexOf('ensureFinalArtifacts') > calls.indexOf('restoreBaseline'))
+  assert.ok(calls.indexOf('publishReady') > calls.indexOf('ensureFinalArtifacts'))
+  const final = statuses[statuses.length - 1]
+  assert.strictEqual(final.verdict, 'applicable')
+  assert.strictEqual(final.baseline.head, 'abc123')
+  assert.strictEqual(final.artifacts.results, 'final-results.md')
+  assert.strictEqual(final.remotePr.head, 'abc123')
+}
+
 async function phaseOrderAndGate() {
   const idx = sr.PHASES.indexOf('test-pilot')
   assert.ok(idx > sr.PHASES.indexOf('draft-PR'), 'test-pilot follows draft-PR')
@@ -545,6 +582,7 @@ async function phaseOrderAndGate() {
   await threeFixBatchesParkIfFailuresRemain()
   await reviewCodeMutationForcesBrowserRevalidationWithoutConsumingBrowserFixBudget()
   await reviewCodeCleanWithSkipsParksBecauseNoCoversStamp()
+  await finalReadinessRestoresBaselinePublishesArtifactsAndRemoteHeadBeforeReadyStatus()
   helperContractsCoverFailureCollectionAndMutationReconciliation()
   await phaseOrderAndGate()
   console.log('OK: test-pilot phase skeleton smokes passed')

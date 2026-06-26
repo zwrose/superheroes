@@ -365,6 +365,28 @@ async function testPilotPhase(workItem, generation, deps) {
     if (!wrote.ok) return low(wrote.reason)
   }
 
+  const baselineResult = await restoreFinalBaseline(deps, records, context, retryState)
+  if (!baselineResult.ok) return low(baselineResult.reason)
+
+  const finalArtifacts = await ensureFinalArtifacts(deps, {
+    workItem,
+    context,
+    records,
+    aggregated: combinedAggregated,
+    artifacts: artifactResult.artifacts,
+    baseline: baselineResult.baseline,
+    retryState,
+  })
+  if (!finalArtifacts.ok) return low(finalArtifacts.reason)
+
+  const publishResult = await publishFinalHead(deps, workItem, context, retryState, {
+    records,
+    artifacts: finalArtifacts.artifacts,
+    baseline: baselineResult.baseline,
+    aggregated: combinedAggregated,
+  })
+  if (!publishResult.ok) return low(publishResult.reason)
+
   const finalStatus = {
     schemaVersion: 1,
     verdict: 'applicable',
@@ -375,12 +397,12 @@ async function testPilotPhase(workItem, generation, deps) {
     records: mergeAllowedSkippedResults(combinedAggregated.records, records),
     fixBatchHistory: retryState.fixBatchHistory,
     browserPasses: retryState.browserPasses,
-    artifacts: artifactResult.artifacts,
-    prPosting: artifactResult.posting || artifactResult.prPosting,
-    baseline: context.baseline || { head: retryState.currentHead },
+    artifacts: finalArtifacts.artifacts,
+    prPosting: finalArtifacts.posting || finalArtifacts.prPosting || artifactResult.posting || artifactResult.prPosting,
+    baseline: baselineResult.baseline,
     review: context.review || { head: retryState.reviewCoverageHead || retryState.currentHead },
     verify: context.verify || { result: 'pass', head: retryState.verifyPassedHead || retryState.currentHead },
-    remotePr: context.remotePr || context.remotePR || { head: retryState.currentHead },
+    remotePr: publishResult.remotePr || publishResult.remotePR || { head: retryState.currentHead },
   }
   if (combinedAggregated.coverageRationale || plan.coverageRationale) {
     finalStatus.coverageRationale = combinedAggregated.coverageRationale || plan.coverageRationale
@@ -1014,6 +1036,77 @@ async function stabilizeReviewCode(deps, workItem, context, retryState, aggregat
     reviewCoverageHead: result.reviewCoverageHead || result.covers || after,
     verifyPassedHead: result.verifyPassedHead || result.verifyHead || after,
   }
+}
+
+async function restoreFinalBaseline(deps, records, context, retryState) {
+  if (typeof deps.restoreBaseline !== 'function') {
+    return { ok: true, baseline: context.baseline || { head: retryState.currentHead, restored: true } }
+  }
+  try {
+    const out = await deps.restoreBaseline(records, {
+      context,
+      head: retryState.currentHead,
+      fixBatchHistory: retryState.fixBatchHistory,
+      reviewStabilizationCycle: retryState.reviewStabilizationCycle || 0,
+    })
+    if (!out || out.ok === false || out.action === 'park' || out.confidence === 'low') {
+      return { ok: false, reason: (out && out.reason) || 'final seed baseline restore parked' }
+    }
+    const baseline = out.baseline || out.status || out
+    if (!coversHead(baseline, retryState.currentHead)) {
+      return { ok: false, reason: 'final seed baseline restore did not verify the final head' }
+    }
+    return { ok: true, baseline }
+  } catch (err) {
+    return { ok: false, reason: `final seed baseline restore failed: ${message(err)}` }
+  }
+}
+
+async function ensureFinalArtifacts(deps, payload) {
+  if (typeof deps.ensureFinalArtifacts !== 'function') {
+    return { ok: true, artifacts: payload.artifacts }
+  }
+  try {
+    const out = await deps.ensureFinalArtifacts(payload)
+    if (!out || out.ok === false || out.action === 'park' || out.confidence === 'low') {
+      return { ok: false, reason: (out && out.reason) || 'final test-pilot results artifact parked' }
+    }
+    const artifacts = out.artifacts || out
+    if (!artifacts.plan || !artifacts.results) {
+      return { ok: false, reason: 'final test-pilot plan/results artifacts missing' }
+    }
+    return Object.assign({ ok: true, artifacts }, out)
+  } catch (err) {
+    return { ok: false, reason: `final test-pilot artifact publish failed: ${message(err)}` }
+  }
+}
+
+async function publishFinalHead(deps, workItem, context, retryState, payload) {
+  if (typeof deps.publishReady !== 'function') {
+    return { ok: true, remotePr: context.remotePr || context.remotePR || { head: retryState.currentHead } }
+  }
+  try {
+    const out = await deps.publishReady(workItem, retryState.currentHead, Object.assign({
+      context,
+      branch: context.branch,
+      head: retryState.currentHead,
+    }, payload))
+    if (!out || out.ok === false || out.action === 'park' || out.confidence === 'low') {
+      return { ok: false, reason: (out && out.reason) || 'final tested head publish parked' }
+    }
+    const remotePr = out.remotePr || out.remotePR || { branch: context.branch, head: out.head || retryState.currentHead }
+    if (!coversHead(remotePr, retryState.currentHead)) {
+      return { ok: false, reason: 'remote PR head does not equal final tested head' }
+    }
+    return { ok: true, remotePr }
+  } catch (err) {
+    return { ok: false, reason: `final tested head publish failed: ${message(err)}` }
+  }
+}
+
+function coversHead(value, head) {
+  if (!value || typeof value !== 'object') return false
+  return value.head === head || value.covers === head || value.browserEvidenceHead === head
 }
 
 async function writeRetryStatus(deps, workItem, context, retryState, aggregated, records, reason) {
