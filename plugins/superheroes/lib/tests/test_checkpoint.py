@@ -45,14 +45,25 @@ def test_read_unknown_schema_fails_closed(tmp_path):
     assert "schema" in got["reason"]
 
 
-def test_read_numeric_cursor_without_phase_is_incompatible(tmp_path):
+def test_read_legacy_numeric_cursor_without_phase_infers_previous_phase(tmp_path):
     p = tmp_path / "checkpoint.json"
     c = ck.new("wi", "b", last_good_step=2)
     c.pop("lastGoodPhase")
     p.write_text(json.dumps(c))
     got = ck.read(str(p))
-    assert got["_incompatible"] is True
-    assert "lastGoodPhase" in got["reason"]
+    assert got["lastGoodStep"] == 2
+    assert got["lastGoodPhase"] == "tasks"
+
+
+def test_read_legacy_cursor_shifted_by_test_pilot_insert_moves_to_current_phase_index(tmp_path):
+    p = tmp_path / "checkpoint.json"
+    c = ck.new("wi", "b")
+    c["lastGoodStep"] = 7
+    c.pop("lastGoodPhase")
+    p.write_text(json.dumps(c))
+    got = ck.read(str(p))
+    assert got["lastGoodStep"] == 8
+    assert got["lastGoodPhase"] == "mark-ready"
 
 
 def test_read_allows_missing_phase_when_no_cursor(tmp_path):

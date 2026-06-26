@@ -11,6 +11,11 @@ import time
 import control_plane
 
 SCHEMA_VERSION = 1
+CURRENT_PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
+                  "review-code", "draft-PR", "test-pilot", "mark-ready", "ship"]
+LEGACY_PHASES_PRE_TEST_PILOT = ["plan", "review-plan", "tasks", "review-tasks",
+                                "workhorse", "review-code", "draft-PR",
+                                "mark-ready", "ship"]
 
 
 def new(work_item, branch, issue=None, size=None, phase="build",
@@ -41,6 +46,16 @@ def _is_numeric_step(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _infer_legacy_phase(data, step):
+    if step < 0 or step >= len(LEGACY_PHASES_PRE_TEST_PILOT):
+        return _incompatible("checkpoint lastGoodStep is outside the legacy phase list")
+    phase = LEGACY_PHASES_PRE_TEST_PILOT[step]
+    data["lastGoodPhase"] = phase
+    if phase in CURRENT_PHASES:
+        data["lastGoodStep"] = CURRENT_PHASES.index(phase)
+    return None
+
+
 def _validate_shape(data):
     if not isinstance(data, dict):
         return _incompatible("checkpoint is not an object")
@@ -53,7 +68,7 @@ def _validate_shape(data):
         if step is None:
             data["lastGoodPhase"] = None
         else:
-            return _incompatible("checkpoint lastGoodStep is set but lastGoodPhase is missing")
+            return _infer_legacy_phase(data, step)
     if step is None and data.get("lastGoodPhase") is not None:
         return _incompatible("checkpoint lastGoodPhase is set but lastGoodStep is null")
     if step is not None and not isinstance(data.get("lastGoodPhase"), str):

@@ -377,7 +377,10 @@ async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
       }],
     }),
     preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records }),
-    budgetCheck: async (phase) => { budgetChecks.push(phase); return { ok: true } },
+    budgetCheck: async (phase, payload) => {
+      budgetChecks.push({ phase, counts: payload.counts })
+      return { ok: true }
+    },
     runBrowserPass: async (browserContext) => {
       browserScopes.push(browserContext.rerunScope || { action: 'initial' })
       return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [] }
@@ -416,7 +419,11 @@ async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
 
   assert.strictEqual(out.confidence, 'high')
   assert.deepStrictEqual(dispatchFailures.map((failure) => failure.stepId), ['s1', 's2'])
-  assert.deepStrictEqual(budgetChecks, ['browser-pass', 'fix-batch', 'browser-pass'])
+  assert.deepStrictEqual(budgetChecks.map((entry) => entry.phase), ['browser-pass', 'fix-batch', 'browser-pass'])
+  assert.deepStrictEqual(
+    budgetChecks.filter((entry) => entry.phase === 'browser-pass').map((entry) => entry.counts.browserPasses),
+    [1, 2],
+  )
   assert.deepStrictEqual(browserScopes.map((scope) => scope.action), ['initial', 'rerun_all'])
   const finalStatus = statuses[statuses.length - 1]
   assert.strictEqual(finalStatus.browserEvidenceHead, 'fix111')
@@ -620,6 +627,19 @@ async function finalReadinessRestoresBaselinePublishesArtifactsAndRemoteHeadBefo
   assert.strictEqual(final.remotePr.head, 'abc123')
 }
 
+async function finalPublishFailureParksBeforeApplicableReadyStatus() {
+  const statuses = []
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: true }),
+    publishReady: async () => ({ ok: false, reason: 'remote PR head does not equal final tested head' }),
+    writeStatus: async (status) => { statuses.push(status); return { ok: true } },
+  }))
+
+  assert.strictEqual(out.confidence, 'low')
+  assert.match(out.assumptions[0], /remote PR head/)
+  assert.strictEqual(statuses.some((status) => status.verdict === 'applicable'), false)
+}
+
 async function phaseOrderAndGate() {
   const idx = sr.PHASES.indexOf('test-pilot')
   assert.ok(idx > sr.PHASES.indexOf('draft-PR'), 'test-pilot follows draft-PR')
@@ -658,6 +678,7 @@ async function phaseOrderAndGate() {
   await reviewCodeMutationForcesBrowserRevalidationWithoutConsumingBrowserFixBudget()
   await reviewCodeCleanWithSkipsParksBecauseNoCoversStamp()
   await finalReadinessRestoresBaselinePublishesArtifactsAndRemoteHeadBeforeReadyStatus()
+  await finalPublishFailureParksBeforeApplicableReadyStatus()
   helperContractsCoverFailureCollectionAndMutationReconciliation()
   await phaseOrderAndGate()
   console.log('OK: test-pilot phase skeleton smokes passed')

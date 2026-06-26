@@ -590,7 +590,9 @@ print(json.dumps(ctx))
 
     budgetCheck: async (_phase, payload) => {
       const counts = writeJson('budget-counts', payload && payload.counts ? payload.counts : {
-        browserPasses: payload && payload.rerunScope ? 1 : 0,
+        browserPasses: payload && typeof payload.browserPasses === 'number'
+          ? payload.browserPasses
+          : (payload && payload.rerunScope ? 1 : 0),
         browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
       })
       const out = await cli(

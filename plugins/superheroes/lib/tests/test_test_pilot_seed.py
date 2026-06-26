@@ -132,6 +132,15 @@ def test_prepare_cleans_successfully_applied_records_when_later_apply_fails():
     assert ("clean", "feat/x", False) in engine.calls
 
 
+def test_prepare_parks_with_cleanup_failure_when_partial_apply_rollback_fails():
+    engine = FakeEngine(fail={"apply_branch": "feat/y", "clean_branch": "feat/x"})
+    result = seed.prepare_records([_record_for("feat/x"), _record_for("feat/y")], engine)
+
+    assert result["action"] == "park"
+    assert "compensation cleanup failed" in result["reason"]
+    assert result["compensationFailures"][0]["operation"] == "clean"
+
+
 def test_prepare_parks_on_live_lock():
     engine = FakeEngine(status={"ok": True, "entries": [],
                                 "lock": {"pid": 123}, "lockStale": False})
@@ -198,6 +207,15 @@ def test_restore_baseline_reapplies_successfully_cleaned_records_when_later_clea
     assert result["action"] == "park"
     assert "clean failed" in result["reason"]
     assert engine.calls[-1] == ("apply", "feat/x", False, False)
+
+
+def test_restore_baseline_parks_with_cleanup_failure_when_reapply_compensation_fails():
+    engine = FakeEngine(fail={"clean_branch": "feat/y", "apply_branch": "feat/x"})
+    result = seed.restore_baseline([_record_for("feat/x"), _record_for("feat/y")], engine)
+
+    assert result["action"] == "park"
+    assert "compensation cleanup failed" in result["reason"]
+    assert result["compensationFailures"][0]["operation"] == "reapply"
 
 
 def test_restore_baseline_recleans_successfully_applied_records_when_reapply_fails():

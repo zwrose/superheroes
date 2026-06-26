@@ -22,6 +22,7 @@ WEB_KEYS = {
     "runnableWeb",
     "web",
 }
+PROFILE_WEB_KEYS = WEB_KEYS - {"baseUrl", "base_url"}
 
 NO_BROWSER_KEYS = {
     "docs_only": "docs-only",
@@ -168,7 +169,7 @@ def decide(diff=None, detectors=None, profile=None, plan_result=None):
     files = _files(diff)
     web_signal = (
         _truthy_signal(detectors, WEB_KEYS)
-        or _truthy_signal(profile, WEB_KEYS)
+        or _truthy_signal(profile, PROFILE_WEB_KEYS)
         or _truthy_signal(plan_result, WEB_KEYS)
     )
     if not web_signal and _web_path_signal(files):

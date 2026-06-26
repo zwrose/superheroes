@@ -195,20 +195,33 @@ def _dry_run(records, engine):
     return None
 
 
+def _compensation_reason(prefix, failures):
+    details = "; ".join("%s %s failed: %s" %
+                        (failure["operation"], failure["key"], failure["error"])
+                        for failure in failures)
+    return "%s; compensation cleanup failed: %s" % (prefix, details)
+
+
 def _clean_compensation(records, engine):
+    failures = []
     for record in reversed(records):
         try:
             engine.clean(record, allow_protected=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            failures.append({"operation": "clean", "key": _record_key(record),
+                             "error": str(exc)})
+    return failures
 
 
 def _reapply_compensation(records, engine):
+    failures = []
     for record in reversed(records):
         try:
             engine.apply(record, dry_run=False, allow_protected=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            failures.append({"operation": "reapply", "key": _record_key(record),
+                             "error": str(exc)})
+    return failures
 
 
 def prepare_records(records, engine=None, budget=None):
@@ -238,7 +251,10 @@ def prepare_records(records, engine=None, budget=None):
             engine.apply(record, dry_run=False, allow_protected=False)
             applied.append(record)
         except Exception as exc:
-            _clean_compensation(applied, engine)
+            failures = _clean_compensation(applied, engine)
+            if failures:
+                return _park(_compensation_reason("apply failed: %s" % exc, failures),
+                             compensationFailures=failures)
             msg = str(exc).replace("-", " ")
             if "protected target refusal" in msg.lower():
                 return _park("protected target refusal: %s" % exc)
@@ -276,7 +292,10 @@ def restore_baseline(records, engine=None, budget=None):
             engine.clean(record, allow_protected=False)
             cleaned.append(record)
         except Exception as exc:
-            _reapply_compensation(cleaned, engine)
+            failures = _reapply_compensation(cleaned, engine)
+            if failures:
+                return _park(_compensation_reason("clean failed: %s" % exc, failures),
+                             compensationFailures=failures)
             msg = str(exc).replace("-", " ")
             if "protected target refusal" in msg.lower():
                 return _park("clean failed: protected target refusal: %s" % exc)
@@ -287,7 +306,10 @@ def restore_baseline(records, engine=None, budget=None):
             engine.apply(record, dry_run=False, allow_protected=False)
             applied.append(record)
         except Exception as exc:
-            _clean_compensation(applied, engine)
+            failures = _clean_compensation(applied, engine)
+            if failures:
+                return _park(_compensation_reason("apply failed: %s" % exc, failures),
+                             compensationFailures=failures)
             return _park("apply failed: %s" % exc)
     verified = _verify_seeded(records, engine)
     if verified.get("action") == "verified":

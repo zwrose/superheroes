@@ -183,6 +183,10 @@ async function testPilotPhase(workItem, generation, deps) {
       head: retryState.currentHead,
       rerunScope,
       fixBatchHistory: retryState.fixBatchHistory,
+      counts: {
+        browserPasses: retryState.browserPasses.length + 1,
+        browserFixBatches: retryState.fixBatchHistory.length,
+      },
     })
     if (!budget.ok) return low(budget.reason)
 

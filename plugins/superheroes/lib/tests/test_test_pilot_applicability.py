@@ -25,6 +25,25 @@ def test_not_applicable_requires_positive_no_browser_evidence():
     assert "docs-only" in result["reason"]
 
 
+def test_profile_base_url_is_setup_not_applicability_evidence():
+    result = applicability.decide(
+        diff={"files": ["README.md"]},
+        detectors={"docs_only": True},
+        profile={"baseUrl": "http://localhost:3000"},
+    )
+    assert result["verdict"] == "not_applicable"
+    assert "docs-only" in result["reason"]
+
+
+def test_profile_base_url_still_satisfies_required_setup_for_applicable_work():
+    result = applicability.decide(
+        diff={"files": ["web/app.jsx"]},
+        detectors={"frontend": True, "requires_setup": ["baseUrl"]},
+        profile={"baseUrl": "http://localhost:3000"},
+    )
+    assert result["verdict"] == "applicable"
+
+
 def test_internal_only_parks_when_user_facing_signal_is_present():
     result = applicability.decide(
         diff={"files": ["lib/internal.py"]},
