@@ -11,7 +11,11 @@ global.agent = async (prompt) => {
 global.log = () => {}
 
 const sr = require('../showrunner.js')
-const { testPilotPhase } = require('../test_pilot_phase.js')
+const {
+  testPilotPhase,
+  collectAppBugFailures,
+  reconcileCommittedMutations,
+} = require('../test_pilot_phase.js')
 
 function baseContext(extra) {
   return Object.assign({
@@ -287,6 +291,177 @@ async function nonBrowserEvidenceParksBeforeReadiness() {
   assert.match(out.assumptions[0], /browser-derived pass\/fail evidence/)
 }
 
+async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
+  const budgetChecks = []
+  const browserScopes = []
+  const statuses = []
+  let dispatchFailures
+  let pass = 0
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    derivePlan: async () => ({
+      records: [{
+        branch: 'codex/example',
+        steps: [
+          { id: 's1', instruction: 'save settings', expected: 'settings save', scenarioIds: ['scenario-a'] },
+          { id: 's2', instruction: 'open profile', expected: 'profile opens', scenarioIds: ['scenario-b'] },
+        ],
+      }],
+    }),
+    preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records }),
+    budgetCheck: async (phase) => { budgetChecks.push(phase); return { ok: true } },
+    runBrowserPass: async (browserContext) => {
+      browserScopes.push(browserContext.rerunScope || { action: 'initial' })
+      return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [] }
+    },
+    aggregateResults: async () => {
+      pass += 1
+      if (pass === 1) {
+        return {
+          action: 'aggregated',
+          records: [
+            { stepId: 's1', status: 'failed', failureType: 'app_bug', summary: 'save crashed', browserExecuted: true },
+            { stepId: 's2', status: 'failed', failureType: 'app_bug', summary: 'profile crashed', browserExecuted: true },
+          ],
+        }
+      }
+      return {
+        action: 'aggregated',
+        records: [
+          { stepId: 's1', status: 'passed', browserExecuted: true },
+          { stepId: 's2', status: 'passed', browserExecuted: true },
+        ],
+      }
+    },
+    dispatchFixBatch: async (failures) => {
+      dispatchFailures = failures
+      return { ok: true, commitShas: ['fix111'], changedFiles: ['web/settings.js'], head: 'fix111' }
+    },
+    ensureCleanWorktreeAfterFix: async () => ({ ok: true }),
+    reconcileCommittedMutations: async () => ({ ok: true, commitShas: ['fix111'], head: 'fix111' }),
+    writeStatus: async (status) => { statuses.push(status); return { ok: true } },
+  }))
+
+  assert.strictEqual(out.confidence, 'high')
+  assert.deepStrictEqual(dispatchFailures.map((failure) => failure.stepId), ['s1', 's2'])
+  assert.deepStrictEqual(budgetChecks, ['browser-pass', 'fix-batch', 'browser-pass'])
+  assert.deepStrictEqual(browserScopes.map((scope) => scope.action), ['initial', 'rerun_all'])
+  const finalStatus = statuses[statuses.length - 1]
+  assert.strictEqual(finalStatus.browserEvidenceHead, 'fix111')
+  assert.deepStrictEqual(finalStatus.fixBatchHistory[0].commitShas, ['fix111'])
+  assert.strictEqual(finalStatus.fixBatchHistory[0].rerunScope.action, 'rerun_all')
+  assert.ok(finalStatus.fixBatchHistory[0].scrubbedSummary)
+}
+
+async function knownDependencyRerunsFailedAndAffectedSubset() {
+  const browserStepSets = []
+  let pass = 0
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    derivePlan: async () => ({
+      dependencyMap: { 'web/settings.js': ['s3'] },
+      records: [{
+        branch: 'codex/example',
+        steps: [
+          { id: 's1', instruction: 'save settings', expected: 'settings save' },
+          { id: 's2', instruction: 'open profile', expected: 'profile opens' },
+          { id: 's3', instruction: 'reload settings', expected: 'settings persist' },
+        ],
+      }],
+    }),
+    preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records }),
+    budgetCheck: async () => ({ ok: true }),
+    runBrowserPass: async (browserContext) => {
+      browserStepSets.push(browserContext.records.flatMap((record) => record.steps.map((step) => step.id)))
+      return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [] }
+    },
+    aggregateResults: async () => {
+      pass += 1
+      if (pass === 1) {
+        return {
+          action: 'aggregated',
+          records: [
+            { stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true },
+            { stepId: 's2', status: 'passed', browserExecuted: true },
+            { stepId: 's3', status: 'passed', browserExecuted: true },
+          ],
+        }
+      }
+      return {
+        action: 'aggregated',
+        records: [
+          { stepId: 's1', status: 'passed', browserExecuted: true },
+          { stepId: 's3', status: 'passed', browserExecuted: true },
+        ],
+      }
+    },
+    dispatchFixBatch: async () => ({ ok: true, commitShas: ['fix222'], changedFiles: ['web/settings.js'], head: 'fix222' }),
+    ensureCleanWorktreeAfterFix: async () => ({ ok: true }),
+    reconcileCommittedMutations: async () => ({ ok: true, commitShas: ['fix222'], head: 'fix222' }),
+  }))
+
+  assert.strictEqual(out.confidence, 'high')
+  assert.deepStrictEqual(browserStepSets, [['s1', 's2', 's3'], ['s1', 's3']])
+}
+
+async function dirtyFixLeftoversParkBehindInjectedWorktreeGuard() {
+  let dispatches = 0
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: true }),
+    aggregateResults: async () => ({
+      action: 'aggregated',
+      records: [{ stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true }],
+    }),
+    dispatchFixBatch: async () => { dispatches += 1; return { ok: true, dirty: true } },
+    ensureCleanWorktreeAfterFix: async () => ({ ok: false, reason: 'dirty fix leftovers after lease reset failed' }),
+  }))
+
+  assert.strictEqual(out.confidence, 'low')
+  assert.strictEqual(dispatches, 1)
+  assert.match(out.assumptions[0], /dirty fix leftovers/)
+}
+
+async function threeFixBatchesParkIfFailuresRemain() {
+  let dispatches = 0
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: true }),
+    retryDecide: async (_passResult, history, changedFiles) => {
+      if (changedFiles) return { action: 'rerun_all', failedStepIds: ['s1'] }
+      if (history.length >= 3) {
+        return { action: 'park_cap_reached', reason: 'reached 3 browser fix batches with failed browser steps remaining' }
+      }
+      return { action: 'fix_batch', failedStepIds: ['s1'], summary: `Fix browser app failures batch ${history.length + 1}` }
+    },
+    aggregateResults: async () => ({
+      action: 'aggregated',
+      records: [{ stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true }],
+    }),
+    dispatchFixBatch: async () => {
+      dispatches += 1
+      return { ok: true, commitShas: [`fix${dispatches}`], changedFiles: [`web/app${dispatches}.js`], head: `fix${dispatches}` }
+    },
+    ensureCleanWorktreeAfterFix: async () => ({ ok: true }),
+    reconcileCommittedMutations: async (_result) => ({ ok: true, commitShas: [`fix${dispatches}`], head: `fix${dispatches}` }),
+  }))
+
+  assert.strictEqual(out.confidence, 'low')
+  assert.strictEqual(dispatches, 3)
+  assert.match(out.assumptions[0], /3 browser fix batches/)
+}
+
+function helperContractsCoverFailureCollectionAndMutationReconciliation() {
+  const failures = collectAppBugFailures({
+    records: [
+      { stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true },
+      { stepId: 's2', status: 'failed', failureType: 'test_bug', browserExecuted: true },
+      { stepId: 's3', status: 'passed', browserExecuted: true },
+    ],
+  })
+  assert.deepStrictEqual(failures.map((failure) => failure.stepId), ['s1'])
+
+  const unreconciled = reconcileCommittedMutations({ cleanCommittedMutations: true }, [], null, {})
+  assert.strictEqual(unreconciled.ok, false)
+  assert.match(unreconciled.reason, /committed mutations/)
+}
+
 async function phaseOrderAndGate() {
   const idx = sr.PHASES.indexOf('test-pilot')
   assert.ok(idx > sr.PHASES.indexOf('draft-PR'), 'test-pilot follows draft-PR')
@@ -316,6 +491,11 @@ async function phaseOrderAndGate() {
   await managedServerTearsDownOnBrowserFailure()
   await offOriginBrowserResultsPark()
   await nonBrowserEvidenceParksBeforeReadiness()
+  await appBugFailuresDispatchOneFixBatchAndRerunWholePlan()
+  await knownDependencyRerunsFailedAndAffectedSubset()
+  await dirtyFixLeftoversParkBehindInjectedWorktreeGuard()
+  await threeFixBatchesParkIfFailuresRemain()
+  helperContractsCoverFailureCollectionAndMutationReconciliation()
   await phaseOrderAndGate()
   console.log('OK: test-pilot phase skeleton smokes passed')
 })().catch((e) => { console.error('FAIL:', e.stack || e.message); process.exit(1) })
