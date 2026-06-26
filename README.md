@@ -124,10 +124,11 @@ First run in any project:
 
 When a tasks doc is approved, workhorse runs the **back half** of the loop on its own: it
 builds the change (subagent-driven, test-first), reviews it (review-crew's auto-fix loop),
-opens a draft PR, exercises it (test-pilot), resets seeded data, then **flips the PR to
-ready-for-review** and gets CI green on a branch brought up to date with its base, and
-hands you a live dev server + a plain-language readout. It **never merges** — that's always
-yours.
+opens a draft PR, exercises it through the native showrunner `test-pilot` phase, resets
+seeded data fresh for spot-checking, then **flips the PR to ready-for-review** only after
+the tested head is review-covered, verified, published to the PR branch, and CI-green on a
+branch brought up to date with its base. It hands you a live dev server + a
+plain-language readout. It **never merges** — that's always yours.
 
 > **GitHub access:** workhorse needs `gh` signed in with **write** access to the repo (it never merges). A fail-closed preflight checks this at startup — see [GitHub access](plugins/superheroes/skills/workhorse/reference/github-access.md).
 

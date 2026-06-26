@@ -834,6 +834,15 @@ flow that reuses the hero's libraries and leaf agents** — never wrapped as one
 (`ci_loop.decide`, `freshness.decide`, `ship_gate.decide`, `recover.reconcile`, …) and
 substrate libraries carry over **unchanged**.
 
+The showrunner back half includes a native `test-pilot` phase after draft-PR and before
+mark-ready. A branch that has positive no-browser evidence records a current-head
+`not_applicable` rationale and may proceed; an applicable branch must publish/update the
+human checklist, seed through test-pilot's engine, run browser-derived checks, fix and rerun
+within the browser-fix cap, restore fresh seed data for spot-checking, re-cover any
+post-browser fixes with targetable `review-code`, non-force-push the final tested head to
+the PR branch, and write a current status sidecar before mark-ready. The human checklist is
+never auto-checked by the workflow.
+
 ### 10.2 Durability is the substrate's, not the engine's
 
 A Workflow's native resume (`resumeFromRunId`) is **same-session only** and **not
