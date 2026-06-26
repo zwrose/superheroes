@@ -62,7 +62,7 @@ class PortInUseError(RuntimeError):
     (possible orphan from a prior run)' instead of silently colliding."""
 
 
-def start(command, port, cwd=None, env=None):
+def start(command, port, cwd=None, env=None, shell=True):
     """Launch `command` in the background; return a handle dict. Refuses LOUDLY if
     the port is already bound (design §3.4: reuse-or-fail, never silent-collide).
     The caller health-polls health_url(port) and MUST teardown(handle) on every
@@ -71,7 +71,7 @@ def start(command, port, cwd=None, env=None):
     fail loudly so the owner sees it rather than wedging on a stale server.)"""
     if port_in_use(port):
         raise PortInUseError(port)
-    proc = subprocess.Popen(command, shell=True, cwd=cwd,
+    proc = subprocess.Popen(command, shell=shell, cwd=cwd,
                             env={**os.environ, **(env or {}), "PORT": str(port)},
                             start_new_session=True)
     return {"pid": proc.pid, "port": port, "command": command, "_proc": proc}

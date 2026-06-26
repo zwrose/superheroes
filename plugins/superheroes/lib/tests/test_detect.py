@@ -7,6 +7,8 @@ def test_dev_server_from_package_json(tmp_path):
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"dev": "vite"}}))
     r = detect.detect_dev_server(str(tmp_path))
     assert r["command"] == "npm run dev" and r["source"] == "package.json"
+    assert r["script"] == "dev"
+    assert r["argv"] == ["npm", "run", "dev"]
 
 
 def test_dev_server_profile_override_wins(tmp_path):
@@ -51,3 +53,11 @@ def test_dev_server_blank_profile_command_falls_through(tmp_path):
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"dev": "vite"}}))
     r = detect.detect_dev_server(str(tmp_path), profile={"devCommand": "   "})
     assert r["source"] == "package.json" and r["command"] == "npm run dev"
+
+
+def test_dev_server_package_unsafe_script_name_has_no_argv(tmp_path):
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"dev;bad": "vite"}}))
+    r = detect.detect_dev_server(str(tmp_path), profile=None)
+
+    assert r["source"] == "none"
+    assert r["command"] is None

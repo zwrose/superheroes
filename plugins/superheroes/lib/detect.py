@@ -4,8 +4,10 @@ it'. No detector ever raises: a missing/garbled signal returns a structured
 """
 import json
 import os
+import re
 
 _DEV_SCRIPT_PREFERENCE = ("dev", "start", "serve", "develop")
+_SAFE_NPM_SCRIPT = re.compile(r"^[A-Za-z0-9:_./-]+$")
 
 
 def detect_dev_server(root, profile=None):
@@ -26,7 +28,11 @@ def detect_dev_server(root, profile=None):
             scripts = {}
         for name in _DEV_SCRIPT_PREFERENCE:
             if name in scripts:
-                return {"command": "npm run %s" % name, "source": "package.json", "note": ""}
+                result = {"command": "npm run %s" % name, "source": "package.json",
+                          "script": name, "note": ""}
+                if _SAFE_NPM_SCRIPT.match(name):
+                    result["argv"] = ["npm", "run", name]
+                return result
     return {"command": None, "source": "none",
             "note": "no dev-server command detected — spot-check server skipped"}
 
