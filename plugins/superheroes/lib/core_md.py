@@ -463,3 +463,93 @@ def _migration_recorded(repo_root, core_p, legacy):
     core_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", core_p))
     legacy_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", legacy))
     return core_tracked and not legacy_tracked
+
+
+import argparse
+
+_HEROES = ("review-crew", "test-pilot")
+
+
+def resolve_shared(cwd, *, root=None):
+    """The shared facts WITH migrate-on-read (the FR-2 + FR-8 entry point — the ONLY migration
+    trigger). For each hero whose legacy profile is present, attempt migrate_on_read, then read.
+    Returns the fact dict, or None when core.md is still absent (caller detects, UFR-1)."""
+    for hero in _HEROES:
+        legacy = _legacy_path(cwd, hero)
+        if legacy and os.path.isfile(legacy):
+            migrate_on_read(cwd, hero, root=root)
+    return read(cwd, root)
+
+
+def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
+    """Lock-guarded atomic write of a hero LAYER file (FR-3 create path), co-located with
+    core.md and wrapped in the §2.2 layer provenance line. Returns a structured result:
+      - written  → {action: "written", "path": layer_p}
+      - lock contended / store unwritable → {action: "deferred"} (UFR-4; never raises)."""
+    stamp = now or _today()
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        return {"action": "deferred"}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            return {"action": "deferred"}
+        layer_p = _layer_path(cwd, hero, root)
+        try:
+            store_core.atomic_write(layer_p, _render_layer(layer_text, hero, status, stamp))
+        except OSError:
+            return {"action": "deferred"}
+        return {"action": "written", "path": layer_p}
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(prog="core_md")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    rp = sub.add_parser("resolve")
+    rp.add_argument("--cwd", default=".")
+    rp.add_argument("--root", default=None)
+    mp = sub.add_parser("migrate")
+    mp.add_argument("--cwd", default=".")
+    mp.add_argument("--root", default=None)
+    mp.add_argument("--hero", choices=_HEROES, required=True)
+    wp = sub.add_parser("write")  # FR-5 create path: shared facts → core.md
+    wp.add_argument("--cwd", default=".")
+    wp.add_argument("--root", default=None)
+    wp.add_argument("--status", choices=("provisional", "confirmed"), default="provisional")
+    lp = sub.add_parser("write-layer")  # FR-3: hero's own sections → its layer
+    lp.add_argument("--cwd", default=".")
+    lp.add_argument("--root", default=None)
+    lp.add_argument("--hero", choices=_HEROES, required=True)
+    lp.add_argument("--status", choices=("provisional", "confirmed"), default="provisional")
+    args = ap.parse_args(argv)
+    if args.cmd == "resolve":
+        try:
+            rec = read(args.cwd, args.root)
+        except Exception:  # fail-open like review_store.py — never crash a consumer
+            rec = None
+        out = {"verifyCommand": rec["verifyCommand"] if rec else None,
+               "stackTags": rec["stackTags"] if rec else [],
+               "status": rec["status"] if rec else None,
+               "behind": rec["behind"] if rec else False}
+    elif args.cmd == "migrate":
+        try:
+            out = migrate_on_read(args.cwd, args.hero, root=args.root)
+        except Exception:
+            out = {"action": "deferred"}
+    elif args.cmd == "write":
+        try:
+            facts = json.loads(sys.stdin.read() or "{}")
+            if not isinstance(facts, dict):
+                facts = {}
+            out = write(args.cwd, facts, args.status, root=args.root)
+        except Exception:
+            out = {"action": "deferred", "record": None, "proposals": []}
+    else:  # write-layer
+        try:
+            out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status, root=args.root)
+        except Exception:
+            out = {"action": "deferred"}
+    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

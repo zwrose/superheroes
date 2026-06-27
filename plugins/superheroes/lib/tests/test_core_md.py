@@ -632,3 +632,79 @@ def test_resume_completed_branch_git_failure_yields_deferred(tmp_path, monkeypat
     monkeypatch.setattr(CM.store_core, "run_git", _fail_commit)
     res = CM.migrate_on_read(repo, "review-crew", root=store)
     assert res["action"] == "deferred"  # NOT "completed"
+
+
+def test_resolve_shared_migrates_then_reads(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    got = CM.resolve_shared(repo, root=store)
+    assert got is not None and got["verifyCommand"] == "npm test"
+    assert not os.path.exists(legacy)  # migration fired
+
+
+def test_resolve_shared_none_on_bare_greenfield(tmp_path):
+    assert CM.resolve_shared(str(tmp_path), root=str(tmp_path / "store")) is None
+
+
+def test_cli_resolve_emits_expected_shape(tmp_path, capsys):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, CM.SCHEMA_VERSION, status="confirmed")
+    rc = CM.main(["resolve", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert set(out) == {"verifyCommand", "stackTags", "status", "behind"}
+    assert out["verifyCommand"] == "npm test"
+    assert out["behind"] is False
+
+
+def test_cli_resolve_greenfield_emits_nulls(tmp_path, capsys):
+    rc = CM.main(["resolve", "--cwd", str(tmp_path), "--root", str(tmp_path / "store")])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["verifyCommand"] is None and out["status"] is None
+
+
+def test_cli_migrate_runs(tmp_path, capsys):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    rc = CM.main(["migrate", "--cwd", repo, "--root", store, "--hero", "review-crew"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "migrated"
+
+
+def test_cli_write_creates_core_from_stdin(tmp_path, capsys, monkeypatch):
+    # FR-5 create path: `write` reads a facts JSON from stdin and writes core.md.
+    import io
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = {"verifyCommand": "pnpm check", "stackTags": ["node"],
+             "threatModel": "multi-tenant", "patterns": "- x: a.ts:1"}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(facts)))
+    rc = CM.main(["write", "--cwd", repo, "--root", store, "--status", "confirmed"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["verifyCommand"] == "pnpm check" and got["status"] == "confirmed"
+
+
+def test_cli_write_layer_creates_layer_from_stdin(tmp_path, capsys, monkeypatch):
+    # FR-3 create path: `write-layer` reads the hero layer body from stdin and writes the layer.
+    import io
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr("sys.stdin", io.StringIO("## Scope exclusions\n- none\n"))
+    rc = CM.main(["write-layer", "--cwd", repo, "--root", store,
+                  "--hero", "review-crew", "--status", "provisional"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "written"
+    layer = open(out["path"]).read()
+    assert "## Scope exclusions" in layer
+    assert "review-crew: schemaVersion=" in layer  # wrapped in the §2.2 layer provenance line
