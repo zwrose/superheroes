@@ -1,6 +1,8 @@
 // Smoke: runPhases routes the four front-half phases to the injected deps and PARKS at the front-half
 // boundary after review-tasks (does not begin build); switch-off routes the unchanged defaultPhaseLeaf
 // path and reaches build (FR-9).
+// #115 Task 12: phaseStep is now the JS twin (in-process). appendPhaseRecord (journal_entry) and
+// recordCursor (checkpoint_entry) still use cmdRunner (lib) until their conversion.
 const assert = require('assert')
 const sr = require('../showrunner.js')
 
@@ -8,11 +10,18 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 global.agent = async (prompt, opts) => {
   const label = (opts && opts.label) || ''
-  if (label !== 'lib') return null
-  if (prompt.includes('journal_entry')) return { ok: true }
-  if (prompt.includes('phase_step_cli')) return { action: 'proceed' }
-  if (prompt.includes('checkpoint_entry')) return { ok: true, pr: null }
-  return { ok: true }
+  if (label === 'exec') {
+    // exec batches; return ok for any batch
+    return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
+  }
+  if (label === 'lib') {
+    if (prompt.includes('journal_entry')) return { ok: true }
+    if (prompt.includes('checkpoint_entry')) return { ok: true, pr: null }
+    // phase_step_cli.py must NOT be dispatched as an agent (it is now the in-process JS twin).
+    if (prompt.includes('phase_step_cli')) throw new Error('phase_step_cli dispatched as agent — must use JS twin instead')
+    return { ok: true }
+  }
+  return null
 }
 
 async function main() {

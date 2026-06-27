@@ -3,6 +3,9 @@
 // runs in-memory — reviewers RETURN {findings:[]}, the synthesis leaf RETURNS {verdicts:[]}, merge +
 // tally are in-process twins (no front_half.py merge / tally agent). Terminals are driven by the
 // reviewer findings + the doc-reviser fixStep, not by a canned tally verdict. Stubs the leaves.
+// #115 Task 12: gateForTerminal is the in-process JS twin (no gate-for-terminal cmdRunner agent).
+//   readGate uses exec (not cmdRunner label='lib').
+//   reviewDocPhase records the gate via persistPhase (exec with set-gate + journal + checkpoint).
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
@@ -12,27 +15,31 @@ global.log = () => {}
 
 const BLOCKER = [{ file: 'docs/superheroes/wi/plan.md', line: 1, title: 'gap', severity: 'Critical', evidence: 'e' }]
 
-// reviewerFindings: what each doc reviewer returns. reviserFails: the doc-reviser fixStep returns null
-// (a fix failure -> halted). gate: the read-gate value. setGateFails: the set-gate write does not record.
+// gate: what read-gate returns. setGateFails: the set-gate step in persistPhase returns ok:false.
 function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails }) {
   let panelRuns = 0
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
-    if (label === 'lib') {
-      if (prompt.includes('read-gate')) return { review: gate }
-      if (prompt.includes('gate-for-terminal')) {
-        // map the terminal in the command to a gate exactly as front_half.py would.
-        const m = prompt.match(/--terminal '([^']+)'/)
-        return { gate: m && m[1] === 'clean' ? 'passed' : 'changes-requested' }
-      }
+    if (label === 'exec') {
+      if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
       if (prompt.includes('set-gate')) {
-        if (setGateFails) return { review: 'pending', status: 'in-review' }   // write did not record the gate
-        const m = prompt.match(/--review '([^']+)'/); return { review: m ? m[1] : 'passed', status: 'approved' }
+        // persistPhase batches set-gate + journal + checkpoint into one exec call.
+        // setGateFails: return ok:false for the set-gate command so persistPhase returns {ok:false}.
+        const ok = !setGateFails
+        return [
+          { index: 0, ok, stdout: '' },   // set-gate
+          { index: 1, ok: true, stdout: '' },  // journal_entry
+          { index: 2, ok: true, stdout: '' },  // checkpoint_entry
+        ]
       }
-      return { ok: true }
+      // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
+      if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as exec — must use JS twin')
+      // Generic exec (recordDeferred, io writes, etc.)
+      return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
-    if (label === 'exec') return []                                    // the cheap recordDeferred pipe
+    // gate-for-terminal must NOT be dispatched as a cmdRunner agent either.
+    if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as cmdRunner — must use JS twin')
     if (label.endsWith('-reviewer')) { panelRuns += 1; return { findings: reviewerFindings } }
     if (label.startsWith('synthesis')) return { verdicts: [] }         // keep all merged findings
     if (label === 'doc-reviser') return reviserFails ? null : { fixes: [], deferred: [] }
@@ -60,7 +67,7 @@ async function main() {
   ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
   global.agent = ag
   r = await sr.reviewDocPhase('plan', 'wi-b')
-  assert.strictEqual(r.gate, 'passed', 'clean terminal maps to passed')
+  assert.strictEqual(r.gate, 'passed', 'clean terminal maps to passed (JS twin gateForTerminal)')
   assert.ok(ag.panelRuns() >= 5, 'the panel ran when the gate was not yet passed')
 
   // (c) pending + a blocker whose doc-reviser fix fails -> halted -> changes-requested (parks).
@@ -68,16 +75,16 @@ async function main() {
   ag = makeAgent({ gate: 'pending', reviewerFindings: BLOCKER, reviserFails: true })
   global.agent = ag
   r = await sr.reviewDocPhase('plan', 'wi-c')
-  assert.strictEqual(r.gate, 'changes-requested', 'halted terminal maps to changes-requested')
+  assert.strictEqual(r.gate, 'changes-requested', 'halted terminal maps to changes-requested (JS twin)')
 
-  // (d) clean review but the set-gate write does not record -> park low-confidence (UFR-5 guard).
+  // (d) clean review but the set-gate persistPhase fails -> park low-confidence (UFR-5 guard).
   clean('wi-d')
   ag = makeAgent({ gate: 'pending', reviewerFindings: [], setGateFails: true })
   global.agent = ag
   r = await sr.reviewDocPhase('plan', 'wi-d')
   assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed')
   assert.strictEqual(r.phaseResult.confidence, 'low', 'a failed gate write parks (low confidence, UFR-5)')
-  console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard')
+  console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard (exec+twin, no cmdRunner)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

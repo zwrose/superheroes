@@ -49,6 +49,9 @@ def main(argv):
     ap.add_argument("--doc", required=True, choices=["plan", "tasks"])
     ap.add_argument("--root", default=None)
     ap.add_argument("--write-marker", action="store_true")
+    ap.add_argument("--emit-signals", action="store_true",
+                    help="Return {text, recorded, expected, sections} so the JS twin can call "
+                         "isUsableDraft() in-process (#115 Task 12). No decision is made here.")
     args = ap.parse_args(argv[1:])
     root = args.root or os.getcwd()
     base = os.path.join(root, "docs", "superheroes", args.work_item)
@@ -58,6 +61,9 @@ def main(argv):
         with open(doc_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
+        if args.emit_signals:
+            print(json.dumps({"text": "", "recorded": "", "expected": "", "sections": _SECTIONS.get(args.doc, [])}))
+            return 0
         print(json.dumps({"usable": False, "wrote": False})); return 0
     if args.write_marker:
         try:
@@ -66,6 +72,17 @@ def main(argv):
             print(json.dumps({"wrote": True}))
         except OSError:
             print(json.dumps({"wrote": False}))
+        return 0
+    if args.emit_signals:
+        # #115 Task 12: emit the raw signals so the JS twin (front_half.isUsableDraft) can decide.
+        expected = _body_hash(text)
+        try:
+            with open(marker_path, encoding="utf-8") as f:
+                recorded = f.read().strip()
+        except OSError:
+            recorded = ""
+        print(json.dumps({"text": text, "recorded": recorded, "expected": expected,
+                          "sections": list(_SECTIONS.get(args.doc, ()))}))
         return 0
     # check mode: marker (recorded) must equal the doc's CURRENT body hash (expected).
     expected = _body_hash(text)

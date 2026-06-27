@@ -2039,14 +2039,157 @@ module.exports = { resolveModel, DEFAULT_TIERS }
 
 };
 
+// ===== phase_step.js =====
+__modules["phase_step"] = function (module, exports, require) {
+// plugins/superheroes/lib/phase_step.js
+// Faithful JS twin of phase_step.py:decide — parity-locked. Safety ordering: assumption /
+// low-confidence parks are evaluated BEFORE the gate (a recorded assumption parks even on a
+// passed gate). Pure + fail-closed.
+function pyReprStr(v) {
+  // Python %r for a simple str: single-quoted, backslash- and quote-escaped.
+  if (typeof v === 'string') return "'" + v.replace(/\\/g, '\\\\').replace(/'/g, "\\'") + "'"
+  if (v === null || v === undefined) return 'None'
+  return String(v)
+}
+function decide(phaseResult, gate) {
+  const pr = phaseResult || {}
+  if (pr.assumptions && pr.assumptions.length) {
+    return { action: 'park_assumption', reason: 'phase recorded a material assumption' }
+  }
+  if (pr.confidence === 'low') {
+    return { action: 'park_low_confidence', reason: 'phase recorded confidence below the parking threshold' }
+  }
+  if (gate === null || gate === undefined || gate === 'passed') {
+    return { action: 'proceed', reason: (gate === null || gate === undefined) ? 'no review gate' : 'gate passed' }
+  }
+  if (gate === 'changes-requested') return { action: 'park_changes_requested', reason: 'review requested changes' }
+  if (gate === 'pending') return { action: 'park_pending', reason: 'gate not passed (pending / not yet approved)' }
+  return { action: 'park_unexpected_gate', reason: 'unexpected or unreadable gate value: ' + pyReprStr(gate) }
+}
+module.exports = { decide }
+
+};
+
+// ===== recover.js =====
+__modules["recover"] = function (module, exports, require) {
+// plugins/superheroes/lib/recover.js
+const _UNKNOWN = 'unknown'
+function _branchHash(branch) {
+  if (typeof branch !== 'string' || !branch.includes('-')) return null
+  return branch.slice(branch.lastIndexOf('-') + 1)
+}
+function reconcile(checkpoint, world) {
+  world = world || {}
+  if (world.store_ok === false) {
+    return { action: 'park_gate', reason: 'control-plane store unusable — fail closed (no lockless run)' }
+  }
+  if (!checkpoint) return { action: 'world_derive', reason: 'no checkpoint — re-derive from reality' }
+  if (checkpoint._incompatible) {
+    // Match Python checkpoint.get("reason", "unknown reason"): default ONLY when the key is absent;
+    // a present-but-falsy reason ("") is emitted as-is. (`|| 'unknown reason'` would wrongly substitute.)
+    return { action: 'park_gate', reason: 'checkpoint incompatible — ' + (checkpoint.reason === undefined ? 'unknown reason' : checkpoint.reason) }
+  }
+  if (checkpoint.branch) {
+    const cur = world.current_content_hash
+    if (cur === null || cur === undefined) {
+      return { action: 'gate', reason: 'could not recompute the tasks content-hash (transient) — not resuming blind' }
+    }
+    const bh = _branchHash(checkpoint.branch)
+    if (bh !== null && bh !== cur) {
+      return { action: 'gate', reason: 'approved tasks changed since this run started (stale spec)' }
+    }
+  }
+  const pr = world.pr
+  if (pr && typeof pr === 'object' && pr.state === 'merged') {
+    return { action: 'gate', reason: "PR already merged — the work is done (merge is the owner's)" }
+  }
+  if (pr === _UNKNOWN) {
+    return { action: 'gate', reason: 'could not read PR state (transient) — not creating a second PR' }
+  }
+  if (world.seeded_empty === _UNKNOWN) {
+    return { action: 'gate', reason: 'could not read seeded state (transient) — cannot confirm a clean baseline' }
+  }
+  return { action: 'continue', from_step: checkpoint.lastGoodStep === undefined ? null : checkpoint.lastGoodStep, reason: 'reconciled — resume' }
+}
+function prAction(world) {
+  const pr = (world || {}).pr
+  if (pr === _UNKNOWN) return 'gate'
+  if (pr && typeof pr === 'object' && !Array.isArray(pr)) {
+    if (!pr.number) return 'gate'
+    return pr.state === 'merged' ? 'gate' : 'adopt'
+  }
+  if (pr !== null && pr !== undefined) return 'gate'
+  return 'create'
+}
+const FLOOR_RETRY_MAX = 3
+function rearmAction(attempt, armed, maxRetry = FLOOR_RETRY_MAX) {
+  if (armed) return 'proceed'
+  if (attempt < maxRetry) return 'retry'
+  return 'park_gate'
+}
+module.exports = { reconcile, prAction, rearmAction, FLOOR_RETRY_MAX }
+
+};
+
+// ===== front_half.js =====
+__modules["front_half"] = function (module, exports, require) {
+// plugins/superheroes/lib/front_half.js
+// Pure-decider JS twin of front_half.py: gate_for_terminal + is_usable_draft.
+// render_run_outcome is deferred to Task 18. IO helpers (merge_findings /
+// record_deferred / append_notify) stay Python executors (Task 11).
+
+function gateForTerminal(terminal) {
+  return (terminal === 'clean' || terminal === 'clean-with-skips') ? 'passed' : 'changes-requested'
+}
+
+// Faithful port of front_half.py _PLACEHOLDER (same four alternatives, same IGNORECASE flag).
+// NOTE: Python _PLACEHOLDER is compiled with re.IGNORECASE only (NOT re.ASCII), so Python's
+// \w/\s/\b are UNICODE-aware there. JS \w/\s/\b (no `u` flag) are ASCII-aware. The twin
+// intentionally uses JS-default classes — NOT explicit ASCII classes as in circuit_breaker.js.
+// This is an accepted ASCII-in-practice approximation: the divergence only bites on a unicode
+// word/space char immediately adjacent to a placeholder token or heading, which never occurs in
+// ASCII definition-docs. Do NOT "fix" this to explicit ASCII classes; the asymmetry is deliberate.
+const _PLACEHOLDER = /\{\{|<!--\s*AUTHOR GUIDANCE|\bTBD\b|similar to Task\s+\w/i
+
+function _escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+
+function isUsableDraft(docText, completionSignal, expectedSignal, requiredSections = []) {
+  if (!completionSignal || !expectedSignal || completionSignal !== expectedSignal) return false
+  if (!docText || !docText.trim() || !docText.startsWith('---\n')) return false
+  const end = docText.indexOf('\n---', 4)
+  if (end === -1) return false
+  const body = docText.slice(end + 4)
+  if (!body.trim()) return false
+  if (_PLACEHOLDER.test(docText)) return false
+  for (const sec of requiredSections) {
+    const m = new RegExp('^#{1,6}\\s+' + _escapeRe(sec) + '\\s*$', 'm').exec(body)
+    if (!m) return false
+    const rest = body.slice(m.index + m[0].length)
+    const nxt = /^#{1,6}\s+/m.exec(rest)
+    const segment = nxt ? rest.slice(0, nxt.index) : rest
+    if (!segment.trim()) return false
+  }
+  return true
+}
+
+module.exports = { gateForTerminal, isUsableDraft }
+
+};
+
 // ===== showrunner.js =====
 __modules["showrunner"] = function (module, exports, require) {
 // plugins/superheroes/lib/showrunner.js
-// Control-flow-only native Workflow (the #86 review_panel_shell.js posture): the script
-// forwards decisions; every judgement is a pure Python decider or a #86 shell.
+// Control-flow-only native Workflow (#86 review_panel_shell.js posture): the script
+// forwards decisions; every judgment is a pure JS twin (in-process) or a #86 shell.
+// #115 Task 12: front-half spine rewired — reconcile/phaseStep/gateForTerminal/usableDraft/
+// authorModel are now in-process JS twin calls; zero decider agents on the front-half.
 const { reviewPanel } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
+const phaseStepTwin = require('./phase_step.js')
+const recoverTwin = require('./recover.js')
+const frontHalfTwin = require('./front_half.js')
+const modelTierTwin = require('./model_tier.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -2230,18 +2373,30 @@ function docPathFor(workItem, doc) { return `docs/superheroes/${workItem}/${doc}
 function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
 
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
+// #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
+// authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
+// The --write-marker stamp is FOLDED into the author agent (FR-4 fold): the author's prompt
+// instructs it to run front_half_usable.py --write-marker after authoring the doc, so there is
+// no separate cmdRunner call — the author leaf handles its own completion stamp.
 async function producePhase(phase, workItem) {
   const doc = phase                                    // 'plan' | 'tasks'
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
+  const model = authorModel()
+  // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
+  // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
   const authored = await agent(
     `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
     `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
-    `non-empty, no placeholder. Do NOT run review or record the review gate. Return ` +
+    `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
+    `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
+    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"\n\n` +
+    `Do NOT run review or record the review gate. Return ` +
     `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
     `{ identity, message }.`,
-    { label: `produce-${doc}`, model: await authorModel(),
+    { label: `produce-${doc}`, model,
       schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
   if (authored == null) {
     return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
@@ -2258,18 +2413,15 @@ async function producePhase(phase, workItem) {
                authored.notify.map((n) => (n && n.message) || '').join('; ')] }
     }
   }
-  // stamp the content-bound completion signal deterministically (engine, not the LLM) — the body hash,
-  // so a crash before this leaves the marker absent/stale and the next entry re-produces (UFR-4).
-  await cmdRunner(
-    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`,
-    { schema: { type: 'object', properties: { wrote: {} } } })
+  // Verify the author actually stamped the marker (UFR-4 guard). usableDraft re-reads via exec+twin.
   const after = await usableDraft(workItem, doc)
   if (!after.usable) return { confidence: 'low', assumptions: [`produce step yielded no usable ${doc} draft`] } // UFR-4
   return { confidence: 'high', assumptions: [] }
 }
 
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
+// #115 Task 12: gateForTerminal is now the in-process JS twin; the gate write goes through
+// persistPhase (one exec: set-gate + journal + checkpoint) — not a cmdRunner agent dispatch.
 async function reviewDocPhase(doc, workItem) {
   const existing = await readGate(workItem, doc)
   if (existing === 'passed') {
@@ -2281,12 +2433,19 @@ async function reviewDocPhase(doc, workItem) {
   const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
   try { await io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
-  const gate = await gateForTerminal(verdict && verdict.terminal)
-  const sg = await cmdRunner(
+  // gateForTerminal is the in-process JS twin (no agent dispatch).
+  const gate = gateForTerminal(verdict && verdict.terminal)
+  // Record gate + journal + checkpoint in one exec call (persistPhase, FR-4 persist order).
+  const sideEffectCmd =
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
-    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`,
-    { schema: { type: 'object', properties: { review: {}, status: {} } } })
-  if (!sg || sg.review !== gate) {
+    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`
+  const pr = await persistPhase(workItem, {
+    sideEffectCmd,
+    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
+    step: -1,   // placeholder: the real step is written by recordCursor in runPhases; -1 signals review-doc context
+    phase: `review-${doc}`,
+  })
+  if (!pr.ok) {
     // a failed durable gate write must NOT advance on un-recorded state (UFR-5) — park low-confidence,
     // mirroring reviewCodePhase's provenance-write guard.
     return { phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] }, gate }
@@ -2294,33 +2453,42 @@ async function reviewDocPhase(doc, workItem) {
   return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
 }
 
-// thin front_half.py / registry decider bridges.
-async function gateForTerminal(terminal) {
-  const out = await cmdRunner(
-    `python3 plugins/superheroes/lib/front_half.py gate-for-terminal --terminal ${shq(terminal || 'unknown')}`,
-    { schema: { type: 'object', required: ['gate'], properties: { gate: { type: 'string' } } } })
-  return (out && out.gate) || 'changes-requested'
+// gateForTerminal: pure in-process JS twin. No agent dispatch.
+function gateForTerminal(terminal) {
+  return frontHalfTwin.gateForTerminal(terminal || 'unknown')
 }
+
+// usableDraft: exec reads the doc text + signals via front_half_usable.py --emit-signals,
+// then the JS twin (front_half.isUsableDraft) decides in-process. No LLM agent.
 async function usableDraft(workItem, doc) {
-  const out = await cmdRunner(
+  const results = await exec([
     `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-    `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)"`,
-    { schema: { type: 'object', required: ['usable'], properties: { usable: {} } } })
-  return { usable: !!(out && out.usable) }
+    `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)" --emit-signals`,
+  ])
+  let signals = null
+  try { signals = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
+  if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
+  const usable = frontHalfTwin.isUsableDraft(
+    signals.text || '', signals.recorded || '', signals.expected || '', signals.sections || [])
+  return { usable: !!usable }
 }
-async function authorModel() {
-  const out = await cmdRunner(
-    `python3 plugins/superheroes/lib/model_tier_resolve.py --role author`,
-    { schema: { type: 'object', properties: { model: {} } } })
-  return (out && out.model) || undefined
+
+// authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
+// Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS.author = 'opus').
+function authorModel() {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  return modelTierTwin.resolveModel('author', overrides, null)
 }
 // the durable per-work-item NOTIFY ledger (under the gitignored docs dir — run-local state).
 function notifyLedgerFor(workItem) { return `docs/superheroes/${workItem}/.notify.json` }
+// appendNotify: IO accumulator write via exec (not cmdRunner). Returns false on failed durable write.
 async function appendNotify(workItem, entries) {
-  const out = await cmdRunner(
+  const results = await exec([
     `python3 plugins/superheroes/lib/front_half.py append-notify ` +
     `--ledger ${shq(notifyLedgerFor(workItem))} --entries ${shq(JSON.stringify(entries || []))}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {} } } })
+  ])
+  let out = null
+  try { out = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
   return !!(out && out.ok)   // false on a failed durable write — the caller must not silently lose it
 }
 
@@ -2473,19 +2641,24 @@ async function cmdRunner(cmd, { schema }) {
   )
 }
 
-const RECONCILE_SCHEMA = {
-  type: 'object', required: ['action'],
-  properties: { action: { type: 'string' }, from_step: {}, reason: { type: 'string' },
-    generation: {} },   // UFR-10: the lease generation recover_entry acquired, threaded to the build
-}
-
-// Reconcile-from-store: the leaf runs a small python that ensures the store, reads the
-// checkpoint + a world snapshot, and returns recover.reconcile(...)'s action.
+// Reconcile-from-store: exec gathers the world snapshot via recover_entry.py --snapshot
+// (IO: store, enforcer, lease, checkpoint, world read), then the JS twin decides (pure, in-process).
+// generation is threaded from the Python snapshot (UFR-10).
 async function reconcile(workItem) {
-  return cmdRunner(
-    `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)}`,
-    { schema: RECONCILE_SCHEMA },
-  )
+  const results = await exec([
+    `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)} --snapshot`,
+  ])
+  let snap = null
+  try { snap = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
+  if (!snap) {
+    // A failed/empty snapshot (IO error, store unusable before lease) -> fail closed.
+    return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
+  }
+  // recover_entry emits an early_park when the cursor guard triggers (before snapshot).
+  // In that case the snapshot fields are absent and {action, reason, generation} come directly.
+  if (snap.action) return snap   // early park (cursor_gate or store/enforcer/lease failure)
+  const decision = recoverTwin.reconcile(snap.checkpoint, snap.world)
+  return Object.assign({}, decision, { generation: snap.generation })
 }
 
 async function showrunner({ workItem }) {
@@ -2521,19 +2694,18 @@ async function showrunner({ workItem }) {
   return runPhases(workItem, fromStep, deps)
 }
 
-const READGATE_SCHEMA = { type: 'object', required: ['review'], properties: { review: { type: 'string' } } }
-
+// readGate: IO read via exec (definition-doc on disk). A missing/malformed doc returns the
+// 'unreadable' sentinel that phaseStep twin maps to park_unexpected_gate.
 async function readGate(workItem, doc) {
-  // A failed read-gate (missing/malformed doc -> non-zero exit + empty stdout, so cmdRunner can't
-  // produce a valid object) must PARK, never crash the run: return an 'unreadable' sentinel that
-  // phase_step.decide maps to park_unexpected_gate.
   try {
-    const out = await cmdRunner(
+    const results = await exec([
       `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
       `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
-      { schema: READGATE_SCHEMA })
+    ])
+    let out = null
+    try { out = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
     return (out && out.review) || 'unreadable'
-  } catch (e) {
+  } catch (_) {
     return 'unreadable'
   }
 }
@@ -2551,18 +2723,9 @@ function gateReadFor(workItem) {
 const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'workhorse',
                 'review-code', 'draft-PR', 'test-pilot', 'mark-ready', 'ship']
 
-const DECIDE_SCHEMA = {
-  type: 'object', required: ['action'],
-  properties: { action: { type: 'string' }, reason: { type: 'string' } },
-}
-
-async function phaseStep(phaseResult, gate) {
-  const pr = shq(JSON.stringify(phaseResult))
-  const g = gate === null || gate === undefined ? '' : ` --gate ${shq(gate)}`
-  return cmdRunner(
-    `python3 plugins/superheroes/lib/phase_step_cli.py --result ${pr}${g}`,
-    { schema: DECIDE_SCHEMA },
-  )
+// phaseStep: pure in-process JS twin (phase_step.decide). No agent dispatch.
+function phaseStep(phaseResult, gate) {
+  return phaseStepTwin.decide(phaseResult, gate)
 }
 
 async function defaultTestPilotPhase(workItem, generation) {
