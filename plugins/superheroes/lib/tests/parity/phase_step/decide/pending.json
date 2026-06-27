@@ -1,0 +1,2 @@
+{"input": [{"confidence": "high", "assumptions": []}, "pending"],
+ "expected": {"action": "park_pending", "reason": "gate not passed (pending / not yet approved)"}}
