@@ -28,7 +28,12 @@ def _git(*args):
 
 def resolve(work_item, generation):
     paths = control_plane.paths(os.getcwd(), work_item)
-    cp = checkpoint.read(paths["checkpoint"]) or {}
+    cp = checkpoint.read(paths["checkpoint"])
+    if isinstance(cp, dict) and cp.get("_incompatible"):
+        # recover_entry gates an incompatible checkpoint at startup, so this is defense in depth: don't
+        # carry the truthy marker dict forward — re-derive branch/pr from git reality (treat as empty).
+        cp = {}
+    cp = cp or {}
     root = _git("rev-parse", "--show-toplevel") or os.getcwd()
     head = _git("rev-parse", "HEAD")
     branch = cp.get("branch") or _git("rev-parse", "--abbrev-ref", "HEAD")
@@ -70,7 +75,11 @@ def main(argv):
     args = ap.parse_args(argv[1:])
 
     if args.cmd == "resolve":
-        sys.stdout.write(json.dumps(resolve(args.work_item, args.generation)) + "\n")
+        # Preserve the original heredoc's contract: a numeric generation stays a JSON number.
+        generation = args.generation
+        if isinstance(generation, str) and generation.isdigit():
+            generation = int(generation)
+        sys.stdout.write(json.dumps(resolve(args.work_item, generation)) + "\n")
         return 0
     return 2
 

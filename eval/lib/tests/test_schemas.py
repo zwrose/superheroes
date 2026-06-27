@@ -79,6 +79,14 @@ def test_invalid_samples_are_rejected():
             jsonschema.validate(sample, _load(name))
 
 
+def test_checkpoint_schema_rejects_future_version():
+    # The schemaVersion maximum mirrors the reader's accept-set {1,2}: a future v3 artifact must fail
+    # the schema, just as checkpoint.read() fails it closed.
+    bad = dict(VALID["checkpoint.schema.json"], schemaVersion=3)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(bad, _load("checkpoint.schema.json"))
+
+
 def test_definition_doc_rejects_malformed_workitem():
     # The §6.1 slug pattern is the most spec-load-bearing schema rule; exercise it directly.
     bad = dict(VALID["definition-doc.schema.json"], workItem="add-toggle-zzzzzz")  # suffix not 6 hex
