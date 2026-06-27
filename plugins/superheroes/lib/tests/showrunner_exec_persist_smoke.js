@@ -184,5 +184,34 @@ const sr = require('../showrunner.js')
   })
   assert.deepStrictEqual(phantomCheck, { ok: false }, 'persistPhase returns {ok:false} on unparseable exec output (no phantom ok:true)')
 
-  console.log('OK: exec dumb-pipe + persistPhase seam (model=haiku, order, shq-quoting, fenced-string parsing)')
+  // ---- (d6) prose BEFORE fence (the live failure shape) ----
+  // Haiku prefixed the JSON with prose: "Perfect. Here's the result as a JSON array:\n\n```json\n[...]\n```"
+  // The anchored ^```...```$ regex fails to match, so the current parser yields synthetic failure.
+  // After the fix the parser should extract the fenced block from anywhere in the string.
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return "Perfect. Here's the result as a JSON array:\n\n```json\n[{\"index\":0,\"ok\":true,\"stdout\":\"prose-ok\"}]\n```"
+  }
+  const proseFenced = await sr.exec(['echo prose'])
+  assert.ok(Array.isArray(proseFenced), 'exec returns array when leaf prefixes fence with prose')
+  assert.strictEqual(proseFenced.length, 1, 'prose-fenced result has one entry')
+  assert.strictEqual(proseFenced[0].index, 0, 'prose-fenced result[0].index is 0')
+  assert.strictEqual(proseFenced[0].ok, true, 'prose-fenced result[0].ok is true')
+  assert.strictEqual(proseFenced[0].stdout, 'prose-ok', 'prose-fenced result[0].stdout is "prose-ok"')
+
+  // ---- (d7) prose AROUND bare JSON (no fence) ----
+  // e.g. "Here it is: [{...}]\nAll done."
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return 'Here it is: [{"index":0,"ok":true,"stdout":"bare-prose"}]\nAll done.'
+  }
+  const bareProse = await sr.exec(['echo bare-prose'])
+  assert.ok(Array.isArray(bareProse), 'exec returns array when leaf surrounds bare JSON with prose')
+  assert.strictEqual(bareProse.length, 1, 'prose-around-JSON result has one entry')
+  assert.strictEqual(bareProse[0].ok, true, 'prose-around-JSON result[0].ok is true')
+  assert.strictEqual(bareProse[0].stdout, 'bare-prose', 'prose-around-JSON result[0].stdout is "bare-prose"')
+
+  console.log('OK: exec dumb-pipe + persistPhase seam (model=haiku, order, shq-quoting, fenced-string parsing, prose-prefixed shapes)')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

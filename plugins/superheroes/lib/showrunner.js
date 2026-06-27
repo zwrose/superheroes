@@ -373,24 +373,46 @@ function cheapestModel() {
 }
 
 // _parseExecResult: parse the leaf agent's response into a [{index,ok,stdout}] array.
-// Handles three response shapes:
-//   1. Array (stub/lucky-path) — returned as-is.
-//   2. String — strip optional markdown code fence (```json...``` or ```...```), then JSON.parse.
-//   3. Anything else / parse failure — return a synthetic per-command failure array so callers
-//      fail-closed with a clear signal rather than a vacuous success.
+// Handles all response shapes the leaf may produce:
+//   1. Array (stub/pass-through) — returned as-is.
+//   2. String — robust extraction tried in order:
+//      (a) First fenced block ANYWHERE in the string (non-anchored match for prose-prefixed output).
+//      (b) Whole trimmed string as-is (covers clean bare JSON array).
+//      For each candidate, try JSON.parse directly; if that fails, slice from first '[' to last ']'
+//      and JSON.parse that slice (handles prose before/after a bare JSON array).
+//      The first candidate that yields an Array is returned.
+//   3. Anything else / all candidates fail — synthetic per-command failure array (fail-closed).
 // n = commands.length; used only for synthetic failure array sizing (must be >= 1).
 function _parseExecResult(out, n) {
   var count = (n && n > 0) ? n : 1
   if (Array.isArray(out)) return out
   if (typeof out === 'string') {
     var trimmed = out.trim()
-    // Strip a surrounding markdown code fence: optional language tag (e.g. "json") after ```.
-    var fenceMatch = trimmed.match(/^```[a-z]*\s*\n?([\s\S]*?)\n?```\s*$/)
-    var inner = fenceMatch ? fenceMatch[1].trim() : trimmed
-    try {
-      var parsed = JSON.parse(inner)
-      if (Array.isArray(parsed)) return parsed
-    } catch (_e) { /* fall through to synthetic failure */ }
+    // Build candidates to try, in priority order:
+    // (a) content of the FIRST fenced block found anywhere (handles prose-prefixed fences).
+    var candidates = []
+    var fenceMatch = trimmed.match(/```(?:[a-zA-Z0-9]+)?\s*([\s\S]*?)```/)
+    if (fenceMatch) candidates.push(fenceMatch[1].trim())
+    // (b) whole trimmed string (handles clean bare JSON or prose-around-JSON via bracket slice).
+    candidates.push(trimmed)
+    for (var ci = 0; ci < candidates.length; ci++) {
+      var candidate = candidates[ci]
+      // Try direct parse first.
+      try {
+        var parsed = JSON.parse(candidate)
+        if (Array.isArray(parsed)) return parsed
+      } catch (_e1) { /* try bracket-slice fallback */ }
+      // Slice from first '[' to last ']' to handle prose around a bare JSON array.
+      var firstBracket = candidate.indexOf('[')
+      var lastBracket = candidate.lastIndexOf(']')
+      if (firstBracket >= 0 && lastBracket > firstBracket) {
+        var slice = candidate.slice(firstBracket, lastBracket + 1)
+        try {
+          var sliced = JSON.parse(slice)
+          if (Array.isArray(sliced)) return sliced
+        } catch (_e2) { /* try next candidate */ }
+      }
+    }
   }
   // Synthetic per-command failure: callers can detect the failure and surface it clearly.
   var failures = []
@@ -410,7 +432,9 @@ async function exec(commands, opts) {
   const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + c }).join('\n')
   const prompt =
     'Run each of the following commands in order using the Bash tool. ' +
-    'Return ONLY a JSON array where each element is {"index":<0-based>,"ok":<true|false>,"stdout":<string>}.\n\n' +
+    'Return ONLY a raw JSON array and NOTHING else — no prose, no explanation, no markdown fences; ' +
+    'your entire response must be valid for JSON.parse. ' +
+    'Each element: {"index":<0-based>,"ok":<true|false>,"stdout":<string>}.\n\n' +
     cmdList
   const o = Object.assign({}, opts || {}, { model: cheapestModel(), label: 'exec' })
   const out = await globalThis.agent(prompt, o)
