@@ -7,6 +7,7 @@ import pytest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 SHOWRUNNER_SMOKES = [
+    "plugins/superheroes/lib/tests/showrunner_bundle_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_boundary_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_extras_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_panel_smoke.js",
