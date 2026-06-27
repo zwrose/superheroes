@@ -501,12 +501,17 @@ async function showrunner({ workItem }) {
   // UFR-10 (#107): thread the lease generation recover_entry acquired into the workhorse build phase,
   // so the build can fence (renew-then-fence) at every branch-mutating boundary.
   const deps = { gateRead: gateReadFor(workItem), generation: r.generation }
-  // FR-7 (#108)/FR-4 (#102): native front-half wiring. Two opt-in selectors share the native
-  // authoring deps but differ on the boundary park: env SUPERHEROES_FRONT_HALF=native keeps the
-  // front-half-only boundary (parks at workhorse); the bundle's SUPERHEROES_BUNDLE_FULL_RUN runs
-  // the full live run (no boundary -> proceeds into the back-half).
-  const fullRun = !!globalThis.SUPERHEROES_BUNDLE_FULL_RUN   // set by the bundle preamble (Task 4)
-  if (procEnv('SUPERHEROES_FRONT_HALF') === 'native' || fullRun) {
+  // FR-7 (#108)/FR-4 (#102)/Task-13a (#115): native front-half wiring. Three opt-in selectors
+  // share the native authoring deps but differ on the boundary park:
+  //   - env SUPERHEROES_FRONT_HALF=native: direct-node/smoke path (procEnv); keeps boundary park.
+  //   - globalThis.SUPERHEROES_FRONT_HALF_NATIVE: Workflow-sandbox path (set by the ENTRY from
+  //     args.frontHalf==='native'); procEnv is unavailable in the sandbox (FR-8), so the ENTRY
+  //     injects this globalThis flag instead.
+  //   - SUPERHEROES_BUNDLE_FULL_RUN true (preamble default + full-run ENTRY): no boundary park,
+  //     proceeds into the back-half.
+  const fullRun = !!globalThis.SUPERHEROES_BUNDLE_FULL_RUN
+  const frontHalfNative = procEnv('SUPERHEROES_FRONT_HALF') === 'native' || !!globalThis.SUPERHEROES_FRONT_HALF_NATIVE
+  if (frontHalfNative || fullRun) {
     deps.produce = producePhase                  // plan / tasks authoring (author-only)
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
     if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park

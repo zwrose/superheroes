@@ -102,6 +102,14 @@ if (globalThis.__SR_RUN !== false) {
   // Optional cheap-leaf override for throwaway/test runs (args.model, e.g. 'haiku'); absent in
   // production so the per-role model tiers govern. The preamble's agent wrapper applies it.
   if (__a && __a.model) globalThis.__SR_LEAF_MODEL = __a.model
+  // args-based front-half selector (Task 13a, #115): args.frontHalf==='native' opts into a
+  // front-half-only run (parks at the workhorse boundary). This drives the sandbox selector
+  // because the env path (SUPERHEROES_FRONT_HALF) is unavailable in the Workflow sandbox (FR-8).
+  // The preamble sets SUPERHEROES_BUNDLE_FULL_RUN=true as the safe default; the ENTRY's
+  // assignment here runs AFTER the preamble so it correctly overrides that default.
+  const frontHalfNative = !!(__a && __a.frontHalf === 'native')
+  globalThis.SUPERHEROES_FRONT_HALF_NATIVE = frontHalfNative
+  globalThis.SUPERHEROES_BUNDLE_FULL_RUN = !frontHalfNative
   return __require('showrunner.js').showrunner({ workItem: wi })
 }
 `
