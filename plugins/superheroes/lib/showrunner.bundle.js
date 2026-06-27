@@ -2080,11 +2080,15 @@ async function showrunner({ workItem }) {
   // UFR-10 (#107): thread the lease generation recover_entry acquired into the workhorse build phase,
   // so the build can fence (renew-then-fence) at every branch-mutating boundary.
   const deps = { gateRead: gateReadFor(workItem), generation: r.generation }
-  // FR-7 (#108): native front-half wiring, behind the opt-in switch.
-  if (process.env.SUPERHEROES_FRONT_HALF === 'native') {
+  // FR-7 (#108)/FR-4 (#102): native front-half wiring. Two opt-in selectors share the native
+  // authoring deps but differ on the boundary park: env SUPERHEROES_FRONT_HALF=native keeps the
+  // front-half-only boundary (parks at workhorse); the bundle's SUPERHEROES_BUNDLE_FULL_RUN runs
+  // the full live run (no boundary -> proceeds into the back-half).
+  const fullRun = !!globalThis.SUPERHEROES_BUNDLE_FULL_RUN   // set by the bundle preamble (Task 4)
+  if (process.env.SUPERHEROES_FRONT_HALF === 'native' || fullRun) {
     deps.produce = producePhase                  // plan / tasks authoring (author-only)
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
-    deps.frontHalfBoundary = frontHalfBoundary   // park at the front-half boundary (FR-7)
+    if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park
   }
   return runPhases(workItem, fromStep, deps)
 }
