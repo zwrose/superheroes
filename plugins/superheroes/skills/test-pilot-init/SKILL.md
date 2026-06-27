@@ -96,6 +96,14 @@ trade-offs AND a recommendation derived from what you detected.
    dependency versions.
 3. Generate the catalog:
    `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/catalog.py" --blocks-dir <blocks_dir>`
+4. CREATE path (fresh setup, FR-5): pipe the shared facts JSON (stack, verify command,
+   threat model) into `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
+   --status confirmed` (use `provisional` on a headless run) to write the band-wide `core.md`,
+   and pipe test-pilot's own sections (its `json test-pilot-config` block + prose) into
+   `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
+   layer (FR-3). On reconcile of a pre-existing profile, run `core_md migrate --hero test-pilot`
+   then `core_md resolve` (CONVENTIONS §2.1 / §2.2). Never hand-format core.md — the lib owns
+   the format and the config lock.
 
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.

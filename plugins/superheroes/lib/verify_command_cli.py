@@ -7,6 +7,8 @@ the #89 panel re-runs verify)."""
 import json, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import core_md  # noqa: E402  (sibling, pure read)
 
 
 def _profile_path():
@@ -36,5 +38,18 @@ def _command_from_profile(path):
     return "none"
 
 
+def resolve_command(cwd=None):
+    """Resolve the verify command — core.md first (PURE read, never migrates), else the legacy
+    profile parse. Fail-open to "none" so the verify_gate treats it as skipped."""
+    cwd = cwd or os.getcwd()
+    try:
+        rec = core_md.read(cwd)                    # PURE read — never migrates
+        if rec and rec.get("verifyCommand"):
+            return rec["verifyCommand"]
+    except Exception:
+        pass
+    return _command_from_profile(_profile_path())
+
+
 if __name__ == "__main__":
-    print(json.dumps({"command": _command_from_profile(_profile_path())}))
+    print(json.dumps({"command": resolve_command()}))
