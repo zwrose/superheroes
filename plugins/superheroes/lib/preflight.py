@@ -132,14 +132,21 @@ def _verify_resolves(root):
 
 
 def _config_resolves(root):
-    """True iff the band's policy + storage-mode both resolve readably. Fail-closed."""
+    """True iff the band's policy + storage-mode reads complete without error. Fail-closed.
+
+    READ-ONLY: uses `mode_registry.read_registry` (not `resolve`, which backfills/creates a
+    store as a side-effect) so a readiness check never mutates state. A legitimately-absent
+    config is fine — the later phases fall back to provisional defaults — so this only fails
+    on an UNREADABLE config (an IO error, or `read_registry` raising UnknownSchemaVersion on
+    a too-new schema, which is the fail-closed case the later phases genuinely can't proceed past).
+    """
     try:
         import architect_config
         import mode_registry
         cwd = os.getcwd()
-        policy = architect_config.read_policy(cwd, root)
-        mode = mode_registry.resolve(cwd, root)
-        return policy is not None and isinstance(mode, dict) and bool(mode.get("mode"))
+        architect_config.read_policy(cwd, root)   # None on absent/corrupt; raises only on real IO error
+        mode_registry.read_registry(cwd, root)    # read-only; raises UnknownSchemaVersion (fail-closed)
+        return True
     except Exception:
         return False
 
