@@ -708,3 +708,51 @@ def test_cli_write_layer_creates_layer_from_stdin(tmp_path, capsys, monkeypatch)
     layer = open(out["path"]).read()
     assert "## Scope exclusions" in layer
     assert "review-crew: schemaVersion=" in layer  # wrapped in the §2.2 layer provenance line
+
+
+def test_content_completeness_review_profile_roundtrip(tmp_path):
+    # Loss-free guarantee (justifies removing the legacy file): every shared fact lands in
+    # core.md; every recognized hero section survives in the layer; an unrecognized section
+    # survives verbatim.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    profile = _REVIEW_PROFILE + "\n## Weird custom\n\nverbatim please\n"
+    open(legacy, "w").write(profile)
+    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "migrated"
+    core = CM.read(repo, root=store)
+    assert core["verifyCommand"] == "npm test"
+    assert core["threatModel"] == "multi-tenant"
+    assert "src/auth.ts:10" in core["patterns"]
+    layer = open(_hero_layer_path(repo, "review-crew")).read()
+    assert "## Scope exclusions" in layer
+    assert "## Focus hints" in layer
+    assert "## Weird custom" in layer and "verbatim please" in layer
+
+
+def test_content_completeness_test_pilot_machine_block_byte_identical(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "test-pilot")
+    os.makedirs(d, exist_ok=True)
+    legacy = os.path.join(d, "profile.md")
+    open(legacy, "w").write(_TEST_PILOT_PROFILE)
+    assert CM.migrate_on_read(repo, "test-pilot", root=store)["action"] == "migrated"
+    layer = open(_hero_layer_path(repo, "test-pilot")).read()
+    assert "```json test-pilot-config" in layer
+    assert '"baseUrl": "http://localhost:3000"' in layer
+
+
+def test_fr11_edited_layer_survives_reread(tmp_path):
+    # FR-11: a layer hand-edited AFTER migration is not overwritten on the next read.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    CM.migrate_on_read(repo, "review-crew", root=store)
+    layer_p = _hero_layer_path(repo, "review-crew")
+    edited = open(layer_p).read() + "\n## My hand edit\n\nkeep this\n"
+    open(layer_p, "w").write(edited)
+    # next read: noop (both files present, legacy gone) → layer untouched
+    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+    assert open(layer_p).read() == edited
