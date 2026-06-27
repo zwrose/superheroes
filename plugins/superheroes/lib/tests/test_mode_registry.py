@@ -424,3 +424,17 @@ def test_decide_mode_propagates_unknown_schema_version(tmp_path):
     _write_raw(str(tmp_path), root, {"schemaVersion": 999, "storageMode": "in-repo"})
     with pytest.raises(mr.UnknownSchemaVersion):
         mr.decide_mode(str(tmp_path), None, True, root=root)
+
+
+def test_config_lock_at_keys_on_an_arbitrary_store_dir(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    import store_core as sc
+    gh = sc.derive_identifiers(str(tmp_path))["gitdir_hash"]
+    common_dir = os.path.join(root, "projects", gh)
+    with mr.config_lock_at(common_dir) as got1:
+        assert got1 is True
+        with mr.config_lock_at(common_dir) as got2:
+            assert got2 is False     # same dir -> mutually exclusive, non-blocking
+    with mr.config_lock_at(common_dir) as got3:
+        assert got3 is True          # released after the context closed
