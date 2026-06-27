@@ -57,13 +57,21 @@ function __require(id) {
 globalThis.__sr_require = __require   // exposed so the compose smoke can resolve the registry
 `
 
+// The Workflow runtime runs this script in an async context and awaits the script
+// body's top-level promise. The entry must therefore `return` the showrunner promise
+// at the top level (NOT fire-and-forget it inside an un-awaited IIFE) — a floating
+// promise is never awaited, so the run would tear down before any agent() executes
+// (0 agents, instant exit). Top-level `return` is valid in the runtime's async wrapper;
+// the bundle smoke evaluates the script inside an async wrapper too, so it parses there.
 const ENTRY = `
 if (globalThis.__SR_RUN !== false) {
-  ;(async () => {
-    const wi = (typeof args === 'object' && args && args.workItem) ? args.workItem : null
-    if (!wi) throw new Error('showrunner bundle requires args.workItem')
-    return __require('showrunner.js').showrunner({ workItem: wi })
-  })()
+  // The Workflow runtime delivers the tool's args input as a JSON STRING (not a parsed object), so
+  // accept either: parse a string, pass an object through. A non-JSON / missing value -> clear throw.
+  let __a = args
+  if (typeof __a === 'string') { try { __a = JSON.parse(__a) } catch (_) { __a = null } }
+  const wi = (__a && typeof __a === 'object') ? __a.workItem : null
+  if (!wi) throw new Error('showrunner bundle requires args.workItem')
+  return __require('showrunner.js').showrunner({ workItem: wi })
 }
 `
 

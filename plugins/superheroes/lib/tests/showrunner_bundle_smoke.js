@@ -13,6 +13,9 @@ for (const banned of [/require\(\s*['"](fs|path|os|child_process|crypto|vm)['"]\
 // (b) Execute it in a sandbox that has NO require and NO Node builtins. `export const meta` is ESM
 //     syntax, so strip the `export ` keyword for the CommonJS-style eval. Set __SR_RUN=false so the
 //     auto-run entry is skipped and the registry is exposed for the compose assertion.
+//     The script is evaluated inside an async wrapper — faithful to how the Workflow runtime runs
+//     it (an async context that awaits the body's top-level promise), which is ALSO what makes the
+//     entry's top-level `return` parse (a bare top-level return in a plain vm script is a SyntaxError).
 text = text.replace(/export\s+const\s+meta/, 'const meta')
 const sandbox = { console, args: { workItem: 'x' } }
 sandbox.globalThis = sandbox
@@ -23,7 +26,9 @@ sandbox.log = () => {}
 vm.createContext(sandbox)
 // A Node-builtin require inside any loaded module would throw here (no `require` in scope), and a
 // duplicate const / orphaned export would be a SyntaxError at compile — both fail the smoke loudly.
-vm.runInContext('globalThis.__SR_RUN = false;\n' + text, sandbox, { timeout: 5000 })
+// __SR_RUN=false skips the entry, so the async wrapper completes synchronously (no top-level await is
+// reached) and the registry is set on globalThis by the time runInContext returns.
+vm.runInContext('globalThis.__SR_RUN = false;\n;(async () => {\n' + text + '\n})();', sandbox, { timeout: 5000 })
 const sr = sandbox.globalThis.__sr_require('showrunner.js')
 assert.strictEqual(typeof sr.showrunner, 'function', 'bundle did not compose a showrunner export')
 assert.ok(/const\s+meta\s*=/.test(text), 'bundle missing meta')

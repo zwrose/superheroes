@@ -2618,9 +2618,11 @@ module.exports.PHASES = PHASES
 
 
 if (globalThis.__SR_RUN !== false) {
-  ;(async () => {
-    const wi = (typeof args === 'object' && args && args.workItem) ? args.workItem : null
-    if (!wi) throw new Error('showrunner bundle requires args.workItem')
-    return __require('showrunner.js').showrunner({ workItem: wi })
-  })()
+  // The Workflow runtime delivers the tool's args input as a JSON STRING (not a parsed object), so
+  // accept either: parse a string, pass an object through. A non-JSON / missing value -> clear throw.
+  let __a = args
+  if (typeof __a === 'string') { try { __a = JSON.parse(__a) } catch (_) { __a = null } }
+  const wi = (__a && typeof __a === 'object') ? __a.workItem : null
+  if (!wi) throw new Error('showrunner bundle requires args.workItem')
+  return __require('showrunner.js').showrunner({ workItem: wi })
 }
