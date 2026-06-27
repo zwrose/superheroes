@@ -2,6 +2,8 @@ import socket
 import subprocess
 import sys
 
+import pytest
+
 import devserver
 
 
@@ -21,7 +23,11 @@ def test_health_url_built_from_port():
 
 def test_port_in_use_detects_a_bound_socket():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
+    try:
+        s.bind(("127.0.0.1", 0))
+    except PermissionError:
+        s.close()
+        pytest.skip("sandbox does not permit local socket bind")
     s.listen(1)
     port = s.getsockname()[1]
     try:
@@ -37,15 +43,37 @@ def test_start_raises_port_in_use_error():
     # before ever reaching Popen. Mirror test_port_in_use_detects_a_bound_socket's
     # socket setup so no real server is spawned.
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
+    try:
+        s.bind(("127.0.0.1", 0))
+    except PermissionError:
+        s.close()
+        pytest.skip("sandbox does not permit local socket bind")
     s.listen(1)
     port = s.getsockname()[1]
     try:
-        import pytest
         with pytest.raises(devserver.PortInUseError):
             devserver.start("true", port)
     finally:
         s.close()
+
+
+def test_start_accepts_argv_command_with_shell_false(monkeypatch):
+    calls = []
+    monkeypatch.setattr(devserver, "port_in_use", lambda port: False)
+
+    class Proc:
+        pid = 123
+
+    def fake_popen(command, shell, cwd, env, start_new_session):
+        calls.append((command, shell, cwd, env["PORT"], start_new_session))
+        return Proc()
+
+    monkeypatch.setattr(devserver.subprocess, "Popen", fake_popen)
+
+    handle = devserver.start(["npm", "run", "dev"], 5173, cwd="/tmp/app", shell=False)
+
+    assert handle["command"] == ["npm", "run", "dev"]
+    assert calls == [(["npm", "run", "dev"], False, "/tmp/app", "5173", True)]
 
 
 def test_teardown_kills_a_live_pid():

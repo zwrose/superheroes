@@ -22,7 +22,13 @@ if outcome in ("gate_failclosed", "preserve_notify"):            # no clean usab
     print(json.dumps({"error": "buildtree %s — cannot build cleanly" % outcome}))
     sys.exit(0)   # exit 0 so the fail-closed JSON is reliably consumed (buildPhase parks on no branch)
 paths = control_plane.paths(root, a.work_item)
-cp = ckpt_lib.read(paths["checkpoint"]) or ckpt_lib.new(a.work_item, branch)
+cp = ckpt_lib.read(paths["checkpoint"])
+if isinstance(cp, dict) and cp.get("_incompatible"):
+    # Don't overwrite a durable-but-incompatible checkpoint with a fresh one (that
+    # would discard the fail-closed signal and propagate the marker dict to disk). Park.
+    print(json.dumps({"error": "checkpoint incompatible: %s — cannot build cleanly" % cp.get("reason", "unknown reason")}))
+    sys.exit(0)   # exit 0 so the fail-closed JSON is reliably consumed (buildPhase parks on no branch)
+cp = cp or ckpt_lib.new(a.work_item, branch)
 cp["branch"] = branch
 if a.generation is not None:
     cp["lockGeneration"] = a.generation     # UFR-10: thread this run's generation (mint or reuse)

@@ -4,12 +4,12 @@
   "title": "superheroes checkpoint.json (CONVENTIONS §4.3)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "workItem", "issue", "size", "phase", "gates", "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep", "updatedAt"],
+  "required": ["schemaVersion", "workItem", "issue", "size", "phase", "gates", "patternsPin", "branch", "lockGeneration", "pr", "lastGoodStep", "lastGoodPhase", "updatedAt"],
   "definitions": {
     "gate": { "enum": ["pending", "passed", "changes-requested"] }
   },
   "properties": {
-    "schemaVersion": { "type": "integer", "minimum": 1 },
+    "schemaVersion": { "type": "integer", "minimum": 1, "maximum": 2 },
     "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
     "issue": { "type": ["integer", "null"] },
     "size": { "enum": ["small", "medium", "large"] },
@@ -40,7 +40,11 @@
         }
       ]
     },
-    "lastGoodStep": { "type": "string" },
+    "lastGoodStep": { "type": ["integer", "null"], "minimum": 0 },
+    "lastGoodPhase": {
+      "type": ["string", "null"],
+      "enum": [null, "plan", "review-plan", "tasks", "review-tasks", "workhorse", "review-code", "draft-PR", "test-pilot", "mark-ready", "ship"]
+    },
     "updatedAt": { "type": "string" }
   }
 }

@@ -2,6 +2,7 @@
 // Control-flow-only native Workflow (the #86 review_panel_shell.js posture): the script
 // forwards decisions; every judgement is a pure Python decider or a #86 shell.
 const { reviewPanel } = require('./review_panel_shell.js')
+const { testPilotPhase } = require('./test_pilot_phase.js')
 
 const REVIEW_CODE_REVIEWERS = [
   'architecture-reviewer', 'code-reviewer', 'security-reviewer',
@@ -25,15 +26,20 @@ const RECORD_DEFERRED_SCHEMA = { type: 'object', required: ['ok'],
   properties: { ok: {}, extras: {}, parentOrigin: {}, deferred: {} } }   // extras rides onto report.extras
 
 // Build the five caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
-function reviewCodeLeaves(tiers) {
+function reviewCodeLeaves(tiers, opts) {
+  opts = opts || {}
   const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
+  const target = opts.target || {}
+  const targetSuffix = target.worktree || target.head
+    ? `\n\nTarget worktree: ${target.worktree || process.cwd()}\nExpected head: ${target.head || 'current HEAD'}`
+    : ''
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
     const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
     await agent(
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
       `${rubric} rubric, and write your findings array to ` +
-      `${runDir}/round-${round}/findings-${reviewer}.json ([] if nothing to flag).`,
+      `${runDir}/round-${round}/findings-${reviewer}.json ([] if nothing to flag).${targetSuffix}`,
       withModel(model, { label: `${reviewer}:r${round}` }))
     return true
   }
@@ -65,7 +71,7 @@ function reviewCodeLeaves(tiers) {
       `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
       `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
       `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
-      `Blocking findings:\n${JSON.stringify(blockers)}`,
+      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
       withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
     return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
   }
@@ -84,19 +90,19 @@ function reviewCodeLeaves(tiers) {
 }
 
 // Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
-async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves }) {
+async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree }) {
   global.reviewerAgent = leaves.reviewerAgent
   global.mergeAgent = leaves.mergeAgent
   global.synthesisLeaf = leaves.synthesisLeaf
   global.recordDeferred = leaves.recordDeferred
-  return reviewPanel({
+  return withTargetCommandPrompts(worktree, () => reviewPanel({
     reviewerSet: REVIEW_CODE_REVIEWERS,
     context, rubric, runKey: runDir, runDir,
     fixStep: leaves.fixStep,
     maxRounds: 7,
     legKind: { panel: true, code: true },
     verifyCommand,
-  })
+  }))
 }
 
 module.exports = { REVIEW_CODE_REVIEWERS }
@@ -317,6 +323,32 @@ async function frontHalfBoundary(workItem) {
 module.exports.frontHalfBoundary = frontHalfBoundary
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
+function safeRunKey(s) { return String(s).replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 120) || 'target' }
+function inWorktree(cmd, worktree) {
+  return worktree ? `cd ${shq(worktree)} && ${cmd}` : cmd
+}
+function targetCommandPrompt(prompt, worktree) {
+  if (!worktree || typeof prompt !== 'string') return prompt
+  if (!prompt.startsWith('Run exactly this')) return prompt
+  // The cmdRunner shape is "Run exactly this …:\n\n<cmd>"; split on the FIRST blank-line boundary
+  // so a multi-line command (which may itself contain a blank line) is wrapped whole, not just its tail.
+  const idx = prompt.indexOf('\n\n')
+  if (idx < 0) return prompt
+  const prefix = prompt.slice(0, idx + 2)
+  const cmd = prompt.slice(idx + 2)
+  if (!cmd.trim() || cmd.trim().startsWith('cd ')) return prompt
+  return `${prefix}${inWorktree(cmd, worktree)}`
+}
+async function withTargetCommandPrompts(worktree, fn) {
+  if (!worktree) return fn()
+  const originalAgent = global.agent
+  global.agent = async (prompt, opts) => originalAgent(targetCommandPrompt(prompt, worktree), opts)
+  try {
+    return await fn()
+  } finally {
+    global.agent = originalAgent
+  }
+}
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
 async function cmdRunner(cmd, { schema }) {
@@ -395,7 +427,7 @@ function gateReadFor(workItem) {
 }
 
 const PHASES = ['plan', 'review-plan', 'tasks', 'review-tasks', 'workhorse',
-                'review-code', 'draft-PR', 'mark-ready', 'ship']
+                'review-code', 'draft-PR', 'test-pilot', 'mark-ready', 'ship']
 
 const DECIDE_SCHEMA = {
   type: 'object', required: ['action'],
@@ -409,6 +441,196 @@ async function phaseStep(phaseResult, gate) {
     `python3 plugins/superheroes/lib/phase_step_cli.py --result ${pr}${g}`,
     { schema: DECIDE_SCHEMA },
   )
+}
+
+async function defaultTestPilotPhase(workItem, generation) {
+  return testPilotPhase(workItem, generation, testPilotDeps(workItem, generation))
+}
+
+function testPilotDeps(workItem, generation) {
+  const fs = require('fs')
+  const path = require('path')
+  const os = require('os')
+  const runDir = path.join(os.tmpdir(), `showrunner-${workItem}-test-pilot`)
+  fs.mkdirSync(runDir, { recursive: true })
+  const writeJson = (name, value) => {
+    const p = path.join(runDir, `${name}.json`)
+    fs.writeFileSync(p, JSON.stringify(value || {}))
+    return p
+  }
+  const jsonCommand = (cmd, schema) => cmdRunner(cmd, { schema: schema || { type: 'object' } })
+  const cli = (cmd, schema) => jsonCommand(cmd, schema || { type: 'object' })
+  const keyFor = (branch) => encodeURIComponent(branch || workItem).replace(/~/g, '%7E')
+
+  return {
+    resolveContext: async () => cli(
+      `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
+      `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}`,
+      { type: 'object' }),
+
+    decideApplicability: async (context) => {
+      const diff = writeJson('applicability-diff', context.diff || {})
+      const detectors = writeJson('applicability-detectors', context.detectors || {})
+      const profile = writeJson('applicability-profile', context.profile || {})
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_applicability_cli.py decide ` +
+        `--diff-json ${shq(diff)} --detectors-json ${shq(detectors)} --profile-json ${shq(profile)}`,
+        { type: 'object', required: ['verdict'] })
+    },
+
+    derivePlan: async (context) => agent(
+      `You are the test-pilot plan leaf for work-item ${workItem}. Derive a browser test plan for ` +
+      `the current branch head ${context.head}. Return ONLY JSON ` +
+      `{"records":[{"branch":${JSON.stringify(context.branch)},"steps":[{"id","instruction","expected","scenarioIds":[]}]}],` +
+      `"coverageRationale":"..."}. Use concise stable step ids; include scenarioIds when seed scenarios are needed.`,
+      { label: 'test-pilot-plan', schema: { type: 'object', required: ['records'], properties: { records: { type: 'array' } } } }),
+
+    preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records || [] }),
+
+    prepareArtifacts: async ({ plan, records, context }) => {
+      const pr = context.pr && context.pr.number
+      if (!pr) return { action: 'park', reason: 'test-pilot artifacts require a draft PR number' }
+      const planPath = writeJson('plan-artifact', { key: keyFor(context.branch), records })
+      const resultsPath = writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(context.branch))}`,
+        { type: 'object' })
+    },
+
+    resolveServer: async (context) => {
+      const profile = writeJson('server-profile', context.profile || {})
+      const detection = writeJson('server-detection', context.detectors || {})
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py resolve ` +
+        `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
+        { type: 'object' })
+    },
+
+    withManagedServer: async (serverContext, run) => {
+      const launchPath = writeJson('server-launch-context', serverContext)
+      const launched = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py launch ` +
+        `--context-json ${shq(launchPath)}`,
+        { type: 'object' })
+      if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
+        return launched
+      }
+      try {
+        const outcome = await run(launched)
+        const contextPath = writeJson('server-finish-context', launched)
+        const outcomePath = writeJson('server-finish-outcome', outcome || {})
+        return cli(
+          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
+          { type: 'object' })
+      } catch (err) {
+        const contextPath = writeJson('server-finish-context', launched)
+        const outcomePath = writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
+        await cli(
+          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
+          { type: 'object' })
+        throw err
+      }
+    },
+
+    seedRecords: async (records) => {
+      const recordsPath = writeJson('seed-records', records)
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py prepare --records-json ${shq(recordsPath)}`,
+        { type: 'object' })
+    },
+
+    runBrowserPass: async (browserContext) => agent(
+      `Run the test-pilot browser pass for work-item ${workItem}. Stay within baseUrl/allowedOrigins and return ONLY JSON ` +
+      `{"source":"browser","baseUrl":${JSON.stringify(browserContext.baseUrl)},"steps":[{"id","status","notes","browserExecuted":true,"failureType"?,"summary"?}]}. ` +
+      `Browser context: ${JSON.stringify(browserContext)}`,
+      { label: 'test-pilot-browser', schema: { type: 'object' } }),
+
+    aggregateResults: async (rawResults) => {
+      const raw = writeJson('browser-raw', rawResults)
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_results_cli.py aggregate --raw-json ${shq(raw)}`,
+        { type: 'object' })
+    },
+
+    budgetCheck: async (_phase, payload) => {
+      const counts = writeJson('budget-counts', payload && payload.counts ? payload.counts : {
+        browserPasses: payload && typeof payload.browserPasses === 'number'
+          ? payload.browserPasses
+          : (payload && payload.rerunScope ? 1 : 0),
+        browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
+      })
+      const out = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_budget_cli.py decide --counts-json ${shq(counts)}`,
+        { type: 'object' })
+      return out.action === 'within_budget' ? { ok: true } : { ok: false, reason: out.reason || 'test-pilot budget exceeded' }
+    },
+
+    retryDecide: async (passResult, history, changedFiles, dependencyMap) => {
+      const passPath = writeJson('retry-pass', passResult)
+      const histPath = writeJson('retry-history', history || [])
+      const depPath = dependencyMap ? writeJson('retry-deps', dependencyMap) : null
+      const changed = (changedFiles || []).map((f) => ` --changed-file ${shq(f)}`).join('')
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_retry_cli.py decide --pass-json ${shq(passPath)} ` +
+        `--history-json ${shq(histPath)}${changed}${depPath ? ` --dependency-json ${shq(depPath)}` : ''}`,
+        { type: 'object' })
+    },
+
+    dispatchFixBatch: async (failures, details) => agent(
+      `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
+      `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
+      `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
+      { label: 'test-pilot-fixer', schema: { type: 'object' } }),
+
+    reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
+      runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
+    })),
+
+    restoreBaseline: async (records, details) => {
+      const recordsPath = writeJson('restore-records', records)
+      const out = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py restore-baseline --records-json ${shq(recordsPath)}`,
+        { type: 'object' })
+      if (out.action === 'park' || out.ok === false) return out
+      return Object.assign({}, out, { baseline: { head: details.head, restored: true, status: out.status } })
+    },
+
+    ensureFinalArtifacts: async (payload) => {
+      const pr = payload.context.pr && payload.context.pr.number
+      if (!pr) return { action: 'park', reason: 'final results artifact requires a PR number' }
+      const planPath = writeJson('final-plan-artifact', { key: keyFor(payload.context.branch), records: payload.records })
+      const resultsPath = writeJson('final-results-artifact', Object.assign({ key: keyFor(payload.context.branch) }, payload.aggregated || {}))
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(payload.context.branch))}`,
+        { type: 'object' })
+    },
+
+    publishReady: async (_wi, head, payload) => {
+      const statusPath = writeJson('publish-status', {
+        branch: payload.context.branch,
+        store: payload.context.store,
+        generation,
+      })
+      const storeArg = payload.context.store ? ` --store ${shq(payload.context.store)}` : ''
+      const generationArg = generation ? ` --generation ${shq(String(generation))}` : ''
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_publish_cli.py publish --work-item ${shq(workItem)} ` +
+        `--head ${shq(head)} --status-json ${shq(statusPath)} --expected-branch ${shq(payload.context.branch)} ` +
+        `${storeArg}${generationArg}`,
+        { type: 'object' })
+    },
+
+    writeStatus: async (status) => {
+      const statusPath = writeJson('status-write', status)
+      return cli(
+        `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
+        { type: 'object', required: ['ok'] })
+    },
+  }
 }
 
 // returns { ok } — a false ok means journal_entry caught a DurableWriteError (UFR-2).
@@ -442,6 +664,8 @@ async function runPhases(workItem, fromStep, deps) {
       phaseResult = await (deps.build || buildPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'draft-PR') {
       const r = await (deps.draftPR || draftPRPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+    } else if (phase === 'test-pilot') {
+      phaseResult = await (deps.testPilot || defaultTestPilotPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'mark-ready') {
       const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
@@ -459,7 +683,7 @@ async function runPhases(workItem, fromStep, deps) {
     if (decision.action !== 'proceed') return { outcome: 'parked', phase, reason: decision.reason }
     // FR-4/FR-3: persist the side effect + cursor BEFORE advancing. If that durable write fails, park
     // rather than advance — advancing on an unrecorded cursor would lose record-before-advance.
-    const cur = await recordCursor(workItem, i, sideEffect)
+    const cur = await recordCursor(workItem, i, phase, sideEffect)
     if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
@@ -488,34 +712,96 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
 
 // the review-code phase: drive the shared loop, map its terminal to advance/park, stamp covers on a
 // pure `clean` (X'), and surface the readout at a park. Returns { phaseResult, gate } for runPhases.
-async function reviewCodePhase(workItem) {
-  const runDir = `/tmp/showrunner-${workItem}-review-code`
+async function reviewCodePhase(workItem, opts) {
+  opts = opts || {}
+  const runDir = opts.runDir || (opts.runDirSuffix
+    ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
+    : `/tmp/showrunner-${workItem}-review-code`)
+  const initialHead = opts.expectedHead || null
+  if (opts.expectedHead) {
+    const actual = await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
+    if (!actual || actual !== opts.expectedHead) {
+      return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${opts.expectedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
+    }
+  }
+  const targetWorktree = opts.worktree || null
+  // premortem-002: the fixer is a freeform subagent that receives the target worktree only as a TEXT
+  // hint (withTargetCommandPrompts retargets just the "Run exactly this" cmdRunner prompts). If it
+  // commits to the showrunner CWD instead of the target tree, the target HEAD never advances, the
+  // expectedHead checks still pass (both = pre-fix HEAD), and a stale `clean` covers-stamp would
+  // publish unmodified code. Snapshot CWD HEAD so we can detect that divergence after the loop.
+  const cwdHeadBefore = (targetWorktree && opts.expectedHead) ? await resolveHead(null, opts.ref || 'HEAD') : null
   const cfg = await cmdRunner(
-    `python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`,
+    inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree),
     { schema: CONFIG_SCHEMA })
-  const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {})
+  const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
+    target: { worktree: opts.worktree, head: opts.expectedHead },
+  })
   const verdict = await runReviewCodePanel({
     runDir, context: workItem, rubric: 'review-base',
-    verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves,
+    verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
+  const finalHead = opts.expectedHead
+    ? await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
+    : null
+  if (opts.expectedHead && !finalHead) {
+    return { phaseResult: { confidence: 'low', assumptions: ['review-code final target head could not be resolved'] }, gate: 'changes-requested', terminal, head: null, changed: false }
+  }
   // #104's advance/park mapping, read off the terminal (plan Key decision 2).
   if (!ADVANCE_TERMINALS.has(terminal)) {
     await renderAndPostReadout(workItem, runDir, verdict)   // names parentOrigin at the review-phase park
-    return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested' }
+    return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
+  }
+  // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If
+  // the CWD advanced while the target HEAD did not, the fixer's commits landed outside the shipped tree
+  // — refuse to advance/stamp rather than certify (and ship) code the fixes never touched.
+  if (targetWorktree && opts.expectedHead) {
+    const cwdHeadAfter = await resolveHead(null, opts.ref || 'HEAD')
+    const cwdMoved = cwdHeadBefore && cwdHeadAfter && cwdHeadBefore !== cwdHeadAfter
+    const targetMoved = initialHead && finalHead && initialHead !== finalHead
+    if (cwdMoved && !targetMoved) {
+      return { phaseResult: { confidence: 'low', assumptions: ['review-code fixes landed outside the target worktree (cwd HEAD advanced, target HEAD did not) — refusing to stamp coverage'] }, gate: 'changes-requested', terminal, head: finalHead, changed: false }
+    }
   }
   // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
   // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
+    const targetArgs = opts.worktree || opts.expectedHead
+      ? ` --worktree ${shq(opts.worktree || process.cwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
+      : ''
     const prov = await cmdRunner(
-      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}`,
+      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
       { schema: PROV_SCHEMA })
     if (!prov.ok) {
       // UFR-2: the covers-stamp write failed -> park (low confidence), do NOT assert ship-ready.
       return { phaseResult: { confidence: 'low', assumptions: ['review covers stamp not recorded: ' + (prov.error || 'unknown')] }, gate: 'changes-requested' }
     }
   }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
+  return {
+    phaseResult: { confidence: 'high', assumptions: [] },
+    gate: 'passed',
+    terminal,
+    head: finalHead,
+    changed: !!(initialHead && finalHead && initialHead !== finalHead),
+    reviewCoverageHead: terminal === 'clean' ? (finalHead || undefined) : undefined,
+    verifyPassedHead: finalHead || undefined,
+  }
+}
+
+async function resolveHead(worktree, ref) {
+  const cmd = worktree
+    ? `git -C ${shq(worktree)} rev-parse ${shq(ref || 'HEAD')}`
+    : `git rev-parse ${shq(ref || 'HEAD')}`
+  try {
+    const out = await agent(
+      `Run exactly this command and return ONLY its stdout, unchanged:\n\n${cmd}`,
+      { label: 'lib' })
+    const text = String(out || '').trim()
+    return text || null
+  } catch (_) {
+    return null
+  }
 }
 
 // the native "workhorse" build phase (#87) — implement the approved tasks doc task-by-task with a
@@ -531,12 +817,13 @@ module.exports.buildPhase = buildPhase
 
 const CKPT_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, pr: {} } }
 
-// recordCursor writes lastGoodStep (+ any side effect: { pr } or { ready }) BEFORE the loop
+// recordCursor writes lastGoodStep + lastGoodPhase (+ any side effect: { pr } or { ready }) BEFORE the loop
 // advances — so a crash resumes after this phase and never repeats an irreversible action (FR-4).
-async function recordCursor(workItem, step, sideEffect) {
+async function recordCursor(workItem, step, phase, sideEffect) {
   const extra = sideEffect ? ` --json ${shq(JSON.stringify(sideEffect))}` : ''
   return cmdRunner(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --step ${shq(String(step))}${extra}`,
+    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} ` +
+    `--step ${shq(String(step))} --phase ${shq(phase)}${extra}`,
     { schema: CKPT_SCHEMA })
 }
 
@@ -570,6 +857,9 @@ async function markReadyPhase(workItem) {
 module.exports.recordCursor = recordCursor
 module.exports.draftPRPhase = draftPRPhase
 module.exports.markReadyPhase = markReadyPhase
+module.exports.testPilotPhase = testPilotPhase
+module.exports.defaultTestPilotPhase = defaultTestPilotPhase
+module.exports.testPilotDeps = testPilotDeps
 
 async function shipPhase(workItem, pr) {
   // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date

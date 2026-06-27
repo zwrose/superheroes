@@ -11,15 +11,28 @@ ap.add_argument("--step", required=True, choices=["build", "review"])
 ap.add_argument("--work-item", required=True)
 ap.add_argument("--round", type=int, default=1, help="the review loop's terminal round (review step)")
 ap.add_argument("--reason", default="review-code clean", help="review_result reason (review step)")
+ap.add_argument("--worktree", default=None, help="explicit worktree for a targetable review step")
+ap.add_argument("--head", default=None, help="explicit expected head for a targetable review step")
 a = ap.parse_args()
 paths = control_plane.paths(os.getcwd(), a.work_item)
 # The SHIPPED HEAD is the build branch's tip (the PR ships that branch), not the ambient cwd HEAD —
 # resolve it from the recorded checkpoint.branch so provenance.head == the HEAD the PR actually ships
 # (otherwise a build that happens on a separate branch/worktree records a mismatched HEAD).
-cp = ckpt_lib.read(paths["checkpoint"]) or {}
-ref = cp.get("branch") or "HEAD"
+cp = ckpt_lib.read(paths["checkpoint"])
+if isinstance(cp, dict) and cp.get("_incompatible"):
+    # A durable-but-incompatible checkpoint must NOT silently fall back to ambient HEAD
+    # (that would stamp provenance over whatever cwd happens to point at). Fail closed.
+    print(json.dumps({"ok": False,
+                      "error": "checkpoint incompatible: %s — provenance not recorded" % cp.get("reason", "unknown reason")}))
+    sys.exit(0)
+cp = cp or {}
+ref = a.head or cp.get("branch") or "HEAD"
 try:
-    _hp = subprocess.run(["git", "rev-parse", ref], capture_output=True, text=True, timeout=10)
+    cmd = ["git"]
+    if a.worktree:
+        cmd.extend(["-C", a.worktree])
+    cmd.extend(["rev-parse", ref])
+    _hp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 except subprocess.TimeoutExpired:
     print(json.dumps({"ok": False, "error": "git rev-parse timed out — provenance not recorded"})); sys.exit(0)
 head = _hp.stdout.strip()

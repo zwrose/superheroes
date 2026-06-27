@@ -22,6 +22,13 @@ def test_marker_render_uses_key_verbatim():
         pc.render_marker("plan", "feat%2Fx\n")
 
 
+def test_fallback_path_rejects_unsanitized_keys(tmp_path):
+    with pytest.raises(ValueError):
+        pc.fallback_path(str(tmp_path), "../README", "plan")
+    with pytest.raises(ValueError):
+        pc.write_fallback(str(tmp_path), "evil/key", "results", "body")
+
+
 def _c(cid, author, body):
     return {"id": cid, "author": author, "body": body}
 

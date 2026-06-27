@@ -4,7 +4,7 @@ after ship_gate.decide proves build+review; returns {pr}. mark-ready: pr_phase.m
 a gh isDraft read -> flip if needed. Fail-closed: any 'gate' decision returns ok:false."""
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import checkpoint as ckpt_lib, control_plane, pr_phase, recover, ship_gate
+import checkpoint as ckpt_lib, control_plane, pr_phase, recover, ship_gate, test_pilot_status
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True, choices=["draft", "mark-ready"])
@@ -12,7 +12,14 @@ ap.add_argument("--work-item", required=True)
 a = ap.parse_args()
 root = os.getcwd()
 paths = control_plane.paths(root, a.work_item)
-cp = ckpt_lib.read(paths["checkpoint"]) or {}
+cp = ckpt_lib.read(paths["checkpoint"])
+if isinstance(cp, dict) and cp.get("_incompatible"):
+    # A durable-but-incompatible checkpoint must NOT fall back to an empty branch (that
+    # lists/creates PRs against the ambient HEAD). Fail closed before any PR action.
+    print(json.dumps({"ok": False,
+                      "reason": "checkpoint incompatible: %s" % cp.get("reason", "unknown reason")}))
+    sys.exit(0)
+cp = cp or {}
 branch = cp.get("branch", "")
 
 
@@ -77,6 +84,17 @@ else:  # mark-ready
     decision = pr_phase.mark_ready_action(pr)
     if decision == "gate":
         print(json.dumps({"ok": False, "reason": "PR isDraft unreadable — not flipping blind"})); sys.exit(0)
+    try:
+        _hp = subprocess.run(["git", "rev-parse", branch or "HEAD"], capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        print(json.dumps({"ok": False, "reason": "git rev-parse timed out"})); sys.exit(0)
+    head = _hp.stdout.strip()
+    if _hp.returncode != 0 or not head:
+        print(json.dumps({"ok": False, "reason": "cannot resolve branch HEAD for test-pilot status"})); sys.exit(0)
+    status_result = test_pilot_status.assert_current(test_pilot_status.status_path(root, a.work_item), head)
+    status_decision = pr_phase.mark_ready_status_action(status_result)
+    if status_decision["action"] == "gate":
+        print(json.dumps({"ok": False, "reason": status_decision["reason"]})); sys.exit(0)
     if decision == "flip":
         try:                                             # capture: gh's success line must not pollute our stdout
             rc = subprocess.run(["gh", "pr", "ready", str(pr["number"])], capture_output=True, timeout=60).returncode

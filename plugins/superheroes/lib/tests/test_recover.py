@@ -1,7 +1,9 @@
 # plugins/superheroes/lib/tests/test_recover.py
 import recover
+import recover_entry
 
-CKPT = {"workItem": "wi", "branch": "superheroes/wi-abc123", "lastGoodStep": "5"}
+CKPT = {"workItem": "wi", "branch": "superheroes/wi-abc123",
+        "lastGoodStep": "5", "lastGoodPhase": "review-code"}
 OK_WORLD = {"store_ok": True, "current_content_hash": "abc123", "pr": None,
             "seeded_empty": True}
 
@@ -13,6 +15,36 @@ def test_wedged_store_fails_closed():
 
 def test_no_checkpoint_world_derives():
     assert recover.reconcile(None, OK_WORLD)["action"] == "world_derive"
+
+
+def test_incompatible_checkpoint_parks_instead_of_world_deriving():
+    r = recover.reconcile({"_incompatible": True, "reason": "newer schema"}, OK_WORLD)
+    assert r["action"] == "park_gate"
+    assert "newer schema" in r["reason"]
+
+
+def test_recover_entry_parks_when_cursor_phase_does_not_match_phase_list():
+    r = recover_entry._phase_cursor_guard(
+        {"lastGoodStep": 2, "lastGoodPhase": "review-plan"},
+        ["plan", "review-plan", "tasks"],
+    )
+    assert r["action"] == "park_gate"
+    assert "lastGoodPhase" in r["reason"]
+    assert "tasks" in r["reason"]
+
+
+def test_recover_entry_accepts_test_pilot_cursor_in_current_phase_list():
+    r = recover_entry._phase_cursor_guard(
+        {"lastGoodStep": 7, "lastGoodPhase": "test-pilot"},
+    )
+    assert r is None
+
+
+def test_recover_entry_accepts_mark_ready_cursor_after_test_pilot_insert():
+    r = recover_entry._phase_cursor_guard(
+        {"lastGoodStep": 8, "lastGoodPhase": "mark-ready"},
+    )
+    assert r is None
 
 
 def test_unreadable_content_hash_gates_not_resumes_blind():

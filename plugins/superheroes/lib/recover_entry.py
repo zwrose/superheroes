@@ -16,6 +16,8 @@ import recover
 import ref_lock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+# checkpoint.py is the single source of truth for the phase list (§4.3); don't redefine it.
+CURRENT_PHASES = ckpt_lib.CURRENT_PHASES
 
 
 def _park(reason):
@@ -44,6 +46,36 @@ def _read_pr(cp):
         return "unknown"   # a 0-exit non-array / malformed payload -> transient (reconcile GATEs)
 
 
+def _phase_cursor_guard(cp, phases=None):
+    phases = phases or CURRENT_PHASES
+    if not cp:
+        return None
+    if cp.get("_incompatible"):
+        return {"action": "park_gate",
+                "reason": "checkpoint incompatible — %s" % cp.get("reason", "unknown reason")}
+    step = cp.get("lastGoodStep")
+    phase = cp.get("lastGoodPhase")
+    if step is None:
+        if phase is None:
+            return None
+        return {"action": "park_gate",
+                "reason": "checkpoint lastGoodPhase is set but lastGoodStep is empty"}
+    try:
+        idx = int(step)
+    except (TypeError, ValueError):
+        return {"action": "park_gate",
+                "reason": "checkpoint lastGoodStep is not numeric"}
+    if idx < 0 or idx >= len(phases):
+        return {"action": "park_gate",
+                "reason": "checkpoint lastGoodStep %s is outside the current phase list" % step}
+    expected = phases[idx]
+    if phase != expected:
+        return {"action": "park_gate",
+                "reason": "checkpoint lastGoodPhase %r does not match current phase[%s] %r" %
+                          (phase, idx, expected)}
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--work-item", required=True)
@@ -68,6 +100,11 @@ def main():
         return _park("work-item lease %s — another run is in progress (UFR-3)" % reason)
     paths = control_plane.paths(cwd, args.work_item)
     cp = ckpt_lib.read(paths["checkpoint"])
+    cursor_gate = _phase_cursor_guard(cp)
+    if cursor_gate:
+        cursor_gate["generation"] = generation
+        print(json.dumps(cursor_gate))
+        return
     # Back-half (a branch exists): recompute the content-hash so reconcile can detect a stale spec;
     # front-half (no branch yet): None is expected and the Task-5 guard skips that gate.
     # A missing/malformed tasks doc must NOT crash the leaf with no JSON (cmdRunner fails closed on

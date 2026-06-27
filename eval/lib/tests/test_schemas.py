@@ -47,11 +47,11 @@ VALID = {
         "size": "medium", "status": "approved", "gates": {"review": "passed"},
         "producedBy": "the-architect@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
     "checkpoint.schema.json": {
-        "schemaVersion": 1, "workItem": "add-toggle-abc123", "issue": 42, "size": "medium",
+        "schemaVersion": 2, "workItem": "add-toggle-abc123", "issue": 42, "size": "medium",
         "phase": "tasks", "gates": {"spec": "passed", "plan": "passed", "tasks": "pending"},
         "patternsPin": "0123456789abcdef", "branch": "superheroes/add-toggle-abc123-0123456789abcdef",
         "lockGeneration": 7, "pr": {"number": 42, "url": "https://example/pr/42"},
-        "lastGoodStep": "step-3", "updatedAt": "2026-06-14T00:00:00Z"},
+        "lastGoodStep": 3, "lastGoodPhase": "tasks", "updatedAt": "2026-06-14T00:00:00Z"},
     "queue.schema.json": {
         "schemaVersion": 1,
         "items": [{"workItem": "add-toggle-abc123", "issue": 42, "state": "queued", "order": 0}]},
@@ -77,6 +77,14 @@ def test_invalid_samples_are_rejected():
     for name, sample in INVALID.items():
         with pytest.raises(jsonschema.ValidationError):
             jsonschema.validate(sample, _load(name))
+
+
+def test_checkpoint_schema_rejects_future_version():
+    # The schemaVersion maximum mirrors the reader's accept-set {1,2}: a future v3 artifact must fail
+    # the schema, just as checkpoint.read() fails it closed.
+    bad = dict(VALID["checkpoint.schema.json"], schemaVersion=3)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(bad, _load("checkpoint.schema.json"))
 
 
 def test_definition_doc_rejects_malformed_workitem():

@@ -28,9 +28,12 @@ def reconcile(checkpoint, world):
         return {"action": "park_gate",
                 "reason": "control-plane store unusable — fail closed (no lockless run)"}
 
-    # (b) no durable record (or it failed closed on a bad schema) -> world-derive
+    # (b) no durable record -> world-derive; durable-but-incompatible -> park.
     if not checkpoint:
         return {"action": "world_derive", "reason": "no checkpoint — re-derive from reality"}
+    if checkpoint.get("_incompatible"):
+        return {"action": "park_gate",
+                "reason": "checkpoint incompatible — %s" % checkpoint.get("reason", "unknown reason")}
 
     # (c) stale-spec cascade (§6.3) — only once a content-addressed branch exists (back-half).
     #     Front-half phases (plan/tasks) have no branch yet, so a None content-hash is expected
