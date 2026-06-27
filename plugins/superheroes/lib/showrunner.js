@@ -357,8 +357,15 @@ async function withTargetCommandPrompts(worktree, fn) {
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
 async function cmdRunner(cmd, { schema }) {
+  // The command prints ONE JSON object to stdout. The leaf must map each top-level key of that
+  // object to the SAME-named StructuredOutput field — NOT stuff the whole JSON text into one field
+  // (a live-only derailment: that is schema-valid-but-wrong, e.g. action="{...the whole blob...}",
+  // which then mis-routes the deciders). Spell the mapping out so the leaf can't collapse it.
   return agent(
-    `Run exactly this command and return ONLY its stdout JSON, unchanged:\n\n${cmd}`,
+    `Use the Bash tool to run exactly this command. It prints ONE JSON object to stdout. Return that ` +
+    `object via StructuredOutput by copying each of its top-level keys to the same-named output field, ` +
+    `values exactly as printed. Do NOT put the whole JSON into a single field, do NOT stringify or nest ` +
+    `it, and do NOT add commentary or extra fields:\n\n${cmd}`,
     { label: 'lib', schema },
   )
 }
