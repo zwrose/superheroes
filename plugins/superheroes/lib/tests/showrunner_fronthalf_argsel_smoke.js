@@ -6,6 +6,8 @@
 //       would leave frontHalfBoundary un-injected and the assertion would fail.
 //   (B) bundle ENTRY side — the regenerated bundle's ENTRY maps args.frontHalf==='native' to both
 //       globals (text/structure assertion, not a full eval of the entry).
+// usableDraft uses the small boundary signal {usable, recorded, expected} — verdict computed
+// Python-side; the large doc text never crosses the cheapest-model pipe.
 const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
@@ -21,13 +23,12 @@ const sr = require('../showrunner.js')
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
-// A minimal usable-draft signals blob: text has valid frontmatter + non-empty body,
-// recorded === expected (both truthy) so front_half.isUsableDraft returns true.
+// Small boundary signal: verdict computed Python-side at the IO boundary.
+// The spine reads signals.usable directly; the large doc text never crosses the pipe.
 const USABLE_SIGNALS = JSON.stringify({
-  text: '---\nfrontmatter\n---\n# Body\n\ncontent',
+  usable: true,
   recorded: 'sha:smoke',
   expected: 'sha:smoke',
-  sections: [],
 })
 
 function makeAgentStub() {

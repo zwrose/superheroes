@@ -1,9 +1,8 @@
 // Smoke: producePhase resumes a usable draft (no authoring), re-produces when not usable, and parks
 // (low confidence) when the produce leaf fails or yields no usable draft. Stubs the leaves.
-// #115 Task 12: usableDraft uses exec + JS twin (front_half.isUsableDraft in-process).
-//   authorModel is in-process (model_tier.resolveModel — no agent call).
-//   appendNotify uses exec (not cmdRunner label='lib').
-//   The --write-marker stamp is FOLDED into the author agent (FR-4 fold: no separate cmdRunner call).
+// usableDraft verdict is computed Python-side at the IO boundary (front_half_usable.py
+// --emit-signals calls front_half.is_usable_draft and returns a small {usable, recorded, expected}
+// signal). The spine reads signals.usable directly — no JS twin call on the live doc text.
 // The agent stub must:
 //   - intercept exec (label='exec') for: front_half_usable --emit-signals, appendNotify (append-notify).
 //   - intercept produce-* label for authoring.
@@ -13,9 +12,9 @@ const sr = require('../showrunner.js')
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
-// A "usable" signal set: recorded === expected (non-empty strings).
-const USABLE_SIGNAL = JSON.stringify({ text: '---\nabc: 1\n---\n# Title\nBody here.', recorded: 'abc123', expected: 'abc123', sections: [] })
-const NOT_USABLE_SIGNAL = JSON.stringify({ text: '', recorded: '', expected: '', sections: [] })
+// Small boundary signals: verdict computed Python-side. No large doc text in the pipe.
+const USABLE_SIGNAL = JSON.stringify({ usable: true, recorded: 'abc123', expected: 'abc123' })
+const NOT_USABLE_SIGNAL = JSON.stringify({ usable: false, recorded: '', expected: '' })
 
 function agentWith({ usableSeq, authored, notifyOk = true }) {
   const seq = usableSeq.slice()

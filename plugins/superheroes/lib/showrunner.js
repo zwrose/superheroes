@@ -278,8 +278,11 @@ function gateForTerminal(terminal) {
   return frontHalfTwin.gateForTerminal(terminal || 'unknown')
 }
 
-// usableDraft: exec reads the doc text + signals via front_half_usable.py --emit-signals,
-// then the JS twin (front_half.isUsableDraft) decides in-process. No LLM agent.
+// usableDraft: exec runs front_half_usable.py --emit-signals, which computes the verdict
+// Python-side at the IO boundary (calls front_half.is_usable_draft) and returns a small
+// {usable, recorded, expected} signal — the large doc text never crosses the cheapest-model
+// pipe (live-surfaced large-payload-transport limit). The frontHalfTwin.isUsableDraft JS twin
+// stays for parity testing only; it is no longer called here on the live doc text.
 async function usableDraft(workItem, doc) {
   const results = await exec([
     `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
@@ -288,9 +291,7 @@ async function usableDraft(workItem, doc) {
   let signals = null
   try { signals = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
-  const usable = frontHalfTwin.isUsableDraft(
-    signals.text || '', signals.recorded || '', signals.expected || '', signals.sections || [])
-  return { usable: !!usable }
+  return { usable: !!signals.usable }
 }
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
