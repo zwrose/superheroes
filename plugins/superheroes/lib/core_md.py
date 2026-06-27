@@ -111,3 +111,34 @@ def core_path(cwd, root=None):
     in_repo = os.path.join(_repo_root(cwd), ".claude", "superheroes", "core.md")
     global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
     return mode_registry.resolve_artifact(cwd, in_repo, global_path, root)
+
+
+def read(cwd, root=None):
+    """Pure read of core.md → the fact dict + `behind`, or None (absent/corrupt — UFR-1).
+    Older schemaVersion is upgraded IN MEMORY only (no write-back; at v1 there are no
+    migration steps, so the record is stamped current) — UFR-2. A NEWER schemaVersion
+    returns the understood fields with behind=True and never rewrites — UFR-3. parse_core
+    already guarantees schemaVersion is a real int (else corrupt → None), so any integer
+    < SCHEMA_VERSION here is unambiguously an older schema, never a corrupt one."""
+    try:
+        with open(core_path(cwd, root), encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    facts = parse_core(text)
+    if facts is None:
+        return None
+    ver = facts["schemaVersion"]
+    behind = ver > SCHEMA_VERSION
+    effective = ver if behind else SCHEMA_VERSION  # UFR-2: older stamped current in memory
+    return {
+        "schemaVersion": effective,
+        "status": facts["status"],
+        "verifyCommand": facts["verifyCommand"],
+        "stackTags": facts["stackTags"],
+        "threatModel": facts["threatModel"],
+        "patterns": facts["patterns"],
+        "behind": behind,
+        "created": facts["created"],
+        "updated": facts["updated"],
+    }

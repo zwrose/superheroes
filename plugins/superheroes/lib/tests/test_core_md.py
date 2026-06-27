@@ -68,3 +68,69 @@ def test_core_path_global_default_greenfield(tmp_path):
     p = CM.core_path(str(tmp_path), root=store)
     assert p.endswith(os.path.join("config", "core.md"))
     assert p.startswith(store)
+
+
+def _write_core(repo, schema_version, status="provisional", verify="npm test"):
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    text = (
+        "<!-- superheroes-core: schemaVersion=%d status=%s created=2026-06-26 "
+        "updated=2026-06-26 -->\n\n## Threat model\n\nsingle-user\n\n"
+        "## Canonical patterns\n\n- x: a.ts:1\n\n"
+        "```json superheroes-core\n%s\n```\n"
+        % (schema_version, status,
+           json.dumps({"schemaVersion": schema_version, "verifyCommand": verify,
+                       "stackTags": ["node"]}, indent=2)))
+    open(os.path.join(d, "core.md"), "w").write(text)
+
+
+def test_read_absent_is_none(tmp_path):
+    assert CM.read(str(tmp_path), root=str(tmp_path / "store")) is None
+
+
+def test_read_current_schema(tmp_path):
+    repo = str(tmp_path)
+    _write_core(repo, CM.SCHEMA_VERSION, status="confirmed")
+    got = CM.read(repo, root=str(tmp_path / "store"))
+    assert got["verifyCommand"] == "npm test"
+    assert got["stackTags"] == ["node"]
+    assert got["status"] == "confirmed"
+    assert got["behind"] is False
+    assert got["schemaVersion"] == CM.SCHEMA_VERSION
+
+
+def test_read_corrupt_block_is_none(tmp_path):
+    repo = str(tmp_path)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "core.md"), "w").write(
+        "<!-- superheroes-core: schemaVersion=1 status=provisional created=2026-06-26 "
+        "updated=2026-06-26 -->\n\n```json superheroes-core\n{ broken\n```\n")
+    assert CM.read(repo, root=str(tmp_path / "store")) is None
+
+
+def test_read_older_schema_upgraded_in_memory_no_writeback(tmp_path):
+    # UFR-2: an older schemaVersion (0) is upgraded in memory (stamped current); the FILE is
+    # untouched. schemaVersion=0 is a valid int → older, NOT corrupt (it never becomes None).
+    repo = str(tmp_path)
+    _write_core(repo, 0)
+    before = open(os.path.join(repo, ".claude", "superheroes", "core.md")).read()
+    got = CM.read(repo, root=str(tmp_path / "store"))
+    assert got is not None
+    assert got["schemaVersion"] == CM.SCHEMA_VERSION  # upgraded in memory
+    assert got["behind"] is False
+    after = open(os.path.join(repo, ".claude", "superheroes", "core.md")).read()
+    assert after == before  # no write-back on read
+
+
+def test_read_newer_schema_behind_no_downgrade(tmp_path):
+    # UFR-3: a newer schemaVersion → known fields + behind=True, file never rewritten.
+    repo = str(tmp_path)
+    _write_core(repo, CM.SCHEMA_VERSION + 1)
+    before = open(os.path.join(repo, ".claude", "superheroes", "core.md")).read()
+    got = CM.read(repo, root=str(tmp_path / "store"))
+    assert got is not None
+    assert got["behind"] is True
+    assert got["verifyCommand"] == "npm test"  # still reads the understood field
+    after = open(os.path.join(repo, ".claude", "superheroes", "core.md")).read()
+    assert after == before
