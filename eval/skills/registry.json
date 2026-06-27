@@ -87,6 +87,12 @@
       "approved tasks doc (gates.review == passed) should be BUILT",
       "shipped to a ready-for-review PR",
       "It NEVER merges — that is always yours"
+    ],
+    "superheroes/showrunner": [
+      "RUN end-to-end by the live showrunner",
+      "Runs a deterministic pre-flight gate",
+      "drives the native front-half → build → review → ship pipeline to a ready-for-review PR",
+      "It NEVER merges — that is always yours"
     ]
   }
 }
