@@ -213,5 +213,58 @@ const sr = require('../showrunner.js')
   assert.strictEqual(bareProse[0].ok, true, 'prose-around-JSON result[0].ok is true')
   assert.strictEqual(bareProse[0].stdout, 'bare-prose', 'prose-around-JSON result[0].stdout is "bare-prose"')
 
-  console.log('OK: exec dumb-pipe + persistPhase seam (model=haiku, order, shq-quoting, fenced-string parsing, prose-prefixed shapes)')
+  // ---- (e) FR-5 cd-prefix: selfContained() and exec() with __SR_ROOT set ----
+  // (e1) exec with __SR_ROOT set: every command gets `cd '<root>' && ` prefix in the prompt.
+  const savedRoot = globalThis.__SR_ROOT
+  try {
+    globalThis.__SR_ROOT = '/some/root'
+    calls.length = 0
+    globalThis.agent = async (prompt, opts) => {
+      calls.push({ prompt, opts: opts || {} })
+      return [{ index: 0, ok: true, stdout: 'cd-ok' }]
+    }
+    await sr.exec(['python3 foo.py'])
+    assert.ok(calls[0].prompt.includes("cd '/some/root' && python3 foo.py"),
+      'exec cd-prefixes commands when __SR_ROOT is set')
+
+    // (e2) exec with __SR_ROOT unset: no cd prefix (backward compat).
+    globalThis.__SR_ROOT = undefined
+    calls.length = 0
+    globalThis.agent = async (prompt, opts) => {
+      calls.push({ prompt, opts: opts || {} })
+      return [{ index: 0, ok: true, stdout: 'no-cd-ok' }]
+    }
+    await sr.exec(['python3 bar.py'])
+    assert.ok(!calls[0].prompt.includes('cd '), 'exec does NOT cd-prefix when __SR_ROOT is unset')
+
+    // (e3) command already starting with `cd ` is NOT double-prefixed.
+    globalThis.__SR_ROOT = '/some/root'
+    calls.length = 0
+    globalThis.agent = async (prompt, opts) => {
+      calls.push({ prompt, opts: opts || {} })
+      return [{ index: 0, ok: true, stdout: 'already-cd-ok' }]
+    }
+    await sr.exec(['cd /build-worktree && python3 foo.py'])
+    const alreadyCdPrompt = calls[0].prompt
+    // Must contain the original command unchanged (not double-cd'd).
+    assert.ok(alreadyCdPrompt.includes('cd /build-worktree && python3 foo.py'),
+      'exec preserves command already starting with cd (no double-prefix)')
+    assert.ok(!alreadyCdPrompt.includes("cd '/some/root' && cd /build-worktree"),
+      'exec does NOT double-prefix a command that already starts with cd')
+
+    // (e4) selfContained() helper exported and reusable.
+    globalThis.__SR_ROOT = '/repo-root'
+    assert.ok(sr.selfContained('python3 foo.py').startsWith("cd '/repo-root' && "),
+      'selfContained() prefixes when __SR_ROOT set')
+    globalThis.__SR_ROOT = undefined
+    assert.strictEqual(sr.selfContained('python3 foo.py'), 'python3 foo.py',
+      'selfContained() is identity when __SR_ROOT unset')
+    globalThis.__SR_ROOT = '/repo-root'
+    assert.strictEqual(sr.selfContained('cd /other && foo'), 'cd /other && foo',
+      'selfContained() leaves cd-prefixed command untouched')
+  } finally {
+    globalThis.__SR_ROOT = savedRoot
+  }
+
+  console.log('OK: exec dumb-pipe + persistPhase seam (model=haiku, order, shq-quoting, fenced-string parsing, prose-prefixed shapes, FR-5 cd-prefix)')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

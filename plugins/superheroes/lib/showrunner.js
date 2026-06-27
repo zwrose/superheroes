@@ -211,8 +211,8 @@ async function producePhase(phase, workItem) {
     `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
     `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
     `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
-    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"\n\n` +
+    selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
     `Do NOT run review or record the review gate. Return ` +
     `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
     `{ identity, message }.`,
@@ -344,7 +344,7 @@ async function frontHalfBoundary(workItem) {
   const rendered = recordOk
     ? await agent(
         `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-        `python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`,
+        selfContained(`python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`),
         { label: 'lib' })
     : null
   const reason = (typeof rendered === 'string' && rendered.trim())
@@ -360,6 +360,19 @@ module.exports.frontHalfBoundary = frontHalfBoundary
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function safeRunKey(s) { return String(s).replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 120) || 'target' }
+
+// selfContained: FR-5 — prefix a command with `cd <root> && ` so the leaf always runs from the
+// correct repo root, regardless of the haiku leaf's cwd. Opt-in: only applies when globalThis.__SR_ROOT
+// is set (threaded from args.root in the ENTRY). Commands already starting with `cd ` (e.g. the
+// build-worktree inWorktree commands) are left untouched — the startsWith guard prevents double-cd.
+// When __SR_ROOT is unset (most smokes, back-half runs not yet opted in) behavior is unchanged.
+function selfContained(cmd) {
+  var root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null
+  if (!root) return cmd
+  var trimmed = String(cmd).trimLeft ? String(cmd).trimLeft() : String(cmd).replace(/^\s+/, '')
+  if (trimmed.startsWith('cd ')) return cmd   // already rooted (inWorktree or similar) — leave alone
+  return 'cd ' + shq(root) + ' && ' + cmd
+}
 
 // cheapestModel: resolves the mechanical (cheapest) tier once and caches it. The `mechanical` tier
 // is unconditionally `'haiku'` per DEFAULT_TIERS; resolving through model_tier.js keeps the twin
@@ -429,7 +442,7 @@ function _parseExecResult(out, n) {
 // FR-8 sandbox-safe: no fs, no child_process, no time/random globals, no process/bare-global refs.
 async function exec(commands, opts) {
   var cmds = commands || []
-  const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + c }).join('\n')
+  const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + selfContained(c) }).join('\n')
   const prompt =
     'Run each of the following commands in order using the Bash tool. ' +
     'Return ONLY a raw JSON array and NOTHING else — no prose, no explanation, no markdown fences; ' +
@@ -1081,3 +1094,4 @@ module.exports.PHASES = PHASES
 module.exports.exec = exec
 module.exports.persistPhase = persistPhase
 module.exports.cheapestModel = cheapestModel
+module.exports.selfContained = selfContained

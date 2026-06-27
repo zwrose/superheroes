@@ -57,7 +57,14 @@ globalThis.log = (typeof log === 'function') ? log : (() => {})
 // Leaf-bash io: every filesystem touch runs in a command-runner leaf, so the script body needs no fs.
 // __sh dispatches through globalThis.agent (the wrapper) so io leaves also get the model/phase enrichment.
 function __q(s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'" }
-async function __sh(cmd) { return globalThis.agent('Run exactly this command and return ONLY its stdout, unchanged:\\n\\n' + cmd, { label: 'io' }) }
+function __sc(cmd) {
+  var root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null
+  if (!root) return cmd
+  var t = String(cmd).replace(/^\\s+/, '')
+  if (t.startsWith('cd ')) return cmd
+  return 'cd ' + __q(root) + ' && ' + cmd
+}
+async function __sh(cmd) { return globalThis.agent('Run exactly this command and return ONLY its stdout, unchanged:\\n\\n' + __sc(cmd), { label: 'io' }) }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\\/+/g, '/') }
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
@@ -102,6 +109,10 @@ if (globalThis.__SR_RUN !== false) {
   // Optional cheap-leaf override for throwaway/test runs (args.model, e.g. 'haiku'); absent in
   // production so the per-role model tiers govern. The preamble's agent wrapper applies it.
   if (__a && __a.model) globalThis.__SR_LEAF_MODEL = __a.model
+  // FR-5: thread the explicit repo root so leaf commands cd to the correct checkout regardless of
+  // the haiku leaf's cwd. Callers pass args.root = <abs repo root> to opt in; absent in production
+  // (where the leaf cwd is the correct repo) the guard is unset and selfContained() is a no-op.
+  if (__a && __a.root) globalThis.__SR_ROOT = __a.root
   // args-based front-half selector (Task 13a, #115): args.frontHalf==='native' opts into a
   // front-half-only run (parks at the workhorse boundary). This drives the sandbox selector
   // because the env path (SUPERHEROES_FRONT_HALF) is unavailable in the Workflow sandbox (FR-8).

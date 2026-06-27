@@ -79,6 +79,50 @@ async function main() {
   global.agent = ag
   r = await sr.producePhase('plan', 'wi')
   assert.strictEqual(r.confidence, 'low', 'failed NOTIFY durable write -> low (park, UFR-2)')
-  console.log('ok: producePhase resume / re-produce / park / notify (exec+twin, no cmdRunner)')
+  // (g) FR-5: producePhase embeds selfContained() write-marker command in the author agent prompt
+  // when __SR_ROOT is set. The embedded command must be cd-prefixed so the haiku leaf uses the correct repo.
+  const savedRoot = globalThis.__SR_ROOT
+  try {
+    globalThis.__SR_ROOT = '/test-repo'
+    let capturedPrompt = null
+    const agG = async (prompt, opts) => {
+      const label = (opts && opts.label) || ''
+      if (label === 'exec') {
+        if (prompt.includes('emit-signals')) return [{ index: 0, ok: true, stdout: NOT_USABLE_SIGNAL }]
+        if (prompt.includes('append-notify')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
+      }
+      if (label === 'exec2') return [{ index: 0, ok: true, stdout: USABLE_SIGNAL }]
+      if (label.startsWith('produce-')) {
+        capturedPrompt = prompt
+        return { status: 'ok' }
+      }
+      return null
+    }
+    // Override exec emit-signals to return not-usable first, then usable on second call.
+    let emitCount = 0
+    global.agent = async (prompt, opts) => {
+      const label = (opts && opts.label) || ''
+      if (label === 'exec') {
+        if (prompt.includes('emit-signals')) {
+          emitCount += 1
+          return [{ index: 0, ok: true, stdout: emitCount === 1 ? NOT_USABLE_SIGNAL : USABLE_SIGNAL }]
+        }
+        if (prompt.includes('append-notify')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
+      }
+      if (label.startsWith('produce-')) { capturedPrompt = prompt; return { status: 'ok' } }
+      return null
+    }
+    emitCount = 0
+    await sr.producePhase('plan', 'wi-fr5')
+    assert.ok(capturedPrompt !== null, 'produce leaf was called')
+    assert.ok(capturedPrompt.includes("cd '/test-repo' && python3 plugins/superheroes/lib/front_half_usable.py"),
+      'producePhase embeds selfContained write-marker command when __SR_ROOT is set')
+  } finally {
+    globalThis.__SR_ROOT = savedRoot
+  }
+
+  console.log('ok: producePhase resume / re-produce / park / notify (exec+twin, no cmdRunner) + FR-5 cd-prefix in embedded write-marker')
 }
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
