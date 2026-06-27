@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.2.0...superheroes-v0.3.0) (2026-06-27)
+
+
+### Features
+
+* **superheroes:** add native test-pilot workflow phase ([#109](https://github.com/zwrose/superheroes/issues/109)) ([5a40dab](https://github.com/zwrose/superheroes/commit/5a40dab46658a92484d14d993aea2a80171b84e4))
+* **superheroes:** native front-half (plan & tasks phases) on the shared review-and-fix loop ([#88](https://github.com/zwrose/superheroes/issues/88)) ([#108](https://github.com/zwrose/superheroes/issues/108)) ([d7cfd06](https://github.com/zwrose/superheroes/commit/d7cfd06418ad5e8d79bf5b6dff1fde6645d95997))
+* **superheroes:** native review-code panel + auto-fix loop ([#89](https://github.com/zwrose/superheroes/issues/89)) ([#106](https://github.com/zwrose/superheroes/issues/106)) ([cf60f5f](https://github.com/zwrose/superheroes/commit/cf60f5ff33b9940da44ed014cd24dc5eba8ef698))
+* **superheroes:** native workhorse build phase ([#87](https://github.com/zwrose/superheroes/issues/87)) ([#107](https://github.com/zwrose/superheroes/issues/107)) ([3d4d834](https://github.com/zwrose/superheroes/commit/3d4d834a2ffcd7a979664e474bd6ac0c45bc9734))
+* **superheroes:** review-crew + test-pilot honor the storage-mode registry (I2, [#79](https://github.com/zwrose/superheroes/issues/79)) ([#99](https://github.com/zwrose/superheroes/issues/99)) ([559866c](https://github.com/zwrose/superheroes/commit/559866cad7e31b40771745ec4e89e95f4fea6ac2))
+* **superheroes:** shared core.md calibration brain + unified profile format ([#81](https://github.com/zwrose/superheroes/issues/81)) ([#113](https://github.com/zwrose/superheroes/issues/113)) ([64880e9](https://github.com/zwrose/superheroes/commit/64880e927f1b46c1d0d74bffb43707cbe5a2434f))
+* **superheroes:** shared review-and-fix loop (extract-first, [#104](https://github.com/zwrose/superheroes/issues/104)) ([#105](https://github.com/zwrose/superheroes/issues/105)) ([155692f](https://github.com/zwrose/superheroes/commit/155692feb0922ba7b2764d7f83b1622d6da23910))
+* **superheroes:** showrunner per-issue Workflow spine (thin slice) ([#103](https://github.com/zwrose/superheroes/issues/103)) ([4243fef](https://github.com/zwrose/superheroes/commit/4243fef46ef629405d661cfc8a15287839444a5a)), closes [#21](https://github.com/zwrose/superheroes/issues/21)
+* **superheroes:** the-architect mode-aware definition-docs + doc-policy (I3) ([#101](https://github.com/zwrose/superheroes/issues/101)) ([f377732](https://github.com/zwrose/superheroes/commit/f377732c55527b4c01751e7d52311085e664df56))
+* **superheroes:** unified superheroes:configure — set up, fix, view & tune ([#82](https://github.com/zwrose/superheroes/issues/82), [#83](https://github.com/zwrose/superheroes/issues/83)) ([#116](https://github.com/zwrose/superheroes/issues/116)) ([bc670eb](https://github.com/zwrose/superheroes/commit/bc670ebc4eecf5e7ec70705f5ad208e98f1b7fcb))
+
 ## [0.2.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.1.0...superheroes-v0.2.0) (2026-06-21)
 
 
