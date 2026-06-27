@@ -393,6 +393,9 @@ async function reconcile(workItem) {
 }
 
 async function showrunner({ workItem }) {
+  // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
+  // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   const r = await reconcile(workItem)
   if (r.action === 'park_gate' || r.action === 'gate') {
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
@@ -669,6 +672,9 @@ async function runPhases(workItem, fromStep, deps) {
   deps = deps || {}
   for (let i = fromStep; i < PHASES.length; i += 1) {
     const phase = PHASES[i]
+    // Progress-group every leaf dispatched during this phase under the phase name (read by the
+    // bundle's agent wrapper). Purely cosmetic — no control-flow effect.
+    if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = phase
     // FR-7: the native front-half ends at its boundary — park before entering the back-half
     // (the 'workhorse' build phase, renamed from 'build' in #107), on a FRESH run AND on a RESUME
     // (a resume re-enters at the build cursor, so the boundary must be checked at that phase, not

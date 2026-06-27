@@ -3,13 +3,36 @@ export const meta = {
   description: 'Run the superheroes showrunner end-to-end for one approved work-item (full-run, native front-half).',
 }
 // The Workflow runtime provides agent()/parallel()/log() in scope; bind them onto globalThis so the
-// inlined spine (which reads globals) sees them.
-globalThis.agent = agent
+// inlined spine (which reads globals) sees them. agent is WRAPPED so EVERY leaf gets, centrally:
+//  (1) an optional cheap-model override — globalThis.__SR_LEAF_MODEL, set from args.model; useful for
+//      throwaway/test runs where the produced content does not matter, so the cheapest model is fine;
+//  (2) the current phase as its progress group — globalThis.__SR_PHASE, set by runPhases — so the
+//      Workflow UI shows named phases instead of a flat undifferentiated list.
+// Display label: turn a generic 'lib'/'io' leaf into the lib script (+ subcommand) or io op it runs,
+// derived from the prompt (which carries the command). Done HERE (bundle-only) — not in the spine's
+// cmdRunner — so the node smokes, which route canned responses by the logical 'lib' label, are unaffected.
+function __leafLabel(p, fallback) {
+  var m = p.match(/([\w-]+\.py)(?:\s+([a-z][\w-]*))?/)
+  if (m) return m[2] ? m[1] + ' ' + m[2] : m[1]
+  if (p.indexOf('cat > ') >= 0) return 'io:write'
+  if (p.indexOf('mkdir -p') >= 0) return 'io:mkdir'
+  if (p.indexOf('cat ') >= 0) return 'io:read'
+  return fallback || 'lib'
+}
+const __realAgent = agent
+globalThis.agent = function (prompt, opts) {
+  var o = Object.assign({}, opts || {})
+  if (globalThis.__SR_LEAF_MODEL) o.model = globalThis.__SR_LEAF_MODEL
+  if (!o.phase && globalThis.__SR_PHASE) o.phase = globalThis.__SR_PHASE
+  if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
+  return __realAgent(prompt, o)
+}
 globalThis.parallel = parallel
 globalThis.log = (typeof log === 'function') ? log : (() => {})
 // Leaf-bash io: every filesystem touch runs in a command-runner leaf, so the script body needs no fs.
+// __sh dispatches through globalThis.agent (the wrapper) so io leaves also get the model/phase enrichment.
 function __q(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-async function __sh(cmd) { return agent('Run exactly this command and return ONLY its stdout, unchanged:\n\n' + cmd, { label: 'io' }) }
+async function __sh(cmd) { return globalThis.agent('Run exactly this command and return ONLY its stdout, unchanged:\n\n' + cmd, { label: 'io' }) }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
@@ -2089,6 +2112,9 @@ async function reconcile(workItem) {
 }
 
 async function showrunner({ workItem }) {
+  // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
+  // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   const r = await reconcile(workItem)
   if (r.action === 'park_gate' || r.action === 'gate') {
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
@@ -2365,6 +2391,9 @@ async function runPhases(workItem, fromStep, deps) {
   deps = deps || {}
   for (let i = fromStep; i < PHASES.length; i += 1) {
     const phase = PHASES[i]
+    // Progress-group every leaf dispatched during this phase under the phase name (read by the
+    // bundle's agent wrapper). Purely cosmetic — no control-flow effect.
+    if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = phase
     // FR-7: the native front-half ends at its boundary — park before entering the back-half
     // (the 'workhorse' build phase, renamed from 'build' in #107), on a FRESH run AND on a RESUME
     // (a resume re-enters at the build cursor, so the boundary must be checked at that phase, not
@@ -2644,5 +2673,8 @@ if (globalThis.__SR_RUN !== false) {
   if (typeof __a === 'string') { try { __a = JSON.parse(__a) } catch (_) { __a = null } }
   const wi = (__a && typeof __a === 'object') ? __a.workItem : null
   if (!wi) throw new Error('showrunner bundle requires args.workItem')
+  // Optional cheap-leaf override for throwaway/test runs (args.model, e.g. 'haiku'); absent in
+  // production so the per-role model tiers govern. The preamble's agent wrapper applies it.
+  if (__a && __a.model) globalThis.__SR_LEAF_MODEL = __a.model
   return __require('showrunner.js').showrunner({ workItem: wi })
 }
