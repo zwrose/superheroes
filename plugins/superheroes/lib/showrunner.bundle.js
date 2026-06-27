@@ -2558,15 +2558,20 @@ async function shipPhase(workItem, pr) {
   if (fresh.decision !== 'up_to_date') {
     return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)
   }
-  // ship_phase.py --step ci returns 'green' (no failing checks) or a ci_loop.decide value
-  // ('fix' | 'revert_and_gate'). The slice does not auto-fix CI, so anything but green parks.
+  // ship_phase.py --step ci returns 'green' (all required checks pass), 'red' (some check is
+  // failing/pending/errored), or 'none' (no required checks gate the PR). green -> merge-ready;
+  // red (or any non-green/none) -> park with the reason; none -> merge-ready WITH the
+  // no-required-checks carve-out (the owner confirms checks before merging).
   const ci = await cmdRunner(
     `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)}`,
     { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' }, reason: { type: 'string' } } } })
-  if (ci.decision !== 'green') {
-    return park(workItem, pr, ci.reason || 'CI could not be made green')
+  if (ci.decision === 'green') {
+    return park(workItem, pr, 'merge-ready: CI green and branch up to date — awaiting owner merge', true)
   }
-  return park(workItem, pr, 'merge-ready: CI green and branch up to date — awaiting owner merge', true)
+  if (ci.decision === 'none') {
+    return park(workItem, pr, 'merge-ready: no required checks gate this PR — confirm checks before merging', true)
+  }
+  return park(workItem, pr, ci.reason || 'CI could not be made green')
 }
 
 // park posts the readout (scrubbed) to the PR; on a failed post it records to the store (UFR-4).

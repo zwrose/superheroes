@@ -1,7 +1,54 @@
 # plugins/superheroes/lib/ship_phase.py
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import freshness, ci_loop, control_plane, journal
+import freshness, ci_loop, control_plane, journal, ci_status, checkpoint as ckpt_lib
+
+
+def _resolve_pr_number(work_item):
+    """The run's PR number from the recorded checkpoint, else from `gh pr view`. None on any error."""
+    try:
+        paths = control_plane.paths(os.getcwd(), work_item)
+        cp = ckpt_lib.read(paths["checkpoint"]) or {}
+        pr = cp.get("pr")
+        if isinstance(pr, dict) and pr.get("number"):
+            return str(pr["number"])
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["gh", "pr", "view", "--json", "number", "--jq", ".number"],
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _read_ci(work_item):
+    """Real CI read -> {"decision": green|red|none, "reason": text, "failing": [...]}. Fail-CLOSED:
+    any read error -> red (never green)."""
+    pr = _resolve_pr_number(work_item)
+    if not pr:
+        return {"decision": "red", "reason": "CI status could not be read"}
+    try:
+        out = subprocess.run(["gh", "pr", "checks", pr, "--json", "name,bucket,state"],
+                             capture_output=True, text=True, timeout=30)
+        # `gh pr checks` exits non-zero when checks are failing/pending; the JSON is still on stdout,
+        # so parse stdout regardless of returncode and let ci_status classify.
+        checks = json.loads(out.stdout) if out.stdout.strip() else []
+    except Exception:
+        return {"decision": "red", "reason": "CI status could not be read"}
+    res = ci_status.classify(checks)
+    status = res["status"]
+    if status == "green":
+        return {"decision": "green", "reason": "all required checks pass", "failing": []}
+    if status == "none":
+        return {"decision": "none",
+                "reason": "no required checks gate this PR — confirm checks before merging",
+                "failing": []}
+    return {"decision": "red",
+            "reason": "checks not green: %s" % ", ".join(res["failing"]),
+            "failing": res["failing"]}
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True, choices=["freshness", "ci"])
@@ -21,18 +68,6 @@ if a.step == "freshness":
     decision, _reason = freshness.decide(is_anc, 1)
     print(json.dumps({"decision": decision}))
 else:
-    paths = control_plane.paths(os.getcwd(), a.work_item)
-    rounds, history = journal.ci_attempts(paths["events"])
-    # This thin slice does NOT read real CI (the real read + the bounded fix loop are deferred to
-    # #87-#90). It must NEVER claim 'green' — that would post a false "merge-ready: CI green" signal
-    # to the PR. Return an explicit 'unverified' so ship parks honestly. When a real CI read is wired
-    # here it populates `failing` and routes through ci_loop.decide (kept so the seam stays visible).
-    failing = None  # None = not read in this slice (distinct from [] = read-and-empty)
-    if failing is None:
-        print(json.dumps({"decision": "unverified",
-                          "reason": "CI not verified in this slice — confirm checks are green before merge"}))
-    elif not failing:
-        print(json.dumps({"decision": "green"}))
-    else:
-        decision, reason = ci_loop.decide(failing, history, rounds + 1)
-        print(json.dumps({"decision": decision, "reason": reason}))
+    # Real CI read: classify the PR's checks (green / red / none) via ci_status. Fail-CLOSED — any
+    # read error returns 'red' (never 'green'), so ship never posts a false "merge-ready: CI green".
+    print(json.dumps(_read_ci(a.work_item)))
