@@ -1,0 +1,1 @@
+{"input": [[{"name": "linter", "conclusion": "failure"}, {"name": "tests", "conclusion": "failure"}]], "expected": {"status": "red", "failing": ["linter", "tests"]}}
