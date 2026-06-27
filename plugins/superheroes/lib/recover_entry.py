@@ -16,8 +16,8 @@ import recover
 import ref_lock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-CURRENT_PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
-                  "review-code", "draft-PR", "test-pilot", "mark-ready", "ship"]
+# checkpoint.py is the single source of truth for the phase list (§4.3); don't redefine it.
+CURRENT_PHASES = ckpt_lib.CURRENT_PHASES
 
 
 def _park(reason):

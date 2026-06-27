@@ -198,6 +198,8 @@ def test_restore_baseline_parks_on_clean_failure():
     result = seed.restore_baseline([_record()], engine)
     assert result["action"] == "park"
     assert "clean failed" in result["reason"]
+    # The underlying engine refusal must be surfaced in the park reason, not swallowed.
+    assert "protected-target refusal: main" in result["reason"]
 
 
 def test_restore_baseline_reapplies_successfully_cleaned_records_when_later_clean_fails():

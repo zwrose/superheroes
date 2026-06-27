@@ -88,7 +88,7 @@ async function notApplicableProceeds() {
 async function productionWrapperHandlesNotApplicableWithoutMissingLeaf() {
   const previousAgent = global.agent
   global.agent = async (prompt) => {
-    if (prompt.includes('python3 -c') && prompt.includes('detect.detect_dev_server')) {
+    if (prompt.includes('test_pilot_context_cli.py resolve')) {
       return baseContext({ workItem: 'wi', generation: 3, pr: { number: 7 }, diff: { files: ['docs/readme.md'] }, detectors: {} })
     }
     if (prompt.includes('test_pilot_applicability_cli.py decide')) {
@@ -358,6 +358,17 @@ async function nonBrowserEvidenceParksBeforeReadiness() {
   }))
   assert.strictEqual(out.confidence, 'low')
   assert.match(out.assumptions[0], /browser-derived pass\/fail evidence/)
+}
+
+async function budgetExhaustedParksBeforeBrowser() {
+  let browserRan = false
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: false, reason: 'test-pilot budget exhausted before browser-pass' }),
+    runBrowserPass: async () => { browserRan = true; return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [] } },
+  }))
+  assert.strictEqual(out.confidence, 'low')
+  assert.match(out.assumptions[0], /budget exhausted/)
+  assert.strictEqual(browserRan, false)
 }
 
 async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
@@ -671,6 +682,7 @@ async function phaseOrderAndGate() {
   await managedServerTearsDownOnBrowserFailure()
   await offOriginBrowserResultsPark()
   await nonBrowserEvidenceParksBeforeReadiness()
+  await budgetExhaustedParksBeforeBrowser()
   await appBugFailuresDispatchOneFixBatchAndRerunWholePlan()
   await knownDependencyRerunsFailedAndAffectedSubset()
   await dirtyFixLeftoversParkBehindInjectedWorktreeGuard()

@@ -1,6 +1,8 @@
 import os
 import subprocess
 
+import pytest
+
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
@@ -34,7 +36,9 @@ def test_showrunner_node_smokes_are_enforced():
     assert discovered == set(SHOWRUNNER_SMOKES)
 
 
-def test_showrunner_node_smokes_pass():
-    for rel in SHOWRUNNER_SMOKES:
-        result = subprocess.run(["node", rel], cwd=ROOT, text=True, capture_output=True, timeout=30)
-        assert result.returncode == 0, result.stdout + result.stderr
+@pytest.mark.parametrize("rel", SHOWRUNNER_SMOKES)
+def test_showrunner_node_smoke_passes(rel):
+    # One independent test per smoke so a failure names the offending file instead of collapsing the
+    # whole suite into a single red assertion.
+    result = subprocess.run(["node", rel], cwd=ROOT, text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr

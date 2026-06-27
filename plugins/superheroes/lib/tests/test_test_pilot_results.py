@@ -53,6 +53,15 @@ def test_aggregate_rejects_synthetic_or_non_browser_evidence(source):
     assert "browser-derived" in result["reason"]
 
 
+def test_aggregate_parks_on_missing_step_id():
+    # A browser record with no id must surface as missing here, not become a "None" stepId that
+    # slips past the downstream missing-id guard.
+    raw = dict(_raw(), steps=[{"status": "pass", "notes": "no id"}])
+    result = results.aggregate_browser_results(raw, lambda s: s, {"diagnostics": 2000})
+    assert result["action"] == "park"
+    assert "step id" in result["reason"]
+
+
 def test_aggregate_parks_on_scrub_failure():
     def boom(text):
         raise RuntimeError("scrubber broke")

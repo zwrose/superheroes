@@ -61,6 +61,10 @@ def aggregate_browser_results(raw_results, scrubber=None, byte_limits=None):
         if problem:
             return _park(problem)
         step_id = step.get("id") or step.get("stepId") or step.get("step_id")
+        if not step_id:
+            # Don't stringify a missing id into "None" — that fabricates a non-empty stepId that slips
+            # past the downstream "missing step id" guard. Surface it as malformed evidence here.
+            return _park("browser result record is missing a step id")
         record = {
             "stepId": str(step_id),
             "status": step.get("status") or step.get("result") or "unknown",

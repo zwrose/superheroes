@@ -12,7 +12,14 @@ ap.add_argument("--work-item", required=True)
 a = ap.parse_args()
 root = os.getcwd()
 paths = control_plane.paths(root, a.work_item)
-cp = ckpt_lib.read(paths["checkpoint"]) or {}
+cp = ckpt_lib.read(paths["checkpoint"])
+if isinstance(cp, dict) and cp.get("_incompatible"):
+    # A durable-but-incompatible checkpoint must NOT fall back to an empty branch (that
+    # lists/creates PRs against the ambient HEAD). Fail closed before any PR action.
+    print(json.dumps({"ok": False,
+                      "reason": "checkpoint incompatible: %s" % cp.get("reason", "unknown reason")}))
+    sys.exit(0)
+cp = cp or {}
 branch = cp.get("branch", "")
 
 

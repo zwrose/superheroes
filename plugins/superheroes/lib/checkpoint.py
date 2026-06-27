@@ -3,6 +3,14 @@
 writer/reader for the schema CONVENTIONS §4.3 already locked; it does NOT redefine
 it. Unknown/newer durable shapes fail closed with an incompatibility marker so the
 caller parks instead of re-deriving from reality.
+
+Schema versions: v2 is current — its `lastGoodStep` indexes CURRENT_PHASES (the
+test-pilot-aware phase list). v1 is the pre-test-pilot legacy shape whose
+`lastGoodStep` indexes LEGACY_PHASES_PRE_TEST_PILOT; the reader still ACCEPTS v1 and
+migrates it forward so this (newer) code resumes an in-flight v1 run. Bumping
+SCHEMA_VERSION to 2 is the rollback fence: code that predates the test-pilot insert
+only accepts schemaVersion==1, so it fail-closes (parks) on a v2 checkpoint rather
+than resuming at a phase index the test-pilot insert silently shifted out from under it.
 """
 import json
 import os
@@ -10,7 +18,8 @@ import time
 
 import control_plane
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+_SUPPORTED_READ_VERSIONS = (1, 2)
 CURRENT_PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
                   "review-code", "draft-PR", "test-pilot", "mark-ready", "ship"]
 LEGACY_PHASES_PRE_TEST_PILOT = ["plan", "review-plan", "tasks", "review-tasks",
@@ -59,19 +68,42 @@ def _infer_legacy_phase(data, step):
 def _validate_shape(data):
     if not isinstance(data, dict):
         return _incompatible("checkpoint is not an object")
-    if data.get("schemaVersion") != SCHEMA_VERSION:
+    version = data.get("schemaVersion")
+    if version not in _SUPPORTED_READ_VERSIONS:
         return _incompatible("unsupported checkpoint schemaVersion")
     step = data.get("lastGoodStep")
     if step is not None and not _is_numeric_step(step):
         return _incompatible("checkpoint lastGoodStep must be numeric or null")
-    if "lastGoodPhase" not in data:
-        if step is None:
-            data["lastGoodPhase"] = None
-        else:
-            return _infer_legacy_phase(data, step)
-    if step is None and data.get("lastGoodPhase") is not None:
-        return _incompatible("checkpoint lastGoodPhase is set but lastGoodStep is null")
-    if step is not None and not isinstance(data.get("lastGoodPhase"), str):
+    if version == 1:
+        return _migrate_legacy(data, step)
+    return _validate_current(data, step)
+
+
+def _migrate_legacy(data, step):
+    # Pre-test-pilot (v1) checkpoint: lastGoodStep indexes the 9-phase legacy list and
+    # there is no lastGoodPhase. Map it onto CURRENT_PHASES so this (newer) code resumes
+    # the in-flight run at the right phase, then normalize to the current shape in memory.
+    if step is None:
+        data["lastGoodPhase"] = None
+    else:
+        incompatible = _infer_legacy_phase(data, step)
+        if incompatible:
+            return incompatible
+    data["schemaVersion"] = SCHEMA_VERSION
+    return None
+
+
+def _validate_current(data, step):
+    # Current (v2) checkpoint: lastGoodStep indexes CURRENT_PHASES and lastGoodPhase is
+    # authoritative. The writer always stamps lastGoodPhase, so a present step with a
+    # missing/non-string phase is a corrupt durable shape -> fail closed (never re-infer).
+    phase = data.get("lastGoodPhase")
+    if step is None:
+        if phase is not None:
+            return _incompatible("checkpoint lastGoodPhase is set but lastGoodStep is null")
+        data["lastGoodPhase"] = None
+        return None
+    if not isinstance(phase, str):
         return _incompatible("checkpoint lastGoodPhase must be present when lastGoodStep is set")
     return None
 

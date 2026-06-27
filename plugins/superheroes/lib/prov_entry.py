@@ -18,7 +18,14 @@ paths = control_plane.paths(os.getcwd(), a.work_item)
 # The SHIPPED HEAD is the build branch's tip (the PR ships that branch), not the ambient cwd HEAD —
 # resolve it from the recorded checkpoint.branch so provenance.head == the HEAD the PR actually ships
 # (otherwise a build that happens on a separate branch/worktree records a mismatched HEAD).
-cp = ckpt_lib.read(paths["checkpoint"]) or {}
+cp = ckpt_lib.read(paths["checkpoint"])
+if isinstance(cp, dict) and cp.get("_incompatible"):
+    # A durable-but-incompatible checkpoint must NOT silently fall back to ambient HEAD
+    # (that would stamp provenance over whatever cwd happens to point at). Fail closed.
+    print(json.dumps({"ok": False,
+                      "error": "checkpoint incompatible: %s — provenance not recorded" % cp.get("reason", "unknown reason")}))
+    sys.exit(0)
+cp = cp or {}
 ref = a.head or cp.get("branch") or "HEAD"
 try:
     cmd = ["git"]

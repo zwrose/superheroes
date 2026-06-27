@@ -45,9 +45,48 @@ def test_read_unknown_schema_fails_closed(tmp_path):
     assert "schema" in got["reason"]
 
 
-def test_read_legacy_numeric_cursor_without_phase_infers_previous_phase(tmp_path):
+def test_schema_version_is_2_the_rollback_fence(tmp_path):
+    # v2 is the test-pilot-aware shape; bumping the constant is the rollback fence
+    # (pre-test-pilot code only accepts v1, so it parks on a v2 checkpoint).
+    assert ck.SCHEMA_VERSION == 2
+    p = str(tmp_path / "checkpoint.json")
+    ck.write(p, ck.new("wi", "b"))
+    assert json.loads(open(p).read())["schemaVersion"] == 2
+
+
+def test_read_v2_test_pilot_cursor_indexes_current_phases(tmp_path):
+    # Under v2 the step indexes CURRENT_PHASES directly (test-pilot at index 7); the
+    # reader does NOT re-infer the phase — lastGoodPhase is authoritative.
+    p = str(tmp_path / "checkpoint.json")
+    ck.write(p, ck.new("wi", "b", last_good_step=7, last_good_phase="test-pilot"))
+    got = ck.read(p)
+    assert got["lastGoodStep"] == 7 and got["lastGoodPhase"] == "test-pilot"
+
+
+def test_read_v2_cursor_without_phase_fails_closed(tmp_path):
+    # A v2 checkpoint must carry lastGoodPhase; a present step with no phase is corrupt.
+    p = tmp_path / "checkpoint.json"
+    c = ck.new("wi", "b", last_good_step=3)
+    c.pop("lastGoodPhase")
+    p.write_text(json.dumps(c))
+    got = ck.read(str(p))
+    assert got["_incompatible"] is True
+
+
+def test_read_future_schema_v3_fails_closed(tmp_path):
+    p = tmp_path / "checkpoint.json"
+    p.write_text(json.dumps({"schemaVersion": 3, "workItem": "wi"}))
+    got = ck.read(str(p))
+    assert got["_incompatible"] is True
+    assert "schema" in got["reason"]
+
+
+def test_read_legacy_v1_numeric_cursor_without_phase_infers_previous_phase(tmp_path):
+    # v1 (pre-test-pilot) checkpoints carry no lastGoodPhase; the reader still accepts
+    # them and infers the phase from the legacy 9-phase list, migrating forward.
     p = tmp_path / "checkpoint.json"
     c = ck.new("wi", "b", last_good_step=2)
+    c["schemaVersion"] = 1
     c.pop("lastGoodPhase")
     p.write_text(json.dumps(c))
     got = ck.read(str(p))
@@ -55,9 +94,10 @@ def test_read_legacy_numeric_cursor_without_phase_infers_previous_phase(tmp_path
     assert got["lastGoodPhase"] == "tasks"
 
 
-def test_read_legacy_cursor_shifted_by_test_pilot_insert_moves_to_current_phase_index(tmp_path):
+def test_read_legacy_v1_cursor_shifted_by_test_pilot_insert_moves_to_current_phase_index(tmp_path):
     p = tmp_path / "checkpoint.json"
     c = ck.new("wi", "b")
+    c["schemaVersion"] = 1
     c["lastGoodStep"] = 7
     c.pop("lastGoodPhase")
     p.write_text(json.dumps(c))

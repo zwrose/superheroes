@@ -330,7 +330,9 @@ function inWorktree(cmd, worktree) {
 function targetCommandPrompt(prompt, worktree) {
   if (!worktree || typeof prompt !== 'string') return prompt
   if (!prompt.startsWith('Run exactly this')) return prompt
-  const idx = prompt.lastIndexOf('\n\n')
+  // The cmdRunner shape is "Run exactly this …:\n\n<cmd>"; split on the FIRST blank-line boundary
+  // so a multi-line command (which may itself contain a blank line) is wrapped whole, not just its tail.
+  const idx = prompt.indexOf('\n\n')
   if (idx < 0) return prompt
   const prefix = prompt.slice(0, idx + 2)
   const cmd = prompt.slice(idx + 2)
@@ -462,43 +464,8 @@ function testPilotDeps(workItem, generation) {
 
   return {
     resolveContext: async () => cli(
-      `python3 -c ${shq(`
-import json, os, subprocess, sys, urllib.parse
-sys.path.insert(0, 'plugins/superheroes/lib')
-import checkpoint, control_plane, detect, engine, store
-def git(*args):
-    r = subprocess.run(['git', *args], capture_output=True, text=True, timeout=10)
-    return r.stdout.strip() if r.returncode == 0 else ''
-paths = control_plane.paths(os.getcwd(), ${JSON.stringify(workItem)})
-cp = checkpoint.read(paths['checkpoint']) or {}
-root = git('rev-parse', '--show-toplevel') or os.getcwd()
-head = git('rev-parse', 'HEAD')
-branch = cp.get('branch') or git('rev-parse', '--abbrev-ref', 'HEAD')
-res = store.resolve(os.getcwd(), store.store_root())
-trusted_store = control_plane.ensure_store(root)
-profile = {}
-profile_error = None
-if res.get('profile'):
-    try:
-        profile = engine.load_profile_config(res['profile'])
-    except Exception as exc:
-        profile_error = str(exc)
-base = profile.get('baseUrl') or profile.get('base_url')
-allowed = profile.get('allowedOrigins') or profile.get('allowed_origins') or ([base] if base else [])
-browser_tools = profile.get('browserTools') or profile.get('browser_tools') or profile.get('browserTool')
-files = subprocess.run(['git', 'diff', '--name-only', 'main...HEAD'], capture_output=True, text=True, timeout=20)
-changed = [line for line in files.stdout.splitlines() if line]
-ctx = {
-  'workItem': ${JSON.stringify(workItem)}, 'generation': ${JSON.stringify(generation)},
-  'worktree': root, 'branch': branch, 'head': head, 'pr': cp.get('pr'), 'store': trusted_store,
-  'profile': profile or None, 'profileError': profile_error,
-  'baseUrl': base, 'allowedOrigins': allowed,
-  'browserTool': {'source': 'profile', 'tools': browser_tools} if browser_tools else None,
-  'diff': {'files': changed},
-  'detectors': detect.detect_dev_server(root, profile),
-}
-print(json.dumps(ctx))
-`)}`,
+      `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
+      `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}`,
       { type: 'object' }),
 
     decideApplicability: async (context) => {
@@ -758,6 +725,12 @@ async function reviewCodePhase(workItem, opts) {
     }
   }
   const targetWorktree = opts.worktree || null
+  // premortem-002: the fixer is a freeform subagent that receives the target worktree only as a TEXT
+  // hint (withTargetCommandPrompts retargets just the "Run exactly this" cmdRunner prompts). If it
+  // commits to the showrunner CWD instead of the target tree, the target HEAD never advances, the
+  // expectedHead checks still pass (both = pre-fix HEAD), and a stale `clean` covers-stamp would
+  // publish unmodified code. Snapshot CWD HEAD so we can detect that divergence after the loop.
+  const cwdHeadBefore = (targetWorktree && opts.expectedHead) ? await resolveHead(null, opts.ref || 'HEAD') : null
   const cfg = await cmdRunner(
     inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree),
     { schema: CONFIG_SCHEMA })
@@ -779,6 +752,17 @@ async function reviewCodePhase(workItem, opts) {
   if (!ADVANCE_TERMINALS.has(terminal)) {
     await renderAndPostReadout(workItem, runDir, verdict)   // names parentOrigin at the review-phase park
     return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
+  }
+  // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If
+  // the CWD advanced while the target HEAD did not, the fixer's commits landed outside the shipped tree
+  // — refuse to advance/stamp rather than certify (and ship) code the fixes never touched.
+  if (targetWorktree && opts.expectedHead) {
+    const cwdHeadAfter = await resolveHead(null, opts.ref || 'HEAD')
+    const cwdMoved = cwdHeadBefore && cwdHeadAfter && cwdHeadBefore !== cwdHeadAfter
+    const targetMoved = initialHead && finalHead && initialHead !== finalHead
+    if (cwdMoved && !targetMoved) {
+      return { phaseResult: { confidence: 'low', assumptions: ['review-code fixes landed outside the target worktree (cwd HEAD advanced, target HEAD did not) — refusing to stamp coverage'] }, gate: 'changes-requested', terminal, head: finalHead, changed: false }
+    }
   }
   // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
   // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).

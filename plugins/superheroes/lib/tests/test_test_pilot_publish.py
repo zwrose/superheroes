@@ -310,7 +310,11 @@ def test_publish_refuses_protected_branch_before_any_remote_action(tmp_path):
     assert calls == []
 
 
-def test_cli_publish_prints_result_json(tmp_path):
+def test_cli_publish_parks_on_local_head_mismatch(tmp_path):
+    # End-to-end CLI exercise: --head abc123 never equals the real local HEAD, so the publish gate
+    # parks deterministically at the local-head check with a specific reason (and never pushes). The
+    # "published" path is covered at the unit level by
+    # test_publish_renews_fences_pushes_non_force_and_writes_ready_status (local_head == tested head).
     status_path, _ = _status(tmp_path, remotePr={"head": "abc123"})
 
     proc = subprocess.run(
@@ -337,4 +341,5 @@ def test_cli_publish_prints_result_json(tmp_path):
     )
 
     result = json.loads(proc.stdout)
-    assert result["verdict"] in {"published", "park"}
+    assert result["verdict"] == "park"
+    assert "local HEAD does not equal final tested head" in result["reason"]

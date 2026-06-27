@@ -2,28 +2,53 @@
 // Native showrunner test-pilot phase. This module stays dependency-injected so the
 // showrunner spine can be smoke-tested without launching browsers or mutating refs.
 
+// Native showrunner test-pilot phase. The orchestrator threads state through five sequential
+// helpers, each of which returns `{ done: <terminalResult> }` to short-circuit (park or proceed) or
+// the state it produced. Judgment stays in the injected leaves + pure helpers (§10.1); these helpers
+// are control flow only.
 async function testPilotPhase(workItem, generation, deps) {
   deps = deps || {}
-  const assumptions = []
 
+  const setup = await resolveApplicabilityAndSetup(deps, workItem, generation)
+  if (setup.done) return setup.done
+  const { context } = setup
+
+  const planned = await preparePlanAndRecords(deps, workItem, context)
+  if (planned.done) return planned.done
+  const { plan, records, previousStatus } = planned
+
+  const execCtx = await prepareExecutionContext(deps, workItem, context, plan, records, previousStatus)
+  if (execCtx.done) return execCtx.done
+  const { artifactResult, serverContext, seedResult } = execCtx
+
+  const browser = await runBrowserPasses(deps, workItem, context, plan, records, artifactResult, serverContext, seedResult)
+  if (browser.done) return browser.done
+  const { combinedAggregated, retryState } = browser
+
+  return finalizeReadiness(deps, workItem, context, plan, records, retryState, combinedAggregated, artifactResult)
+}
+
+// Phase 1: resolve context, decide applicability (short-circuit not_applicable / park uncertain),
+// validate setup. Returns `{ context }` to proceed or `{ done }` for a terminal.
+async function resolveApplicabilityAndSetup(deps, workItem, generation) {
   let context
   try {
     context = await callLeaf(deps.resolveContext, workItem, generation)
   } catch (err) {
-    return low(`test-pilot setup failed: ${message(err)}`)
+    return { done: low(`test-pilot setup failed: ${message(err)}`) }
   }
   if (!context || !context.head) {
-    return low('test-pilot setup failed: missing current head')
+    return { done: low('test-pilot setup failed: missing current head') }
   }
 
   let applicability
   try {
     applicability = await callLeaf(deps.decideApplicability, context)
   } catch (err) {
-    return low(`test-pilot applicability failed: ${message(err)}`)
+    return { done: low(`test-pilot applicability failed: ${message(err)}`) }
   }
   if (!applicability || typeof applicability !== 'object') {
-    return low('test-pilot applicability failed: no verdict')
+    return { done: low('test-pilot applicability failed: no verdict') }
   }
 
   if (applicability.verdict === 'not_applicable') {
@@ -36,77 +61,89 @@ async function testPilotPhase(workItem, generation, deps) {
       rationale: applicability.rationale || applicability.reason || 'no browser-verifiable workflow changed',
     }
     const wrote = await writeStatus(deps, workItem, status)
-    if (!wrote.ok) return low(wrote.reason)
-    return { confidence: 'high', assumptions }
+    if (!wrote.ok) return { done: low(wrote.reason) }
+    return { done: { confidence: 'high', assumptions: [] } }
   }
 
   if (applicability.verdict !== 'applicable') {
-    return low(applicability.reason || 'test-pilot applicability is uncertain')
+    return { done: low(applicability.reason || 'test-pilot applicability is uncertain') }
   }
 
   const setupProblem = validateSetup(context)
   if (setupProblem) {
-    return low(setupProblem)
+    return { done: await parkLow(deps, workItem, context, setupProblem) }
   }
 
+  return { context }
+}
+
+// Phase 2: derive the plan, prepare + validate plan records, write the plan milestones. Returns
+// `{ plan, records, previousStatus }` to proceed or `{ done }` for a terminal.
+async function preparePlanAndRecords(deps, workItem, context) {
   const previousStatus = await readPreviousStatus(deps, workItem)
 
   let plan
   try {
     plan = await callLeaf(deps.derivePlan, context)
   } catch (err) {
-    return low(`test-pilot plan derivation failed: ${message(err)}`)
+    return { done: low(`test-pilot plan derivation failed: ${message(err)}`) }
   }
   if (plan && plan.confidence === 'low') {
-    return low(plan.reason || 'test-pilot plan derivation is low-confidence')
+    return { done: low(plan.reason || 'test-pilot plan derivation is low-confidence') }
   }
   plan = normalizePlan(plan)
   if (!plan.records.length) {
-    return low('applicable test-pilot plan is empty')
+    return { done: await parkLow(deps, workItem, context, 'applicable test-pilot plan is empty') }
   }
   const generatedStoreProblem = generatedInRepoStoreProblem(plan.records)
   if (generatedStoreProblem) {
-    return low(generatedStoreProblem)
+    return { done: await parkLow(deps, workItem, context, generatedStoreProblem) }
   }
   const mergedRecords = mergePriorStepState(plan.records, previousStatus)
   const skippedProblem = validateSkippedPreservation(mergedRecords)
   if (skippedProblem) {
-    return low(skippedProblem)
+    return { done: low(skippedProblem) }
   }
   const dedupeProblem = validateUniqueIds(mergedRecords)
   if (dedupeProblem) {
-    return low(dedupeProblem)
+    return { done: low(dedupeProblem) }
   }
   plan.records = mergedRecords
   let wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'plan-derived', {
     planRecords: plan.records,
   }))
-  if (!wrote.ok) return low(wrote.reason)
+  if (!wrote.ok) return { done: low(wrote.reason) }
 
   let prepared
   try {
     prepared = await callLeaf(deps.preparePlanRecords, plan, context, previousStatus)
   } catch (err) {
-    return low(`test-pilot plan record preparation failed: ${message(err)}`)
+    return { done: low(`test-pilot plan record preparation failed: ${message(err)}`) }
   }
   const recordProblem = planRecordProblem(prepared)
   if (recordProblem) {
-    return low(recordProblem)
+    return { done: await parkLow(deps, workItem, context, recordProblem) }
   }
   const records = mergePriorStepState(prepared.records, previousStatus)
   const preparedSkippedProblem = validateSkippedPreservation(records)
   if (preparedSkippedProblem) {
-    return low(preparedSkippedProblem)
+    return { done: low(preparedSkippedProblem) }
   }
   const preparedDedupeProblem = validateUniqueIds(records)
   if (preparedDedupeProblem) {
-    return low(preparedDedupeProblem)
+    return { done: low(preparedDedupeProblem) }
   }
   wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'plan-records-ready', {
     planRecords: records,
   }))
-  if (!wrote.ok) return low(wrote.reason)
+  if (!wrote.ok) return { done: low(wrote.reason) }
 
+  return { plan, records, previousStatus }
+}
+
+// Phase 3: prepare artifacts, resolve the server, seed records — each with its readiness milestone.
+// Returns `{ artifactResult, serverContext, seedResult }` to proceed or `{ done }` for a terminal.
+async function prepareExecutionContext(deps, workItem, context, plan, records, previousStatus) {
   let artifactResult
   try {
     artifactResult = await callLeaf(deps.prepareArtifacts, {
@@ -116,46 +153,46 @@ async function testPilotPhase(workItem, generation, deps) {
       previousStatus,
     })
   } catch (err) {
-    return low(`test-pilot artifact preparation failed: ${message(err)}`)
+    return { done: low(`test-pilot artifact preparation failed: ${message(err)}`) }
   }
   const artifactProblem = artifactReadinessProblem(artifactResult)
   if (artifactProblem) {
-    return low(artifactProblem)
+    return { done: low(artifactProblem) }
   }
-  wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'artifacts-ready', {
+  let wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'artifacts-ready', {
     planRecords: records,
     artifacts: artifactResult.artifacts,
     prPosting: artifactResult.posting || artifactResult.prPosting,
     fallback: artifactResult.fallback,
   }))
-  if (!wrote.ok) return low(wrote.reason)
+  if (!wrote.ok) return { done: low(wrote.reason) }
 
   let serverContext
   try {
     serverContext = await callLeaf(deps.resolveServer, context, records)
   } catch (err) {
-    return low(`test-pilot server resolution failed: ${message(err)}`)
+    return { done: low(`test-pilot server resolution failed: ${message(err)}`) }
   }
   const serverProblem = serverContextProblem(serverContext, context)
   if (serverProblem) {
-    return low(serverProblem)
+    return { done: low(serverProblem) }
   }
   wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'server-ready', {
     planRecords: records,
     artifacts: artifactResult.artifacts,
     server: publicServerContext(serverContext),
   }))
-  if (!wrote.ok) return low(wrote.reason)
+  if (!wrote.ok) return { done: low(wrote.reason) }
 
   let seedResult
   try {
     seedResult = await callLeaf(deps.seedRecords, records, context)
   } catch (err) {
-    return low(`test-pilot seed preparation failed: ${message(err)}`)
+    return { done: low(`test-pilot seed preparation failed: ${message(err)}`) }
   }
   const seedProblem = seedReadinessProblem(seedResult)
   if (seedProblem) {
-    return low(seedProblem)
+    return { done: low(seedProblem) }
   }
   wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'seed-ready', {
     planRecords: records,
@@ -163,8 +200,14 @@ async function testPilotPhase(workItem, generation, deps) {
     server: publicServerContext(serverContext),
     seed: seedResult.status || seedResult,
   }))
-  if (!wrote.ok) return low(wrote.reason)
+  if (!wrote.ok) return { done: low(wrote.reason) }
 
+  return { artifactResult, serverContext, seedResult }
+}
+
+// Phase 4: run browser passes, dispatch app-bug fix batches + review-code stabilization, until the
+// evidence is clean (returns { combinedAggregated, retryState }) or a park condition returns { done }.
+async function runBrowserPasses(deps, workItem, context, plan, records, artifactResult, serverContext, seedResult) {
   const retryState = {
     fixBatchHistory: [],
     currentHead: context.head,
@@ -188,7 +231,7 @@ async function testPilotPhase(workItem, generation, deps) {
         browserFixBatches: retryState.fixBatchHistory.length,
       },
     })
-    if (!budget.ok) return low(budget.reason)
+    if (!budget.ok) return { done: low(budget.reason) }
 
     let rawResults
     try {
@@ -205,11 +248,11 @@ async function testPilotPhase(workItem, generation, deps) {
         return callLeaf(deps.runBrowserPass, browserContext)
       })
     } catch (err) {
-      return low(`test-pilot browser execution failed: ${message(err)}`)
+      return { done: low(`test-pilot browser execution failed: ${message(err)}`) }
     }
     const originProblem = browserOriginProblem(rawResults, serverContext)
     if (originProblem) {
-      return low(originProblem)
+      return { done: low(originProblem) }
     }
 
     try {
@@ -222,11 +265,11 @@ async function testPilotPhase(workItem, generation, deps) {
         fixBatchHistory: retryState.fixBatchHistory,
       })
     } catch (err) {
-      return low(`test-pilot result aggregation failed: ${message(err)}`)
+      return { done: low(`test-pilot result aggregation failed: ${message(err)}`) }
     }
     const aggregationProblem = resultAggregationProblem(aggregated)
     if (aggregationProblem) {
-      return low(aggregationProblem)
+      return { done: low(aggregationProblem) }
     }
 
     retryState.browserEvidenceHead = retryState.currentHead
@@ -242,17 +285,17 @@ async function testPilotPhase(workItem, generation, deps) {
     if (!evidenceProblem) {
       const stabilization = await stabilizeReviewCode(deps, workItem, context, retryState, combinedAggregated, records)
       if (!stabilization.ok) {
-        wrote = await writeRetryStatus(deps, workItem, context, retryState, combinedAggregated, records, stabilization.reason)
-        if (!wrote.ok) return low(wrote.reason)
-        return low(stabilization.reason)
+        const wrote = await writeRetryStatus(deps, workItem, context, retryState, combinedAggregated, records, stabilization.reason)
+        if (!wrote.ok) return { done: low(wrote.reason) }
+        return { done: low(stabilization.reason) }
       }
       if (stabilization.changed) {
         stabilizationCycle += 1
         if (stabilizationCycle > 2) {
           const reason = 'review-code stabilization cycle cap reached'
-          wrote = await writeRetryStatus(deps, workItem, context, retryState, combinedAggregated, records, reason)
-          if (!wrote.ok) return low(wrote.reason)
-          return low(reason)
+          const wrote = await writeRetryStatus(deps, workItem, context, retryState, combinedAggregated, records, reason)
+          if (!wrote.ok) return { done: low(wrote.reason) }
+          return { done: low(reason) }
         }
         retryState.currentHead = stabilization.head || retryState.currentHead
         retryState.reviewStabilizationCycle = stabilizationCycle
@@ -265,30 +308,30 @@ async function testPilotPhase(workItem, generation, deps) {
       retryState.reviewStabilizationCycle = stabilizationCycle
       retryState.reviewCoverageHead = stabilization.reviewCoverageHead || retryState.currentHead
       retryState.verifyPassedHead = stabilization.verifyPassedHead || retryState.currentHead
-      break
+      return { combinedAggregated, retryState }
     }
 
     const failed = failedBrowserRecords(aggregated)
     if (!failed.length) {
       const retryWrite = await writeRetryStatus(deps, workItem, context, retryState, aggregated, records, evidenceProblem)
-      if (!retryWrite.ok) return low(retryWrite.reason)
-      return low(evidenceProblem)
+      if (!retryWrite.ok) return { done: low(retryWrite.reason) }
+      return { done: low(evidenceProblem) }
     }
 
     const decision = await retryDecision(deps, aggregated, retryState.fixBatchHistory)
     if (decision.action !== 'fix_batch') {
       const reason = decision.reason || evidenceProblem
       const retryWrite = await writeRetryStatus(deps, workItem, context, retryState, aggregated, records, reason)
-      if (!retryWrite.ok) return low(retryWrite.reason)
-      return low(reason)
+      if (!retryWrite.ok) return { done: low(retryWrite.reason) }
+      return { done: low(reason) }
     }
 
     const failures = collectAppBugFailures(aggregated)
     if (!failures.length || failures.length !== failed.length) {
       const reason = 'one or more browser failures are not app-bug failures'
       const retryWrite = await writeRetryStatus(deps, workItem, context, retryState, aggregated, records, reason)
-      if (!retryWrite.ok) return low(retryWrite.reason)
-      return low(reason)
+      if (!retryWrite.ok) return { done: low(retryWrite.reason) }
+      return { done: low(reason) }
     }
 
     const fixBudget = await budgetCheck(deps, 'fix-batch', {
@@ -297,7 +340,7 @@ async function testPilotPhase(workItem, generation, deps) {
       head: retryState.currentHead,
       fixBatchHistory: retryState.fixBatchHistory,
     })
-    if (!fixBudget.ok) return low(fixBudget.reason)
+    if (!fixBudget.ok) return { done: low(fixBudget.reason) }
 
     const summary = decision.summary || failureSummary(failures)
     const batch = {
@@ -323,20 +366,20 @@ async function testPilotPhase(workItem, generation, deps) {
         batch,
       })
     } catch (err) {
-      return low(`test-pilot browser fix batch failed: ${message(err)}`)
+      return { done: low(`test-pilot browser fix batch failed: ${message(err)}`) }
     }
     if (!fixResult || fixResult.ok === false || fixResult.action === 'park' || fixResult.confidence === 'low') {
-      return low((fixResult && (fixResult.reason || fixResult.message)) || 'test-pilot browser fix batch parked')
+      return { done: low((fixResult && (fixResult.reason || fixResult.message)) || 'test-pilot browser fix batch parked') }
     }
 
     const clean = await ensureCleanWorktreeAfterFix(fixResult, deps, { workItem, context, batch })
-    if (!clean.ok) return low(clean.reason)
+    if (!clean.ok) return { done: low(clean.reason) }
 
     const reconciled = await reconcileCommittedMutations(fixResult, retryState.fixBatchHistory, batch, deps, {
       workItem,
       context,
     })
-    if (!reconciled.ok) return low(reconciled.reason)
+    if (!reconciled.ok) return { done: low(reconciled.reason) }
 
     batch.intent = false
     batch.commitShas = normalizeShas(reconciled.commitShas || fixResult.commitShas || fixResult.commits || fixResult.shas)
@@ -356,7 +399,7 @@ async function testPilotPhase(workItem, generation, deps) {
     batch.rerunScope = rerunScope
     browserRecords = recordsForRerun(records, rerunScope)
 
-    wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'fix-batch-ready', {
+    const wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'fix-batch-ready', {
       planRecords: records,
       artifacts: artifactResult.artifacts,
       server: publicServerContext(serverContext),
@@ -366,9 +409,13 @@ async function testPilotPhase(workItem, generation, deps) {
       currentHead: retryState.currentHead,
       lastBrowserResult: aggregated,
     }))
-    if (!wrote.ok) return low(wrote.reason)
+    if (!wrote.ok) return { done: low(wrote.reason) }
   }
+}
 
+// Phase 5: restore the seed baseline, publish the final artifacts + tested head, write the applicable
+// status. Returns the high-confidence terminal, or low() on any park.
+async function finalizeReadiness(deps, workItem, context, plan, records, retryState, combinedAggregated, artifactResult) {
   const baselineResult = await restoreFinalBaseline(deps, records, context, retryState)
   if (!baselineResult.ok) return low(baselineResult.reason)
 
@@ -413,10 +460,10 @@ async function testPilotPhase(workItem, generation, deps) {
   }
   if (combinedAggregated.fixes) finalStatus.fixes = combinedAggregated.fixes
   if (combinedAggregated.verify) finalStatus.verify = combinedAggregated.verify
-  wrote = await writeStatus(deps, workItem, finalStatus)
+  const wrote = await writeStatus(deps, workItem, finalStatus)
   if (!wrote.ok) return low(wrote.reason)
 
-  return { confidence: 'high', assumptions }
+  return { confidence: 'high', assumptions: [] }
 }
 
 function validateSetup(context) {
@@ -440,7 +487,9 @@ function validateSetup(context) {
 async function writeStatus(deps, workItem, status) {
   try {
     if (deps.writeStatus) {
-      const out = await deps.writeStatus(status, workItem)
+      // status already carries workItem (milestoneStatus / terminal statuses set it); the writer
+      // contract is writeStatus(status) — don't pass a 2nd arg no implementation reads.
+      const out = await deps.writeStatus(status)
       if (out && out.ok === false) return { ok: false, reason: out.reason || 'test-pilot status write failed' }
       return { ok: true }
     }
@@ -682,6 +731,20 @@ function resultAggregationProblem(aggregated) {
   return null
 }
 
+// Single source of truth for "this record is browser-derived evidence". MUST stay byte-for-byte
+// equivalent to test_pilot_status.py `_browser_executed` (the mark-ready gate's check) — if the two
+// drift, the in-phase readiness check and the mark-ready gate can disagree on the same status.
+// The `browser === true` alias is the one the Python accepts that the JS previously omitted.
+function browserExecutedRecord(record) {
+  return !!record && typeof record === 'object' && (
+    record.browserExecuted === true ||
+    record.browser_executed === true ||
+    record.browser === true ||
+    record.kind === 'browser' ||
+    record.type === 'browser'
+  )
+}
+
 function resultEvidenceProblem(aggregated, records) {
   const aggregationProblem = resultAggregationProblem(aggregated)
   if (aggregationProblem) return aggregationProblem
@@ -698,7 +761,7 @@ function resultEvidenceProblem(aggregated, records) {
     if (!key) return 'browser-derived pass/fail evidence missing step id'
     const status = record.status || record.result
     if (status !== 'passed' && status !== 'pass') return 'skipped, incomplete, or failing browser records park before readiness'
-    if (record.browserExecuted !== true && record.browser_executed !== true && record.kind !== 'browser' && record.type !== 'browser') {
+    if (!browserExecutedRecord(record)) {
       return 'every browser step must have browser-derived pass/fail evidence'
     }
     seen.add(key)
@@ -1086,6 +1149,22 @@ function milestoneStatus(context, workItem, milestone, extra) {
 async function callLeaf(fn, ...args) {
   if (typeof fn !== 'function') throw new Error('required leaf is unavailable')
   return fn(...args)
+}
+
+// Best-effort: stamp a parked status carrying WHY before an early low() return, so the mark-ready
+// gate (and a human reading the sidecar) see the real cause instead of an opaque "status missing".
+// Never changes the returned reason and never fails the phase if the write is unavailable/fails —
+// the not_applicable path writes a status the same way; these early parks were the gap.
+async function recordParkStatus(deps, workItem, context, reason) {
+  if (!context) return
+  try {
+    await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'parked', { reason }))
+  } catch (_) { /* best-effort: low(reason) below still carries the real cause */ }
+}
+
+async function parkLow(deps, workItem, context, reason) {
+  await recordParkStatus(deps, workItem, context, reason)
+  return low(reason)
 }
 
 function low(reason) {

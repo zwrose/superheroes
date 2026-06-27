@@ -87,9 +87,11 @@ def _ext(path):
 
 
 def _docs_only(files):
+    # A doc-extension check (DOC_EXTS) already covers README.md / CHANGELOG.md / CONTRIBUTING.md and
+    # every other .md/.rst/.txt doc; the earlier per-name allowlist was dead (path.upper() never equals
+    # a mixed-case "README.md") and redundant, so it was removed.
     return bool(files) and all(
         path.startswith(("docs/", "documentation/"))
-        or path.upper() in {"README.md", "CHANGELOG.md", "CONTRIBUTING.md"}
         or _ext(path) in DOC_EXTS
         for path in files
     )
