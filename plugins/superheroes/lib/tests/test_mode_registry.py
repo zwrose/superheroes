@@ -438,3 +438,47 @@ def test_config_lock_at_keys_on_an_arbitrary_store_dir(tmp_path):
             assert got2 is False     # same dir -> mutually exclusive, non-blocking
     with mr.config_lock_at(common_dir) as got3:
         assert got3 is True          # released after the context closed
+
+
+def _seed_hero_in_repo(repo):
+    p = os.path.join(str(repo), ".claude", "review-profile.md")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "w").write("profile\n")
+
+
+def _pin_hero_globals(monkeypatch, tmp_path):
+    monkeypatch.setattr(mr, "_hero_global_root", lambda name: str(tmp_path / "heroglobal"))
+
+
+def test_resolve_defers_backfill_write_while_rebind_marker_present(tmp_path, monkeypatch):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    _pin_hero_globals(monkeypatch, tmp_path)
+    _seed_hero_in_repo(tmp_path)
+    import store_core as sc
+    gh = sc.derive_identifiers(str(tmp_path))["gitdir_hash"]
+    cdir = os.path.join(root, "projects", gh); os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "migration-journal.json"),
+                    json.dumps({"kind": "rebind", "phase": "copying"}))
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["authoritative"] is False
+    rk = sc.derive_identifiers(str(tmp_path))["remote_hash"]
+    assert not os.path.isfile(os.path.join(root, "projects", rk, "registry.json"))
+
+
+def test_resolve_backfills_when_no_rebind_marker(tmp_path, monkeypatch):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    _pin_hero_globals(monkeypatch, tmp_path)
+    _seed_hero_in_repo(tmp_path)
+    r = mr.resolve(str(tmp_path), root=root)
+    assert r["source"] == "backfilled" and r["authoritative"] is True
+
+
+def test_resolve_artifact_prefers_recorded_mode_when_both_exist(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
+    in_repo = tmp_path / "in.txt"; in_repo.write_text("old")
+    glob = tmp_path / "g.txt"; glob.write_text("new")
+    assert mr.resolve_artifact(str(tmp_path), str(in_repo), str(glob), root=root) == str(glob)

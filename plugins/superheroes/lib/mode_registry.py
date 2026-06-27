@@ -181,6 +181,21 @@ def evidence_verdict(hero_locs):
     return "disagree"
 
 
+def _rebind_in_flight(cwd, root=None):
+    """True when a first-push rebind journal is present at the rebind-invariant
+    <common-dir-key> store. Additive guard for the backfill branch below (configure's
+    mode_migrate.rebind writes this journal): while a rebind is mid-flight a hero must NOT
+    backfill a fresh authoritative record under the new remote key and fork the calibration."""
+    base = root if root is not None else control_plane.store_root()
+    common = os.path.join(base, "projects",
+                          store_core.derive_identifiers(cwd)["gitdir_hash"])
+    try:
+        with open(os.path.join(common, "migration-journal.json"), encoding="utf-8") as fh:
+            return json.load(fh).get("kind") == "rebind"
+    except (OSError, ValueError):
+        return False
+
+
 def resolve(cwd, root=None):
     """The shared band-wide mode resolver. Never blocks, never hits the network.
     Raises UnknownSchemaVersion on a newer record (fail-closed)."""
@@ -190,6 +205,10 @@ def resolve(cwd, root=None):
                 "source": "registry", "evidence": None}
     verdict = evidence_verdict(hero_evidence(cwd, root))
     if verdict in (IN_REPO, GLOBAL):
+        if _rebind_in_flight(cwd, root):
+            # defer the backfill WRITE (not the read) while a rebind is mid-flight — no fork
+            return {"mode": verdict, "authoritative": False,
+                    "source": "provisional", "evidence": verdict}
         remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
         wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
         if wrote is None:
@@ -220,10 +239,16 @@ def decide_mode(cwd, env_value, interactive, root=None):
 
 def resolve_artifact(cwd, in_repo_path, global_path, root=None):
     """FR-6: an EXISTING artifact resolves to where it physically lives; a NEW artifact
-    resolves by the recorded mode."""
-    if os.path.exists(in_repo_path):
+    resolves by the recorded mode. When BOTH copies exist — the transient window during a
+    mode flip's copy phase — resolve by the authoritative recorded mode (mode-authoritative),
+    so a reader never prefers a source the registry has already flipped away from."""
+    in_exists = os.path.exists(in_repo_path)
+    gl_exists = os.path.exists(global_path)
+    if in_exists and gl_exists:
+        return in_repo_path if resolve(cwd, root)["mode"] == IN_REPO else global_path
+    if in_exists:
         return in_repo_path
-    if os.path.exists(global_path):
+    if gl_exists:
         return global_path
     return in_repo_path if resolve(cwd, root)["mode"] == IN_REPO else global_path
 
