@@ -309,3 +309,93 @@ def split_profile(profile_text, hero):
     # it rides along verbatim in layer_blocks above).
     layer_text = "\n\n".join(b for b in layer_blocks if b.strip()) + "\n"
     return core_facts, layer_text
+
+
+def _legacy_path(cwd, hero):
+    """The hero's pre-existing single-file profile path, MODE-AWARE. A global-mode legacy
+    profile lives under the hero's own global store, not in the repo, so resolve it through
+    each hero's own resolver first (the hero owns where its profile lives); fall back to the
+    in-repo `_HERO_INREPO` subpath (anchored at the repo root) when no global profile exists.
+    Returns None for an unknown hero."""
+    sub = mode_registry._HERO_INREPO.get(hero)
+    if sub is None:
+        return None
+    try:
+        if hero == "review-crew":
+            import review_store
+            res = review_store.resolve(cwd, "profile", review_store.store_root())
+            if res.get("exists") and res.get("path"):
+                return res["path"]
+        elif hero == "test-pilot":
+            import store as test_pilot_store
+            res = test_pilot_store.resolve(cwd, test_pilot_store.store_root())
+            if res.get("exists") and res.get("profile"):
+                return res["profile"]
+    except Exception:
+        pass  # fail-open: fall back to the in-repo anchored path
+    return os.path.join(_repo_root(cwd), sub)
+
+
+def _layer_path(cwd, hero, root=None):
+    """The hero layer path, co-located with core.md (same mode-aware dir)."""
+    return os.path.join(os.path.dirname(core_path(cwd, root)), hero + ".md")
+
+
+def _render_layer(layer_text, hero, status, stamp):
+    """Wrap the split hero sections in the §2.2 provenance line for a layer file."""
+    return ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
+            % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+
+
+def _in_repo_mode(cwd, root):
+    """True when this migration must commit (in-repo): the resolved mode is in-repo AND the
+    project is a git repo. A nongit/global project never commits."""
+    if mode_registry.resolve(cwd, root)["mode"] != mode_registry.IN_REPO:
+        return False
+    return store_core.run_git(cwd, "rev-parse", "--show-toplevel") is not None
+
+
+def migrate_on_read(cwd, hero, *, root=None, now=None):
+    """Convert a hero's legacy profile to core.md + a layer, all-or-nothing, under the lock.
+    Only acts when a legacy profile exists and no usable core.md exists. Ordered for
+    crash-safety: (1) write core.md, (2) write layer, (3) remove legacy, (4) in-repo commit
+    (Task 8). The legacy file is removed only after both new files exist (UFR-5)."""
+    stamp = now or _today()
+    legacy = _legacy_path(cwd, hero)
+    if not legacy or not os.path.isfile(legacy):
+        return {"action": "noop"}
+    if read(cwd, root) is not None:
+        return {"action": "noop"}  # usable core.md already present (resume handled in Task 9)
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"hero": hero, "reason": "store-unwritable"})
+        return {"action": "deferred"}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"hero": hero, "reason": "lock-contended"})
+            return {"action": "deferred"}
+        # re-check under the lock (Task 9 adds the full resume rule)
+        if read(cwd, root) is not None:
+            return {"action": "noop"}
+        try:
+            with open(legacy, encoding="utf-8") as fh:
+                legacy_text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"hero": hero, "reason": "legacy-unreadable"})
+            return {"action": "deferred"}
+        if classify(legacy_text, hero) != "standard":
+            return {"action": "ambiguous"}
+        core_facts, layer_text = split_profile(legacy_text, hero)
+        try:
+            # (1) core.md
+            store_core.atomic_write(core_path(cwd, root),
+                                    render_core(core_facts, "provisional", stamp, stamp))
+            # (2) hero layer
+            store_core.atomic_write(_layer_path(cwd, hero, root),
+                                    _render_layer(layer_text, hero, "provisional", stamp))
+            # (3) remove the legacy file (only now that both new files exist)
+            os.unlink(legacy)
+        except OSError:
+            mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
+            return {"action": "deferred"}
+        clear_pending(cwd, root)
+        return {"action": "migrated"}

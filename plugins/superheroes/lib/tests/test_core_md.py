@@ -321,3 +321,79 @@ def test_split_preserves_unrecognized_section_verbatim():
     _core, layer = CM.split_profile(extra, "review-crew")
     assert "## Weird custom section" in layer
     assert "keep me exactly" in layer
+
+
+def _hero_layer_path(repo, hero):
+    return os.path.join(repo, ".claude", "superheroes", hero + ".md")
+
+
+def _legacy_review_path(repo):
+    d = os.path.join(repo, ".claude")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "review-profile.md")
+
+
+def test_migrate_global_standard_splits_and_retires_legacy(tmp_path):
+    # Global mode (no repo root override / nongit): write core.md + layer, remove legacy.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "migrated"
+    # core.md exists and carries the shared facts
+    got = CM.read(repo, root=store)
+    assert got is not None and got["verifyCommand"] == "npm test"
+    # the hero layer exists and carries hero content
+    layer = open(_hero_layer_path(repo, "review-crew")).read()
+    assert "## Scope exclusions" in layer
+    # legacy removed (retired only after both new files exist)
+    assert not os.path.exists(legacy)
+
+
+def test_migrate_noop_when_no_legacy(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+
+
+def test_migrate_ambiguous_no_write(tmp_path):
+    # FR-9: ambiguous profile → no write, legacy untouched, action ambiguous.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "ambiguous"
+    assert CM.read(repo, root=store) is None
+    assert os.path.exists(legacy)  # untouched
+
+
+def test_migrate_noop_when_core_already_present(tmp_path):
+    # A usable core.md already exists → do not re-migrate even if a legacy file lingers absent.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, CM.SCHEMA_VERSION)  # from Task 3 helper
+    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+
+
+def test_migrate_global_mode_legacy_profile_is_found_and_migrated(tmp_path, monkeypatch):
+    # FR-8: a GLOBAL-mode legacy profile lives under review-crew's own store (NOT in the repo)
+    # — _legacy_path must resolve it via the hero resolver, so global-mode migration is reachable.
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo, exist_ok=True)
+    store = str(tmp_path / "store")
+    hero_root = str(tmp_path / "review_store")  # review-crew's own global store root
+    # seed a global review-crew profile (hermetic: point review_store.store_root at hero_root)
+    import review_store
+    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
+    prof_path = review_store.create(repo, "profile", "global", hero_root)  # mints entry + pointers
+    open(prof_path, "w").write(_REVIEW_PROFILE)
+    # _legacy_path resolves the global profile path (NOT the in-repo .claude/review-profile.md)
+    legacy = CM._legacy_path(repo, "review-crew")
+    assert legacy == prof_path
+    assert os.path.isfile(legacy)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "migrated"
+    assert CM.read(repo, root=store)["verifyCommand"] == "npm test"
+    assert not os.path.exists(legacy)  # global legacy retired
