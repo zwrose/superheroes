@@ -49,7 +49,7 @@ If the loaded profile's `status:` is `provisional` AND this run is interactive (
 > This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
 
 - **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (bump `updated:`). Nothing else changes.
-- **Refresh via review-init** — point the user at `/superheroes:configure` and do not change the profile now.
+- **Refresh via configure** — point the user at `/superheroes:configure` and do not change the profile now.
 - **Keep provisional** — record a dismissal using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
 
 Skip this entirely when the run is **headless/non-interactive**, when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged.

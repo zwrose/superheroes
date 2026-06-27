@@ -149,7 +149,7 @@ def test_recover_finishes_a_half_done_flip(tmp_path):
     _seed_flip_inputs(tmp_path, root)
     _stage_to_phase(tmp_path, root, "deleting", flip_registry=True)
     res = mm.recover(str(tmp_path), root=root)
-    assert res["status"] in ("recovered", "noop")
+    assert res["status"] == "recovered"   # a real half-done flip was finished, not a no-op
     assert not os.path.exists(os.path.join(str(tmp_path), ".claude", "superheroes", "core.md"))
     assert not os.path.exists(os.path.join(str(tmp_path), "docs", "superheroes", "wi", "spec.md"))
     assert mm.active_journal(str(tmp_path), root=root) is None
@@ -162,7 +162,7 @@ def test_recover_backs_out_a_pre_commit_flip(tmp_path):
     _seed_flip_inputs(tmp_path, root)
     _stage_to_phase(tmp_path, root, "copying", flip_registry=False)
     res = mm.recover(str(tmp_path), root=root)
-    assert res["status"] in ("recovered", "noop")
+    assert res["status"] == "recovered"   # a real pre-commit flip was backed out, not a no-op
     assert os.path.exists(os.path.join(str(tmp_path), ".claude", "superheroes", "core.md"))
     assert mr.resolve(str(tmp_path), root=root)["mode"] == mr.IN_REPO
     assert mm.active_journal(str(tmp_path), root=root) is None
@@ -185,7 +185,7 @@ def test_rebind_rekeys_store_and_mode_record_under_remote_key(tmp_path):
                     "git@github.com:o/r.git"], check=True)
     cdir = os.path.join(root, "projects", sc.derive_identifiers(str(tmp_path))["gitdir_hash"])
     res = mm.rebind(str(tmp_path), root=root)
-    assert res["status"] in ("rebound", "noop")
+    assert res["status"] == "rebound"   # a real re-key happened, not a no-op
     r = mr.resolve(str(tmp_path), root=root)
     assert r["mode"] == mr.GLOBAL and r["authoritative"] is True
     assert not os.path.isfile(os.path.join(cdir, "migration-journal.json"))

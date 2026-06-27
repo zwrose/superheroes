@@ -25,7 +25,10 @@ import core_md         # noqa: E402  (sibling)
 import mode_registry   # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-_JOURNAL = "migration-journal.json"
+# The journal filename + rebind-kind sentinel are owned by mode_registry (the lower module
+# mode_registry.resolve's backfill guard also reads), so both share one source of truth.
+_JOURNAL = mode_registry.MIGRATION_JOURNAL
+_REBIND = mode_registry.REBIND_KIND
 _CAL_BASENAMES_PRESERVE = ("core.md", "patterns.md")  # plus any <plugin>.md layer
 _DEF_DOCS = ("spec.md", "plan.md", "tasks.md")
 
@@ -236,10 +239,12 @@ def execute(migration, *, root=None):
 
 def _finish_flip(files):
     for f in files:
-        if not os.path.exists(f["dst"]) and os.path.exists(f["src"]):
-            with open(f["src"], encoding="utf-8") as fh:
-                store_core.atomic_write(f["dst"], fh.read())
-        _remove(f["src"])
+        if not os.path.exists(f["src"]):
+            continue                      # source already gone — nothing to finish
+        if os.path.exists(f["dst"]):
+            os.remove(f["src"])           # dst already present — just drop the source
+        else:
+            core_md.relocate_file(f["src"], f["dst"])  # the one relocate primitive (copy + unlink)
 
 
 def _backout_flip(files):
@@ -259,12 +264,18 @@ def recover(cwd, *, root=None):
             continue
         kind = journal.get("kind")
         jpath = _journal_path(store_dir)
-        if kind == "rebind":
+        if kind == _REBIND:
             # An interrupted rebind: the store may be half-moved. Re-run the rebind to converge
-            # (it is itself idempotent / merge-based), then clear the stranded journal.
-            _remove(jpath)
+            # (it is idempotent / merge-based and clears its own journal on success). Do NOT
+            # pre-delete the journal — if the re-run can't complete (busy lock, or an
+            # owner-decision conflict), the journal must survive so the next run can retry
+            # (UFR-10). Only a terminal rebound/noop counts as recovered; anything else is
+            # surfaced honestly with the journal left in place.
             res = rebind(cwd, root=root, interactive=True)
-            return {"status": "recovered", "rebind": res.get("status")}
+            status = res.get("status")
+            if status in ("rebound", "noop"):
+                return {"status": "recovered", "rebind": status}
+            return {"status": status, "rebind": status, "detail": res.get("detail")}
         # flip
         with mode_registry.config_lock(cwd, root) as got:
             if not got:
@@ -296,7 +307,9 @@ def _merge_move(src_dir, dst_dir):
             shutil.move(src, dst)
         elif os.path.isdir(src) and os.path.isdir(dst):
             _merge_move(src, dst)
-        # file-vs-file collision: keep the existing dst (no clobber)
+        # else: a collision (file-vs-file, or a file-vs-dir type mismatch) — keep the
+        # existing dst (no clobber, FR-9); the src copy is left in place under the old key
+        # rather than silently stranded, so nothing is lost.
 
 
 def rebind(cwd, *, root=None, interactive=True):
@@ -317,22 +330,28 @@ def rebind(cwd, *, root=None, interactive=True):
     with mode_registry.config_lock_at(common_dir) as got:
         if not got:
             return {"status": "busy"}
-        jpath = _journal_path(common_dir)
-        store_core.atomic_write(jpath, json.dumps(
-            {"kind": "rebind", "phase": "copying", "files": []}, indent=2))
         common_reg = _read_json(os.path.join(common_dir, "registry.json"))
         remote_reg = _read_json(os.path.join(remote_dir, "registry.json"))
+        # Conflict check FIRST — before writing a journal or moving anything. A disagreement
+        # is surfaced for the owner with the store left wholly untouched (FR-9); no journal is
+        # written, so nothing needs recovery. (A journal stranded by an EARLIER interrupted
+        # run, if any, is left in place so the next run retries once the conflict is resolved.)
         if (remote_reg is not None and common_reg is not None
                 and remote_reg.get("storageMode") != common_reg.get("storageMode")):
-            _remove(jpath)
             return {"status": "conflict", "applied": False,
                     "detail": {"common": common_reg.get("storageMode"),
                                "remote": remote_reg.get("storageMode")}}
+        jpath = _journal_path(common_dir)
+        store_core.atomic_write(jpath, json.dumps(
+            {"kind": _REBIND, "phase": "copying", "files": []}, indent=2))
         _merge_move(common_dir, remote_dir)
         # re-establish registry.json under the remote key (config_key is now remote_hash)
         target = (common_reg or remote_reg or {}).get("storageMode") \
             or mode_registry.resolve(cwd, root)["mode"]
-        _commit_registry(cwd, target, rk, root)
+        if not _commit_registry(cwd, target, rk, root):
+            # the store moved but the mode record could not be written — leave the journal so
+            # the next run's recover retries the (idempotent) rebind rather than reporting success
+            return {"status": "deferred"}
         _remove(jpath)
         return {"status": "rebound"}
 

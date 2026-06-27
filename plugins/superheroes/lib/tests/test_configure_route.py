@@ -79,3 +79,25 @@ def test_work_in_flight_true_when_an_issue_is_in_progress(tmp_path, monkeypatch)
     _init_repo(tmp_path)
     monkeypatch.setattr(crt, "_current_work", lambda cwd, root: {"workItem": "wi", "phase": "build"})
     assert crt.work_in_flight(str(tmp_path), root=str(tmp_path / "store")) is True
+
+
+def test_structural_signal_routes_to_fix(tmp_path, monkeypatch):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_light_layers(_seed_core(tmp_path))   # otherwise healthy
+    monkeypatch.setattr(crt.mode_reconcile, "gather_signals",
+                        lambda cwd, root=None: [{"type": "migration-pending", "identity": "x", "detail": {}}])
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "fix" and "structural" in " ".join(out["reasons"]).lower()
+
+
+def test_staleness_drift_stays_in_view(tmp_path, monkeypatch):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_light_layers(_seed_core(tmp_path))   # healthy; a non-structural drift signal stays in view
+    monkeypatch.setattr(crt.mode_reconcile, "gather_signals",
+                        lambda cwd, root=None: [{"type": "hero-behind", "identity": "x", "detail": {}}])
+    out = crt.route(str(tmp_path), interactive=True, root=root)
+    assert out["path"] == "view"

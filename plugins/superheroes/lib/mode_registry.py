@@ -17,6 +17,11 @@ import store_core
 SCHEMA_VERSION = 1
 IN_REPO = "in-repo"
 GLOBAL = "global"
+# The migration journal mode_migrate writes; named here (the lower module both reference)
+# so the backfill guard below and mode_migrate share one source of truth — a rename can't
+# silently disable the guard, and neither module imports the other for it (no cycle).
+MIGRATION_JOURNAL = "migration-journal.json"
+REBIND_KIND = "rebind"
 
 
 def config_key(cwd):
@@ -190,8 +195,8 @@ def _rebind_in_flight(cwd, root=None):
     common = os.path.join(base, "projects",
                           store_core.derive_identifiers(cwd)["gitdir_hash"])
     try:
-        with open(os.path.join(common, "migration-journal.json"), encoding="utf-8") as fh:
-            return json.load(fh).get("kind") == "rebind"
+        with open(os.path.join(common, MIGRATION_JOURNAL), encoding="utf-8") as fh:
+            return json.load(fh).get("kind") == REBIND_KIND
     except (OSError, ValueError):
         return False
 
