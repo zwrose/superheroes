@@ -3,6 +3,7 @@
 // forwards decisions; every judgement is a pure Python decider or a #86 shell.
 const { reviewPanel } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
+const { io, joinPath } = require('./io_seam.js')
 
 const REVIEW_CODE_REVIEWERS = [
   'architecture-reviewer', 'code-reviewer', 'security-reviewer',
@@ -144,7 +145,7 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
 async function docRecordDeferred(report, _verdict, runDir) {
   // fix-report.json is a transient hand-off read by record-deferred immediately below; per-round
   // overwrite is harmless (it is consumed before the next round writes it).
-  require('fs').writeFileSync(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
   await cmdRunner(
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
@@ -236,7 +237,7 @@ async function reviewDocPhase(doc, workItem) {
   const runDir = runDirFor(workItem, `review-${doc}`)
   const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  try { require('fs').writeFileSync(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
+  try { io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
   const gate = await gateForTerminal(verdict && verdict.terminal)
   const sg = await cmdRunner(
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
@@ -288,8 +289,7 @@ module.exports.notifyLedgerFor = notifyLedgerFor
 // front_half render-outcome) and return a parked result. Reads best-effort per-phase terminal records
 // + the durable NOTIFY ledger; render_run_outcome tolerates missing records.
 async function frontHalfBoundary(workItem) {
-  const fs = require('fs')
-  const readJson = (p, dflt) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) { return dflt } }
+  const readJson = (p, dflt) => io().readJson(p, dflt)
   const outcome = {
     completed_phases: ['plan', 'review-plan', 'tasks', 'review-tasks'],
     docs: { plan: docPathFor(workItem, 'plan'), tasks: docPathFor(workItem, 'tasks') },
@@ -302,7 +302,7 @@ async function frontHalfBoundary(workItem) {
   }
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
   let recordOk = true
-  try { fs.writeFileSync(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
+  try { io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
   // render-outcome prints TEXT (not JSON); call the leaf directly (no cmdRunner schema). If the
   // outcome record could not be written, render has nothing to read -> flag UFR-6 in the reason.
   const rendered = recordOk
@@ -448,14 +448,11 @@ async function defaultTestPilotPhase(workItem, generation) {
 }
 
 function testPilotDeps(workItem, generation) {
-  const fs = require('fs')
-  const path = require('path')
-  const os = require('os')
-  const runDir = path.join(os.tmpdir(), `showrunner-${workItem}-test-pilot`)
-  fs.mkdirSync(runDir, { recursive: true })
+  const runDir = joinPath(io().tmpdir(), `showrunner-${workItem}-test-pilot`)
+  io().mkdirp(runDir)
   const writeJson = (name, value) => {
-    const p = path.join(runDir, `${name}.json`)
-    fs.writeFileSync(p, JSON.stringify(value || {}))
+    const p = joinPath(runDir, `${name}.json`)
+    io().writeFile(p, JSON.stringify(value || {}))
     return p
   }
   const jsonCommand = (cmd, schema) => cmdRunner(cmd, { schema: schema || { type: 'object' } })
@@ -700,7 +697,7 @@ function verdictToGate(verdict) {
 // extras channel) and post it at the park (no PR yet -> readout_post records to the store). FR-6/UFR-1.
 async function renderAndPostReadout(workItem, runDir, verdict) {
   const recPath = `${runDir}/terminal-record.json`
-  try { require('fs').writeFileSync(recPath, JSON.stringify(verdict || {})) } catch (_) {}
+  try { io().writeFile(recPath, JSON.stringify(verdict || {})) } catch (_) {}
   const text = await agent(
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`,
