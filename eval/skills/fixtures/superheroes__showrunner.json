@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "launch the showrunner on this approved work-item",
+    "run the showrunner end-to-end and take it to a ready-for-review PR",
+    "turn the showrunner on for this approved spec and let it run the whole pipeline",
+    "the spec is approved — start the live showrunner run"
+  ],
+  "should_not_fire": [
+    "the tasks doc is approved, build it and ship to a ready-for-review PR",
+    "elicit requirements from the owner and produce a spec definition-doc"
+  ]
+}

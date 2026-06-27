@@ -7,12 +7,16 @@ import pytest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 SHOWRUNNER_SMOKES = [
+    "plugins/superheroes/lib/tests/showrunner_bundle_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_boundary_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_extras_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_panel_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_produce_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",

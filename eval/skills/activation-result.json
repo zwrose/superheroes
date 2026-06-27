@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-06-21",
+  "recordedAt": "2026-06-27",
   "observations": [
     {
       "skill": "superheroes/audit-debt",
@@ -1887,6 +1887,132 @@
     {
       "skill": "superheroes/architect-init",
       "phrase": "this project has no review profile yet, set one up",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "launch the showrunner on this approved work-item",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "launch the showrunner on this approved work-item",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "launch the showrunner on this approved work-item",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "run the showrunner end-to-end and take it to a ready-for-review PR",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "run the showrunner end-to-end and take it to a ready-for-review PR",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "run the showrunner end-to-end and take it to a ready-for-review PR",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "turn the showrunner on for this approved spec and let it run the whole pipeline",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "turn the showrunner on for this approved spec and let it run the whole pipeline",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "turn the showrunner on for this approved spec and let it run the whole pipeline",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "the spec is approved \u2014 start the live showrunner run",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "the spec is approved \u2014 start the live showrunner run",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "the spec is approved \u2014 start the live showrunner run",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "elicit requirements from the owner and produce a spec definition-doc",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "elicit requirements from the owner and produce a spec definition-doc",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/showrunner",
+      "phrase": "elicit requirements from the owner and produce a spec definition-doc",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
