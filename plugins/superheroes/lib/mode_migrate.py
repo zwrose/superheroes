@@ -271,7 +271,7 @@ def recover(cwd, *, root=None):
             # owner-decision conflict), the journal must survive so the next run can retry
             # (UFR-10). Only a terminal rebound/noop counts as recovered; anything else is
             # surfaced honestly with the journal left in place.
-            res = rebind(cwd, root=root, interactive=True)
+            res = rebind(cwd, root=root)
             status = res.get("status")
             if status in ("rebound", "noop"):
                 return {"status": "recovered", "rebind": status}
@@ -294,29 +294,37 @@ def recover(cwd, *, root=None):
 # --------------------------------------------------------------------------- rebind
 
 
-def _merge_move(src_dir, dst_dir):
+def _merge_move(src_dir, dst_dir, _prefix=""):
     """Move src_dir's entries into dst_dir, merging: a missing dst entry is moved; a dir
-    collision recurses; a file collision keeps the dst (remote-keyed) copy — no clobber (FR-9)."""
+    collision recurses; any other collision (file-vs-file, or a file-vs-dir type mismatch)
+    keeps the dst (remote-keyed) copy — no clobber (FR-9). Returns the list of relative paths
+    kept on the destination on a collision, so the caller can surface a merge that did NOT move
+    everything (the src copy is left under the old key — nothing is silently stranded)."""
     os.makedirs(dst_dir, exist_ok=True)
+    kept = []
     for name in os.listdir(src_dir):
         if name in (_JOURNAL, "config.lock"):
             continue
         src = os.path.join(src_dir, name)
         dst = os.path.join(dst_dir, name)
+        rel = os.path.join(_prefix, name) if _prefix else name
         if not os.path.exists(dst):
             shutil.move(src, dst)
         elif os.path.isdir(src) and os.path.isdir(dst):
-            _merge_move(src, dst)
-        # else: a collision (file-vs-file, or a file-vs-dir type mismatch) — keep the
-        # existing dst (no clobber, FR-9); the src copy is left in place under the old key
-        # rather than silently stranded, so nothing is lost.
+            kept += _merge_move(src, dst, rel)
+        else:
+            kept.append(rel)   # collision — kept the existing dst (no clobber, FR-9)
+    return kept
 
 
-def rebind(cwd, *, root=None, interactive=True):
+def rebind(cwd, *, root=None):
     """FR-9 first-push re-keying: move the whole <common-dir-key> project store to the
     <remote-key> store (registry.json travels), merge, and surface a value conflict rather than
     clobber. Locked + journalled at the rebind-invariant <common-dir-key> so an interruption is
-    recoverable regardless of the now-changed active config_key (UFR-10)."""
+    recoverable regardless of the now-changed active config_key (UFR-10). Takes no `interactive`
+    flag (unlike the destructive flip's plan/execute, which refuse unattended): a rebind is a
+    mechanical re-key that runs even headless, and its one owner-decision part — a value conflict
+    — is surfaced (applied=False) regardless of mode, satisfying FR-9 + FR-17 in both."""
     ident = store_core.derive_identifiers(cwd)
     rk, gh = ident["remote_hash"], ident["gitdir_hash"]
     if rk is None or rk == gh:
@@ -344,7 +352,7 @@ def rebind(cwd, *, root=None, interactive=True):
         jpath = _journal_path(common_dir)
         store_core.atomic_write(jpath, json.dumps(
             {"kind": _REBIND, "phase": "copying", "files": []}, indent=2))
-        _merge_move(common_dir, remote_dir)
+        kept = _merge_move(common_dir, remote_dir)
         # re-establish registry.json under the remote key (config_key is now remote_hash)
         target = (common_reg or remote_reg or {}).get("storageMode") \
             or mode_registry.resolve(cwd, root)["mode"]
@@ -353,7 +361,12 @@ def rebind(cwd, *, root=None, interactive=True):
             # the next run's recover retries the (idempotent) rebind rather than reporting success
             return {"status": "deferred"}
         _remove(jpath)
-        return {"status": "rebound"}
+        res = {"status": "rebound"}
+        if kept:
+            # the remote store already had these entries — kept them (no clobber, FR-9); the
+            # owner is told so they know the merge did not move everything.
+            res["keptExisting"] = kept
+        return res
 
 
 # --------------------------------------------------------------------------- CLI
@@ -374,14 +387,12 @@ def main(argv):
             sp.add_argument("--target", choices=(mode_registry.IN_REPO, mode_registry.GLOBAL),
                             required=True)
             sp.add_argument("--interactive", default="true")
-        if name == "rebind":
-            sp.add_argument("--interactive", default="true")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "recover":
             out = recover(args.cwd, root=args.root)
         elif args.cmd == "rebind":
-            out = rebind(args.cwd, root=args.root, interactive=_b(args.interactive))
+            out = rebind(args.cwd, root=args.root)
         else:
             m = plan(args.cwd, args.target, root=args.root, interactive=_b(args.interactive))
             if args.cmd == "plan":

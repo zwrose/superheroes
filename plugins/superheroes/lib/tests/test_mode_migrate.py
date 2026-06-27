@@ -203,27 +203,30 @@ def test_rebind_conflict_is_surfaced_and_not_clobbered_on_disk(tmp_path):
     sc.atomic_write(os.path.join(rdir, "registry.json"),
                     json.dumps({"schemaVersion": 1, "storageMode": "in-repo",
                                 "remoteKey": rk, "createdAt": "2026-06-01T00:00:00Z"}))
-    res = mm.rebind(str(tmp_path), root=root, interactive=True)
+    res = mm.rebind(str(tmp_path), root=root)
     assert res["status"] == "conflict" and res.get("applied") is not True
     assert "detail" in res
     survived = json.load(open(os.path.join(rdir, "registry.json")))
-    assert survived["storageMode"] == "in-repo"
+    assert survived["storageMode"] == "in-repo"   # surfaced for the owner, never clobbered (FR-9/FR-17)
 
 
-def test_rebind_refuses_conflict_headless(tmp_path):
+def test_rebind_surfaces_kept_collisions_without_clobber(tmp_path):
+    # the remote store already has a same-named, same-mode entry — rebind keeps it (no clobber)
+    # and reports it in keptExisting so the owner knows the merge did not move everything.
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
-    mr.write_registry(str(tmp_path), mr.GLOBAL, None, root=root)
+    mr.write_registry(str(tmp_path), mr.GLOBAL, None, root=root)   # common-dir store, mode global
+    common = os.path.join(root, "projects", sc.derive_identifiers(str(tmp_path))["gitdir_hash"])
+    sc.atomic_write(os.path.join(common, "config", "core.md"), "OLD core\n")
     subprocess.run(["git", "-C", str(tmp_path), "remote", "add", "origin",
                     "git@github.com:o/r.git"], check=True)
     rk = sc.derive_identifiers(str(tmp_path))["remote_hash"]
     rdir = os.path.join(root, "projects", rk)
-    os.makedirs(rdir, exist_ok=True)
-    sc.atomic_write(os.path.join(rdir, "registry.json"),
-                    json.dumps({"schemaVersion": 1, "storageMode": "in-repo",
-                                "remoteKey": rk, "createdAt": "2026-06-01T00:00:00Z"}))
-    res = mm.rebind(str(tmp_path), root=root, interactive=False)
-    assert res["status"] == "conflict" and res.get("applied") is not True
+    sc.atomic_write(os.path.join(rdir, "config", "core.md"), "NEW core\n")  # collision, same name
+    res = mm.rebind(str(tmp_path), root=root)
+    assert res["status"] == "rebound"
+    assert os.path.join("config", "core.md") in res.get("keptExisting", [])
+    assert open(os.path.join(rdir, "config", "core.md")).read() == "NEW core\n"  # dst kept, not clobbered
 
 
 def test_interrupted_rebind_recovers_via_recover(tmp_path):
