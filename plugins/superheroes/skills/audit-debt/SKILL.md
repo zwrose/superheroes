@@ -88,7 +88,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's end). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's end). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before generating artifacts or dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -414,7 +414,7 @@ The decisions-recording helper invocation and record-JSON format are in `${CLAUD
 
 Using the `DOCTOR_JSON` captured in §1: print the doctor's `message` as a single non-blocking line **only when** `message` is non-null AND `nudge_acked` is false:
 
-> ℹ️ Profile may be stale: `<message>`. Run `/superheroes:review-init` to refresh (this nudge won't repeat once acknowledged).
+> ℹ️ Profile may be stale: `<message>`. Run `/superheroes:configure` to refresh (this nudge won't repeat once acknowledged).
 
 If the user declines or ignores it, record the dismissal (see "Recording a dismissal" below) using the doctor's `signal_hash`. Suppress the line entirely when `nudge_acked` is true or `message` is null.
 
@@ -442,7 +442,7 @@ If the loaded profile's `status:` is `provisional` AND this run is interactive (
 > This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
 
 - **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (a small, user-approved provenance write; bump `updated:`). Nothing else changes.
-- **Refresh via review-init** — point the user at `/superheroes:review-init` (its reconcile re-detects + can flip status) and do not change the profile now.
+- **Refresh via review-init** — point the user at `/superheroes:configure` (its reconcile re-detects + can flip status) and do not change the profile now.
 - **Keep provisional** — record a dismissal (see "Recording a dismissal") using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
 
 Skip this entirely when the run is **headless/non-interactive** (no human to answer — never block an automated run), when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged. This is the spec's "next interactive review offers to confirm a provisional profile" behavior; it never auto-flips without the user's choice.

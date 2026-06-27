@@ -36,7 +36,7 @@ def test_profile_without_config_block_is_error(tmp_path):
     open(p, "w").write("# no block here\n")
     with pytest.raises(engine.EngineError) as e:
         engine.load_profile_config(p)
-    assert "test-pilot-init" in str(e.value)
+    assert "superheroes:configure" in str(e.value)
 
 
 def test_bare_name():

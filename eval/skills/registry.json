@@ -18,9 +18,8 @@
       "auto-fixed locally or posted to GitHub"
     ],
     "superheroes/review-init": [
-      "no .claude/review-profile.md yet",
-      "before the first review-crew review in a repo",
-      "regenerate or refresh a project's review calibration"
+      "refresh review-crew's calibration layer",
+      "reached from `superheroes:configure`"
     ],
     "superheroes/review-plan": [
       "review the-architect's `plan` definition-doc",
@@ -47,9 +46,8 @@
       "posts a results comment"
     ],
     "superheroes/test-pilot-init": [
-      "no test-pilot profile yet",
-      "before the first test-pilot plan/execute in a repo",
-      "Sets up the profile, seeding blocks, and browser tooling"
+      "refresh test-pilot's profile, seeding blocks, and browser tooling layer",
+      "reached from `superheroes:configure`"
     ],
     "superheroes/test-pilot-plan": [
       "PR/branch needs a manual test plan with seeded data",
@@ -79,14 +77,19 @@
       "Does NOT elicit requirements (that is `discovery`)"
     ],
     "superheroes/architect-init": [
-      "setting up the-architect's doc-policy for a project",
-      "where definition-docs live (in-repo committed vs gitignored)",
-      "before the first architect-discovery in a project"
+      "refresh the-architect's doc-policy layer",
+      "reached from `superheroes:configure`"
     ],
     "superheroes/workhorse": [
       "approved tasks doc (gates.review == passed) should be BUILT",
       "shipped to a ready-for-review PR",
       "It NEVER merges — that is always yours"
+    ],
+    "superheroes/configure": [
+      "set up, fix, view, or tune a project's superheroes calibration",
+      "the single front door for superheroes configuration",
+      "see the whole project's calibration on one screen",
+      "move a project between in-repo and out-of-repo storage"
     ]
   }
 }

@@ -1,6 +1,6 @@
 ---
 name: review-init
-description: Use when a project has no .claude/review-profile.md yet (e.g. before the first review-crew review in a repo), or when you want to regenerate or refresh a project's review calibration after the project has changed.
+description: "Internal helper reached from `superheroes:configure` to refresh review-crew's calibration layer for a project. Not a front door; owners run `superheroes:configure` to set up, fix, view, or tune calibration."
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.

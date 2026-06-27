@@ -12,6 +12,25 @@ reviewing, testing, planning, and running the build loop themselves. One plugin,
 
 ---
 
+## Getting set up
+
+**One command sets up, fixes, or shows & tunes any project's calibration:**
+
+```
+/superheroes:configure
+```
+
+Run it **first** in any project. It senses what the project needs and either sets it up,
+repairs it, or lets you see the whole project's calibration on one screen and tune a setting —
+including moving a project between in-repo and out-of-repo storage. It folds in the old
+per-hero setup commands, so `configure` is the only calibration command you run.
+
+| Command | Use it to… |
+| --- | --- |
+| `/superheroes:configure` | Set up, fix, view, or tune a project's superheroes calibration (**run this first**). |
+
+---
+
 ## the-architect
 
 **Turns a fuzzy idea into a reviewed spec → plan → tasks.**
@@ -31,7 +50,9 @@ plain-language pros/cons.
 | `/superheroes:architect-plan` | Turn an approved spec into a technical **plan**. |
 | `/superheroes:architect-tasks` | Turn an approved plan into bite-sized, test-first **tasks**. |
 | `/superheroes:architect-spec` | Write the on-disk spec doc once requirements are approved (normally invoked by discovery). |
-| `/superheroes:architect-init` | Set the project's doc-policy: where definition-docs live and whether they are committed or gitignored. |
+
+The project's doc-policy (where definition-docs live, committed vs gitignored) is set via
+[`/superheroes:configure`](#getting-set-up).
 
 First run in any project:
 
@@ -54,7 +75,7 @@ re-reviews until nothing Critical or Important remains.
 
 Two things make it more than a clever prompt:
 
-- **Calibrated to your project.** `review-init` generates a
+- **Calibrated to your project.** [`/superheroes:configure`](#getting-set-up) generates a
   `.claude/review-profile.md` — your threat model, verify command, scope, and
   canonical patterns — so reviews match *your* codebase instead of generic best
   practices. Severity rules, diff-scope discipline, and "cite `file:line` or drop
@@ -72,7 +93,6 @@ structured results to disk.
 
 | Command | Use it to… |
 | --- | --- |
-| `/superheroes:review-init` | Generate or refresh a project's review profile (**run this first**). |
 | `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
 | `/superheroes:review-plan` | Red-team a draft plan **before** any code is written. |
 | `/superheroes:review-spec` | Red-team a draft spec and report a readiness verdict. |
@@ -82,8 +102,8 @@ structured results to disk.
 First run in any project:
 
 ```
-/superheroes:review-init      # calibrate to this repo
-/superheroes:review-code      # review the current branch / PR
+/superheroes:configure        # calibrate to this repo (run first)
+/superheroes:review-code       # review the current branch / PR
 ```
 
 ---
@@ -98,22 +118,21 @@ pilots that plan in a real browser, fixes the bugs it trips over, and hands you 
 results comment plus a short spot-check. The goal is a trustworthy "here's it
 working" before a human ever clicks anything.
 
-Like review-crew, it's **calibrated per project** (`test-pilot-init` sets up a
-profile, seeding blocks, and browser tooling) so the plans and data fit *your* app.
+Like review-crew, it's **calibrated per project** ([`/superheroes:configure`](#getting-set-up)
+sets up a profile, seeding blocks, and browser tooling) so the plans and data fit *your* app.
 
 ### Commands
 
 | Command | Use it to… |
 | --- | --- |
-| `/superheroes:test-pilot-init` | Set up (or refresh) a project's testing profile, seed blocks, and browser tooling (**run this first**). |
 | `/superheroes:test-pilot-plan` | Seed test data for a PR/branch and post a checkbox test plan to the PR. |
 | `/superheroes:test-pilot-execute` | Drive the plan in a real browser, fix what breaks, and post a results comment before your spot-check. |
 
 First run in any project:
 
 ```
-/superheroes:test-pilot-init   # calibrate to this app
-/superheroes:test-pilot-plan   # seed data + post a plan to the PR
+/superheroes:configure         # calibrate to this app (run first)
+/superheroes:test-pilot-plan    # seed data + post a plan to the PR
 ```
 
 ---
