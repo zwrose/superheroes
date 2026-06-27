@@ -35,6 +35,8 @@ PARITY_TWINS = [
     ("recover", "reconcile", "recover", "reconcile"),
     ("recover", "prAction", "recover", "pr_action"),
     ("recover", "rearmAction", "recover", "rearm_action"),
+    ("front_half", "gateForTerminal", "front_half", "gate_for_terminal"),
+    ("front_half", "isUsableDraft", "front_half", "is_usable_draft"),
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored
@@ -43,7 +45,7 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half"]
 
 # Python fns that return a tuple whose JS twin returns an object — map (py_mod, py_fn) to field names.
 # Used by test_python_oracle to normalize the result before comparison with an object fixture.

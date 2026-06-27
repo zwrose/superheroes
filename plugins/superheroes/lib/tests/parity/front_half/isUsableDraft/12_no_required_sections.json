@@ -1,0 +1,1 @@
+{"input": ["---\nfoo: bar\n---\n# Head\nContent.\n", "sig", "sig"], "expected": true}

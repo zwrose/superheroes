@@ -1,0 +1,1 @@
+{"input": ["---\nfoo: bar\n---\n# Heading\nSome {{placeholder}} content.\n", "abc", "abc"], "expected": false}
