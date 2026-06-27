@@ -293,3 +293,31 @@ def test_classify_ambiguous_when_shared_fact_unlocatable():
     # FR-9: the verify command sits under a heading the system does not recognize → ambiguous.
     hand_edited = _REVIEW_PROFILE.replace("## Verify", "## How we check")
     assert CM.classify(hand_edited, "review-crew") == "ambiguous"
+
+
+def test_split_review_profile_routes_shared_and_layer():
+    core_facts, layer = CM.split_profile(_REVIEW_PROFILE, "review-crew")
+    assert core_facts["verifyCommand"] == "npm test"
+    assert core_facts["threatModel"] == "multi-tenant"
+    assert "src/auth.ts:10" in core_facts["patterns"]
+    # hero sections land in the layer, shared ones do not
+    assert "## Scope exclusions" in layer
+    assert "## Focus hints" in layer
+    assert "## Threat model" not in layer
+    assert "## Verify" not in layer
+
+
+def test_split_test_pilot_carries_machine_block_verbatim():
+    core_facts, layer = CM.split_profile(_TEST_PILOT_PROFILE, "test-pilot")
+    # the hero machine block survives byte-for-byte in the layer
+    assert "```json test-pilot-config" in layer
+    assert '"baseUrl": "http://localhost:3000"' in layer
+    assert "## App launch" in layer
+    assert "## Auth strategy" in layer
+
+
+def test_split_preserves_unrecognized_section_verbatim():
+    extra = _REVIEW_PROFILE + "\n## Weird custom section\n\nkeep me exactly\n"
+    _core, layer = CM.split_profile(extra, "review-crew")
+    assert "## Weird custom section" in layer
+    assert "keep me exactly" in layer

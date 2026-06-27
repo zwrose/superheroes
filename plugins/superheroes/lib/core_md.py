@@ -256,3 +256,56 @@ def classify(profile_text, hero):
     if not required.issubset(heads):
         return "ambiguous"  # a required shared fact has no recognized heading
     return "standard"
+
+
+_VERIFY_CMD_RE = re.compile(r"^command:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _split_sections(text):
+    """Split a profile into (preamble, [(heading_lower, raw_block), ...]) where each raw_block
+    is the heading line + its body verbatim, up to the next `## ` heading."""
+    lines = text.splitlines(keepends=True)
+    preamble, sections, cur_head, cur = [], [], None, []
+    for line in lines:
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            if cur_head is not None:
+                sections.append((cur_head, "".join(cur)))
+            elif cur:
+                preamble.extend(cur)
+            cur_head, cur = m.group(1).strip().lower(), [line]
+        else:
+            cur.append(line)
+    if cur_head is not None:
+        sections.append((cur_head, "".join(cur)))
+    else:
+        preamble.extend(cur)
+    return "".join(preamble), sections
+
+
+def split_profile(profile_text, hero):
+    """Content-preserving split → (core_facts, layer_text). Shared facts (verify/threat/
+    patterns/stack) go to core_facts; recognized hero sections + any hero machine block go to
+    the layer verbatim; any unrecognized section is carried into the layer verbatim (FR-8)."""
+    shared = _SHARED_HEADINGS.get(hero, set())
+    _preamble, sections = _split_sections(profile_text)
+    core_facts = {"verifyCommand": None, "stackTags": [], "threatModel": "", "patterns": ""}
+    layer_blocks = []
+    for head, block in sections:
+        if head in shared:
+            body = block.split("\n", 1)[1] if "\n" in block else ""
+            body = body.strip()
+            if head == "verify":
+                m = _VERIFY_CMD_RE.search(block)
+                core_facts["verifyCommand"] = m.group(1).strip() if m else None
+            elif head == "threat model":
+                core_facts["threatModel"] = body
+            elif head == "canonical patterns":
+                core_facts["patterns"] = body
+            # "project" prose informs stackTags loosely; left empty here (detection fills it)
+            continue
+        layer_blocks.append(block.rstrip("\n"))
+    # carry any hero machine block (already inside its `## Machine-readable config` section, so
+    # it rides along verbatim in layer_blocks above).
+    layer_text = "\n\n".join(b for b in layer_blocks if b.strip()) + "\n"
+    return core_facts, layer_text
