@@ -1,0 +1,1 @@
+{"input": [[{"severity": "Critical", "evidence": "repro"}], ["code"], ["code"]], "expected": {"confidence": "high", "gate": "blocking", "incomplete": []}}

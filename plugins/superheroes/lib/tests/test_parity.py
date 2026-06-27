@@ -28,6 +28,10 @@ PARITY_TWINS = [
     ("circuit_breaker", "checkCircuitBreaker", "circuit_breaker", "check_circuit_breaker"),
     ("loop_state", "decide", "loop_state", "decide"),
     ("loop_synthesis", "consume", "loop_synthesis", "consume"),
+    ("panel_tally", "compileFindings", "panel_tally", "compile_findings"),
+    ("panel_tally", "roundGate", "panel_tally", "round_gate"),
+    ("panel_tally", "presentDeferred", "panel_tally", "present_deferred"),
+    ("panel_tally", "decideTerminal", "panel_tally", "decide_terminal"),
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored
@@ -36,7 +40,14 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally"]
+
+# Python fns that return a tuple whose JS twin returns an object — map (py_mod, py_fn) to field names.
+# Used by test_python_oracle to normalize the result before comparison with an object fixture.
+_TUPLE_TO_DICT_FIELDS = {
+    ("panel_tally", "round_gate"): ["gate", "confidence", "incomplete"],
+    ("panel_tally", "decide_terminal"): ["terminal", "reason"],
+}
 
 # Bundled modules that are NOT twins (spine shells, not pure deciders).
 BUNDLED_NON_TWINS = {
@@ -99,6 +110,11 @@ def test_python_oracle(py_mod, py_fn, case):
     # Normalize: Python tuples serialise to JSON arrays; compare as list when expected is a list.
     if isinstance(got, tuple) and isinstance(case["expected"], list):
         got = list(got)
+    # Normalize: some fns return a tuple whose JS twin returns an object; convert to dict.
+    elif isinstance(got, tuple) and isinstance(case["expected"], dict):
+        fields = _TUPLE_TO_DICT_FIELDS.get((py_mod, py_fn))
+        if fields:
+            got = dict(zip(fields, got))
     assert got == case["expected"], f"oracle mismatch: got {got!r}, expected {case['expected']!r}"
 
 
