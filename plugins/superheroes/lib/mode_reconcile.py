@@ -61,7 +61,9 @@ def gather_signals(cwd, root=None):
         core_p = core_md.core_path(cwd, root)
         core_exists = os.path.exists(core_p)
         core_rec = core_md.read(cwd, root)
-    except (OSError, ImportError, ValueError):
+    except Exception:
+        # Fail-open: a broken core.md read must never abort the whole signal-gather and
+        # suppress the other (registry/doc-policy) signals — degrade this block to "no core.md".
         core_p, core_exists, core_rec = None, False, None
 
     if core_rec is not None:

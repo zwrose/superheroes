@@ -214,7 +214,14 @@ def write(cwd, facts, status, *, root=None, now=None):
             return {"action": "reused", "record": existing, "proposals": []}
         created = facts.get("created") or stamp
         text = render_core(facts, status, created, stamp)
-        store_core.atomic_write(core_path(cwd, root), text)
+        try:
+            store_core.atomic_write(core_path(cwd, root), text)
+        except OSError:
+            # Fail-open (UFR-4): honor this function's "never raise, never block" contract —
+            # an unwritable store defers (best-effort marker) rather than propagating, exactly
+            # as write_layer() does.
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred", "record": None, "proposals": []}
         record = read(cwd, root)
         clear_pending(cwd, root)
         return {"action": "written", "record": record, "proposals": []}
@@ -363,6 +370,11 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
     migrated/completed clears it."""
     stamp = now or _today()
     legacy = _legacy_path(cwd, hero)
+    if legacy is None:
+        # Unknown hero — no legacy profile to migrate. Guard before `legacy` reaches
+        # `_migration_recorded`/`run_git` (a None pathspec would raise TypeError). The CLI is
+        # allowlisted via choices=_HEROES; this guards the direct Python API too.
+        return {"action": "noop"}
     core_p = core_path(cwd, root)
     layer_p = _layer_path(cwd, hero, root)
     legacy_present = bool(legacy) and os.path.isfile(legacy)

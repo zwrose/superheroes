@@ -756,3 +756,30 @@ def test_fr11_edited_layer_survives_reread(tmp_path):
     # next read: noop (both files present, legacy gone) → layer untouched
     assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
     assert open(layer_p).read() == edited
+
+
+def test_write_defers_when_core_write_fails(tmp_path, monkeypatch):
+    # code-001 fail-open: an OSError writing core.md → `deferred` + a best-effort pending
+    # marker, never a propagated exception (the function's "never raise, never block" contract).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    real = CM.store_core.atomic_write
+
+    def _boom(path, text, *a, **k):
+        if path.endswith("core.md"):
+            raise OSError("disk full")
+        return real(path, text, *a, **k)  # let store setup + the marker write through
+
+    monkeypatch.setattr(CM.store_core, "atomic_write", _boom)
+    res = CM.write(repo, {"verifyCommand": "x", "stackTags": [], "threatModel": "t",
+                          "patterns": ""}, "provisional", root=store)
+    assert res["action"] == "deferred"
+    assert os.path.isfile(CM._pending_path(repo, store))  # UFR-4 marker set
+
+
+def test_migrate_unknown_hero_is_noop(tmp_path):
+    # code-002: an unknown hero has no legacy profile → noop, never a TypeError from a None
+    # pathspec reaching _migration_recorded/run_git.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.migrate_on_read(repo, "bogus-hero", root=store)["action"] == "noop"
