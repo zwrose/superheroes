@@ -10,6 +10,18 @@ let text = fs.readFileSync(bundlePath, 'utf8')
 for (const banned of [/require\(\s*['"](fs|path|os|child_process|crypto|vm)['"]\s*\)/]) {
   assert.ok(!banned.test(text), 'bundle leaks a Node builtin require: ' + banned)
 }
+// (a2) The Workflow runtime forbids these (they break resume) — they must never reach the bundle.
+for (const banned of [/\bDate\.now\b/, /\bMath\.random\b/, /\bnew Date\b/]) {
+  assert.ok(!banned.test(text), 'bundle uses a Workflow-forbidden API (breaks resume): ' + banned)
+}
+// (a3) `process` is absent in the runtime sandbox — every process.cwd()/process.env reference MUST be
+//      typeof-guarded (procCwd/procEnv), or the live run crashes with "process is not defined".
+for (const ln of text.split('\n')) {
+  if (/process\.(cwd|env)\b/.test(ln)) {
+    assert.ok(/typeof process !== 'undefined'/.test(ln),
+      'bundle has an unguarded process reference (crashes the Workflow sandbox): ' + ln.trim())
+  }
+}
 // (b) Execute it in a sandbox that has NO require and NO Node builtins. `export const meta` is ESM
 //     syntax, so strip the `export ` keyword for the CommonJS-style eval. Set __SR_RUN=false so the
 //     auto-run entry is skipped and the registry is exposed for the compose assertion.

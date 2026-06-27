@@ -1701,6 +1701,13 @@ const { reviewPanel } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
 
+// `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
+// node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
+// node (smokes) these forward to the real process; under the bundle they degrade safely ('.' / undefined,
+// so the bundle's globalThis.SUPERHEROES_BUNDLE_FULL_RUN drives full-run, not the env selector).
+function procCwd() { return (typeof process !== 'undefined' && process.cwd) ? process.cwd() : '.' }
+function procEnv(name) { return (typeof process !== 'undefined' && process.env) ? process.env[name] : undefined }
+
 const REVIEW_CODE_REVIEWERS = [
   'architecture-reviewer', 'code-reviewer', 'security-reviewer',
   'test-reviewer', 'premortem-reviewer',
@@ -1728,7 +1735,7 @@ function reviewCodeLeaves(tiers, opts) {
   const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
   const target = opts.target || {}
   const targetSuffix = target.worktree || target.head
-    ? `\n\nTarget worktree: ${target.worktree || process.cwd()}\nExpected head: ${target.head || 'current HEAD'}`
+    ? `\n\nTarget worktree: ${target.worktree || procCwd()}\nExpected head: ${target.head || 'current HEAD'}`
     : ''
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
@@ -2103,7 +2110,7 @@ async function showrunner({ workItem }) {
   // front-half-only boundary (parks at workhorse); the bundle's SUPERHEROES_BUNDLE_FULL_RUN runs
   // the full live run (no boundary -> proceeds into the back-half).
   const fullRun = !!globalThis.SUPERHEROES_BUNDLE_FULL_RUN   // set by the bundle preamble (Task 4)
-  if (process.env.SUPERHEROES_FRONT_HALF === 'native' || fullRun) {
+  if (procEnv('SUPERHEROES_FRONT_HALF') === 'native' || fullRun) {
     deps.produce = producePhase                  // plan / tasks authoring (author-only)
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
     if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park
@@ -2479,7 +2486,7 @@ async function reviewCodePhase(workItem, opts) {
   // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
     const targetArgs = opts.worktree || opts.expectedHead
-      ? ` --worktree ${shq(opts.worktree || process.cwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
+      ? ` --worktree ${shq(opts.worktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
       : ''
     const prov = await cmdRunner(
       `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
