@@ -51,3 +51,20 @@ def test_parse_corrupt_json_block_is_none():
             "created=2026-06-26 updated=2026-06-26 -->\n\n"
             "```json superheroes-core\n{ not json\n```\n")
     assert CM.parse_core(text) is None
+
+
+def test_core_path_in_repo_when_file_present(tmp_path):
+    repo = str(tmp_path)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "core.md"), "w").write("x")
+    p = CM.core_path(repo, root=str(tmp_path / "store"))
+    assert p == os.path.join(repo, ".claude", "superheroes", "core.md")
+
+
+def test_core_path_global_default_greenfield(tmp_path):
+    # No file anywhere + no registry → defaults to the project store config/ path (global).
+    store = str(tmp_path / "store")
+    p = CM.core_path(str(tmp_path), root=store)
+    assert p.endswith(os.path.join("config", "core.md"))
+    assert p.startswith(store)

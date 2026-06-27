@@ -97,3 +97,17 @@ def parse_core(text):
         "created": created,
         "updated": updated,
     }
+
+
+def _repo_root(cwd):
+    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
+    return os.path.realpath(out) if out else os.path.realpath(cwd)
+
+
+def core_path(cwd, root=None):
+    """Mode-aware path to core.md (FR-1): in-repo .claude/superheroes/core.md, else the
+    project store's config/core.md. An EXISTING file resolves to where it physically lives;
+    a new one resolves by the recorded mode (mode_registry.resolve_artifact)."""
+    in_repo = os.path.join(_repo_root(cwd), ".claude", "superheroes", "core.md")
+    global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
+    return mode_registry.resolve_artifact(cwd, in_repo, global_path, root)
