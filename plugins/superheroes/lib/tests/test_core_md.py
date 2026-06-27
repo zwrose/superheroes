@@ -229,3 +229,67 @@ def test_write_deferred_marks_pending_then_written_clears_it(tmp_path, monkeypat
                           "patterns": ""}, "confirmed", root=store, now="2026-06-26")
     assert res["action"] == "written"
     assert not os.path.exists(CM._pending_path(repo, store))  # cleared on success
+
+
+_REVIEW_PROFILE = """<!-- review-profile · managed by review-crew · schema 1 -->
+schema: 1
+status: stable
+
+## Project
+node app
+
+## Threat model
+multi-tenant
+
+## Verify
+command: npm test
+
+## Scope exclusions
+- none
+
+## Focus hints
+- security: authz
+
+## Canonical patterns
+- auth: src/auth.ts:10
+
+## Conventions
+See CLAUDE.md.
+"""
+
+_TEST_PILOT_PROFILE = """# test-pilot profile — app
+
+<!-- provenance: plugin-version=0.2.0 profile-version=1 status=stable created=2026-06-26 updated=2026-06-26 -->
+
+## App launch
+- Dev command: `npm run dev`
+
+## Auth strategy
+test-user credentials
+
+## Seed surfaces
+- DB: env DB_URL
+
+## Browser tool order
+chrome-devtools
+
+## Machine-readable config
+
+```json test-pilot-config
+{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}
+```
+"""
+
+
+def test_classify_standard_review_profile():
+    assert CM.classify(_REVIEW_PROFILE, "review-crew") == "standard"
+
+
+def test_classify_standard_test_pilot_profile():
+    assert CM.classify(_TEST_PILOT_PROFILE, "test-pilot") == "standard"
+
+
+def test_classify_ambiguous_when_shared_fact_unlocatable():
+    # FR-9: the verify command sits under a heading the system does not recognize → ambiguous.
+    hand_edited = _REVIEW_PROFILE.replace("## Verify", "## How we check")
+    assert CM.classify(hand_edited, "review-crew") == "ambiguous"

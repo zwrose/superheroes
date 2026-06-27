@@ -218,3 +218,41 @@ def write(cwd, facts, status, *, root=None, now=None):
         record = read(cwd, root)
         clear_pending(cwd, root)
         return {"action": "written", "record": record, "proposals": []}
+
+
+# Recognized headings per hero. Shared-fact headings live in core.md; hero headings → the
+# layer. Anything not listed (and not a recognized shared/hero heading) is an "extra" section
+# carried verbatim into the layer — it does not by itself make a profile ambiguous.
+_SHARED_HEADINGS = {
+    "review-crew": {"project", "threat model", "verify", "canonical patterns"},
+    "test-pilot": set(),  # test-pilot's profile carries no shared prose; its facts live in its json block
+}
+# The shared facts that MUST be locatable for a `standard` classification.
+_REQUIRED_SHARED = {
+    "review-crew": {"threat model", "verify"},
+    "test-pilot": set(),  # verify/stack come from the test-pilot-config json block when present
+}
+_HERO_HEADINGS = {
+    "review-crew": {"scope exclusions", "focus hints", "conventions"},
+    "test-pilot": {"app launch", "auth strategy", "seed surfaces", "browser tool order",
+                   "machine-readable config"},
+}
+
+_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _headings(text):
+    return [m.group(1).strip().lower() for m in _HEADING_RE.finditer(text or "")]
+
+
+def classify(profile_text, hero):
+    """`standard` (all required shared facts locatable under recognized headings, and every
+    other section is a recognized hero section or an extra section bearing on no shared fact)
+    or `ambiguous` (a shared fact unlocatable, or a section genuinely ambiguous). Conservative:
+    anything that is not clearly placeable is `ambiguous` so content never lands in the wrong
+    layer (FR-8/FR-9 boundary)."""
+    heads = set(_headings(profile_text))
+    required = _REQUIRED_SHARED.get(hero, set())
+    if not required.issubset(heads):
+        return "ambiguous"  # a required shared fact has no recognized heading
+    return "standard"
