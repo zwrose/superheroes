@@ -111,5 +111,78 @@ const sr = require('../showrunner.js')
   assert.ok(qp.includes("--step '"), '--step arg is shq-quoted')
   assert.ok(qp.includes("--phase '"), '--phase arg is shq-quoted')
 
-  console.log('OK: exec dumb-pipe + persistPhase seam (model=haiku, order, shq-quoting)')
+  // ---- (d) exec parses fenced/string leaf output (regression guard for live failure) ----
+  // The live Workflow agent returns its text response as a STRING, often with markdown code fences.
+  // Before the fix: Array.isArray(out) is false -> exec returns [] -> callers fail silently.
+  // After the fix: exec strips the fence and JSON.parses the inner text.
+
+  // (d1) markdown-fenced string with ```json tag (the exact live-failure case)
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return '```json\n[{"index":0,"ok":true,"stdout":"OK"}]\n```'
+  }
+  const fencedResult = await sr.exec(['echo hello'])
+  assert.ok(Array.isArray(fencedResult), 'exec returns array when leaf returns fenced ```json string')
+  assert.strictEqual(fencedResult.length, 1, 'fenced result has one entry')
+  assert.strictEqual(fencedResult[0].index, 0, 'fenced result[0].index is 0')
+  assert.strictEqual(fencedResult[0].ok, true, 'fenced result[0].ok is true')
+  assert.strictEqual(fencedResult[0].stdout, 'OK', 'fenced result[0].stdout is "OK"')
+
+  // (d2) bare fence without language tag
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return '```\n[{"index":0,"ok":true,"stdout":"bare"}]\n```'
+  }
+  const bareFenced = await sr.exec(['echo bare'])
+  assert.ok(Array.isArray(bareFenced), 'exec returns array when leaf returns bare-fenced string')
+  assert.strictEqual(bareFenced[0].stdout, 'bare', 'bare-fenced result stdout is "bare"')
+
+  // (d3) clean JSON string with no fence
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return '[{"index":0,"ok":true,"stdout":"clean"}]'
+  }
+  const cleanStr = await sr.exec(['echo clean'])
+  assert.ok(Array.isArray(cleanStr), 'exec returns array when leaf returns clean JSON string')
+  assert.strictEqual(cleanStr[0].stdout, 'clean', 'clean JSON string result stdout is "clean"')
+
+  // (d4) existing array-returning stub path still works (no regression)
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return [{ index: 0, ok: true, stdout: 'array-path' }]
+  }
+  const arrayPath = await sr.exec(['echo array'])
+  assert.ok(Array.isArray(arrayPath), 'exec returns array when leaf returns array directly')
+  assert.strictEqual(arrayPath[0].stdout, 'array-path', 'direct-array path stdout preserved')
+
+  // (d5) genuinely unparseable string -> synthetic per-command failure array (fail-closed)
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return 'not json at all'
+  }
+  const unparseable = await sr.exec(['cmd1', 'cmd2', 'cmd3'])
+  assert.ok(Array.isArray(unparseable), 'exec returns array even on unparseable response')
+  assert.strictEqual(unparseable.length, 3, 'synthetic failure array length === commands.length')
+  assert.ok(unparseable.every(function(r) { return r.ok === false }), 'all synthetic failures have ok:false')
+  assert.ok(unparseable[0].stdout.length > 0, 'synthetic failure has a non-empty stdout signal')
+
+  // (d5b) persistPhase over a synthetic-failure result returns {ok:false} (no phantom {ok:true})
+  calls.length = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return 'not json at all'
+  }
+  const phantomCheck = await sr.persistPhase('wi-phantom', {
+    journalPayload: { phase: 'plan' },
+    step: 1,
+    phase: 'plan',
+  })
+  assert.deepStrictEqual(phantomCheck, { ok: false }, 'persistPhase returns {ok:false} on unparseable exec output (no phantom ok:true)')
+
+  console.log('OK: exec dumb-pipe + persistPhase seam (model=haiku, order, shq-quoting, fenced-string parsing)')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

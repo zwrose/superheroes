@@ -372,22 +372,49 @@ function cheapestModel() {
   return _cheapestModelCache
 }
 
+// _parseExecResult: parse the leaf agent's response into a [{index,ok,stdout}] array.
+// Handles three response shapes:
+//   1. Array (stub/lucky-path) — returned as-is.
+//   2. String — strip optional markdown code fence (```json...``` or ```...```), then JSON.parse.
+//   3. Anything else / parse failure — return a synthetic per-command failure array so callers
+//      fail-closed with a clear signal rather than a vacuous success.
+// n = commands.length; used only for synthetic failure array sizing (must be >= 1).
+function _parseExecResult(out, n) {
+  var count = (n && n > 0) ? n : 1
+  if (Array.isArray(out)) return out
+  if (typeof out === 'string') {
+    var trimmed = out.trim()
+    // Strip a surrounding markdown code fence: optional language tag (e.g. "json") after ```.
+    var fenceMatch = trimmed.match(/^```[a-z]*\s*\n?([\s\S]*?)\n?```\s*$/)
+    var inner = fenceMatch ? fenceMatch[1].trim() : trimmed
+    try {
+      var parsed = JSON.parse(inner)
+      if (Array.isArray(parsed)) return parsed
+    } catch (_e) { /* fall through to synthetic failure */ }
+  }
+  // Synthetic per-command failure: callers can detect the failure and surface it clearly.
+  var failures = []
+  for (var i = 0; i < count; i++) {
+    failures.push({ index: i, ok: false, stdout: 'exec: could not parse leaf result' })
+  }
+  return failures
+}
+
 // exec: the dumb-pipe executor. Dispatches ONE globalThis.agent whose prompt lists all fully-formed
 // commands and asks the leaf to run each and return a JSON array of {index, ok, stdout}.
 // The model is UNCONDITIONALLY forced to cheapestModel() — overriding __SR_LEAF_MODEL or any
 // caller-supplied opts.model. This is a side-effect executor, not a genuine-LLM agent.
 // FR-8 sandbox-safe: no fs, no child_process, no time/random globals, no process/bare-global refs.
 async function exec(commands, opts) {
-  const cmdList = (commands || []).map(function(c, i) { return (i + 1) + '. ' + c }).join('\n')
+  var cmds = commands || []
+  const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + c }).join('\n')
   const prompt =
     'Run each of the following commands in order using the Bash tool. ' +
     'Return ONLY a JSON array where each element is {"index":<0-based>,"ok":<true|false>,"stdout":<string>}.\n\n' +
     cmdList
   const o = Object.assign({}, opts || {}, { model: cheapestModel(), label: 'exec' })
   const out = await globalThis.agent(prompt, o)
-  // The stub (in tests) and the live leaf both return the array directly; normalise defensively.
-  if (Array.isArray(out)) return out
-  return []
+  return _parseExecResult(out, cmds.length)
 }
 
 // persistPhase: batches side-effect -> journal_entry -> checkpoint_entry into one exec call.
