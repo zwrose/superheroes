@@ -54,6 +54,67 @@ def gather_signals(cwd, root=None):
             sigs.append({"type": "doc-policy-provisional",
                          "identity": _sig_id("doc-policy-provisional:" + str(pol.get("location"))),
                          "detail": {"location": pol.get("location")}})
+
+    # --- #81: core.md calibration drift (all disk-derived; only dismissal is durable) ---
+    try:
+        import core_md
+        core_p = core_md.core_path(cwd, root)
+        core_exists = os.path.exists(core_p)
+        core_rec = core_md.read(cwd, root)
+    except Exception:
+        # Fail-open: a broken core.md read must never abort the whole signal-gather and
+        # suppress the other (registry/doc-policy) signals — degrade this block to "no core.md".
+        core_p, core_exists, core_rec = None, False, None
+
+    if core_rec is not None:
+        if core_rec.get("behind"):
+            sigs.append({"type": "hero-behind",
+                         "identity": _sig_id("hero-behind", str(core_rec["schemaVersion"])),
+                         "detail": {"schemaVersion": core_rec["schemaVersion"]}})
+        elif core_rec.get("status") == "provisional":
+            sigs.append({"type": "core-md-provisional",
+                         "identity": _sig_id("core-md-provisional"), "detail": {}})
+    elif core_exists:
+        # a core.md file is present but did not parse → corrupt (UFR-1); NOT a greenfield.
+        sigs.append({"type": "core-md-unreadable",
+                     "identity": _sig_id("core-md-unreadable"), "detail": {}})
+
+    # per-hero legacy-profile drift: ambiguous-pending (no usable core.md) or stray (core.md exists)
+    for hero in mr._HERO_INREPO:
+        try:
+            legacy = core_md._legacy_path(cwd, hero) if core_p is not None else None
+        except Exception:
+            legacy = None
+        if not legacy or not os.path.isfile(legacy):
+            continue
+        if core_rec is not None:
+            sigs.append({"type": "migration-incomplete",
+                         "identity": _sig_id("migration-incomplete", hero),
+                         "detail": {"hero": hero}})
+            continue
+        try:
+            with open(legacy, encoding="utf-8") as fh:
+                klass = core_md.classify(fh.read(), hero)
+        except OSError:
+            klass = "ambiguous"
+        if klass == "ambiguous":
+            sigs.append({"type": "legacy-migration-ambiguous",
+                         "identity": _sig_id("legacy-migration-ambiguous", hero),
+                         "detail": {"hero": hero}})
+
+    # calibration-not-saved (UFR-4): the machine-local pending marker, read DIRECTLY (no
+    # core_md import here — avoids an import cycle; the marker path is owned by mode_registry's
+    # project_store_dir, the same dir this engine already uses).
+    try:
+        pending_path = os.path.join(mr.project_store_dir(cwd, root), "calibration-pending.json")
+        with open(pending_path, encoding="utf-8") as fh:
+            marker = json.load(fh)
+    except (OSError, ValueError):
+        marker = None
+    if isinstance(marker, dict) and marker.get("pending"):
+        sigs.append({"type": "calibration-not-saved",
+                     "identity": _sig_id("calibration-not-saved"),
+                     "detail": marker.get("detail") or {}})
     return sigs
 
 

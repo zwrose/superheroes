@@ -17,7 +17,10 @@ def test_disagreement_yields_one_signal(tmp_path, monkeypatch):
     sc.write_pointer(g, sc.derive_identifiers(str(tmp_path))["gitdir_hash"], "e1")
     monkeypatch.setattr(mr, "_hero_global_root", lambda n: g if n == "test-pilot" else str(tmp_path/"x"))
     sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
-    assert len(sigs) == 1 and sigs[0]["type"] == "disagreement"
+    # exactly one storage-mode disagreement signal (the seeded stub review-profile.md also
+    # surfaces a #81 legacy-migration-ambiguous signal — assert on the disagreement specifically).
+    disagreements = [s for s in sigs if s["type"] == "disagreement"]
+    assert len(disagreements) == 1
 
 
 def test_fr10_disagreement_identity_ignores_none_heroes(tmp_path, monkeypatch):
@@ -169,3 +172,185 @@ def test_provisional_signal_ack_suppresses(tmp_path, monkeypatch):
     coalesced = mode_reconcile.coalesce(str(tmp_path), root=store)
     assert coalesced is None or all(
         i["identity"] != sig["identity"] for i in coalesced["items"])
+
+
+# --- core.md drift signals (#81) ---
+def _cm():
+    """Load core_md INSIDE a test (never at module top level) so an import error can't
+    make the whole mode_reconcile suite uncollectable (Fix 7)."""
+    import importlib
+    import core_md
+    return importlib.reload(core_md)
+
+
+def _write_core_file(repo, schema=1, status="confirmed", corrupt=False):
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    if corrupt:
+        body = "```json superheroes-core\n{ broken\n```\n"
+    else:
+        import json as _j
+        body = ("```json superheroes-core\n%s\n```\n"
+                % _j.dumps({"schemaVersion": schema, "verifyCommand": "npm test",
+                            "stackTags": ["node"]}, indent=2))
+    open(os.path.join(d, "core.md"), "w").write(
+        "<!-- superheroes-core: schemaVersion=%d status=%s created=2026-06-26 "
+        "updated=2026-06-26 -->\n\n## Threat model\n\nx\n\n%s" % (schema, status, body))
+
+
+def test_core_md_provisional_signal_present_and_ack_suppresses(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _write_core_file(str(tmp_path), status="provisional")
+    sigs = rc.gather_signals(str(tmp_path), root=root)
+    prov = [s for s in sigs if s["type"] == "core-md-provisional"]
+    assert len(prov) == 1
+    rc.ack_signal(str(tmp_path), prov[0]["identity"], root=root)
+    coalesced = rc.coalesce(str(tmp_path), root=root)
+    assert coalesced is None or all(i["identity"] != prov[0]["identity"] for i in coalesced["items"])
+
+
+def test_core_md_confirmed_emits_no_provisional_signal(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _write_core_file(str(tmp_path), status="confirmed")
+    sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+    assert not any(s["type"] == "core-md-provisional" for s in sigs)
+
+
+def test_legacy_migration_ambiguous_signal(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    # an ambiguous review profile (verify under an unrecognized heading), no core.md
+    (tmp_path / ".claude" / "review-profile.md").write_text(
+        "## How we check\ncommand: npm test\n## Threat model\nx\n")
+    sigs = rc.gather_signals(str(tmp_path), root=str(tmp_path / "store"))
+    assert any(s["type"] == "legacy-migration-ambiguous" for s in sigs)
+
+
+def test_legacy_migration_ambiguous_absent_and_ack_suppresses(tmp_path, monkeypatch):
+    # signal-absent: a STANDARD legacy profile (verify under a recognized heading) → no signal.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "review-profile.md").write_text(
+        "## Verify\ncommand: npm test\n## Threat model\nx\n")
+    sigs = rc.gather_signals(str(tmp_path), root=root)
+    assert not any(s["type"] == "legacy-migration-ambiguous" for s in sigs)
+    # ack-suppresses: re-make it ambiguous, ack the signal, then it must not coalesce.
+    (tmp_path / ".claude" / "review-profile.md").write_text(
+        "## How we check\ncommand: npm test\n## Threat model\nx\n")
+    amb = [s for s in rc.gather_signals(str(tmp_path), root=root)
+           if s["type"] == "legacy-migration-ambiguous"]
+    assert len(amb) == 1
+    rc.ack_signal(str(tmp_path), amb[0]["identity"], root=root)
+    coalesced = rc.coalesce(str(tmp_path), root=root)
+    assert coalesced is None or all(i["identity"] != amb[0]["identity"] for i in coalesced["items"])
+
+
+def test_core_md_unreadable_signal_not_on_greenfield(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    # greenfield: no core.md → NO unreadable signal (signal-absent)
+    assert not any(s["type"] == "core-md-unreadable"
+                   for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store")))
+    # corrupt core.md present → unreadable signal
+    _write_core_file(str(tmp_path), corrupt=True)
+    assert any(s["type"] == "core-md-unreadable"
+               for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store")))
+
+
+def test_core_md_unreadable_ack_suppresses(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _write_core_file(str(tmp_path), corrupt=True)
+    unr = [s for s in rc.gather_signals(str(tmp_path), root=root)
+           if s["type"] == "core-md-unreadable"]
+    assert len(unr) == 1
+    rc.ack_signal(str(tmp_path), unr[0]["identity"], root=root)
+    coalesced = rc.coalesce(str(tmp_path), root=root)
+    assert coalesced is None or all(i["identity"] != unr[0]["identity"] for i in coalesced["items"])
+
+
+def test_hero_behind_signal(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _write_core_file(str(tmp_path), schema=_cm().SCHEMA_VERSION + 1)
+    assert any(s["type"] == "hero-behind"
+               for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store")))
+
+
+def test_hero_behind_absent_on_current_and_ack_suppresses(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    # current schema → NO hero-behind (signal-absent)
+    _write_core_file(str(tmp_path), schema=_cm().SCHEMA_VERSION)
+    assert not any(s["type"] == "hero-behind"
+                   for s in rc.gather_signals(str(tmp_path), root=root))
+    # newer schema → signal present, then ack suppresses
+    _write_core_file(str(tmp_path), schema=_cm().SCHEMA_VERSION + 1)
+    behind = [s for s in rc.gather_signals(str(tmp_path), root=root) if s["type"] == "hero-behind"]
+    assert len(behind) == 1
+    rc.ack_signal(str(tmp_path), behind[0]["identity"], root=root)
+    coalesced = rc.coalesce(str(tmp_path), root=root)
+    assert coalesced is None or all(i["identity"] != behind[0]["identity"] for i in coalesced["items"])
+
+
+def test_migration_incomplete_signal(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    _write_core_file(str(tmp_path), status="confirmed")
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
+    assert any(s["type"] == "migration-incomplete"
+               for s in rc.gather_signals(str(tmp_path), root=str(tmp_path / "store")))
+
+
+def test_migration_incomplete_absent_and_ack_suppresses(tmp_path, monkeypatch):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    # core.md present, NO stray legacy → no migration-incomplete (signal-absent)
+    _write_core_file(str(tmp_path), status="confirmed")
+    assert not any(s["type"] == "migration-incomplete"
+                   for s in rc.gather_signals(str(tmp_path), root=root))
+    # add a stray legacy → signal present, then ack suppresses
+    (tmp_path / ".claude").mkdir(exist_ok=True)
+    (tmp_path / ".claude" / "review-profile.md").write_text("stray legacy\n")
+    inc = [s for s in rc.gather_signals(str(tmp_path), root=root)
+           if s["type"] == "migration-incomplete"]
+    assert len(inc) == 1
+    rc.ack_signal(str(tmp_path), inc[0]["identity"], root=root)
+    coalesced = rc.coalesce(str(tmp_path), root=root)
+    assert coalesced is None or all(i["identity"] != inc[0]["identity"] for i in coalesced["items"])
+
+
+def test_calibration_not_saved_signal_present_absent_and_ack(tmp_path, monkeypatch):
+    # UFR-4: a pending marker in the machine-local project store → calibration-not-saved.
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "hero_evidence", lambda *a, **k: {})
+    # absent: no marker → no signal
+    assert not any(s["type"] == "calibration-not-saved"
+                   for s in rc.gather_signals(str(tmp_path), root=root))
+    # present: drop the marker via core_md.mark_pending (the real producer of it)
+    cm = _cm()
+    cm.mark_pending(str(tmp_path), root, detail={"hero": "review-crew", "reason": "lock-contended"})
+    sigs = rc.gather_signals(str(tmp_path), root=root)
+    not_saved = [s for s in sigs if s["type"] == "calibration-not-saved"]
+    assert len(not_saved) == 1
+    # ack suppresses
+    rc.ack_signal(str(tmp_path), not_saved[0]["identity"], root=root)
+    coalesced = rc.coalesce(str(tmp_path), root=root)
+    assert coalesced is None or all(i["identity"] != not_saved[0]["identity"]
+                                    for i in coalesced["items"])
+    # a falsey marker ({"pending": false}) is NOT a signal
+    import json as _j
+    open(cm._pending_path(str(tmp_path), root), "w").write(_j.dumps({"pending": False}))
+    assert not any(s["type"] == "calibration-not-saved"
+                   for s in rc.gather_signals(str(tmp_path), root=root))

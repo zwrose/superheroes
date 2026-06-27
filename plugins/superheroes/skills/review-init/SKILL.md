@@ -184,6 +184,31 @@ See CLAUDE.md.
 `status` is `stable` when the interview was completed interactively with a real
 verify story; `provisional` for headless/greenfield/defaulted profiles.
 
+### Step 4b — Write the shared brain (core.md) + the review-crew layer
+
+The shared facts (stack, verify command, threat model, canonical patterns) belong in
+the band-wide `core.md`; review-crew's own sections (scope exclusions, focus hints,
+conventions) belong in its layer `review-crew.md`. Both are written through the lib —
+never hand-format core.md (CONVENTIONS §2.2). Set `--status confirmed` on an interactive
+run, `--status provisional` on a headless one (FR-5):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+STATUS=confirmed   # use `provisional` on a headless/non-interactive run (FR-5)
+# CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a
+# `proposed`/`deferred` action is surfaced, never silently overwritten).
+printf '%s' "$CORE_FACTS_JSON" \
+  | python3 "$ROOT_DIR/lib/core_md.py" write --status "$STATUS"
+# CREATE: review-crew's own sections → its layer file (FR-3).
+printf '%s' "$REVIEW_LAYER_BODY" \
+  | python3 "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS"
+```
+
+On **reconcile** (a pre-existing legacy profile), call `core_md migrate --hero review-crew`
+first (adopts a standard legacy profile automatically — FR-8), then `core_md resolve` for the
+shared facts; settle any ambiguous/provisional state through the single coalesced reconcile
+nudge (already surfaced in Step 2). See CONVENTIONS §2.1 (layout) and §2.2 (format).
+
 ## Step 5 — Reconcile (profile already exists)
 
 1. Read the existing profile and its `schema:`.

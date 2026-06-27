@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import model_tier            # noqa: E402
 import model_tier_overrides  # noqa: E402
 import review_store          # noqa: E402
+import core_md               # noqa: E402  (sibling)
 
 
 def resolve_verify_command(profile_path):
@@ -41,11 +42,23 @@ def resolve_tiers(overrides):
     }
 
 
-def resolve(cwd):
+def resolve(cwd, root=None):
+    # core.md first (FR-2): resolve_shared also fires migrate-on-read at this hero-acting seam.
+    # `root` is optional (defaults to the real registry store) so a test can isolate core.md
+    # resolution to a tmp store.
+    verify = None
+    try:
+        shared = core_md.resolve_shared(cwd, root=root)
+        if shared and shared.get("verifyCommand"):
+            verify = shared["verifyCommand"]
+    except Exception:
+        verify = None  # fail-open: fall back to the legacy profile parse
     res = review_store.resolve(cwd, "profile", review_store.store_root())
     profile = res.get("path") if res.get("exists") else None
     overrides = model_tier_overrides.load_overrides(profile)
-    return {"verifyCommand": resolve_verify_command(profile), "tiers": resolve_tiers(overrides)}
+    if verify is None:
+        verify = resolve_verify_command(profile)
+    return {"verifyCommand": verify, "tiers": resolve_tiers(overrides)}
 
 
 def main(argv):

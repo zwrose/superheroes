@@ -37,6 +37,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import core_md  # noqa: E402  (sibling, pure read)
+
 # Highest profile schema this script understands. A profile with schema lower
 # than this is behind and counts as material drift (the engine grew newer
 # fields). Bump in lockstep with the review-init profile template `schema:`.
@@ -313,8 +316,11 @@ def _soft_fail():
     }
 
 
-def doctor(profile_path, plugin_ver, rubric_ver, root, env):
-    """Core check. Returns the result dict. Catches everything → soft-fail."""
+def doctor(profile_path, plugin_ver, rubric_ver, root, env, *, cwd=None):
+    """Core check. Returns the result dict. Catches everything → soft-fail. The verify command
+    prefers core_md.read(cwd).verifyCommand (a PURE read — never migrates, never writes), so the
+    2am staleness probe stays read-only; else the profile's recorded command."""
+    cwd = cwd or os.getcwd()
     try:
         with open(profile_path) as fh:
             text = fh.read()
@@ -327,6 +333,15 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
         return _soft_fail()
 
     try:
+        core_verify = None
+        try:
+            rec = core_md.read(cwd)
+            if rec and rec.get("verifyCommand"):
+                core_verify = rec["verifyCommand"]
+        except Exception:
+            core_verify = None
+        if core_verify is not None:
+            prof["verify-command"] = core_verify
         drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env)
         signal_hash = _hash_drift(drift)
         nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
@@ -386,7 +401,7 @@ def main(argv, env=None):
         profile_path, plugin_ver, rubric_raw = positional[0], positional[1], positional[2]
         rubric_ver = _to_int(rubric_raw)
 
-        result = doctor(profile_path, plugin_ver, rubric_ver, root, env)
+        result = doctor(profile_path, plugin_ver, rubric_ver, root, env, cwd=os.getcwd())
     except Exception:
         result = _soft_fail()
 
