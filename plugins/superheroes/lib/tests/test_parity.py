@@ -25,10 +25,12 @@ PARITY_TWINS = [
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored
-JS_ONLY_TWINS = []
+JS_ONLY_TWINS = [
+    ("verify_gate", "classify"),
+]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate"]
 
 # Bundled modules that are NOT twins (spine shells, not pure deciders).
 BUNDLED_NON_TWINS = {
