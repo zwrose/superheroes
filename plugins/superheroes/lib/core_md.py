@@ -356,28 +356,72 @@ def _in_repo_mode(cwd, root):
 
 
 def migrate_on_read(cwd, hero, *, root=None, now=None):
-    """Convert a hero's legacy profile to core.md + a layer, all-or-nothing, under the lock.
-    Only acts when a legacy profile exists and no usable core.md exists. Ordered for
-    crash-safety: (1) write core.md, (2) write layer, (3) remove legacy, (4) in-repo commit.
-    The legacy file is removed only after both new files exist (UFR-5). In-repo mode records
-    the two adds + the deletion in ONE `git commit --only` (no sweep)."""
+    """Convert a hero's legacy profile to core.md + a layer, all-or-nothing, under the lock,
+    with the convergent resume rule (UFR-5/FR-11). Returns
+    {action: migrated|completed|ambiguous|deferred|noop}. A `deferred` return leaves a
+    best-effort PENDING MARKER (UFR-4 calibration-not-saved signal); a successful
+    migrated/completed clears it."""
     stamp = now or _today()
     legacy = _legacy_path(cwd, hero)
-    if not legacy or not os.path.isfile(legacy):
-        return {"action": "noop"}
-    if read(cwd, root) is not None:
-        return {"action": "noop"}  # usable core.md already present (resume handled in Task 9)
+    core_p = core_path(cwd, root)
+    layer_p = _layer_path(cwd, hero, root)
+    legacy_present = bool(legacy) and os.path.isfile(legacy)
+    core_present = read(cwd, root) is not None
+    layer_present = os.path.isfile(layer_p)
+    # Nothing to migrate when there is no legacy profile — the core is already established or
+    # this is a bare greenfield. EXCEPTION: an in-repo split that landed on disk but whose
+    # commit is still OUTSTANDING (a prior run wrote+unlinked, then the commit failed) must
+    # fall through to the under-lock retry, not short-circuit to noop (the round-3 finding).
+    if not legacy_present and (core_present or not os.path.exists(core_p)):
+        outstanding = (core_present and _in_repo_mode(cwd, root)
+                       and not _migration_recorded(_repo_root(cwd), core_p, legacy))
+        if not outstanding:
+            return {"action": "noop"}
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"hero": hero, "reason": "store-unwritable"})
         return {"action": "deferred"}
-    core_p = core_path(cwd, root)
-    layer_p = _layer_path(cwd, hero, root)
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             mark_pending(cwd, root, detail={"hero": hero, "reason": "lock-contended"})
             return {"action": "deferred"}
-        # re-check under the lock (Task 9 adds the full resume rule)
-        if read(cwd, root) is not None:
+        # re-read state under the lock
+        core_present = read(cwd, root) is not None
+        layer_present = os.path.isfile(layer_p)
+        legacy_present = bool(legacy) and os.path.isfile(legacy)
+        # RESUME: both new files present ⇒ authoritative ⇒ complete retirement, never re-split
+        # (FR-11 — preserves a hand-edited layer).
+        if core_present and layer_present:
+            did_work = False
+            # Remove a still-present legacy file (a prior run wrote both new files but did not
+            # finish retiring the legacy).
+            if legacy_present:
+                try:
+                    os.unlink(legacy)
+                except OSError:
+                    mark_pending(cwd, root, detail={"hero": hero, "reason": "unlink-failed"})
+                    return {"action": "deferred"}
+                did_work = True
+            # In in-repo mode the split must be RECORDED as a commit (FR-8). A prior run may
+            # have failed to commit the adds and/or the legacy deletion — RETRY until recorded,
+            # using git's own tracking state (not run_git's ambiguous None) to decide.
+            if _in_repo_mode(cwd, root):
+                repo = _repo_root(cwd)
+                if not _migration_recorded(repo, core_p, legacy):
+                    msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
+                    # stage the (possibly untracked) new files so `commit --only` knows them
+                    store_core.run_git(repo, "add", "--", core_p, layer_p)
+                    store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
+                                       core_p, layer_p, legacy)
+                    if not _migration_recorded(repo, core_p, legacy):
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
+                        return {"action": "deferred"}
+                    did_work = True
+            clear_pending(cwd, root)
+            return {"action": "completed" if did_work else "noop"}
+        # core present, layer absent (crash between 1 and 2): re-derive from the still-present legacy.
+        # otherwise: a fresh standard migration. Both need the legacy profile.
+        if not legacy_present:
+            clear_pending(cwd, root)
             return {"action": "noop"}
         try:
             with open(legacy, encoding="utf-8") as fh:
@@ -389,29 +433,33 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             return {"action": "ambiguous"}
         core_facts, layer_text = split_profile(legacy_text, hero)
         try:
-            # (1) core.md
             store_core.atomic_write(core_p, render_core(core_facts, "provisional", stamp, stamp))
-            # (2) hero layer
             store_core.atomic_write(layer_p, _render_layer(layer_text, hero, "provisional", stamp))
-            # (3) remove the legacy file (only now that both new files exist)
             os.unlink(legacy)
         except OSError:
             mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
             return {"action": "deferred"}
-        # (4) in-repo commit — record the two adds + the deletion in ONE commit, no sweep.
         if _in_repo_mode(cwd, root):
             repo = _repo_root(cwd)
             msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
-            # `git commit --only -- <pathspec>` only commits the working-tree state of paths
-            # already KNOWN to git; the two brand-new files are untracked, so stage them first
-            # (just those two paths — never the legacy, whose DELETION --only records). This keeps
-            # the commit to exactly the three calibration paths and sweeps in nothing else.
+            # stage the (untracked) new files first so `commit --only` knows them; the legacy
+            # is NOT re-added (its working-tree DELETION is what --only records).
             store_core.run_git(repo, "add", "--", core_p, layer_p)
-            out = store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
-                                     core_p, layer_p, legacy)
-            if out is None:
-                # the files are in place; report deferred so a stray-legacy diagnosis fires
+            store_core.run_git(repo, "commit", "--only", "-m", msg, "--", core_p, layer_p, legacy)
+            if not _migration_recorded(repo, core_p, legacy):
                 mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
                 return {"action": "deferred"}
         clear_pending(cwd, root)
         return {"action": "migrated"}
+
+
+def _migration_recorded(repo_root, core_p, legacy):
+    """In in-repo mode the split is fully recorded iff core.md is TRACKED and the legacy
+    path is NO LONGER tracked (its deletion is committed). `run_git ls-files` returns the
+    path when tracked, "" otherwise — distinguishing a real commit landing from run_git's
+    ambiguous None (any nonzero exit), so a failed/outstanding commit is RETRIED on the next
+    read rather than silently dropped (FR-8). Defined after migrate_on_read; Python late-binds
+    the module-level name, so the call order is fine."""
+    core_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", core_p))
+    legacy_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", legacy))
+    return core_tracked and not legacy_tracked

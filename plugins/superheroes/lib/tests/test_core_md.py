@@ -468,3 +468,167 @@ def test_migrate_in_repo_records_legacy_deletion(tmp_path):
     CM.migrate_on_read(repo, "review-crew", root=store)
     status = _git(repo, "show", "--name-status", "--format=", "HEAD").stdout
     assert "D\t.claude/review-profile.md" in status or "D .claude/review-profile.md" in status
+
+
+def test_resume_both_files_present_completes_retirement(tmp_path):
+    # UFR-5/FR-11: a prior run wrote both new files but a still-present legacy lingers →
+    # on re-entry, do NOT re-split; complete retirement (unlink legacy) and report completed.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    # pre-place both new files (as a prior interrupted run would have)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    CM_facts = {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(CM_facts, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "completed"
+    assert not os.path.exists(legacy)  # retired
+    # and a subsequent read is a plain noop
+    assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+
+
+def test_resume_core_present_layer_absent_rederives(tmp_path):
+    # UFR-5: a crash between (1) and (2) left core.md but no layer → re-derive the split from
+    # the still-present legacy profile (never lose the layer).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core({"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
+                        "patterns": ""}, "provisional", "2026-06-26", "2026-06-26"))
+    # layer is ABSENT
+    assert not os.path.exists(_hero_layer_path(repo, "review-crew"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] in ("migrated", "completed")
+    layer = open(_hero_layer_path(repo, "review-crew")).read()
+    assert "## Scope exclusions" in layer  # re-derived, not lost
+    assert not os.path.exists(legacy)
+
+
+def test_kill_after_core_before_layer_leaves_legacy_recoverable(tmp_path, monkeypatch):
+    # UFR-5: crash after core.md write, before layer write → legacy still present (recoverable).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    real_write = CM.store_core.atomic_write
+
+    def _boom(path, text, *a, **k):
+        # Target the LAYER write specifically (store setup + core.md succeed; the layer fails)
+        # — key on the path, not a fragile call counter (meta.json/registry.json are written
+        # first by store setup + the mode backfill, so a "first call = core.md" assumption is
+        # wrong). This still exercises the exact core→layer crash boundary the test intends.
+        if path.endswith("review-crew.md"):
+            raise OSError("killed before layer")
+        return real_write(path, text, *a, **k)
+
+    monkeypatch.setattr(CM.store_core, "atomic_write", _boom)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "deferred"
+    assert os.path.exists(legacy)  # legacy never removed → fully recoverable
+
+
+def test_unlink_failure_defers_legacy_preserved(tmp_path, monkeypatch):
+    # UFR-5: the unlink step (3) fails → deferred, legacy still present, no half-state.
+    # (Ordering is write→write→unlink→commit, so this is the unlink boundary, not a
+    # "post-commit" one — there is no kill-after-commit-before-unlink window.)
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    monkeypatch.setattr(CM.os, "unlink", lambda p: (_ for _ in ()).throw(OSError("unlink failed")))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "deferred"
+    assert os.path.exists(legacy)
+
+
+def test_inrepo_fresh_migrate_commit_failure_defers_then_retry_records(tmp_path, monkeypatch):
+    # FR-8/UFR-4/UFR-5 (round-2 review-tasks finding): an in-repo fresh migration whose COMMIT
+    # fails must NOT be left silently uncommitted — it returns `deferred` + a
+    # calibration-not-saved marker, and the NEXT read RETRIES the outstanding commit until
+    # `_migration_recorded` confirms it landed.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    _git(repo, "add", ".claude/review-profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy")
+    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
+    real_run_git = CM.store_core.run_git
+
+    def _fail_commit(repo_root, *a):
+        if a and a[0] == "commit":
+            return None  # simulate a nonzero git exit on commit only
+        return real_run_git(repo_root, *a)
+
+    monkeypatch.setattr(CM.store_core, "run_git", _fail_commit)
+    r1 = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert r1["action"] == "deferred"                      # commit failed → NOT a silent success
+    assert os.path.isfile(core_p) and not os.path.exists(legacy)  # split landed on disk
+    pending = CM._pending_path(repo, store)
+    assert os.path.isfile(pending)                         # calibration-not-saved marker set
+    # retry with git working → the outstanding commit is recorded and the marker cleared
+    monkeypatch.setattr(CM.store_core, "run_git", real_run_git)
+    r2 = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert r2["action"] in ("completed", "migrated")
+    assert CM._migration_recorded(repo, core_p, legacy)
+    assert not os.path.isfile(pending)
+
+
+def test_migrate_deferred_when_lock_contended(tmp_path, monkeypatch):
+    # UFR-4: contended lock → deferred, legacy untouched, no raise.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "deferred"
+    assert os.path.exists(legacy)
+
+
+def test_resume_completed_branch_git_failure_yields_deferred(tmp_path, monkeypatch):
+    # UFR-4: in the `completed` (retire-only) branch, a FORCED git failure must yield
+    # `deferred`, NOT a false `completed` — run_git returns None on any nonzero exit.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)  # in-repo so the retirement commit path runs
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    _git(repo, "add", ".claude/review-profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy")
+    # pre-place both new files (a prior interrupted run) so the resume rule takes the
+    # `completed` branch and tries to record the legacy deletion.
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core({"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
+                        "patterns": ""}, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26"))
+    # force ONLY the retirement commit to fail; delegate every other git call to the real one
+    real_run_git = CM.store_core.run_git
+
+    def _fail_commit(repo_root, *a):
+        if a and a[0] == "commit":
+            return None  # simulate a nonzero git exit
+        return real_run_git(repo_root, *a)
+
+    monkeypatch.setattr(CM.store_core, "run_git", _fail_commit)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "deferred"  # NOT "completed"
