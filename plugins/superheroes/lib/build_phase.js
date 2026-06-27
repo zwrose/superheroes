@@ -224,14 +224,21 @@ async function runFinalReview(workItem, generation, branch, wt) {
     `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`,
     { label: 'minor_rollup_cli.py', schema: { type: 'object' } })).minors || []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
-  // The #104 shell resolves these caller leaves from global scope (showrunner.js:13-15).
+  // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
+  // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
+  // findings-generalist.json. This is the single-reviewer code leg (legKind.panel:false), so the
+  // shell compiles the raw returned findings; there is no synthesis leaf.
   globalThis.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
-    await agent(
+    const out = await agent(
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Write findings-generalist.json into round-${round}/.`,
-      { label: `reviewer:${round}`, model: reviewerModel })
-    return true
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`,
+      { label: `reviewer:${round}`, model: reviewerModel,
+        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+    return (out && Array.isArray(out.findings)) ? out.findings : null
   }
+  // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
+  // direct io-seam write — no genuine agent. (build_phase has no exec seam; the awaited io write below
+  // is the bundle's cheap leaf-bash pipe, the equivalent of showrunner's exec for this leg.)
   globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
     let set = await io().readJson(p, {})

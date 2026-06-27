@@ -30,10 +30,14 @@ const CONFIG_SCHEMA = {
 }
 const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
 const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
-const RECORD_DEFERRED_SCHEMA = { type: 'object', required: ['ok'],
-  properties: { ok: {}, extras: {}, parentOrigin: {}, deferred: {} } }   // extras rides onto report.extras
+// #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
+// it in memory and runs the merge/synthesis-consume/tally twins in-process.
+const FINDINGS_SCHEMA = { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } }
+// the genuine synthesis leaf RETURNS per-finding keep/drop verdicts (loop_synthesis.consume reads them).
+const SYNTH_VERDICTS_SCHEMA = { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array' } } }
 
-// Build the five caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
+// Build the four caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
+// (#115: mergeAgent is gone — the merge is the in-process panel_tally.compileFindings twin.)
 function reviewCodeLeaves(tiers, opts) {
   opts = opts || {}
   const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
@@ -44,31 +48,23 @@ function reviewCodeLeaves(tiers, opts) {
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
     const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
-    await agent(
+    const out = await agent(
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
-      `${rubric} rubric, and write your findings array to ` +
-      `${runDir}/round-${round}/findings-${reviewer}.json ([] if nothing to flag).${targetSuffix}`,
-      withModel(model, { label: `${reviewer}:r${round}` }))
-    return true
-  }
-
-  const mergeAgent = async (runDir, round, reviewerSet) => {
-    await agent(
-      `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-      `python3 plugins/superheroes/lib/merge_findings.py --run-dir ${shq(runDir)} ` +
-      `--round ${shq(String(round))} --roster ${shq(reviewerSet.join(','))}`,
-      { label: `merge:r${round}` })
-    return true
+      `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
+      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`,
+      withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+    return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
   }
 
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
-    await agent(
-      `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding in ` +
-      `${runDir}/round-${round}/merged.json decide keep/drop + the rubric-justified severity ` +
-      `(keep-on-uncertain; never decide the loop terminal). Write the verdict array to ` +
-      `${runDir}/round-${round}/synthesis.json.`,
-      withModel(tiers.synthesis, { label: `synthesis:r${round}` }))
-    return true
+    const out = await agent(
+      `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
+      `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
+      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
+      `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `Merged findings:\n${JSON.stringify(merged)}`,
+      withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
+    return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
   }
 
   // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
@@ -85,22 +81,26 @@ function reviewCodeLeaves(tiers, opts) {
   }
 
   const recordDeferred = async (report, _verdict, runDir) => {
-    const out = await cmdRunner(
+    // #115: write the deferred-set via the cheap exec dumb-pipe (not a genuine agent). record_deferred.py
+    // (frozen) appends the deferred identities to deferred-set.json — the channel the in-process tally
+    // reads — and prints the readout-enrichment extras (fixes + accumulated parentOrigin) to stdout.
+    const out = await exec([
       `python3 plugins/superheroes/lib/record_deferred.py --run-dir ${shq(runDir)} ` +
       `--report ${shq(JSON.stringify(report || {}))}`,
-      { schema: RECORD_DEFERRED_SCHEMA })
-    // Attach the computed readout-enrichment extras (fixes + accumulated parentOrigin) to the fix
-    // report so #104's shared shell threads it (report.extras -> tally -> readout). FR-6.
-    if (out && out.extras && report && typeof report === 'object') report.extras = out.extras
+    ])
+    // Attach the computed extras to the fix report so #104's shared shell threads it
+    // (report.extras -> tally -> readout). FR-6. Parse the cheap pipe's stdout (best-effort).
+    let parsed = null
+    try { parsed = JSON.parse((out && out[0] && out[0].stdout) || '') } catch (_) {}
+    if (parsed && parsed.extras && report && typeof report === 'object') report.extras = parsed.extras
   }
 
-  return { reviewerAgent, mergeAgent, synthesisLeaf, fixStep, recordDeferred }
+  return { reviewerAgent, synthesisLeaf, fixStep, recordDeferred }
 }
 
 // Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
 async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree }) {
   globalThis.reviewerAgent = leaves.reviewerAgent
-  globalThis.mergeAgent = leaves.mergeAgent
   globalThis.synthesisLeaf = leaves.synthesisLeaf
   globalThis.recordDeferred = leaves.recordDeferred
   return withTargetCommandPrompts(worktree, () => reviewPanel({
@@ -119,44 +119,38 @@ module.exports = { REVIEW_CODE_REVIEWERS }
 const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
                        'test-reviewer', 'premortem-reviewer']
 
-// the four caller-supplied doc-leg leaf wrappers the #104 shell expects (panel:true). Each is a
+// the three caller-supplied doc-leg leaf wrappers the #104 shell expects (panel:true). Each is a
 // single leaf (no fan-out). Set as globalThis.* before reviewPanel, exactly as runReviewCodePanel does.
-// NOTE: the findings filename is `findings-<full roster name>.json` — panel_tally reads the
-// roster verbatim (findings_path), and the tally is given the full DOC_REVIEWERS names, so the
-// reviewer write, the merge read, and the tally read MUST all use the same full names.
+// #115: the reviewer RETURNS a findings[] array (the panel holds it in memory); the merge is the
+// in-process panel_tally.compileFindings twin (no docMergeAgent / front_half.py merge), and the
+// synthesis leaf RETURNS its keep/drop verdicts (loop_synthesis.consume reads them).
 async function docReviewerAgent(reviewer, context, rubric, runDir, round) {
-  await agent(
+  const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). Write findings to ` +
-    `${runDir}/round-${round}/findings-${reviewer}.json (a JSON array; [] if none).`,
-    { label: reviewer })
-  return true
-}
-async function docMergeAgent(runDir, round, reviewerSet) {
-  await cmdRunner(
-    `python3 plugins/superheroes/lib/front_half.py merge --run-dir ${shq(runDir)} ` +
-    `--round ${shq(String(round))} --roster ${shq((reviewerSet || []).join(','))}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, merged: {} } } })
-  return { runDir, round }   // merged.json on disk is what the synthesis leaf + tally read
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). Return ONLY a JSON object ` +
+    `{"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if none).`,
+    { label: reviewer, schema: FINDINGS_SCHEMA })
+  return (out && Array.isArray(out.findings)) ? out.findings : null
 }
 async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
-  await agent(
+  const out = await agent(
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
-    `Read the merged findings at ${runDir}/round-${round}/merged.json and the doc at ${context.docPath}; ` +
-    `per the synthesis-leaf prompt (plugins/superheroes/eval/synthesis-leaf.md) emit one ` +
-    `keep/drop/severity verdict per merged finding (keep-on-uncertain) and write the JSON array to ` +
-    `${runDir}/round-${round}/synthesis.json.`,
-    { label: `synthesis:r${round}` })
-  return { runDir, round }
+    `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
+    `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
+    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
+    `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
+    { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
+  return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
 }
 async function docRecordDeferred(report, _verdict, runDir) {
-  // fix-report.json is a transient hand-off read by record-deferred immediately below; per-round
-  // overwrite is harmless (it is consumed before the next round writes it).
+  // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
+  // written first, then front_half.py record-deferred (frozen) appends the deferred identities to
+  // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
   await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
-  await cmdRunner(
+  await exec([
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, deferred: {} } } })
+  ])
 }
 
 // the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
@@ -178,7 +172,6 @@ async function docReviser(blockers, runDir, context) {
 async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
   const context = { workItem, docType, docPath }
   globalThis.reviewerAgent = docReviewerAgent
-  globalThis.mergeAgent = docMergeAgent
   globalThis.synthesisLeaf = docSynthesisLeaf
   globalThis.recordDeferred = docRecordDeferred
   return reviewPanel({

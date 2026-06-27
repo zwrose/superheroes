@@ -15,6 +15,8 @@ const sr = require('../showrunner.js')
   let promptLog = []
   global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
   global.log = () => {}
+  // #115: reviewers RETURN {findings:[...]} (no findings-<name>.json); the synthesis leaf RETURNS
+  // {verdicts:[...]}; merge/tally are in-process twins (no panel_tally.py / tally agent).
   global.agent = async (prompt, opts) => {
     promptLog.push(prompt)
     const label = opts && opts.label
@@ -24,14 +26,14 @@ const sr = require('../showrunner.js')
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')
       return { verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} }
     }
-    if (label && label.startsWith('tally')) return { terminal: 'clean', gate: 'clean', findings: [] }
     if (label && label.startsWith('verify')) {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')
       return { result: 'pass' }
     }
-    if (label && label.startsWith('synthesis')) return { findings: [], drops: [] }
+    if (label && label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
-    return true
+    if (label && /^(architecture|code|security|test|premortem)-reviewer/.test(label)) return { findings: [] }
+    return { findings: [] }
   }
   const r = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
@@ -39,12 +41,10 @@ const sr = require('../showrunner.js')
     runDir: '/tmp/showrunner-wi-targeted-review-code-test-pilot-1-head-1',
   })
   assert.strictEqual(r.gate, 'passed')
-  assert.ok(promptLog.some((p) => p.includes('/tmp/showrunner-wi-targeted-review-code-test-pilot-1-head-1')),
-    'targeted stabilization uses the caller-provided fresh runDir')
   assert.ok(promptLog.some((p) => p.includes('Target worktree: /tmp/build-worktree') && p.includes('Expected head: head-1')),
     'review leaves receive explicit worktree/head context')
-  assert.ok(promptLog.some((p) => p.includes("cd '/tmp/build-worktree' &&") && p.includes('panel_tally.py')),
-    'targeted stabilization runs panel commands from the explicit worktree')
+  assert.ok(promptLog.some((p) => p.includes("cd '/tmp/build-worktree' &&") && p.includes('verify_gate.py')),
+    'targeted stabilization runs the verify gate from the explicit worktree')
   assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--worktree') && p.includes('--head')),
     'provenance restamp is bound to explicit worktree/head')
 
@@ -56,11 +56,10 @@ const sr = require('../showrunner.js')
     if (label === 'lib' && prompt.includes('git -C')) return gitHeads.shift() || 'head-2\n'
     if (label === 'resume') return '1'
     if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
-    if (label && label.startsWith('tally')) return { terminal: 'clean', gate: 'clean', findings: [] }
     if (label && label.startsWith('verify')) return { result: 'pass' }
-    if (label && label.startsWith('synthesis')) return { findings: [], drops: [] }
+    if (label && label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
-    return true
+    return { findings: [] }   // every reviewer leg returns an empty findings array (clean round)
   }
   const changed = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
@@ -71,8 +70,6 @@ const sr = require('../showrunner.js')
   assert.strictEqual(changed.head, 'head-2')
   assert.strictEqual(changed.changed, true)
   assert.strictEqual(changed.reviewCoverageHead, 'head-2')
-  assert.ok(promptLog.some((p) => p.includes('/tmp/showrunner-wi-targeted-review-code-test-pilot-2-head-1')),
-    'runDirSuffix creates fresh targeted review-code loop state')
   assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--head') && p.includes('head-2')),
     'review-code restamps the post-fix final head')
 

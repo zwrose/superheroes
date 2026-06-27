@@ -29,6 +29,17 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
+    # #115: the two new in-memory review-panel smokes.
+    "plugins/superheroes/lib/tests/showrunner_review_crash_resume_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_review_breaker_halt_smoke.js",
+    # #115: the build_phase smokes — registered here (the discovery guard now also matches
+    # build_phase_*_smoke.js). The loop/setup/pertask smokes exercise the build LOOP (unchanged until
+    # Task 15) and pass as-is; only build_phase_final_review_smoke.js is rewritten to the in-memory
+    # contract in this task (runFinalReview is rewritten here).
+    "plugins/superheroes/lib/tests/build_phase_loop_smoke.js",
+    "plugins/superheroes/lib/tests/build_phase_setup_smoke.js",
+    "plugins/superheroes/lib/tests/build_phase_pertask_smoke.js",
+    "plugins/superheroes/lib/tests/build_phase_final_review_smoke.js",
 ]
 
 
@@ -37,7 +48,8 @@ def test_showrunner_node_smokes_are_enforced():
     discovered = {
         os.path.join("plugins", "superheroes", "lib", "tests", name)
         for name in os.listdir(smoke_dir)
-        if name.startswith("showrunner_") and name.endswith("_smoke.js")
+        if (name.startswith("showrunner_") or name.startswith("build_phase_"))
+        and name.endswith("_smoke.js")
     }
     assert discovered == set(SHOWRUNNER_SMOKES)
 

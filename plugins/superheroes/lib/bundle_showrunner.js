@@ -7,7 +7,10 @@ const path = require('path')
 
 const LIB = __dirname
 // io_seam is intentionally absent: the preamble provides a leaf-bash io for it.
-const MODULES = ['review_panel_shell.js', 'test_pilot_phase.js', 'build_phase.js', 'model_tier.js', 'showrunner.js']
+// #115: review_panel_shell.js now requires the panel twins in-process, so they bundle BEFORE it in
+// dependency order (circuit_breaker -> loop_state -> loop_synthesis -> panel_tally).
+const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
+                 'review_panel_shell.js', 'test_pilot_phase.js', 'build_phase.js', 'model_tier.js', 'showrunner.js']
 
 // Registry keys are the bare module name (no './' prefix, no '.js' suffix). `norm` MUST match the
 // runtime `__require`'s key derivation exactly, or every lookup throws "unknown module".

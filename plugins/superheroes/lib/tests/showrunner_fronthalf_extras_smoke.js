@@ -1,5 +1,9 @@
-// Smoke: a fixStep report's extras.parentOrigin is written to round-<N>/extras.json and forwarded
-// to the subsequent panel_tally call (the D-4 transport). Stubs the runtime + leaf globals.
+// Smoke: a fixStep report's extras.parentOrigin is threaded forward into the subsequent round's
+// in-process tally (the D-4 transport). #115: the transport is now IN MEMORY — the round-1 fix sets
+// lastExtras, which is persisted to runDir/last-extras.json (so a mid-loop resume reloads it) and
+// rides into the round-2 (terminal) verdict's parentOrigin. No round-<N>/extras.json file, no
+// --extras command (the tally is an in-process twin, not a panel_tally.py dispatch). Stubs the
+// runtime + leaf globals.
 const assert = require('assert')
 const fs = require('fs')
 const os = require('os')
@@ -7,41 +11,34 @@ const path = require('path')
 const { reviewPanel } = require('../review_panel_shell.js')
 
 const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fh-extras-'))
-fs.mkdirSync(path.join(runDir, 'round-1'), { recursive: true })
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
-global.reviewerAgent = async () => true
+global.synthesisLeaf = async () => []          // keep all merged findings
 global.recordDeferred = async () => {}
+global.agent = async () => null
 
-let tallyCmds = []
-let tallyQueue = [
-  { schemaVersion: 1, terminal: 'continue', gate: 'blocking', findings: [] },
-  { schemaVersion: 1, terminal: 'clean', gate: 'clean' },
-]
-global.agent = async (prompt, opts) => {
-  const label = (opts && opts.label) || ''
-  if (label === 'resume') return '1'
-  if (label.startsWith('tally')) { tallyCmds.push(prompt); return tallyQueue.shift() }
-  return null
-}
+// Round 1 flags a blocker (continue); round 2 returns [] (clean). The reviewer RETURNS findings[].
+const BLOCKER = [{ file: 'a.py', line: 1, title: 'bug', severity: 'Critical', evidence: 'e' }]
 
 async function main() {
+  let round = 0
+  global.reviewerAgent = async () => { round += 1; return round === 1 ? BLOCKER.map((f) => ({ ...f })) : [] }
   // fixStep returns a report carrying extras.parentOrigin (a blocker traced to a parent doc).
   const fixStep = async () => ({ fixes: [], deferred: [], extras: { parentOrigin: 'plan' } })
   const v = await reviewPanel({ reviewerSet: ['code'], context: {}, rubric: 'r',
-    runKey: runDir, runDir, fixStep, maxRounds: 7, legKind: {} })
+    runKey: runDir, runDir, fixStep, maxRounds: 7, legKind: { panel: true, code: false } })
   assert.strictEqual(v.terminal, 'clean', 'continue then clean must exit clean')
-  // the round-1 fix sets lastExtras; the NEXT (round-2, terminal) tally writes + forwards it.
-  const extrasFile = path.join(runDir, 'round-2', 'extras.json')
-  assert.ok(fs.existsSync(extrasFile), 'fix step extras must be persisted for the round-2 tally')
+  // the round-1 fix sets lastExtras; the NEXT (round-2, terminal) verdict carries it.
+  assert.strictEqual(v.parentOrigin, 'plan', 'the fix step extras.parentOrigin rides into the terminal verdict')
+  // lastExtras is persisted so a mid-loop resume re-loads it (the in-memory transport's durable anchor).
+  const extrasFile = path.join(runDir, 'last-extras.json')
+  assert.ok(fs.existsSync(extrasFile), 'fix step extras must be persisted to last-extras.json for resume')
   assert.strictEqual(JSON.parse(fs.readFileSync(extrasFile, 'utf8')).parentOrigin, 'plan')
-  // the round-2 (terminal) tally command forwarded --extras into panel_tally (-> terminal record).
-  assert.ok(tallyCmds.some((c) => c.includes('--extras')), 'tally must forward --extras after a fix with extras')
   // NOTE: panel_tally landing parentOrigin in the record + loop_readout rendering "Traces to an
   // upstream phase" are unit-proven by test_panel_tally.py / test_loop_readout.py; this smoke proves
-  // the shell TRANSPORT (the previously-missing link).
-  console.log('ok: fronthalf extras transport forwards parentOrigin to the tally')
+  // the shell TRANSPORT (the previously-missing link), now in-memory.
+  console.log('ok: fronthalf extras transport threads parentOrigin into the in-process tally')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
