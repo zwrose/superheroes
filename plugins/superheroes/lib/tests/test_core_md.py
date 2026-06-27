@@ -397,3 +397,74 @@ def test_migrate_global_mode_legacy_profile_is_found_and_migrated(tmp_path, monk
     assert res["action"] == "migrated"
     assert CM.read(repo, root=store)["verifyCommand"] == "npm test"
     assert not os.path.exists(legacy)  # global legacy retired
+
+
+import subprocess
+
+
+def _git(repo, *args):
+    return subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+
+
+def _git_repo(tmp_path):
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    return repo
+
+
+def _force_in_repo(repo, store):
+    import mode_registry as mr
+    mr.write_registry(repo, mr.IN_REPO, None, root=store)
+
+
+def test_migrate_in_repo_commits_only_calibration_paths(tmp_path):
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    # a tracked, committed legacy profile (git commit --only records no deletion for an untracked one)
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    _git(repo, "add", ".claude/review-profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy")
+    # an unrelated staged change + an unrelated working-tree change must NOT be swept
+    open(os.path.join(repo, "unrelated.txt"), "w").write("staged change")
+    _git(repo, "add", "unrelated.txt")
+    open(os.path.join(repo, "other.txt"), "w").write("worktree change")
+    # ALSO stage an edit to a NAMED calibration path (the legacy profile): `git commit --only`
+    # must commit the migrator's working-tree state (its DELETION), never this staged content.
+    open(legacy, "a").write("\n<!-- staged-but-uncommitted edit to a named path -->\n")
+    _git(repo, "add", ".claude/review-profile.md")
+
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "migrated"
+
+    # the migration commit names ONLY the calibration paths
+    changed = _git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split()
+    names = set(changed)
+    assert ".claude/superheroes/core.md" in names
+    assert ".claude/superheroes/review-crew.md" in names
+    assert ".claude/review-profile.md" in names  # deletion recorded
+    assert "unrelated.txt" not in names
+    assert "other.txt" not in names
+    # the unrelated change is still staged (not committed)
+    assert "unrelated.txt" in _git(repo, "diff", "--cached", "--name-only").stdout
+    # --only ignored the staged modify and recorded the legacy DELETION (not a modification)
+    legacy_line = [l for l in _git(repo, "show", "--name-status", "--format=", "HEAD").stdout.splitlines()
+                   if "review-profile.md" in l]
+    assert legacy_line and legacy_line[0].split()[0] == "D"
+
+
+def test_migrate_in_repo_records_legacy_deletion(tmp_path):
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    _git(repo, "add", ".claude/review-profile.md")
+    _git(repo, "commit", "-q", "-m", "seed legacy")
+    CM.migrate_on_read(repo, "review-crew", root=store)
+    status = _git(repo, "show", "--name-status", "--format=", "HEAD").stdout
+    assert "D\t.claude/review-profile.md" in status or "D .claude/review-profile.md" in status

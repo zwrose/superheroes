@@ -358,8 +358,9 @@ def _in_repo_mode(cwd, root):
 def migrate_on_read(cwd, hero, *, root=None, now=None):
     """Convert a hero's legacy profile to core.md + a layer, all-or-nothing, under the lock.
     Only acts when a legacy profile exists and no usable core.md exists. Ordered for
-    crash-safety: (1) write core.md, (2) write layer, (3) remove legacy, (4) in-repo commit
-    (Task 8). The legacy file is removed only after both new files exist (UFR-5)."""
+    crash-safety: (1) write core.md, (2) write layer, (3) remove legacy, (4) in-repo commit.
+    The legacy file is removed only after both new files exist (UFR-5). In-repo mode records
+    the two adds + the deletion in ONE `git commit --only` (no sweep)."""
     stamp = now or _today()
     legacy = _legacy_path(cwd, hero)
     if not legacy or not os.path.isfile(legacy):
@@ -369,6 +370,8 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
     if mode_registry.ensure_project_store(cwd, root) is None:
         mark_pending(cwd, root, detail={"hero": hero, "reason": "store-unwritable"})
         return {"action": "deferred"}
+    core_p = core_path(cwd, root)
+    layer_p = _layer_path(cwd, hero, root)
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             mark_pending(cwd, root, detail={"hero": hero, "reason": "lock-contended"})
@@ -387,15 +390,28 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
         core_facts, layer_text = split_profile(legacy_text, hero)
         try:
             # (1) core.md
-            store_core.atomic_write(core_path(cwd, root),
-                                    render_core(core_facts, "provisional", stamp, stamp))
+            store_core.atomic_write(core_p, render_core(core_facts, "provisional", stamp, stamp))
             # (2) hero layer
-            store_core.atomic_write(_layer_path(cwd, hero, root),
-                                    _render_layer(layer_text, hero, "provisional", stamp))
+            store_core.atomic_write(layer_p, _render_layer(layer_text, hero, "provisional", stamp))
             # (3) remove the legacy file (only now that both new files exist)
             os.unlink(legacy)
         except OSError:
             mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
             return {"action": "deferred"}
+        # (4) in-repo commit — record the two adds + the deletion in ONE commit, no sweep.
+        if _in_repo_mode(cwd, root):
+            repo = _repo_root(cwd)
+            msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
+            # `git commit --only -- <pathspec>` only commits the working-tree state of paths
+            # already KNOWN to git; the two brand-new files are untracked, so stage them first
+            # (just those two paths — never the legacy, whose DELETION --only records). This keeps
+            # the commit to exactly the three calibration paths and sweeps in nothing else.
+            store_core.run_git(repo, "add", "--", core_p, layer_p)
+            out = store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
+                                     core_p, layer_p, legacy)
+            if out is None:
+                # the files are in place; report deferred so a stray-legacy diagnosis fires
+                mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
+                return {"action": "deferred"}
         clear_pending(cwd, root)
         return {"action": "migrated"}
