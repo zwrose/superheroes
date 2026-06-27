@@ -22,6 +22,7 @@ import pytest
 PARITY_TWINS = [
     ("phase_step", "decide", "phase_step", "decide"),
     ("ci_status", "classify", "ci_status", "classify"),
+    ("model_tier", "resolveModel", "model_tier", "resolve_model"),
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored
@@ -30,7 +31,7 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier"]
 
 # Bundled modules that are NOT twins (spine shells, not pure deciders).
 BUNDLED_NON_TWINS = {
