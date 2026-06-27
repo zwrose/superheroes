@@ -16,18 +16,12 @@ import control_plane   # noqa: E402
 import core_md         # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
-import store_core      # noqa: E402
 
 # Reconcile signal types that mean "a structural fix is pending" (route to fix, not view).
 _STRUCTURAL = (
     "migration-pending", "disagreement", "doc-policy-provisional", "migration-incomplete",
     "legacy-migration-ambiguous", "core-md-unreadable", "calibration-not-saved",
 )
-
-
-def _repo_root(cwd):
-    out = store_core.run_git(cwd, "rev-parse", "--show-toplevel")
-    return os.path.realpath(out) if out else os.path.realpath(cwd)
 
 
 def _review_layer_missing(cwd, root):
