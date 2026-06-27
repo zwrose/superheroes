@@ -1,0 +1,1 @@
+{"input": [[{"file": "c.ts", "title": "Missing type", "severity": "Minor"}], [{"id": "c.ts::missing type", "action": "keep", "reason": "", "severity": "Nit"}]], "expected": {"findings": [{"file": "c.ts", "title": "Missing type", "severity": "Nit"}], "drops": []}}

@@ -26,6 +26,8 @@ PARITY_TWINS = [
     ("circuit_breaker", "normalizeTitle", "circuit_breaker", "normalize_title"),
     ("circuit_breaker", "findingIdentity", "circuit_breaker", "finding_identity"),
     ("circuit_breaker", "checkCircuitBreaker", "circuit_breaker", "check_circuit_breaker"),
+    ("loop_state", "decide", "loop_state", "decide"),
+    ("loop_synthesis", "consume", "loop_synthesis", "consume"),
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored
@@ -34,7 +36,7 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis"]
 
 # Bundled modules that are NOT twins (spine shells, not pure deciders).
 BUNDLED_NON_TWINS = {
@@ -94,6 +96,9 @@ def test_python_oracle(py_mod, py_fn, case):
     mod = importlib.import_module(py_mod)
     fn = getattr(mod, py_fn)
     got = fn(*case["input"])
+    # Normalize: Python tuples serialise to JSON arrays; compare as list when expected is a list.
+    if isinstance(got, tuple) and isinstance(case["expected"], list):
+        got = list(got)
     assert got == case["expected"], f"oracle mismatch: got {got!r}, expected {case['expected']!r}"
 
 

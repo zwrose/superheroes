@@ -1,0 +1,1 @@
+{"input": [[{"severity": "Critical", "title": "Missing thing"}], [{"id": "::missing thing", "action": "drop", "reason": "not applicable", "severity": null}]], "expected": {"findings": [], "drops": [{"id": "::missing thing", "file": null, "title": "Missing thing", "reason": "not applicable", "was_blocking_tagged": true}]}}
