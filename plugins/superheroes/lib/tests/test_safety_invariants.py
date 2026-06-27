@@ -1,6 +1,12 @@
+import os
+
 import ci_loop
 import enforcer
 import reset
+
+
+def _repo_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
 def test_never_merge_invariant_across_every_merge_shape():
@@ -44,3 +50,17 @@ def test_command_path_fails_closed_on_non_string():
     # The command path's fail-closed surface is a non-string command (process-level
     # failure is the hook wrapper's job, §Task 6); a None command must deny.
     assert enforcer.classify_command(None)[0] == "deny"
+
+
+def test_showrunner_path_is_superpowers_free():
+    root = _repo_root()
+    # (a) the showrunner authoring leaf names NO superpowers toolkit — it authors natively (FR-8).
+    leaf = open(os.path.join(root, "plugins/superheroes/eval/produce-leaf.md")).read().lower()
+    assert "superpowers" not in leaf, \
+        "produce-leaf (the showrunner authoring path) must name no superpowers toolkit (FR-8)"
+    # (b) the generated live bundle invokes no superpowers skill — a residual call fails CI loudly.
+    bundle = os.path.join(root, "plugins/superheroes/lib/showrunner.bundle.js")
+    if os.path.exists(bundle):
+        b = open(bundle).read().lower()
+        for token in ("superpowers", "writing-plans"):
+            assert token not in b, "showrunner bundle must not reference %s (FR-8)" % token
