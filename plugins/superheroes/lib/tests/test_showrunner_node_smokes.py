@@ -13,6 +13,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_produce_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
