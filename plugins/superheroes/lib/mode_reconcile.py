@@ -146,7 +146,7 @@ def coalesce(cwd, root=None):
     if not items:
         return None
     return {"count": len(items), "items": items,
-            "message": f"this project has {len(items)} item(s) to reconcile — run init to settle it"}
+            "message": f"this project has {len(items)} item(s) to reconcile — run superheroes:configure to settle it"}
 
 
 def reconcile(cwd, chosen_mode=None, root=None):

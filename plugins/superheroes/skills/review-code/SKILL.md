@@ -142,7 +142,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
+(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 

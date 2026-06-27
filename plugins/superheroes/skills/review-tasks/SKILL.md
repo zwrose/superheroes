@@ -111,7 +111,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:review-init`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
 
 **Profile bootstrap (run before locating the tasks doc or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 

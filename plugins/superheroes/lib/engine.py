@@ -187,7 +187,7 @@ def load_profile_config(profile_path):
     if not m:
         raise EngineError(
             f"profile {profile_path} has no ```json test-pilot-config block; "
-            f"re-run test-pilot-init to regenerate it")
+            f"re-run superheroes:configure (test-pilot setup) to regenerate it")
     try:
         cfg = json.loads(m.group(1))
     except json.JSONDecodeError as exc:

@@ -188,9 +188,11 @@ would strand every already-written calibration file and definition-doc.)
 - **Living profiles.** A *staleness nudge*, a *learning-loop proposal* (any hero may
   **propose** a calibration edit, applied only on confirmation), and a **`nudge-ack` map**
   so a dismissed signal does not re-fire until it changes.
-- **Rendered single view.** Although calibration is stored as several files, `init`
-  (and a future `superheroes:profile` view) renders core + layers + the pinned patterns
-  as **one screen**, so the owner sees "one profile" while the disk stays coordinated.
+- **Rendered single view.** Although calibration is stored as several files,
+  `superheroes:configure` (the band-wide calibration front door — what "`init`" refers to
+  throughout this doc) renders core + layers + the pinned patterns as **one screen**, so the
+  owner sees "one profile" while the disk stays coordinated. The per-hero `*-init` skills are
+  now reached only from within `configure`, not advertised as their own entry points.
 
 ---
 
@@ -280,7 +282,8 @@ updated: <date>
   per doc-type per work-item.
   the-architect now implements this: the prior in-repo-only hardcode is closed, and
   the in-repo location plus committed/gitignored choice is the doc-policy established
-  by `architect-init`.
+  via `superheroes:configure` (which drives the-architect's doc-policy; the standalone
+  `architect-init` is now an internal helper reached only from `configure`).
 - **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
   needs it.

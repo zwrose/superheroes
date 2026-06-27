@@ -312,7 +312,7 @@ def _soft_fail():
         "drift": [],
         "signal_hash": "",
         "nudge_acked": False,
-        "message": "profile unreadable — re-run review-init",
+        "message": "profile unreadable — re-run superheroes:configure",
     }
 
 

@@ -783,3 +783,10 @@ def test_migrate_unknown_hero_is_noop(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     assert CM.migrate_on_read(repo, "bogus-hero", root=store)["action"] == "noop"
+
+
+def test_relocate_file_copies_then_unlinks_atomically(tmp_path):
+    src = tmp_path / "a.txt"; src.write_text("hello")
+    dst = tmp_path / "sub" / "b.txt"
+    CM.relocate_file(str(src), str(dst))
+    assert dst.read_text() == "hello" and not src.exists()
