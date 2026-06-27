@@ -134,3 +134,98 @@ def test_read_newer_schema_behind_no_downgrade(tmp_path):
     assert got["verifyCommand"] == "npm test"  # still reads the understood field
     after = open(os.path.join(repo, ".claude", "superheroes", "core.md")).read()
     assert after == before
+
+
+def test_write_new_is_written(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = {"verifyCommand": "npm test", "stackTags": ["node"],
+             "threatModel": "single-user", "patterns": "- x: a.ts:1"}
+    res = CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["verifyCommand"] == "npm test" and got["status"] == "confirmed"
+
+
+def test_write_reuses_when_detected_equal_or_absent(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, {"verifyCommand": "npm test", "stackTags": ["node"],
+                    "threatModel": "single-user", "patterns": ""}, "confirmed",
+             root=store, now="2026-06-26")
+    # second hero detects the SAME verify command and an ABSENT stack → reuse, no proposal
+    res = CM.write(repo, {"verifyCommand": "npm test", "stackTags": [],
+                          "threatModel": "", "patterns": ""}, "confirmed",
+                   root=store, now="2026-06-26")
+    assert res["action"] == "reused"
+    assert res["proposals"] == []
+    assert CM.read(repo, root=store)["verifyCommand"] == "npm test"
+
+
+def test_write_proposes_on_genuine_difference_not_applied(tmp_path):
+    # FR-6: a second hero detecting a DIFFERENT verify command proposes (not clobbers).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, {"verifyCommand": "npm test", "stackTags": ["node"],
+                    "threatModel": "single-user", "patterns": ""}, "confirmed",
+             root=store, now="2026-06-26")
+    res = CM.write(repo, {"verifyCommand": "pnpm check", "stackTags": ["node"],
+                          "threatModel": "single-user", "patterns": ""}, "confirmed",
+                   root=store, now="2026-06-26")
+    assert res["action"] == "proposed"
+    assert any(p["field"] == "verifyCommand" and p["detected"] == "pnpm check"
+               and p["recorded"] == "npm test" for p in res["proposals"])
+    # NOT applied: core.md still names npm test
+    assert CM.read(repo, root=store)["verifyCommand"] == "npm test"
+
+
+def test_write_deferred_when_lock_contended(tmp_path, monkeypatch):
+    # UFR-4: lock contended → deferred, no write, never raises.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.write(repo, {"verifyCommand": "npm test", "stackTags": [],
+                          "threatModel": "", "patterns": ""}, "provisional",
+                   root=store, now="2026-06-26")
+    assert res["action"] == "deferred"
+    assert res["record"] is None
+    assert CM.read(repo, root=store) is None  # nothing written
+
+
+def test_write_deferred_when_store_unwritable(tmp_path, monkeypatch):
+    # UFR-4: ensure_project_store returns None (store unwritable) → deferred, no raise.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    monkeypatch.setattr(CM.mode_registry, "ensure_project_store", lambda cwd, root=None: None)
+    res = CM.write(repo, {"verifyCommand": "npm test", "stackTags": [],
+                          "threatModel": "", "patterns": ""}, "provisional",
+                   root=store, now="2026-06-26")
+    assert res["action"] == "deferred"
+
+
+def test_write_deferred_marks_pending_then_written_clears_it(tmp_path, monkeypatch):
+    # UFR-4 calibration-not-saved marker: a deferred write drops a pending marker; a later
+    # successful write clears it.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    CM.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "",
+                    "patterns": ""}, "provisional", root=store, now="2026-06-26")
+    assert os.path.isfile(CM._pending_path(repo, store))  # marker dropped
+    monkeypatch.undo()  # restore the real lock
+    res = CM.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "",
+                          "patterns": ""}, "confirmed", root=store, now="2026-06-26")
+    assert res["action"] == "written"
+    assert not os.path.exists(CM._pending_path(repo, store))  # cleared on success

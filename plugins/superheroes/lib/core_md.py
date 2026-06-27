@@ -142,3 +142,79 @@ def read(cwd, root=None):
         "created": facts["created"],
         "updated": facts["updated"],
     }
+
+
+def _today():
+    return datetime.date.today().strftime("%Y-%m-%d")
+
+
+def _pending_path(cwd, root=None):
+    """The UFR-4 PENDING MARKER path in the machine-local project store. This store stays
+    writable even when the in-repo calibration dir or the config lock is unavailable, so it
+    can record that a calibration write/migration was DEFERRED (the calibration-not-saved
+    signal in mode_reconcile reads it back)."""
+    return os.path.join(mode_registry.project_store_dir(cwd, root), "calibration-pending.json")
+
+
+def mark_pending(cwd, root=None, detail=None):
+    """Best-effort write of the pending marker — swallows OSError (never the reason a deferred
+    path raises). Records {"pending": true, "detail": detail}."""
+    try:
+        store_core.atomic_write(_pending_path(cwd, root),
+                                json.dumps({"pending": True, "detail": detail}, indent=2) + "\n")
+    except OSError:
+        pass
+
+
+def clear_pending(cwd, root=None):
+    """Best-effort removal of the pending marker on a successful write/migration — swallows
+    OSError (including FileNotFoundError when no marker exists)."""
+    try:
+        os.remove(_pending_path(cwd, root))
+    except OSError:
+        pass
+
+
+def _diff_proposals(detected, recorded):
+    """Per-field proposals where the detected value DIFFERS from the recorded one.
+    A detected value equal to or absent (None / empty) is a reuse, not a proposal (FR-6)."""
+    proposals = []
+    for field in ("verifyCommand", "stackTags", "threatModel", "patterns"):
+        det = detected.get(field)
+        if det is None or det == "" or det == []:
+            continue  # detection yielded nothing → reuse, propose nothing
+        if det != recorded.get(field):
+            proposals.append({"field": field, "detected": det, "recorded": recorded.get(field)})
+    return proposals
+
+
+def write(cwd, facts, status, *, root=None, now=None):
+    """Lock-guarded atomic write of core.md. Returns a structured result (never a bare None):
+      - new core.md            → {action: "written"}
+      - existing, all detected facts equal/absent → {action: "reused"}
+      - existing, a detected fact DIFFERS         → {action: "proposed"} (NOT applied;
+                                                     the differing fields are in `proposals`)
+      - lock contended / store unwritable         → {action: "deferred"} (UFR-4)
+    Reuse-not-clobber (FR-6) is enforced HERE under the same lock that serializes a concurrent
+    second-hero setup (FR-7). A `deferred` return drops a best-effort pending marker; a
+    `written` clears it (the UFR-4 calibration-not-saved signal)."""
+    stamp = now or _today()
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred", "record": None, "proposals": []}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred", "record": None, "proposals": []}
+        existing = read(cwd, root)
+        if existing is not None:
+            proposals = _diff_proposals(facts, existing)
+            if proposals:
+                return {"action": "proposed", "record": existing, "proposals": proposals}
+            return {"action": "reused", "record": existing, "proposals": []}
+        created = facts.get("created") or stamp
+        text = render_core(facts, status, created, stamp)
+        store_core.atomic_write(core_path(cwd, root), text)
+        record = read(cwd, root)
+        clear_pending(cwd, root)
+        return {"action": "written", "record": record, "proposals": []}
