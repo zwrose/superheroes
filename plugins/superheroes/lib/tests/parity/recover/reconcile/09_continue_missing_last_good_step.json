@@ -1,0 +1,1 @@
+{"input": [{"step": "some_other_field"}, {}], "expected": {"action": "continue", "from_step": null, "reason": "reconciled — resume"}}

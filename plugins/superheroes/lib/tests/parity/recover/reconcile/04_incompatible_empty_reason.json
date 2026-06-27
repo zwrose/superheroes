@@ -1,0 +1,1 @@
+{"input": [{"_incompatible": true, "reason": ""}, {}], "expected": {"action": "park_gate", "reason": "checkpoint incompatible — "}}

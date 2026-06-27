@@ -1,0 +1,1 @@
+{"input": [{"branch": "superheroes/work-item-abc123", "lastGoodStep": 3}, {"current_content_hash": "def456"}], "expected": {"action": "gate", "reason": "approved tasks changed since this run started (stale spec)"}}
