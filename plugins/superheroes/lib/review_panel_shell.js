@@ -13,6 +13,7 @@
 // legKind = { panel: bool, code: bool }. CONTROL FLOW ONLY — every decision is computed in
 // panel_tally.py / loop_synthesis.py / verify_gate.py (protected Python); this shell only
 // detects events and forwards. The shell is itself in SAFETY_MACHINERY (FR-24).
+const { io } = require('./io_seam.js')
 function _usable(v) { return v && typeof v.terminal === 'string' }
 function _failClosed() {
   // UFR-9 last-resort: no usable verdict from the tally -> fail closed, never a clean advance.
@@ -30,7 +31,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let lastExtras = null                 // a fix step's extras (parentOrigin/escalation) ride forward
   // UFR-7: a mid-loop resume must re-load the latest fix extras (in-memory only otherwise), else the
   // resumed round's tally drops parentOrigin from the terminal record/readout.
-  try { lastExtras = JSON.parse(require('fs').readFileSync(`${runDir}/last-extras.json`, 'utf8')) } catch (_) {}
+  lastExtras = io().readJson(`${runDir}/last-extras.json`, null)
   while (true) {
     // 1. Fan out the panel — each reviewer writes findings-<name>.json into round-<N>/.
     await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round)))
@@ -72,7 +73,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
     lastExtras = fix.extras || lastExtras   // latest fix's extras win; persisted once a blocker is parent-traced
     // persist to a stable per-run path so a mid-loop resume can re-load it (the reload above).
-    if (lastExtras) { try { require('fs').writeFileSync(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
+    if (lastExtras) { try { io().writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
     round += 1
   }
 }
@@ -122,14 +123,14 @@ async function tallyAgent({ runDir, round, roster, maxRounds, synthesized = null
                            verifyResult = null, fixStatus = 'completed', extras = null }) {
   let extra = `--breaker-halt no --fix-status ${shq(fixStatus)}`
   if (synthesized) {
-    require('fs').mkdirSync(`${runDir}/round-${round}`, { recursive: true })   // round dir may not exist yet
-    require('fs').writeFileSync(synthPath(runDir, round), JSON.stringify(synthesized))
+    io().mkdirp(`${runDir}/round-${round}`)   // round dir may not exist yet
+    io().writeFile(synthPath(runDir, round), JSON.stringify(synthesized))
     extra += ` --synthesized ${shq(synthPath(runDir, round))}`
   }
   if (verifyResult) extra += ` --verify-result ${shq(verifyResult)}`
   if (extras) {
-    require('fs').mkdirSync(`${runDir}/round-${round}`, { recursive: true })   // round dir may not exist yet
-    require('fs').writeFileSync(extrasPath(runDir, round), JSON.stringify(extras))
+    io().mkdirp(`${runDir}/round-${round}`)   // round dir may not exist yet
+    io().writeFile(extrasPath(runDir, round), JSON.stringify(extras))
     extra += ` --extras ${shq(extrasPath(runDir, round))}`
   }
   const cmd =

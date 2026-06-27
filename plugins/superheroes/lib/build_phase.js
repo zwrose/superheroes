@@ -3,7 +3,7 @@
 // is a pure Python decider behind a *_cli.py bridge; this module detects events and sequences them.
 // It makes NO PR/merge/force-push (FR-10).
 const { reviewPanel } = require('./review_panel_shell.js')
-const fs = require('fs')
+const { io } = require('./io_seam.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
@@ -228,10 +228,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   global.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
-    let set = {}
-    try { set = JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) { set = {} }
+    let set = io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
-    fs.writeFileSync(p, JSON.stringify(set))
+    io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (blockers) => {
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
