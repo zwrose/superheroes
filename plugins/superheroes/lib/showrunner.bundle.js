@@ -1715,6 +1715,47 @@ module.exports.recordFinalReviewClean = recordFinalReviewClean
 
 };
 
+// ===== model_tier.js =====
+__modules["model_tier"] = function (module, exports, require) {
+// model_tier.js — twin of model_tier.resolve_model
+// Pure + deterministic model-tier resolver: role -> model name or null.
+
+const DEFAULT_TIERS = {
+  orchestrator: null,
+  reviewer: 'sonnet',
+  'reviewer-deep': 'opus',
+  mechanical: 'haiku',
+  synthesis: 'opus',
+  fixer: 'sonnet',
+  author: 'opus',
+}
+
+const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
+
+// Python `k in dict` / `dict.get(k, default)` test OWN keys only; JS `in`/bracket walk the prototype
+// chain (so `'constructor' in {}` is true). Use own-key membership everywhere a twin mirrors Python
+// dict membership, so a prototype-named role/identity ('constructor', 'toString', '…::hasOwnProperty')
+// cannot drift the result.
+function hasOwn(o, k) {
+  return Object.prototype.hasOwnProperty.call(o, k)
+}
+
+function resolveModel(role, overrides, context) {
+  if (!hasOwn(DEFAULT_TIERS, role)) role = 'reviewer'   // safe capable default for an unknown role
+  let def = DEFAULT_TIERS[role]
+  if (role === 'fixer' && hasOwn(_FIXER_BY_CONTEXT, context)) def = _FIXER_BY_CONTEXT[context]
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return def
+  if (!hasOwn(overrides, role)) return def
+  const v = overrides[role]
+  if (v === null) return null
+  if (typeof v === 'string' && v.trim()) return v.trim()
+  return def   // malformed (non-str / empty) -> default
+}
+
+module.exports = { resolveModel, DEFAULT_TIERS }
+
+};
+
 // ===== showrunner.js =====
 __modules["showrunner"] = function (module, exports, require) {
 // plugins/superheroes/lib/showrunner.js
@@ -2055,6 +2096,66 @@ module.exports.frontHalfBoundary = frontHalfBoundary
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function safeRunKey(s) { return String(s).replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 120) || 'target' }
+
+// cheapestModel: resolves the mechanical (cheapest) tier once and caches it. The `mechanical` tier
+// is unconditionally `'haiku'` per DEFAULT_TIERS; resolving through model_tier.js keeps the twin
+// parity contract intact and allows future overrides without changing the spine.
+let _cheapestModelCache = null
+function cheapestModel() {
+  if (_cheapestModelCache === null) {
+    _cheapestModelCache = require('./model_tier.js').DEFAULT_TIERS.mechanical
+  }
+  return _cheapestModelCache
+}
+
+// exec: the dumb-pipe executor. Dispatches ONE globalThis.agent whose prompt lists all fully-formed
+// commands and asks the leaf to run each and return a JSON array of {index, ok, stdout}.
+// The model is UNCONDITIONALLY forced to cheapestModel() — overriding __SR_LEAF_MODEL or any
+// caller-supplied opts.model. This is a side-effect executor, not a genuine-LLM agent.
+// FR-8 sandbox-safe: no fs, no child_process, no time/random globals, no process/bare-global refs.
+async function exec(commands, opts) {
+  const cmdList = (commands || []).map(function(c, i) { return (i + 1) + '. ' + c }).join('\n')
+  const prompt =
+    'Run each of the following commands in order using the Bash tool. ' +
+    'Return ONLY a JSON array where each element is {"index":<0-based>,"ok":<true|false>,"stdout":<string>}.\n\n' +
+    cmdList
+  const o = Object.assign({}, opts || {}, { model: cheapestModel(), label: 'exec' })
+  const out = await globalThis.agent(prompt, o)
+  // The stub (in tests) and the live leaf both return the array directly; normalise defensively.
+  if (Array.isArray(out)) return out
+  return []
+}
+
+// persistPhase: batches side-effect -> journal_entry -> checkpoint_entry into one exec call.
+// Persist order (FR-4): side-effect first (when present), then journal, then checkpoint (cursor last).
+// Every interpolated non-constant arg is shq()-quoted.
+// Returns {ok: boolean} — ok is false if any command in the batch reported failure.
+async function persistPhase(workItem, opts) {
+  opts = opts || {}
+  const sideEffectCmd = opts.sideEffectCmd || null
+  const journalPayload = opts.journalPayload || {}
+  const step = opts.step
+  const phase = opts.phase
+
+  const journalCmd =
+    'python3 plugins/superheroes/lib/journal_entry.py ' +
+    '--work-item ' + shq(workItem) + ' ' +
+    '--payload ' + shq(JSON.stringify(journalPayload))
+
+  const checkpointCmd =
+    'python3 plugins/superheroes/lib/checkpoint_entry.py ' +
+    '--work-item ' + shq(workItem) + ' ' +
+    '--step ' + shq(String(step)) + ' ' +
+    '--phase ' + shq(phase)
+
+  const commands = sideEffectCmd
+    ? [sideEffectCmd, journalCmd, checkpointCmd]
+    : [journalCmd, checkpointCmd]
+
+  const results = await exec(commands)
+  return { ok: results.every(function(r) { return r && r.ok }) }
+}
+
 function inWorktree(cmd, worktree) {
   return worktree ? `cd ${shq(worktree)} && ${cmd}` : cmd
 }
@@ -2662,6 +2763,9 @@ module.exports.cmdRunner = cmdRunner
 module.exports.reconcile = reconcile
 module.exports.runPhases = runPhases
 module.exports.PHASES = PHASES
+module.exports.exec = exec
+module.exports.persistPhase = persistPhase
+module.exports.cheapestModel = cheapestModel
 
 };
 

@@ -7,7 +7,7 @@ const path = require('path')
 
 const LIB = __dirname
 // io_seam is intentionally absent: the preamble provides a leaf-bash io for it.
-const MODULES = ['review_panel_shell.js', 'test_pilot_phase.js', 'build_phase.js', 'showrunner.js']
+const MODULES = ['review_panel_shell.js', 'test_pilot_phase.js', 'build_phase.js', 'model_tier.js', 'showrunner.js']
 
 // Registry keys are the bare module name (no './' prefix, no '.js' suffix). `norm` MUST match the
 // runtime `__require`'s key derivation exactly, or every lookup throws "unknown module".
