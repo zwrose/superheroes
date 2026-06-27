@@ -78,12 +78,15 @@ run blocks at pre-flight.
 Read the work-item's run-outcome projection (and its last readout) and print it — the status,
 current phase, PR link, CI checks, and phases traversed:
 
+`<state>` is the run outcome loaded from the work-item's control-plane run record (its last
+recorded readout / run-end state) — not a fresh run.
+
 ```bash
 python3 - "$ROOT" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1] + "/plugins/superheroes/lib")
 import run_readout
-# <state> is the work-item's recorded run-end state
+# <state> is the work-item's recorded run-end state (read from the control-plane run record)
 print(run_readout.run_outcome(state))
 PY
 ```

@@ -71,7 +71,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let lastExtras = null                 // a fix step's extras (parentOrigin/escalation) ride forward
   // UFR-7: a mid-loop resume must re-load the latest fix extras (in-memory only otherwise), else the
   // resumed round's tally drops parentOrigin from the terminal record/readout.
-  lastExtras = io().readJson(`${runDir}/last-extras.json`, null)
+  lastExtras = await io().readJson(`${runDir}/last-extras.json`, null)
   while (true) {
     // 1. Fan out the panel — each reviewer writes findings-<name>.json into round-<N>/.
     await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round)))
@@ -113,7 +113,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
     lastExtras = fix.extras || lastExtras   // latest fix's extras win; persisted once a blocker is parent-traced
     // persist to a stable per-run path so a mid-loop resume can re-load it (the reload above).
-    if (lastExtras) { try { io().writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
+    if (lastExtras) { try { await io().writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
     round += 1
   }
 }
@@ -163,14 +163,14 @@ async function tallyAgent({ runDir, round, roster, maxRounds, synthesized = null
                            verifyResult = null, fixStatus = 'completed', extras = null }) {
   let extra = `--breaker-halt no --fix-status ${shq(fixStatus)}`
   if (synthesized) {
-    io().mkdirp(`${runDir}/round-${round}`)   // round dir may not exist yet
-    io().writeFile(synthPath(runDir, round), JSON.stringify(synthesized))
+    await io().mkdirp(`${runDir}/round-${round}`)   // round dir may not exist yet
+    await io().writeFile(synthPath(runDir, round), JSON.stringify(synthesized))
     extra += ` --synthesized ${shq(synthPath(runDir, round))}`
   }
   if (verifyResult) extra += ` --verify-result ${shq(verifyResult)}`
   if (extras) {
-    io().mkdirp(`${runDir}/round-${round}`)   // round dir may not exist yet
-    io().writeFile(extrasPath(runDir, round), JSON.stringify(extras))
+    await io().mkdirp(`${runDir}/round-${round}`)   // round dir may not exist yet
+    await io().writeFile(extrasPath(runDir, round), JSON.stringify(extras))
     extra += ` --extras ${shq(extrasPath(runDir, round))}`
   }
   const cmd =
@@ -1654,9 +1654,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   global.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
-    let set = io().readJson(p, {})
+    let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
-    io().writeFile(p, JSON.stringify(set))
+    await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (blockers) => {
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
@@ -1835,7 +1835,7 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
 async function docRecordDeferred(report, _verdict, runDir) {
   // fix-report.json is a transient hand-off read by record-deferred immediately below; per-round
   // overwrite is harmless (it is consumed before the next round writes it).
-  io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
   await cmdRunner(
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
@@ -1927,7 +1927,7 @@ async function reviewDocPhase(doc, workItem) {
   const runDir = runDirFor(workItem, `review-${doc}`)
   const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  try { io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
+  try { await io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
   const gate = await gateForTerminal(verdict && verdict.terminal)
   const sg = await cmdRunner(
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
@@ -1979,20 +1979,25 @@ module.exports.notifyLedgerFor = notifyLedgerFor
 // front_half render-outcome) and return a parked result. Reads best-effort per-phase terminal records
 // + the durable NOTIFY ledger; render_run_outcome tolerates missing records.
 async function frontHalfBoundary(workItem) {
-  const readJson = (p, dflt) => io().readJson(p, dflt)
+  // The io() seam is async (it shares one contract with the bundle's Promise-returning leaf-bash io),
+  // so await every read BEFORE building the outcome literal — embedding an un-awaited Promise would
+  // serialize as "{}" and silently drop the durable readout records (the bug this fix class closes).
+  const notify = await io().readJson(notifyLedgerFor(workItem), [])
+  const planRec = await io().readJson(`${runDirFor(workItem, 'review-plan')}/terminal-record.json`, null)
+  const tasksRec = await io().readJson(`${runDirFor(workItem, 'review-tasks')}/terminal-record.json`, null)
   const outcome = {
     completed_phases: ['plan', 'review-plan', 'tasks', 'review-tasks'],
     docs: { plan: docPathFor(workItem, 'plan'), tasks: docPathFor(workItem, 'tasks') },
-    notify: readJson(notifyLedgerFor(workItem), []),
+    notify,
     phase_records: [
-      { phase: 'review-plan', record: readJson(`${runDirFor(workItem, 'review-plan')}/terminal-record.json`, null) },
-      { phase: 'review-tasks', record: readJson(`${runDirFor(workItem, 'review-tasks')}/terminal-record.json`, null) },
+      { phase: 'review-plan', record: planRec },
+      { phase: 'review-tasks', record: tasksRec },
     ],
     readout_record_ok: true,
   }
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
   let recordOk = true
-  try { io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
+  try { await io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
   // render-outcome prints TEXT (not JSON); call the leaf directly (no cmdRunner schema). If the
   // outcome record could not be written, render has nothing to read -> flag UFR-6 in the reason.
   const rendered = recordOk
@@ -2143,10 +2148,12 @@ async function defaultTestPilotPhase(workItem, generation) {
 
 function testPilotDeps(workItem, generation) {
   const runDir = joinPath(io().tmpdir(), `showrunner-${workItem}-test-pilot`)
-  io().mkdirp(runDir)
-  const writeJson = (name, value) => {
+  // writeJson is async (the io() seam is async — see io_seam.js) and lazily ensures runDir, so every
+  // call site must await it. Lazy mkdirp keeps the dir-create on the same awaited path as the write.
+  const writeJson = async (name, value) => {
     const p = joinPath(runDir, `${name}.json`)
-    io().writeFile(p, JSON.stringify(value || {}))
+    await io().mkdirp(runDir)
+    await io().writeFile(p, JSON.stringify(value || {}))
     return p
   }
   const jsonCommand = (cmd, schema) => cmdRunner(cmd, { schema: schema || { type: 'object' } })
@@ -2160,9 +2167,9 @@ function testPilotDeps(workItem, generation) {
       { type: 'object' }),
 
     decideApplicability: async (context) => {
-      const diff = writeJson('applicability-diff', context.diff || {})
-      const detectors = writeJson('applicability-detectors', context.detectors || {})
-      const profile = writeJson('applicability-profile', context.profile || {})
+      const diff = await writeJson('applicability-diff', context.diff || {})
+      const detectors = await writeJson('applicability-detectors', context.detectors || {})
+      const profile = await writeJson('applicability-profile', context.profile || {})
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_applicability_cli.py decide ` +
         `--diff-json ${shq(diff)} --detectors-json ${shq(detectors)} --profile-json ${shq(profile)}`,
@@ -2181,8 +2188,8 @@ function testPilotDeps(workItem, generation) {
     prepareArtifacts: async ({ plan, records, context }) => {
       const pr = context.pr && context.pr.number
       if (!pr) return { action: 'park', reason: 'test-pilot artifacts require a draft PR number' }
-      const planPath = writeJson('plan-artifact', { key: keyFor(context.branch), records })
-      const resultsPath = writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
+      const planPath = await writeJson('plan-artifact', { key: keyFor(context.branch), records })
+      const resultsPath = await writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
         `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(context.branch))}`,
@@ -2190,8 +2197,8 @@ function testPilotDeps(workItem, generation) {
     },
 
     resolveServer: async (context) => {
-      const profile = writeJson('server-profile', context.profile || {})
-      const detection = writeJson('server-detection', context.detectors || {})
+      const profile = await writeJson('server-profile', context.profile || {})
+      const detection = await writeJson('server-detection', context.detectors || {})
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py resolve ` +
         `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
@@ -2199,7 +2206,7 @@ function testPilotDeps(workItem, generation) {
     },
 
     withManagedServer: async (serverContext, run) => {
-      const launchPath = writeJson('server-launch-context', serverContext)
+      const launchPath = await writeJson('server-launch-context', serverContext)
       const launched = await cli(
         `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py launch ` +
         `--context-json ${shq(launchPath)}`,
@@ -2209,15 +2216,15 @@ function testPilotDeps(workItem, generation) {
       }
       try {
         const outcome = await run(launched)
-        const contextPath = writeJson('server-finish-context', launched)
-        const outcomePath = writeJson('server-finish-outcome', outcome || {})
+        const contextPath = await writeJson('server-finish-context', launched)
+        const outcomePath = await writeJson('server-finish-outcome', outcome || {})
         return cli(
           `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
       } catch (err) {
-        const contextPath = writeJson('server-finish-context', launched)
-        const outcomePath = writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
+        const contextPath = await writeJson('server-finish-context', launched)
+        const outcomePath = await writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
         await cli(
           `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
@@ -2227,7 +2234,7 @@ function testPilotDeps(workItem, generation) {
     },
 
     seedRecords: async (records) => {
-      const recordsPath = writeJson('seed-records', records)
+      const recordsPath = await writeJson('seed-records', records)
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_seed_cli.py prepare --records-json ${shq(recordsPath)}`,
         { type: 'object' })
@@ -2240,14 +2247,14 @@ function testPilotDeps(workItem, generation) {
       { label: 'test-pilot-browser', schema: { type: 'object' } }),
 
     aggregateResults: async (rawResults) => {
-      const raw = writeJson('browser-raw', rawResults)
+      const raw = await writeJson('browser-raw', rawResults)
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_results_cli.py aggregate --raw-json ${shq(raw)}`,
         { type: 'object' })
     },
 
     budgetCheck: async (_phase, payload) => {
-      const counts = writeJson('budget-counts', payload && payload.counts ? payload.counts : {
+      const counts = await writeJson('budget-counts', payload && payload.counts ? payload.counts : {
         browserPasses: payload && typeof payload.browserPasses === 'number'
           ? payload.browserPasses
           : (payload && payload.rerunScope ? 1 : 0),
@@ -2260,9 +2267,9 @@ function testPilotDeps(workItem, generation) {
     },
 
     retryDecide: async (passResult, history, changedFiles, dependencyMap) => {
-      const passPath = writeJson('retry-pass', passResult)
-      const histPath = writeJson('retry-history', history || [])
-      const depPath = dependencyMap ? writeJson('retry-deps', dependencyMap) : null
+      const passPath = await writeJson('retry-pass', passResult)
+      const histPath = await writeJson('retry-history', history || [])
+      const depPath = dependencyMap ? await writeJson('retry-deps', dependencyMap) : null
       const changed = (changedFiles || []).map((f) => ` --changed-file ${shq(f)}`).join('')
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_retry_cli.py decide --pass-json ${shq(passPath)} ` +
@@ -2281,7 +2288,7 @@ function testPilotDeps(workItem, generation) {
     })),
 
     restoreBaseline: async (records, details) => {
-      const recordsPath = writeJson('restore-records', records)
+      const recordsPath = await writeJson('restore-records', records)
       const out = await cli(
         `python3 plugins/superheroes/lib/test_pilot_seed_cli.py restore-baseline --records-json ${shq(recordsPath)}`,
         { type: 'object' })
@@ -2292,8 +2299,8 @@ function testPilotDeps(workItem, generation) {
     ensureFinalArtifacts: async (payload) => {
       const pr = payload.context.pr && payload.context.pr.number
       if (!pr) return { action: 'park', reason: 'final results artifact requires a PR number' }
-      const planPath = writeJson('final-plan-artifact', { key: keyFor(payload.context.branch), records: payload.records })
-      const resultsPath = writeJson('final-results-artifact', Object.assign({ key: keyFor(payload.context.branch) }, payload.aggregated || {}))
+      const planPath = await writeJson('final-plan-artifact', { key: keyFor(payload.context.branch), records: payload.records })
+      const resultsPath = await writeJson('final-results-artifact', Object.assign({ key: keyFor(payload.context.branch) }, payload.aggregated || {}))
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
         `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(payload.context.branch))}`,
@@ -2301,7 +2308,7 @@ function testPilotDeps(workItem, generation) {
     },
 
     publishReady: async (_wi, head, payload) => {
-      const statusPath = writeJson('publish-status', {
+      const statusPath = await writeJson('publish-status', {
         branch: payload.context.branch,
         store: payload.context.store,
         generation,
@@ -2316,7 +2323,7 @@ function testPilotDeps(workItem, generation) {
     },
 
     writeStatus: async (status) => {
-      const statusPath = writeJson('status-write', status)
+      const statusPath = await writeJson('status-write', status)
       return cli(
         `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
         { type: 'object', required: ['ok'] })
@@ -2391,7 +2398,7 @@ function verdictToGate(verdict) {
 // extras channel) and post it at the park (no PR yet -> readout_post records to the store). FR-6/UFR-1.
 async function renderAndPostReadout(workItem, runDir, verdict) {
   const recPath = `${runDir}/terminal-record.json`
-  try { io().writeFile(recPath, JSON.stringify(verdict || {})) } catch (_) {}
+  try { await io().writeFile(recPath, JSON.stringify(verdict || {})) } catch (_) {}
   const text = await agent(
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`,

@@ -228,9 +228,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   global.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
-    let set = io().readJson(p, {})
+    let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
-    io().writeFile(p, JSON.stringify(set))
+    await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (blockers) => {
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write

@@ -35,9 +35,22 @@ def test_indeterminate_is_failclosed():
 def test_active_live_run_blocks_but_parked_or_stale_passes():
     live = _all_good(); live["active_run"] = "live"
     assert preflight.decide(live, "wi")["ok"] is False
-    for benign in ("none", "parked", "stale"):
+    for benign in ("none", "parked", "stale", "finished"):
         p = _all_good(); p["active_run"] = benign
         assert preflight.decide(p, "wi")["ok"] is True, benign
+
+
+def test_unknown_readiness_probe_fails_closed_indeterminate():
+    # None/unknown for repo_ready / verify_resolves / config_resolves must hit the fail-closed
+    # `else` branch: block with that check's status == "indeterminate" (a probe that couldn't be
+    # evaluated is treated as not-passing, never silently allowed through).
+    for key, check in (("repo_ready", "repo-ready"), ("verify_resolves", "verify-resolves"),
+                       ("config_resolves", "config-resolves")):
+        p = _all_good(); p[key] = None
+        out = preflight.decide(p, "wi")
+        assert out["ok"] is False, key
+        f = [b for b in out["blocking"] if b["check"] == check][0]
+        assert f["status"] == "indeterminate" and f["remediation"], key
 
 def test_required_ci_suppresses_advisory():
     p = _all_good(); p["ci"] = {"provider": "github-actions", "required": True}

@@ -27,3 +27,11 @@ def test_empty_is_none():
 
 def test_non_list_is_none_failclosed():
     assert ci_status.classify(None) == {"status": "none", "failing": []}
+
+def test_state_and_conclusion_fallback_keys():
+    # _bucket falls back from `bucket` to `state` to `conclusion` (gh's two status shapes).
+    # A failing `state` -> red; a single passing `conclusion` -> green (it is the only gating check).
+    red = ci_status.classify([{"name": "x", "state": "failure"}])
+    assert red["status"] == "red" and red["failing"] == ["x"]
+    green = ci_status.classify([{"name": "y", "conclusion": "success"}])
+    assert green == {"status": "green", "failing": []}

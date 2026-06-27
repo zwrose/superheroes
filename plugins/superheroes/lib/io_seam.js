@@ -11,16 +11,20 @@ function joinPath() {
   return parts.join(PATH_SEP).replace(/\/+/g, '/')
 }
 const defaultIo = {
-  writeFile(p, s) {
+  // The four IO methods are async so this fs-backed backend shares ONE contract with the bundle's
+  // leaf-bash io (every method there returns a Promise). The fs*Sync calls inside still run
+  // synchronously up to the implicit return — the async keyword only makes the method Promise-valued,
+  // so every call site can (and must) `await` it uniformly across both runtimes.
+  async writeFile(p, s) {
     require('fs').writeFileSync(p, typeof s === 'string' ? s : JSON.stringify(s))
   },
-  readText(p) { return require('fs').readFileSync(p, 'utf8') },
-  readJson(p, dflt) {
+  async readText(p) { return require('fs').readFileSync(p, 'utf8') },
+  async readJson(p, dflt) {
     try { return JSON.parse(require('fs').readFileSync(p, 'utf8')) } catch (_) { return dflt }
   },
-  mkdirp(d) { require('fs').mkdirSync(d, { recursive: true }) },
-  tmpdir() { return require('os').tmpdir() },
-  join: joinPath,
+  async mkdirp(d) { require('fs').mkdirSync(d, { recursive: true }) },
+  tmpdir() { return require('os').tmpdir() },   // sync: no IO
+  join: joinPath,                                // sync: no IO
 }
 function io() { return global.io || defaultIo }
 module.exports = { io, defaultIo, joinPath }

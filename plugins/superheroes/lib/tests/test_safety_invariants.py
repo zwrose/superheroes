@@ -62,5 +62,5 @@ def test_showrunner_path_is_superpowers_free():
     bundle = os.path.join(root, "plugins/superheroes/lib/showrunner.bundle.js")
     if os.path.exists(bundle):
         b = open(bundle).read().lower()
-        for token in ("superpowers", "writing-plans"):
+        for token in ("superpowers", "writing-plans", "subagent-driven"):
             assert token not in b, "showrunner bundle must not reference %s (FR-8)" % token
