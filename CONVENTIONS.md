@@ -67,9 +67,11 @@ review (review-crew owns all three review gates):
 The **cast** referenced below: **producer** (the per-issue back-half loop driver —
 **Workhorse**), **the-architect** (produces the definition-docs — spec/plan/tasks),
 **review-crew** (all review gates + code review), **test-pilot** (behavioral/browser
-verification). These four are **shipped today** (and run on both Claude Code and Codex, §7).
-**Upcoming heroes:** the **showrunner** (the outer-loop run engine that drives a queue of
-work-items to merge-ready PRs), a **backlog/TPM** (owns all GitHub-issue writes — triage,
+verification), and the **showrunner** (the run engine that drives one approved work-item
+end-to-end to a ready-for-review PR — the live single-issue launch, §10.4). These five are
+**shipped today** (and run on both Claude Code and Codex, §7).
+**Upcoming heroes:** the showrunner's **queue/controller layer** (driving a *queue* of
+work-items, §10.3), a **backlog/TPM** (owns all GitHub-issue writes — triage,
 decomposition), and a **maintainability guardian** — see the
 [roadmap Project](https://github.com/users/zwrose/projects/1). (The "coordinator" of earlier
 drafts split into the showrunner + the backlog/TPM.) (The spec/plan/tasks artifact family is
@@ -864,3 +866,57 @@ structural:** each step is a validated, logged record (gate / confidence / assum
 appended durably (`events.jsonl`, §4.6); a step that surfaces a **material assumption or
 low confidence parks rather than proceeds** — where an "assumption" is a *genuine
 unverified premise*, not a status note.
+
+### 10.4 The live launch contract (showrunner skill, single work-item)
+
+The `superheroes:showrunner` skill turns the merged spine **on** for one approved work-item.
+The launch path is **pre-flight → bundle → Workflow tool**:
+
+- **Deterministic pre-flight gate (fail-closed).** `lib/preflight.py` runs a pure `decide()`
+  over a probes dict — spec approved (`gates.review == passed`), `gh` write access, no
+  *conflicting* live run (a stale/absent lease lets a relaunch proceed; only a live lease for
+  another work-item blocks), repo/base/remote ready, the verify command resolvable, and the
+  profile/storage config resolvable. A check that errors or cannot be evaluated is treated as
+  **not-passing**; an advisory `ci-visibility` note fires when no required CI gates the PR.
+  The skill prints each blocking check's cause + remediation and **STOPs** on `ok:false`.
+- **The committed bundle is the runtime.** `lib/showrunner.bundle.js` is a generated,
+  self-contained Workflow-tool script (module-registry bundler, `lib/bundle_showrunner.js`;
+  a drift guard keeps the committed bundle == a fresh emit). The skill reads the bundle and
+  invokes the **Workflow tool** with `args: {workItem: <work-item>}` — it never re-bundles or
+  edits the spine. The bundle injects a leaf-bash `io` so the spine's filesystem touches run
+  in command-runner leaves (no `fs`/`path`/`os` in the sandbox), and sets full-run mode so the
+  pipeline proceeds past the front-half boundary into Build → Ship (vs. the env-driven
+  front-half-only mode, which keeps the boundary park).
+- **Idempotent, re-invocable.** The launch takes no load-bearing arguments beyond the
+  work-item; on every entry the spine `reconcile`s from the control-plane store, skips
+  completed phases, and reuses the existing PR — so the same skill entry covers a fresh start,
+  a resume after a park/crash/compaction, and a status read.
+- **Codified readout (FR-10).** At run end the skill assembles the readout via the deciders
+  (`run_readout.assemble` → `readout.build_readout`): PR link, CI status, built-vs-acceptance,
+  test-pilot result, the secret-scrubbed merge reminder. `run_readout.run_outcome` is the
+  machine-readable projection ([#112](https://github.com/zwrose/superheroes/issues/112)
+  consumes it). **The skill never instructs merging** — merge is owner authority (§4.7).
+
+### 10.5 Post-approval path choice (Discovery presents, showrunner executes)
+
+After Discovery records the spec's approval gate, `architect-discovery` presents a two-option
+choice with **no default** — **run the showrunner (recommended)** or the **manual bridged
+path**. The hand-off partitions cleanly: **Discovery presents the choice; the showrunner skill
+executes the run** (Discovery never starts `plan` itself on either branch). On the showrunner
+pick it records the advisory choice (`lib/path_choice.py`) and invokes the `showrunner` skill;
+on the manual pick it records the choice and falls through to the **existing manual hand-off,
+byte-unchanged**. The recorded choice is **advisory** — the run state is authoritative, so a
+never-started showrunner pick simply re-enters via the showrunner skill.
+
+### 10.6 The showrunner path is superpowers-free
+
+No phase on the **showrunner path** may invoke a superpowers skill — it authors natively (the
+`produce-leaf` names the tasks-doc format only as a quality bar, not a superpowers dependency).
+This is **CI-enforced, impossible-by-construction**: a structural invariant
+(`test_safety_invariants.py::test_showrunner_path_is_superpowers_free`) fails loudly if the
+authoring leaf or the generated live bundle names the superpowers toolkit, and the bundle build
+greps clean of `superpowers`/`writing-plans`/`subagent-driven`. (The **manual bridged path**
+keeps its superpowers dependency, untouched.) Full superpowers removal across the band is
+tracked by [#111](https://github.com/zwrose/superheroes/issues/111); the durable repeatable
+agentic acceptance of the live run by
+[#112](https://github.com/zwrose/superheroes/issues/112).
