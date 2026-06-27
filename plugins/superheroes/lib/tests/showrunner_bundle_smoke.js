@@ -22,6 +22,10 @@ for (const ln of text.split('\n')) {
       'bundle has an unguarded process reference (crashes the Workflow sandbox): ' + ln.trim())
   }
 }
+// (a4) node's `global` is absent in the runtime sandbox — the spine must use `globalThis` (which exists
+//      in both node and the sandbox). A bare `global.` crashes the live run with "global is not defined".
+assert.ok(!/\bglobal\./.test(text),
+  'bundle uses bare `global.` (absent in the Workflow sandbox) — use globalThis')
 // (b) Execute it in a sandbox that has NO require and NO Node builtins. `export const meta` is ESM
 //     syntax, so strip the `export ` keyword for the CommonJS-style eval. Set __SR_RUN=false so the
 //     auto-run entry is skipped and the registry is exposed for the compose assertion.

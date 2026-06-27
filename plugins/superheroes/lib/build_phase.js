@@ -225,14 +225,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
     { label: 'minor_rollup_cli.py', schema: { type: 'object' } })).minors || []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope (showrunner.js:13-15).
-  global.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
+  globalThis.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
     await agent(
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Write findings-generalist.json into round-${round}/.`,
       { label: `reviewer:${round}`, model: reviewerModel })
     return true
   }
-  global.recordDeferred = async (report, verdict, rdir) => {
+  globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'

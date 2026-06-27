@@ -1651,14 +1651,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
     { label: 'minor_rollup_cli.py', schema: { type: 'object' } })).minors || []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope (showrunner.js:13-15).
-  global.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
+  globalThis.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
     await agent(
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Write findings-generalist.json into round-${round}/.`,
       { label: `reviewer:${round}`, model: reviewerModel })
     return true
   }
-  global.recordDeferred = async (report, verdict, rdir) => {
+  globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
@@ -1795,10 +1795,10 @@ function reviewCodeLeaves(tiers, opts) {
 
 // Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
 async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree }) {
-  global.reviewerAgent = leaves.reviewerAgent
-  global.mergeAgent = leaves.mergeAgent
-  global.synthesisLeaf = leaves.synthesisLeaf
-  global.recordDeferred = leaves.recordDeferred
+  globalThis.reviewerAgent = leaves.reviewerAgent
+  globalThis.mergeAgent = leaves.mergeAgent
+  globalThis.synthesisLeaf = leaves.synthesisLeaf
+  globalThis.recordDeferred = leaves.recordDeferred
   return withTargetCommandPrompts(worktree, () => reviewPanel({
     reviewerSet: REVIEW_CODE_REVIEWERS,
     context, rubric, runKey: runDir, runDir,
@@ -1816,7 +1816,7 @@ const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-revie
                        'test-reviewer', 'premortem-reviewer']
 
 // the four caller-supplied doc-leg leaf wrappers the #104 shell expects (panel:true). Each is a
-// single leaf (no fan-out). Set as global.* before reviewPanel, exactly as runReviewCodePanel does.
+// single leaf (no fan-out). Set as globalThis.* before reviewPanel, exactly as runReviewCodePanel does.
 // NOTE: the findings filename is `findings-<full roster name>.json` — panel_tally reads the
 // roster verbatim (findings_path), and the tally is given the full DOC_REVIEWERS names, so the
 // reviewer write, the merge read, and the tally read MUST all use the same full names.
@@ -1873,10 +1873,10 @@ async function docReviser(blockers, runDir, context) {
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
 async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
   const context = { workItem, docType, docPath }
-  global.reviewerAgent = docReviewerAgent
-  global.mergeAgent = docMergeAgent
-  global.synthesisLeaf = docSynthesisLeaf
-  global.recordDeferred = docRecordDeferred
+  globalThis.reviewerAgent = docReviewerAgent
+  globalThis.mergeAgent = docMergeAgent
+  globalThis.synthesisLeaf = docSynthesisLeaf
+  globalThis.recordDeferred = docRecordDeferred
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (blockers, rd) => docReviser(blockers, rd, context),
@@ -2049,12 +2049,12 @@ function targetCommandPrompt(prompt, worktree) {
 }
 async function withTargetCommandPrompts(worktree, fn) {
   if (!worktree) return fn()
-  const originalAgent = global.agent
-  global.agent = async (prompt, opts) => originalAgent(targetCommandPrompt(prompt, worktree), opts)
+  const originalAgent = globalThis.agent
+  globalThis.agent = async (prompt, opts) => originalAgent(targetCommandPrompt(prompt, worktree), opts)
   try {
     return await fn()
   } finally {
-    global.agent = originalAgent
+    globalThis.agent = originalAgent
   }
 }
 
