@@ -489,7 +489,12 @@ async function verifyAgent(verifyCommand, runDir, round) {
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
     { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
   if (!out) return 'fail'  // fail-closed if the runner gave nothing
-  return verifyGateTwin.classify({ command: out.command, returncode: out.returncode, timedOut: out.timedOut })
+  // Classify with the command the SPINE knows (verifyCommand), NOT the leaf's echoed out.command.
+  // A garbled leaf that drops `command` would make the twin see !cmd -> 'skipped' (a pass-equivalent
+  // in _VERIFY_OK) — certifying clean without verify passing. Using verifyCommand here means a real
+  // verifyCommand can never be misclassified 'skipped' by a missing echo; a garbled returncode still
+  // falls to 'fail' (fail-closed). (#115 final review FIX 2.)
+  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }
 
 // In-process tally — the parity-locked twins decide gate/confidence/terminal + the circuit breaker,
@@ -1925,12 +1930,21 @@ async function buildPhase(workItem, generation) {
     state = await gatherState(workItem, branch, validIds, wt)
     d = reconcileState(tasks, state)
     if (d.action === 'park') return park(d.reason || 'build_progress parked after reset')
+    // If the SECOND reconcile is STILL reset_uncommitted, the reset did not fully clean the worktree.
+    // Park honestly — bounded, fail-closed — rather than fall through into a dirty forward-walk
+    // (#115 final review FIX 4 / UFR-12). One reset attempt only; a still-dirty tree is the owner's.
+    if (d.action === 'reset_uncommitted') return park('worktree still dirty after reset — park (UFR-12)')
   }
 
   // FR-4a forward-walk: in-memory state for the continuous run.
   // Seed from the entry gather; advance only on confirmed durable success.
   const builtTaskIds = new Set(state.committed_task_ids || [])
   const reviewRecords = Object.assign({}, state.review_records || {})
+  // Track whether THIS walk built or reviewed any task. If it did, the branch HEAD changed, so the
+  // ENTRY gather's final_review.clean / provenance are STALE — the whole-branch final review must
+  // RE-RUN over the new HEAD and provenance must be RE-WRITTEN. A pure resume (nothing built this
+  // walk) keeps the skip optimization (the entry state is fresh). (#115 final review FIX 3 / FR-4a.)
+  let didWork = false
   // Determine the starting index from the entry reconcile's resume_at.
   const resumeTaskId = d.resume_at ? d.resume_at.id : null
 
@@ -1971,6 +1985,7 @@ async function buildPhase(workItem, generation) {
         // On confirmed success (buildOneTask only returns !parked when journal+review both passed):
         builtTaskIds.add(task.id)
         reviewRecords[task.id] = 'passed'
+        didWork = true                 // HEAD moved this walk -> entry final_review/provenance stale
         i += 1; continue
       }
       if (isBuilt && !isReviewed) {
@@ -1978,15 +1993,17 @@ async function buildPhase(workItem, generation) {
         const r = await reviewOneTask(workItem, generation, task, branch, wt)
         if (r.parked) return park(r.reason)
         reviewRecords[task.id] = 'passed'
+        didWork = true                 // a review (with its possible fix commits) also moves HEAD
         i += 1; continue
       }
     }
   }
 
   // All tasks built+reviewed. Run the whole-branch final review.
-  // Only run final_review if not already done (state.final_review?.clean covers the resume case
-  // where final_review is already clean but provenance is absent).
-  const alreadyFinalClean = state.final_review && state.final_review.clean
+  // Skip ONLY on a pure resume (didWork === false): the entry final_review.clean then covers the
+  // current HEAD. If this walk built/reviewed anything, HEAD moved — the entry's final_review.clean
+  // is STALE, so RE-RUN the whole-branch final review over the new HEAD (#115 final review FIX 3).
+  const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
@@ -1995,8 +2012,9 @@ async function buildPhase(workItem, generation) {
     await recordFinalReviewClean(workItem)
   }
 
-  // Write provenance if absent (FR-9): idempotent, only after final review clean.
-  const alreadyProv = state.provenance && state.provenance !== 'absent'
+  // Write provenance if absent (FR-9): idempotent, only after final review clean. Same staleness
+  // guard: a walk that did work must RE-WRITE provenance over the new HEAD (don't trust the entry's).
+  const alreadyProv = !didWork && state.provenance && state.provenance !== 'absent'
   if (!alreadyProv) {
     const p = await writeProvenance(workItem)
     if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown'))
@@ -2059,11 +2077,17 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       if ((chk.unmapped_commits || 0) > 0) {
         return { parked: true, reason: 'a commit lacks its Task-Id trailer — park (UFR-7)' }
       }
-      // record-before-advance: journal must succeed before the task counts as built.
-      await cmdRunner(
+      // record-before-advance: journal must succeed before the task counts as built. Guard the .ok
+      // explicitly (defense-in-depth for invariant #4): a failed journal must NOT advance into the
+      // review loop — park honestly (#115 final review FIX 8). The FR-4a forward-walk no longer
+      // self-heals a missed journal per-iteration, so this guard is the advance fence.
+      const jrnl = await cmdRunner(
         `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
         + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
         { label: 'journal_entry.py', schema: { type: 'object', required: ['ok'] } })
+      if (!(jrnl && jrnl.ok)) {
+        return { parked: true, reason: 'task journal write failed (record-before-advance) — park' }
+      }
       return reviewLoop(workItem, generation, task, branch, wt)
     }
     const rec = await cmdRunner(
@@ -3599,7 +3623,14 @@ async function shipPhase(workItem, pr) {
   }
   let ciChecks = null
   try { ciChecks = JSON.parse(ciResults[0].stdout) } catch (_) {}
-  if (ciChecks && !Array.isArray(ciChecks) && ciChecks.error) {
+  // Fail-closed (Critical, #115 final review): a JSON.parse failure (ciChecks === null) means the
+  // leaf returned garbled / non-JSON / truncated stdout — the read genuinely FAILED. Park; do NOT
+  // coerce a parse-failure to [] (which would classify 'none' -> a false "merge-ready: no required
+  // checks"). A genuinely-empty array [] still classifies to 'none' below (correct: no checks gate).
+  if (ciChecks === null) {
+    return park(workItem, pr, 'CI status could not be read')
+  }
+  if (!Array.isArray(ciChecks) && ciChecks.error) {
     return park(workItem, pr, ciChecks.error || 'CI status could not be read')
   }
   const checksArr = Array.isArray(ciChecks) ? ciChecks : []

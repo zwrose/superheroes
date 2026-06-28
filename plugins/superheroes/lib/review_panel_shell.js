@@ -183,7 +183,12 @@ async function verifyAgent(verifyCommand, runDir, round) {
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
     { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
   if (!out) return 'fail'  // fail-closed if the runner gave nothing
-  return verifyGateTwin.classify({ command: out.command, returncode: out.returncode, timedOut: out.timedOut })
+  // Classify with the command the SPINE knows (verifyCommand), NOT the leaf's echoed out.command.
+  // A garbled leaf that drops `command` would make the twin see !cmd -> 'skipped' (a pass-equivalent
+  // in _VERIFY_OK) — certifying clean without verify passing. Using verifyCommand here means a real
+  // verifyCommand can never be misclassified 'skipped' by a missing echo; a garbled returncode still
+  // falls to 'fail' (fail-closed). (#115 final review FIX 2.)
+  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }
 
 // In-process tally — the parity-locked twins decide gate/confidence/terminal + the circuit breaker,

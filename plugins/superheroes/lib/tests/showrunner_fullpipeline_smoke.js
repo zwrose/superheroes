@@ -8,7 +8,15 @@ global.log = () => {}
 global.agent = async (p, opts) => {
   const label = (opts && opts.label) || ''
   if (label === 'exec') {
-    // exec batches; return ok for any batch (journal, checkpoint, set-gate, etc.)
+    // ship CI now reads raw checks via exec (--emit-checks); the JS twin classifies in-process.
+    // Return a real GREEN check array so the pipeline reaches a merge-ready outcome. (A bare '' here
+    // is NOT valid JSON and — post #115 fail-closed fix — would PARK as an unreadable CI read, so
+    // the emit-checks batch must echo parseable JSON, not the empty-stdout used for fire-and-forget
+    // journal/checkpoint/set-gate batches below.)
+    if (p.includes('emit-checks')) {
+      return [{ index: 0, ok: true, stdout: JSON.stringify([{ name: 'ci', bucket: 'pass', state: 'success' }]) }]
+    }
+    // other exec batches (journal, checkpoint, set-gate, etc.); stdout unused.
     return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
   }
   if (label === 'lib') {

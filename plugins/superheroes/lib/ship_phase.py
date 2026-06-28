@@ -76,14 +76,28 @@ elif a.emit_checks:
     if not pr:
         print(json.dumps({"error": "CI status could not be read"}))
     else:
+        # Mirror _read_ci's fail-closed posture: a read that genuinely FAILS (the gh subprocess
+        # raised/errored, OR stdout was non-empty-but-unparseable) emits the {error:...} sentinel
+        # the JS twin parks on. Emit [] ONLY for a genuinely-successful read with no checks (an
+        # empty stdout from a successful gh call). Never coerce a failed/garbled read to [] — that
+        # would classify 'none' downstream and post a false "merge-ready: no required checks".
         try:
             out = subprocess.run(["gh", "pr", "checks", pr, "--json", "name,bucket,state"],
                                  capture_output=True, text=True, timeout=30)
-            # gh pr checks exits non-zero when checks are failing/pending; JSON is still on stdout.
-            checks = json.loads(out.stdout) if out.stdout.strip() else []
         except Exception:
-            checks = []
-        print(json.dumps(checks))
+            print(json.dumps({"error": "CI status could not be read"}))
+        else:
+            # gh pr checks exits non-zero when checks are failing/pending; JSON is still on stdout.
+            raw = out.stdout.strip()
+            if not raw:
+                print(json.dumps([]))            # successful read, no checks gate this PR
+            else:
+                try:
+                    checks = json.loads(raw)
+                except Exception:
+                    print(json.dumps({"error": "CI status could not be read"}))  # unparseable -> fail-closed
+                else:
+                    print(json.dumps(checks))
 else:
     # Real CI read: classify the PR's checks (green / red / none) via ci_status. Fail-CLOSED — any
     # read error returns 'red' (never 'green'), so ship never posts a false "merge-ready: CI green".

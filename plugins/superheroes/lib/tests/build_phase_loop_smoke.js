@@ -46,17 +46,21 @@ function makeWorkerStubs() {
 }
 
 // makeFinalReviewStubs: stubs for final-review + provenance steps.
-// verify_gate.py returns a 'pass' result so the round ends clean; reviewerAgent (set on globalThis
-// to return []) provides zero findings -> tally -> terminal: 'clean'.
+// FIX 7 (#115 final review, code-002/premortem-003): the verify gate now emits RAW run data
+// ({command,returncode,timedOut}) via --emit-run and the JS twin classifies it. A REAL verify
+// command (pytest -q) + returncode 0 classifies a genuine 'pass' — so the clean round ends clean
+// for the RIGHT reason, NOT accidentally via 'skipped' (which a 'none' command + the old
+// {result:'pass'} shape produced). reviewerAgent (globalThis) returns [] -> zero findings ->
+// tally -> terminal: 'clean'.
 function makeFinalReviewStubs(provOk) {
   return [
-    ['verify_command_cli.py', { command: 'none' }],
+    ['verify_command_cli.py', { command: 'pytest -q' }],
     ['model_tier_resolve.py --role reviewer-deep', { model: 'sonnet' }],
     ['model_tier_resolve.py --role fixer', { model: 'sonnet' }],
     ['minor_rollup_cli.py', { minors: [] }],
     // verify_gate.py is called by verifyAgent (label 'verify:r<round>') when legKind.code:true.
-    // Match the prompt substring so it covers any round number.
-    ['verify_gate.py', { result: 'pass' }],
+    // Match the prompt substring so it covers any round number. Raw run data -> twin -> 'pass'.
+    ['verify_gate.py', { command: 'pytest -q', returncode: 0, timedOut: false }],
     ['record-final-review', { ok: true }],
     ['prov_entry.py', provOk !== false ? { ok: true } : { ok: false, error: 'disk' }],
   ]
@@ -120,11 +124,12 @@ function makeFinalReviewStubs(provOk) {
     ['task_list_cli.py', { tasks: [{ id: '1', title: 'A' }] }],
     ['gather-entry', { committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false }],
     ...makeWorkerStubs(),
-    ['verify_command_cli.py', { command: 'none' }],
+    // FIX 7: real verify command + raw run data -> twin classifies a genuine 'pass' (not 'skipped').
+    ['verify_command_cli.py', { command: 'pytest -q' }],
     ['model_tier_resolve.py --role reviewer-deep', { model: 'sonnet' }],
     ['model_tier_resolve.py --role fixer', { model: 'sonnet' }],
     ['minor_rollup_cli.py', { minors: [] }],
-    ['verify_gate.py', { result: 'pass' }],
+    ['verify_gate.py', { command: 'pytest -q', returncode: 0, timedOut: false }],
     ['record-final-review', { ok: true }],
     ['prov_entry.py', () => { provWrites += 1; return { ok: true } }],
   ])
@@ -136,6 +141,10 @@ function makeFinalReviewStubs(provOk) {
 
   // ===========================================================================
   // (4) provenance write fails -> park (UFR-6).
+  //     NOTE (#115 FIX 3): the entry carries final_review.clean=true + provenance:'absent', BUT an
+  //     un-built task (task 1). The walk BUILDS task 1 -> didWork=true -> the entry final_review is
+  //     STALE -> final review MUST RE-RUN (does NOT skip). Then provenance fails -> park. The
+  //     makeFinalReviewStubs(false) supply the (re-run) final-review leaves AND the failing prov.
   // ===========================================================================
   global.agent = makeAgent([
     ...SETUP_STUBS,
@@ -149,6 +158,50 @@ function makeFinalReviewStubs(provOk) {
   globalThis.recordDeferred = async () => {}
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low', 'provenance write failure parks (UFR-6)')
+
+  // ===========================================================================
+  // (4b) FIX 3 REGRESSION: entry has final_review.clean=true (STALE — points at the pre-build HEAD)
+  //      AND an un-built task. The walk MUST build the task, then RE-RUN the whole-branch final
+  //      review (NOT skip on the stale entry state), and only THEN write provenance. A mutant that
+  //      reads the entry final_review without a didWork guard would SKIP final review (worker built
+  //      but reviewerAgent never invoked + record-final-review never written) and FAIL these.
+  // ===========================================================================
+  {
+    let workerBuilt = 0, finalReviewRan = 0, recordFinalReviews = 0, provWrites4b = 0
+    global.agent = makeAgent([
+      ...SETUP_STUBS,
+      ['task_list_cli.py', { tasks: [{ id: '1', title: 'A' }] }],
+      // STALE entry: final_review.clean=true predates building task 1; provenance still 'absent'.
+      ['gather-entry', { committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false,
+                         final_review: { clean: true }, provenance: 'absent' }],
+      ['fence_cli.py', { ok: true }],
+      ['worker', () => { workerBuilt += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['build_state_cli.py gather', { committed_task_ids: [], unmapped_commits: 0 }],
+      ['journal_entry.py', { ok: true }],
+      ['model_tier_resolve.py', { model: 'sonnet' }],
+      ['record-reviewed', { ok: true }],
+      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['task_review_cli.py', { action: 'complete', blocking: [], minors: [], cannot_verify: [] }],
+      ['verify_command_cli.py', { command: 'none' }],
+      ['model_tier_resolve.py --role reviewer-deep', { model: 'sonnet' }],
+      ['model_tier_resolve.py --role fixer', { model: 'sonnet' }],
+      ['minor_rollup_cli.py', { minors: [] }],
+      // verify_gate.py is a FINAL-REVIEW-ONLY leaf (runFinalReview's verify gate). Counting it proves
+      // the whole-branch final review actually RE-RAN — it is never reached on a skip. record-final-
+      // review (only written when the final review reaches clean) corroborates.
+      ['verify_gate.py', () => { finalReviewRan += 1; return { command: 'none', returncode: 0, timedOut: false } }],
+      ['record-final-review', () => { recordFinalReviews += 1; return { ok: true } }],
+      ['prov_entry.py', () => { provWrites4b += 1; return { ok: true } }],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    r = await bp.buildPhase('wi', 5)
+    assert.strictEqual(r.confidence, 'high', 'stale-final-review + un-built task: build + re-review + prov -> high')
+    assert.strictEqual(workerBuilt, 1, 'FIX 3: the un-built task IS built (didWork=true)')
+    assert.ok(finalReviewRan >= 1, 'FIX 3: whole-branch final review RE-RUNS (NOT skipped on stale entry state)')
+    assert.strictEqual(recordFinalReviews, 1, 'FIX 3: a fresh final-review-clean is recorded over the new HEAD')
+    assert.strictEqual(provWrites4b, 1, 'FIX 3: provenance is RE-WRITTEN over the new HEAD (entry provenance not trusted)')
+  }
 
   // ===========================================================================
   // (5) entry reconcile says park (unmapped commit) -> park immediately.
@@ -203,5 +256,29 @@ function makeFinalReviewStubs(provOk) {
   assert.strictEqual(r.confidence, 'low', 'a failed reset parks (UFR-6)')
   assert.ok(/could not reset/i.test((r.assumptions || [])[0] || ''), 'honest reset-failure reason')
 
-  console.log('ok: build_phase FR-4a in-memory loop (gather-once, resume-once, FR-9/UFR-6/UFR-12)')
+  // ===========================================================================
+  // (8) FIX 4: reset reports ok BUT the re-gather is STILL dirty -> the re-reconcile is again
+  //     reset_uncommitted. The code must PARK honestly (worktree still dirty after reset, UFR-12),
+  //     NOT fall through into a dirty forward-walk. A mutant lacking the post-re-reconcile guard
+  //     would dispatch the worker over a dirty tree.
+  // ===========================================================================
+  {
+    let workerDispatched = 0
+    global.agent = makeAgent([
+      ...SETUP_STUBS,
+      ['task_list_cli.py', { tasks: [{ id: '1', title: 'A' }] }],
+      // BOTH gathers report dirty -> reconcile twin returns reset_uncommitted both times.
+      ['gather-entry', { committed_task_ids: [], unmapped_commits: 0, worktree_dirty: true }],
+      ['fence_cli.py', { ok: true }],
+      ['reset-uncommitted', { ok: true }],   // reset "succeeds" but doesn't actually clean the tree
+      ['worker', () => { workerDispatched += 1; return { ok: true, signal: 'ok', evidence: {} } }],
+    ])
+    r = await bp.buildPhase('wi', 5)
+    assert.strictEqual(r.confidence, 'low', 'FIX 4: a still-dirty tree after reset parks (UFR-12)')
+    assert.ok(/still dirty after reset/i.test((r.assumptions || [])[0] || ''),
+      'FIX 4: park reason names the still-dirty worktree (UFR-12)')
+    assert.strictEqual(workerDispatched, 0, 'FIX 4: NO forward-walk worker dispatch over a dirty tree')
+  }
+
+  console.log('ok: build_phase FR-4a in-memory loop (gather-once, resume-once, FR-9/UFR-6/UFR-12, stale-final-review, double-dirty-park)')
 })()

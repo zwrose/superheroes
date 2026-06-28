@@ -33,6 +33,34 @@ async function main() {
   // (d) loop_readout.py exec is issued (per-phase readout exec leaf is preserved)
   const readoutCall = agentCalls.find((c) => c.prompt.includes('loop_readout.py'))
   assert.ok(readoutCall, 'loop_readout.py exec must still be called (render executor preserved)')
-  console.log('ok: frontHalfBoundary — in-process twin (no render-outcome agent) + loop_readout exec leaf preserved')
+
+  // (e) FIX 5 (#115 final review, test-002): when the durable outcome write THROWS (recordOk=false),
+  // frontHalfBoundary must surface the UFR-6 fallback reason AND skip the loop_readout exec entirely
+  // (no readout seam without a successful record write). A mutant that ignores the write error
+  // (keeps recordOk=true) would still emit the envelope + call loop_readout — and FAIL here.
+  agentCalls.length = 0
+  // Stub the io seam so writeFile THROWS; readJson returns the caller's default (no notify/records).
+  global.io = {
+    async writeFile() { throw new Error('disk full') },
+    async readText() { return '' },
+    async readJson(_p, dflt) { return dflt },
+    async mkdirp() {},
+    tmpdir() { return '/tmp' },
+    join() { return Array.prototype.slice.call(arguments).join('/') },
+  }
+  try {
+    const rf = await sr.frontHalfBoundary('wi-writefail')
+    assert.strictEqual(rf.outcome, 'parked', 'write-fail boundary still parks')
+    assert.ok(/UFR-6/.test(rf.reason),
+      'FIX 5: a failed durable readout write surfaces the UFR-6 fallback reason')
+    assert.ok(/could not be written|treat the durable readout as missing/i.test(rf.reason),
+      'FIX 5: the fallback reason names the missing durable readout')
+    const readoutAfterFail = agentCalls.find((c) => c.prompt.includes('loop_readout.py'))
+    assert.ok(!readoutAfterFail,
+      'FIX 5: loop_readout exec is NOT called when the record write failed (recordOk=false)')
+  } finally {
+    delete global.io
+  }
+  console.log('ok: frontHalfBoundary — in-process twin (no render-outcome agent) + loop_readout exec + UFR-6 write-fail fallback (FIX5)')
 }
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

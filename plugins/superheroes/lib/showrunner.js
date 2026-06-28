@@ -1117,7 +1117,14 @@ async function shipPhase(workItem, pr) {
   }
   let ciChecks = null
   try { ciChecks = JSON.parse(ciResults[0].stdout) } catch (_) {}
-  if (ciChecks && !Array.isArray(ciChecks) && ciChecks.error) {
+  // Fail-closed (Critical, #115 final review): a JSON.parse failure (ciChecks === null) means the
+  // leaf returned garbled / non-JSON / truncated stdout — the read genuinely FAILED. Park; do NOT
+  // coerce a parse-failure to [] (which would classify 'none' -> a false "merge-ready: no required
+  // checks"). A genuinely-empty array [] still classifies to 'none' below (correct: no checks gate).
+  if (ciChecks === null) {
+    return park(workItem, pr, 'CI status could not be read')
+  }
+  if (!Array.isArray(ciChecks) && ciChecks.error) {
     return park(workItem, pr, ciChecks.error || 'CI status could not be read')
   }
   const checksArr = Array.isArray(ciChecks) ? ciChecks : []

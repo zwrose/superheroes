@@ -118,6 +118,10 @@ async function main() {
     assert.ok(capturedPrompt !== null, 'produce leaf was called')
     assert.ok(capturedPrompt.includes("cd '/test-repo' && python3 plugins/superheroes/lib/front_half_usable.py"),
       'producePhase embeds selfContained write-marker command when __SR_ROOT is set')
+    // FIX 6 (#115 final review, test-003): the author prompt carries the --write-marker flag (UFR-4)
+    // so the author stamps the completion marker itself (the FR-4 fold). A regression that dropped
+    // the flag from the embedded command would leave the doc unmarked — catch it here.
+    assert.ok(capturedPrompt.includes('--write-marker'), 'author prompt carries --write-marker (UFR-4)')
   } finally {
     globalThis.__SR_ROOT = savedRoot
   }
