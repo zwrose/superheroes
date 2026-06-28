@@ -47,12 +47,26 @@ _SUPERHEROES_MARKER = ("docs", "superheroes")
 _PATCH_TARGET = re.compile(
     r"^\*\*\*\s+(?:(?:Add|Update|Delete)\s+File|Move\s+to):\s*(.+?)\s*$", re.M)
 
-# The owner-authority / irreversible action set — GATED (live owner approval), not
-# floored. Matched by the ACTUAL command (enumerated; covers the gh REST/GraphQL merge
-# paths F5's git-only classify_floor never had). A command not on this list is ALLOWED —
-# the producer must run build/test/git/gh commands. We deliberately do NOT consult F5's
-# classify_floor for command classification: its bare `git push` pattern would deny the
-# producer's OWN required steps 3/8 pushes and wedge the core job.
+# The owner-authority action set — GATED (live owner approval), not floored. Matched by the
+# ACTUAL command (enumerated; covers the gh REST/GraphQL merge paths F5's git-only
+# classify_floor never had). A command not on this list is ALLOWED — the producer must run
+# build/test/git/gh commands. We deliberately do NOT consult F5's classify_floor for command
+# classification: its bare `git push` pattern would deny the producer's OWN required steps 3/8
+# pushes and wedge the core job.
+#
+# SCOPE PRINCIPLE (deliberate — see SKILL.md "Scope of the deterministic gate"): this set is
+# only the actions that encode an OWNER-ROLE / repo-shaping invariant the host harness cannot
+# express — "the producer never merges / publishes / pushes to the default branch / rewrites
+# shared history." A hook `ask` is worth its keep here precisely because it OVERRIDES an
+# allowlist-allow and fires even under bypassPermissions (the one thing the harness's own
+# prompt can't guarantee). It deliberately does NOT re-implement GENERIC dangerous-command
+# detection (`rm -rf`, destructive SQL, `deploy`/`kubectl apply`/`--prod`): those are already
+# contemplated by the harness (its permission prompt in prompting modes + its built-in
+# `rm -rf /|~` circuit breaker in bypass), they are broad and false-positive-prone on a build
+# agent (a routine `rm -rf node_modules` is not an owner action), and they remain covered by
+# the COOPERATIVE F5 layer (escalation.FLOOR_PATTERNS still lists deploy/destructive/delete →
+# the model GATEs them). This mirrors the earlier choice to keep F5's spend/egress heuristics
+# off the deterministic hook.
 GATED_COMMANDS = [
     ("merge-pr",     re.compile(r"\bgh\s+pr\s+merge\b", re.I)),
     ("merge-api",    re.compile(r"\bgh\s+api\b.*\bpulls/[^/\s]+/merge\b", re.I)),
@@ -65,9 +79,6 @@ GATED_COMMANDS = [
     # <src>:main` — while still allowing the producer's own superheroes/* feature-branch
     # pushes (no `:main`/` main` destination). Anchors on the destination ref.
     ("push-to-default", re.compile(r"\bgit\s+push\b[^;&|\n]*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
-    ("deploy",          re.compile(r"\b(deploy|kubectl\s+apply|terraform\s+apply)|(?:^|\s)--prod\b", re.I)),
-    ("destructive",     re.compile(r"\b(DROP\s+(TABLE|DATABASE|INDEX)|TRUNCATE|DELETE\s+FROM)\b", re.I)),
-    ("rm-rf",           re.compile(r"\brm\s+-[a-z]*[rf][a-z]*[rf]", re.I)),
 ]
 
 # Self-check canary: a harmless shell no-op the step 0 startup probe runs through Bash to
