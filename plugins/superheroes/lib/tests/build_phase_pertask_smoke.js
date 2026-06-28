@@ -143,5 +143,40 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   assert.strictEqual(r.parked, false, 'a converging fix loop should complete, not park')
   assert.ok(reviewCalls >= 2, 'the loop advances to a second (clean) review round before completing')
 
-  console.log('ok: build_phase per-task (FR-6/UFR-3/4/5/7/10, exec fail-closed)')
+  // (6) Runaway regression (#115): the reviewer's StructuredOutput returns `verdicts` as a STRINGIFIED
+  //     JSON (the proven live derailment). With the defensive parse the string is recovered to an
+  //     object -> the twin sees both verdicts -> the task COMPLETES; it does NOT loop. Capture the
+  //     dispatch count to prove the reviewer is called a BOUNDED number of times (not 10+).
+  let recoverCalls = 0
+  global.agent = makeAgent([
+    execRoute(),
+    ['review', () => { recoverCalls += 1; return { verdicts: '{"spec_compliance":"pass","code_quality":"pass"}', findings: [] } }],
+    ['fixer', ''],
+  ])
+  r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
+  assert.strictEqual(r.parked, false, 'a stringified-verdicts review must be recovered (defensive parse) and complete, not loop')
+  assert.strictEqual(recoverCalls, 1, 'a recoverable stringified verdicts completes on the first review (no re-request)')
+
+  // (7) Bound regression (#115): the reviewer ALWAYS returns a verdicts shape that CANNOT be recovered
+  //     ('not json' -> parse fails -> {} -> twin re_requests forever on the pre-fix code). The bounded
+  //     loop must PARK after MAX_ROUNDS attempts with the re_request reason — and the reviewer must be
+  //     dispatched a BOUNDED number of times (<= MAX_ROUNDS), NOT the 10+ of the live runaway. The stub
+  //     also caps itself so a regressed (unbounded) loop fails loudly instead of hanging the suite.
+  let boundCalls = 0
+  const HARD_CAP = bp.MAX_ROUNDS * 5   // a runaway would blow past this; the bound keeps us <= MAX_ROUNDS
+  global.agent = makeAgent([
+    execRoute(),
+    ['review', () => {
+      boundCalls += 1
+      assert.ok(boundCalls <= HARD_CAP, `RUNAWAY: reviewer dispatched ${boundCalls} times (>${HARD_CAP}) — the loop is unbounded`)
+      return { verdicts: 'not json', findings: [] }
+    }],
+    ['fixer', ''],
+  ])
+  r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
+  assert.strictEqual(r.parked, true, 'an unrecoverable verdicts shape must PARK the loop (bounded), not run away')
+  assert.ok(/both verdicts after \d+ attempts/i.test(r.reason || ''), 'park reason names the bounded re-request attempts')
+  assert.ok(boundCalls <= bp.MAX_ROUNDS, `the reviewer must be dispatched <= MAX_ROUNDS (${bp.MAX_ROUNDS}) times, not the 10+ of the runaway (was ${boundCalls})`)
+
+  console.log('ok: build_phase per-task (FR-6/UFR-3/4/5/7/10, exec fail-closed; #115 bounded review loop)')
 })()

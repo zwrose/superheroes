@@ -2277,17 +2277,53 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
   const fixerModel = modelTierTwin.resolveModel('fixer', _overrides(), 'code')
   const history = []
   let round = 1
+  // #115 runaway fix: bound the loop so it can NEVER run away. `reRequests` parks after MAX_ROUNDS
+  // consecutive incomplete-verdict reviews (the live runaway: a reviewer returning a non-object
+  // verdicts shape made the twin re_request forever). `iter`/MAX_ITER is a defense-in-depth overall
+  // guard (mirrors buildPhase's MAX_GUARD) so any future unbounded path parks honestly too.
+  let reRequests = 0
+  let iter = 0
+  const MAX_ITER = MAX_ROUNDS * 3 + 2
   for (;;) {
+    iter += 1
+    if (iter > MAX_ITER) return { parked: true, reason: 'review loop exceeded its iteration guard — park' }
     const review = await agent(
       `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
       + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
       + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
-      { label: 'review', schema: { type: 'object', required: ['verdicts'] } })
+      { label: 'review',
+        schema: {
+          type: 'object',
+          required: ['verdicts'],
+          properties: {
+            verdicts: {
+              type: 'object',
+              required: ['spec_compliance', 'code_quality'],
+              properties: {
+                spec_compliance: { enum: ['pass', 'fail'] },
+                code_quality: { enum: ['pass', 'fail'] },
+              },
+            },
+            findings: { type: 'array' },
+          },
+        } })
+    // #115 runaway fix: defensively recover a stringified `verdicts` (a leaf can still derail and emit
+    // it as JSON-in-a-string despite the pinned schema — same nested-structure-stringification family
+    // as the exec/fence mangles, and mirrors build_phase's existing task-list string recovery). The
+    // twin reads `verdicts[k]` on a string as undefined -> re_request, which fed the runaway.
+    let verdicts = review.verdicts || {}
+    if (typeof verdicts === 'string') { try { verdicts = JSON.parse(verdicts) } catch (_) { verdicts = {} } }
     // #115 increment B: the bespoke two-verdict decision is decided in-process via the task_review
     // twin (no leaf). Same shape: {action, blocking, minors, cannot_verify, reason}.
-    const d = taskReviewTwin.decide(review.verdicts || {}, review.findings || [], round, MAX_ROUNDS, history)
+    const d = taskReviewTwin.decide(verdicts, review.findings || [], round, MAX_ROUNDS, history)
     if (d.action === 'park') return { parked: true, reason: d.reason }
-    if (d.action === 're_request') continue        // both verdicts required (FR-5) -> re-review
+    if (d.action === 're_request') {              // both verdicts required (FR-5) -> re-review
+      reRequests += 1
+      if (reRequests >= MAX_ROUNDS) {
+        return { parked: true, reason: `reviewer did not return both verdicts after ${MAX_ROUNDS} attempts — park` }
+      }
+      continue
+    }
     if (d.action === 'complete') {
       if (Array.isArray(d.minors) && d.minors.length) {
         // append the carried-forward Minors (result unused — best-effort accumulator write).
