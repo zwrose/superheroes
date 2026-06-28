@@ -1872,9 +1872,12 @@ async function cmdRunner(cmd, opts = {}) {
 // FR-4a: gather authoritative git state (entry/resume only, NOT per loop iteration).
 // Label 'gather-entry' is distinguishable from the per-built-task trailer-check gather
 // (label 'build_state_cli.py gather') so smokes can pin the once-at-entry property exactly.
+// FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
+  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
   return cmdRunner(
-    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
+    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${_baseArg}`,
     { label: 'gather-entry', schema: { type: 'object' } })
 }
 
@@ -2223,6 +2226,7 @@ module.exports.runFinalReview = runFinalReview
 module.exports.resetUncommitted = resetUncommitted
 module.exports.writeProvenance = writeProvenance
 module.exports.recordFinalReviewClean = recordFinalReviewClean
+module.exports.gatherState = gatherState
 
 };
 
@@ -3638,9 +3642,12 @@ async function draftPRPhase(workItem) {
   if (act === 'adopt') {
     return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: world.pr } }
   }
-  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh)
+  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh).
+  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> gh uses remote default.
+  const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
   const createResults = await exec([
-    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}`,
+    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
   ])
   let createOut = null
   if (createResults[0] && createResults[0].ok) {
@@ -3673,8 +3680,11 @@ async function shipPhase(workItem, pr) {
   // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date
   // proceeds; the auto-sync of a behind branch is back-half deepening, so sync/give_up_notify/gate
   // all park (FR-11: not merge-ready unless up to date).
+  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> default 'main' behavior.
+  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
   const fresh = await cmdRunner(
-    `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}`,
+    `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}`,
     { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
   if (fresh.decision !== 'up_to_date') {
     return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)
@@ -3773,5 +3783,8 @@ if (globalThis.__SR_RUN !== false) {
   const frontHalfNative = !!(__a && __a.frontHalf === 'native')
   globalThis.SUPERHEROES_FRONT_HALF_NATIVE = frontHalfNative
   globalThis.SUPERHEROES_BUNDLE_FULL_RUN = !frontHalfNative
+  // Configurable base branch (#115): args.base is the branch name to build off of and PR into.
+  // Absent -> unset (each site falls back to its default: _base() / 'main' / gh default).
+  if (__a && __a.base) globalThis.__SR_BASE = __a.base
   return __require('showrunner.js').showrunner({ workItem: wi })
 }

@@ -31,9 +31,12 @@ async function cmdRunner(cmd, opts = {}) {
 // FR-4a: gather authoritative git state (entry/resume only, NOT per loop iteration).
 // Label 'gather-entry' is distinguishable from the per-built-task trailer-check gather
 // (label 'build_state_cli.py gather') so smokes can pin the once-at-entry property exactly.
+// FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
+  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
   return cmdRunner(
-    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
+    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${_baseArg}`,
     { label: 'gather-entry', schema: { type: 'object' } })
 }
 
@@ -382,3 +385,4 @@ module.exports.runFinalReview = runFinalReview
 module.exports.resetUncommitted = resetUncommitted
 module.exports.writeProvenance = writeProvenance
 module.exports.recordFinalReviewClean = recordFinalReviewClean
+module.exports.gatherState = gatherState

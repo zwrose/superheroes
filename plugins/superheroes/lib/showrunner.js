@@ -1116,9 +1116,12 @@ async function draftPRPhase(workItem) {
   if (act === 'adopt') {
     return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: world.pr } }
   }
-  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh)
+  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh).
+  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> gh uses remote default.
+  const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
   const createResults = await exec([
-    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}`,
+    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
   ])
   let createOut = null
   if (createResults[0] && createResults[0].ok) {
@@ -1151,8 +1154,11 @@ async function shipPhase(workItem, pr) {
   // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date
   // proceeds; the auto-sync of a behind branch is back-half deepening, so sync/give_up_notify/gate
   // all park (FR-11: not merge-ready unless up to date).
+  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> default 'main' behavior.
+  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
   const fresh = await cmdRunner(
-    `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}`,
+    `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}`,
     { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
   if (fresh.decision !== 'up_to_date') {
     return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)

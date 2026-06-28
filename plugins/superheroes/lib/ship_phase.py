@@ -55,12 +55,16 @@ ap.add_argument("--step", required=True, choices=["freshness", "ci"])
 ap.add_argument("--work-item", required=True)
 ap.add_argument("--emit-checks", action="store_true",
                 help="IO-only mode: emit raw checks array (or {error:...}) without classifying")
+ap.add_argument("--base", default=None,
+                help="configurable base branch name; absent -> default 'main' (current behavior)")
 a = ap.parse_args()
 
 if a.step == "freshness":
     # is the branch up to date with base = does HEAD contain origin/<base> = is origin/<base> an
     # ancestor of HEAD. (rc 0 = yes/up-to-date, 1 = behind, other = unreadable -> gate.)
-    base = "main"
+    # FR-8: --base is a caller-supplied branch name (e.g. 'live-showrunner-102' or 'main').
+    # Default to 'main' when absent so existing behavior is byte-identical.
+    base = a.base if a.base else "main"
     try:
         rc = subprocess.run(["git", "merge-base", "--is-ancestor", f"origin/{base}", "HEAD"],
                             capture_output=True, timeout=10).returncode

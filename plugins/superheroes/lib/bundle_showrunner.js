@@ -142,6 +142,9 @@ if (globalThis.__SR_RUN !== false) {
   const frontHalfNative = !!(__a && __a.frontHalf === 'native')
   globalThis.SUPERHEROES_FRONT_HALF_NATIVE = frontHalfNative
   globalThis.SUPERHEROES_BUNDLE_FULL_RUN = !frontHalfNative
+  // Configurable base branch (#115): args.base is the branch name to build off of and PR into.
+  // Absent -> unset (each site falls back to its default: _base() / 'main' / gh default).
+  if (__a && __a.base) globalThis.__SR_BASE = __a.base
   return __require('showrunner.js').showrunner({ workItem: wi })
 }
 `

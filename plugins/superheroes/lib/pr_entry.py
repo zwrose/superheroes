@@ -11,6 +11,8 @@ ap.add_argument("--step", required=True, choices=["draft", "mark-ready"])
 ap.add_argument("--work-item", required=True)
 ap.add_argument("--emit-world", action="store_true",
                 help="IO-only mode: world-read the PR and emit {pr} without judgment or creation")
+ap.add_argument("--base", default=None,
+                help="configurable PR target base branch; absent -> gh uses remote default (current behavior)")
 a = ap.parse_args()
 root = os.getcwd()
 paths = control_plane.paths(root, a.work_item)
@@ -71,9 +73,13 @@ if a.step == "draft":
     decision = ship_gate.decide(prov, read_result(paths["review_result"]), head)
     if decision["action"] != "proceed":
         print(json.dumps({"ok": False, "reason": decision["reason"]})); sys.exit(0)
+    # Build the gh pr create command. When --base is supplied, pass it explicitly so the
+    # PR targets the configured base (not the remote default). Absent -> omit (default behavior).
+    _gh_create_cmd = ["gh", "pr", "create", "--draft", "--fill", "--head", branch]
+    if a.base:
+        _gh_create_cmd.extend(["--base", a.base])
     try:
-        out = subprocess.run(["gh", "pr", "create", "--draft", "--fill", "--head", branch],
-                             capture_output=True, text=True, timeout=120)
+        out = subprocess.run(_gh_create_cmd, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         # the create may have landed server-side -> park; recover.pr_action adopts it on resume.
         print(json.dumps({"ok": False, "reason": "gh pr create timed out — will adopt on resume"})); sys.exit(0)
