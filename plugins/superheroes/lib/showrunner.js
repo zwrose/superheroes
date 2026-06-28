@@ -582,21 +582,38 @@ async function persistPhase(workItem, opts) {
     ? [sideEffectCmd, journalCmd, checkpointCmd]
     : [journalCmd, checkpointCmd]
 
-  const results = await exec(commands)
-  // Fail-CLOSE on a durable-write failure. r.ok is only the exec/bash exit code, but
-  // journal_entry.py / checkpoint_entry.py print {"ok":false} and exit 0 on a failed durable
-  // write (DurableWriteError / OSError) — so a script-level {"ok":false} must also fail the batch,
-  // or reviewDocPhase advances high-confidence on un-recorded state (UFR-5). set-gate is covered by
-  // its exec-ok (it sys.exit(1) on failure, and its non-JSON stdout falls through the parse).
-  const allOk = results.every(function (r) {
-    if (!r || !r.ok) return false                  // exec-level failure (e.g. set-gate sys.exit(1))
-    try {                                           // script-level {"ok":false} (journal/checkpoint exit 0 on failure)
-      const p = JSON.parse(r.stdout)
-      if (p && typeof p === 'object' && p.ok === false) return false
-    } catch (_e) { /* non-JSON stdout (e.g. set-gate) — exec-ok already covered it above */ }
-    return true
-  })
-  return { ok: allOk }
+  // Classify one batch result. Three outcomes:
+  //   'real_fail' — an exec-level failure (e.g. set-gate sys.exit(1)) OR a parseable {"ok":false}
+  //                 (journal/checkpoint exit 0 and print {"ok":false} on a failed durable write,
+  //                 DurableWriteError / OSError). A REAL durable-write failure — must fail closed, NOT
+  //                 retry (re-running won't fix a genuine failure, and UFR-5 must not advance on it).
+  //   'drop'      — r.ok but the stdout is EMPTY/whitespace OR unparseable JSON where a {"ok":...} was
+  //                 expected (the cheap haiku courier dropped/garbled it though the command ran). The
+  //                 batch writes are idempotent (gate set / journal append [harmless dup] / checkpoint
+  //                 set), so a courier-drop is safe to retry once.
+  //   'ok'        — r.ok and a parseable JSON with no {"ok":false} (incl. set-gate's {"review":...},
+  //                 which has no ok field — covered by exec-ok, not a drop).
+  function classify(r) {
+    if (!r || !r.ok) return 'real_fail'            // exec-level failure (e.g. set-gate sys.exit(1))
+    const s = (r.stdout == null ? '' : String(r.stdout)).trim()
+    if (!s) return 'drop'                          // empty stdout -> courier-drop
+    try {
+      const p = JSON.parse(s)
+      if (p && typeof p === 'object' && p.ok === false) return 'real_fail'  // genuine durable-write failure
+      return 'ok'
+    } catch (_e) { return 'drop' }                 // unparseable stdout -> courier-drop
+  }
+  // Fail-CLOSE on a durable-write failure; retry the whole batch ONCE on a pure courier-drop (no
+  // real failure present). A real failure short-circuits with NO retry. If a drop persists after the
+  // single retry, fail closed.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const results = await exec(commands)
+    const verdicts = results.map(classify)
+    if (verdicts.indexOf('real_fail') >= 0) return { ok: false }   // real failure -> fail closed, NO retry
+    if (verdicts.indexOf('drop') < 0) return { ok: true }          // all ok -> success
+    // a drop with no real failure -> retry the whole batch once (attempt 0), else fall through to fail closed.
+  }
+  return { ok: false }                             // a courier-drop persisted after the retry -> fail closed
 }
 
 function inWorktree(cmd, worktree) {

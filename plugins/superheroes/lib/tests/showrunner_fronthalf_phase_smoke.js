@@ -27,15 +27,17 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     if (label === 'exec') {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
       if (prompt.includes('set-gate')) {
-        // persistPhase batches set-gate + journal + checkpoint into one exec call.
-        // setGateFails: return ok:false for the set-gate command so persistPhase returns {ok:false}.
+        // persistPhase batches set-gate + journal + checkpoint into one exec call. Success stdouts are
+        // production-realistic JSON (set-gate prints {"review":...}, journal/checkpoint {"ok":true});
+        // an EMPTY stdout would now read as a courier-drop (retried), so the clean cases emit real JSON.
+        // setGateFails: return ok:false for the set-gate command (exec-level fail) so persistPhase fails closed.
         const ok = !setGateFails
         return [
-          { index: 0, ok, stdout: '' },   // set-gate
+          { index: 0, ok, stdout: JSON.stringify({ review: 'passed', status: 'reviewed' }) },   // set-gate
           // journalWriteFails: bash exit 0 (exec ok:true) but stdout is {"ok":false} — the exact
-          // durable-write fail-OPEN shape persistPhase must now catch by parsing the stdout.
-          { index: 1, ok: true, stdout: journalWriteFails ? JSON.stringify({ ok: false, error: 'durable write failed' }) : '' },  // journal_entry
-          { index: 2, ok: true, stdout: '' },  // checkpoint_entry
+          // durable-write fail-OPEN shape persistPhase must catch by parsing the stdout (NOT a drop).
+          { index: 1, ok: true, stdout: journalWriteFails ? JSON.stringify({ ok: false, error: 'durable write failed' }) : JSON.stringify({ ok: true }) },  // journal_entry
+          { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },  // checkpoint_entry
         ]
       }
       // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
@@ -108,7 +110,7 @@ async function main() {
   // (e-unit) persistPhase directly: exec ok:true + stdout {"ok":false} must return {ok:false}; a
   // matching all-{"ok":true} batch must return {ok:true}. Proves the parse fold (vs the pre-fix every(r.ok)).
   global.agent = async () => [
-    { index: 0, ok: true, stdout: '' },                                  // set-gate (non-JSON stdout)
+    { index: 0, ok: true, stdout: JSON.stringify({ review: 'passed', status: 'reviewed' }) },  // set-gate
     { index: 1, ok: true, stdout: JSON.stringify({ ok: false }) },       // journal durable-write failed, exit 0
     { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },        // checkpoint ok
   ]
@@ -116,7 +118,7 @@ async function main() {
   assert.deepStrictEqual(pp, { ok: false },
     'persistPhase fails-close when a batched command stdout is {"ok":false} despite exec ok:true (C1)')
   global.agent = async () => [
-    { index: 0, ok: true, stdout: '' },
+    { index: 0, ok: true, stdout: JSON.stringify({ review: 'passed', status: 'reviewed' }) },  // set-gate
     { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
     { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },
   ]

@@ -48,6 +48,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_setup_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_pertask_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_final_review_smoke.js",
+    # #115 courier-drop retry: execJson/execText retry the cheap haiku exec courier ONCE on a
+    # dropped/garbled stdout (journal recover/park/no-retry-on-real-fail/happy-path + read-gate recover).
+    "plugins/superheroes/lib/tests/build_phase_courier_retry_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.

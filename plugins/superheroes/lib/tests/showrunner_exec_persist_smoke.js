@@ -42,11 +42,11 @@ const sr = require('../showrunner.js')
   // Reset agent to record multi-command batch call.
   globalThis.agent = async (prompt, opts) => {
     calls.push({ prompt, opts: opts || {} })
-    // Three entries: sideEffect=0, journal=1, checkpoint=2
+    // Three entries: sideEffect=0 (set-gate prints {"review":...}), journal=1, checkpoint=2 (JSON {"ok":...}).
     return [
-      { index: 0, ok: true, stdout: 'side-ok' },
-      { index: 1, ok: true, stdout: 'journal-ok' },
-      { index: 2, ok: true, stdout: 'checkpoint-ok' },
+      { index: 0, ok: true, stdout: JSON.stringify({ review: 'passed', status: 'reviewed' }) },
+      { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+      { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },
     ]
   }
 
@@ -76,8 +76,8 @@ const sr = require('../showrunner.js')
   globalThis.agent = async (prompt, opts) => {
     calls.push({ prompt, opts: opts || {} })
     return [
-      { index: 0, ok: true, stdout: 'journal-ok' },
-      { index: 1, ok: false, stdout: '' },  // checkpoint failed
+      { index: 0, ok: true, stdout: JSON.stringify({ ok: true }) },
+      { index: 1, ok: false, stdout: '' },  // checkpoint failed (exec-level failure)
     ]
   }
   const fail = await sr.persistPhase('wi-test', {
@@ -87,12 +87,108 @@ const sr = require('../showrunner.js')
   })
   assert.deepStrictEqual(fail, { ok: false }, 'persistPhase returns {ok:false} when any result fails')
 
+  // ---- (b-retry) persistPhase courier-drop retry (#115) ----
+  // The cheap haiku exec courier occasionally drops/garbles a command's stdout though it ran fine.
+  // For the durable-write batch (journal/checkpoint emit {"ok":...}), an EMPTY/unparseable stdout is a
+  // courier-drop -> retry the whole batch ONCE (the writes are idempotent). A genuine {"ok":false} (a
+  // real durable-write failure) must STILL fail closed with NO retry.
+
+  // (b-retry-1) empty stdout on attempt 1, {"ok":true} on attempt 2 -> {ok:true} (the retry recovered).
+  calls.length = 0
+  let batchCall = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    batchCall += 1
+    if (batchCall === 1) {
+      // journal stdout dropped (empty) though the command ran; checkpoint ok.
+      return [
+        { index: 0, ok: true, stdout: '' },
+        { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+      ]
+    }
+    return [
+      { index: 0, ok: true, stdout: JSON.stringify({ ok: true }) },
+      { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+    ]
+  }
+  const dropRecovered = await sr.persistPhase('wi-drop', { journalPayload: { phase: 'plan' }, step: 1, phase: 'plan' })
+  assert.deepStrictEqual(dropRecovered, { ok: true }, 'persistPhase retries the batch once on a dropped stdout and returns {ok:true}')
+  assert.strictEqual(batchCall, 2, 'persistPhase retries the whole batch exactly once on a courier-drop (2 exec calls)')
+
+  // (b-retry-2) empty stdout on BOTH attempts -> {ok:false} (fail closed after the retry).
+  calls.length = 0
+  let batchCall2 = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    batchCall2 += 1
+    return [
+      { index: 0, ok: true, stdout: '' },                              // journal dropped on every attempt
+      { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+    ]
+  }
+  const dropPersists = await sr.persistPhase('wi-drop2', { journalPayload: { phase: 'plan' }, step: 1, phase: 'plan' })
+  assert.deepStrictEqual(dropPersists, { ok: false }, 'persistPhase fails closed ({ok:false}) when the stdout is dropped on BOTH attempts')
+  assert.strictEqual(batchCall2, 2, 'persistPhase retries the whole batch exactly once before failing closed (2 exec calls)')
+
+  // (b-retry-3) a genuine {"ok":false} (a real durable-write failure) -> {ok:false} with NO retry.
+  calls.length = 0
+  let batchCall3 = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    batchCall3 += 1
+    return [
+      { index: 0, ok: true, stdout: JSON.stringify({ ok: false }) },   // REAL durable-write failure
+      { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+    ]
+  }
+  const realFail = await sr.persistPhase('wi-realfail', { journalPayload: { phase: 'plan' }, step: 1, phase: 'plan' })
+  assert.deepStrictEqual(realFail, { ok: false }, 'a genuine {"ok":false} durable-write failure returns {ok:false}')
+  assert.strictEqual(batchCall3, 1, 'a genuine {"ok":false} is a real failure — NOT a courier-drop — so the batch is NOT retried (1 exec call)')
+
+  // (b-retry-4) a parseable JSON with NO ok field (set-gate prints {"review":...,"status":...}) is
+  // NOT a courier-drop -> NO retry, {ok:true} (set-gate is covered by exec-ok + the no-ok-field parse).
+  calls.length = 0
+  let batchCall4 = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    batchCall4 += 1
+    return [
+      { index: 0, ok: true, stdout: JSON.stringify({ review: 'passed', status: 'reviewed' }) },  // set-gate
+      { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },                              // journal
+      { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },                              // checkpoint
+    ]
+  }
+  const setGateOk = await sr.persistPhase('wi-setgate', {
+    sideEffectCmd: 'echo set-gate', journalPayload: { phase: 'plan' }, step: 1, phase: 'plan',
+  })
+  assert.deepStrictEqual(setGateOk, { ok: true }, 'a set-gate {"review":...} (parseable, no ok field) is OK and not a drop')
+  assert.strictEqual(batchCall4, 1, 'a parseable no-ok-field stdout is NOT a courier-drop — the batch is NOT retried (1 exec call)')
+
+  // (b-retry-5) an exec-level failure (!r.ok, e.g. set-gate sys.exit(1)) is a REAL failure -> {ok:false}
+  // with NO retry.
+  calls.length = 0
+  let batchCall5 = 0
+  globalThis.agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    batchCall5 += 1
+    return [
+      { index: 0, ok: false, stdout: 'set-gate failed' },             // exec-level failure (sys.exit(1))
+      { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+      { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },
+    ]
+  }
+  const execFail = await sr.persistPhase('wi-execfail', {
+    sideEffectCmd: 'echo set-gate', journalPayload: { phase: 'plan' }, step: 1, phase: 'plan',
+  })
+  assert.deepStrictEqual(execFail, { ok: false }, 'an exec-level failure returns {ok:false}')
+  assert.strictEqual(batchCall5, 1, 'an exec-level failure is a real failure — NOT a courier-drop — so the batch is NOT retried (1 exec call)')
+
   // ---- (c) shq-quoting: no raw unquoted JSON in the prompt ----
   calls.length = 0
   const jsonPayload = { phase: 'review-plan', gate: 'passed', confidence: 'high', assumptions: ['x'] }
   globalThis.agent = async (prompt, opts) => {
     calls.push({ prompt, opts: opts || {} })
-    return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
+    return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }, { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) }]
   }
   await sr.persistPhase('wi-q', {
     journalPayload: jsonPayload,

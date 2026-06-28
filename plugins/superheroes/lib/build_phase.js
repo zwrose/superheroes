@@ -40,6 +40,43 @@ function exec(commands) {
   return _execFn(commands)
 }
 
+// Run ONE command via the exec dumb-pipe and parse its JSON stdout. The cheap haiku courier
+// occasionally drops/garbles a command's stdout even though it ran (live: a journal_entry.py leaf
+// returned stdout:"" with ok:true, so JSON.parse("") threw and the build fail-closed-parked); retry
+// ONCE on an empty or unparseable stdout before failing closed. Build-path commands are idempotent /
+// harmless to repeat (journal append, gate set, provenance, lease renew, gather/read).
+// Returns the parsed object, or null after the retry (the caller fails closed on null — same
+// park/false/fallback it produces today). A clean {"ok":true} on the first call returns immediately
+// (one exec, no behavior change); a parseable {"ok":false} (a REAL durable-write failure) is returned
+// as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
+async function execJson(cmd) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await exec([cmd])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) {
+      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
+      if (s) { try { return JSON.parse(s) } catch (_e) { /* garbled -> retry */ } }
+      // empty stdout -> retry (courier likely dropped it)
+    }
+    // exec-level failure or empty/garbled -> retry once, then give up
+  }
+  return null
+}
+
+// Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
+// Retry once on an empty stdout; returns the trimmed string, or null after the retry.
+async function execText(cmd) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await exec([cmd])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) {
+      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
+      if (s) return s
+    }
+  }
+  return null
+}
+
 // build_progress.reconcile via the module (NOT a destructured load-time binding) so reconcileState
 // calls THROUGH the module export — keeps the twin the single source AND makes it spy-able in smokes
 // (a testability improvement; the FR-4a entry-once property is re-asserted by spying reconcile).
@@ -61,13 +98,12 @@ function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.
 // stdout (C-I3) so the caller can park with THAT specific reason instead of the generic one.
 // FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
-  const _res = await exec([
+  // execJson retries the courier ONCE on a dropped/garbled stdout before failing closed; null ->
+  // the caller parks honestly (same fail-closed semantic as today, only a retry added before it).
+  const parsed = await execJson(
     `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
-  ])
-  const _r0 = _res && _res[0]
-  if (!_r0 || !_r0.ok) return null
-  let parsed
-  try { parsed = JSON.parse(_r0.stdout) } catch (_e) { return null }
+  )
+  if (parsed == null) return null
   // Structured fail-closed signal: the leaf could not resolve --base. Surface the SPECIFIC reason
   // (C-I3) rather than collapsing to the generic "could not gather authoritative git state" park.
   if (parsed && typeof parsed === 'object' && typeof parsed.error === 'string') {
@@ -93,22 +129,18 @@ function reconcileState(taskList, state) {
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
   // UFR-1: refuse unless the tasks gate is passed. read-gate prints a PLAIN STRING (e.g. 'passed'),
-  // NOT JSON — exec returns the raw stdout; trim it directly (no JSON.parse). Fail closed on exec-fail.
-  const _gateRes = await exec([
+  // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
+  // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
+  const gate = await execText(
     `python3 ${LIB}/definition_doc.py read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
-  ])
-  const _gate0 = _gateRes && _gateRes[0]
-  if (!_gate0 || !_gate0.ok) return park('could not read the tasks gate — failing closed')
-  const gate = String(_gate0.stdout || '').trim()
+  )
+  if (gate == null) return park('could not read the tasks gate — failing closed')
   if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
-  const _setupRes = await exec([
+  const setup = await execJson(
     `python3 ${LIB}/build_entry.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
-  ])
-  const _setup0 = _setupRes && _setupRes[0]
-  if (!_setup0 || !_setup0.ok) return park('build setup failed: no branch')
-  let setup
-  try { setup = JSON.parse(_setup0.stdout) } catch (_e) { return park('build setup failed: no branch') }
+  )
+  if (setup == null) return park('build setup failed: no branch')
   if (!setup.branch) return park('build setup failed: ' + (setup.error || 'no branch'))
   const branch = setup.branch
   // The build branch is checked out in a SEPARATE managed build worktree (build_entry -> buildtree);
@@ -117,11 +149,8 @@ async function buildPhase(workItem, generation) {
   // UFR-8: zero executable tasks -> finish without building.
   // With exec+JSON.parse the BUG-2 string-recovery is structurally moot, but KEEP the
   // typeof===string JSON.parse recovery + Array.isArray guard as defense-in-depth (BUG-3).
-  const _taskRes = await exec([`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`])
-  const _task0 = _taskRes && _taskRes[0]
-  if (!_task0 || !_task0.ok) return park('task-list command did not run — failing closed')
-  let _taskResult
-  try { _taskResult = JSON.parse(_task0.stdout) } catch (_e) { return park('task-list returned unparseable output — failing closed') }
+  const _taskResult = await execJson(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`)
+  if (_taskResult == null) return park('task-list command did not run — failing closed')
   let tasks = _taskResult.tasks
   if (typeof tasks === 'string') {
     try { tasks = JSON.parse(tasks) } catch (_) { tasks = null }
@@ -267,32 +296,32 @@ async function resetUncommitted(wt, branch) {
 // Record build provenance once over HEAD = X (FR-9), via the existing prov_entry leaf.
 // exec/parse fail -> {ok:false, error:'provenance leaf did not run'} so the caller's !p.ok parks.
 async function writeProvenance(workItem) {
-  const _res = await exec([`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`])
-  const _r0 = _res && _res[0]
-  if (!_r0 || !_r0.ok) return { ok: false, error: 'provenance leaf did not run' }
-  try { return JSON.parse(_r0.stdout) } catch (_e) { return { ok: false, error: 'provenance leaf did not run' } }
+  // execJson retries the courier ONCE on a dropped/garbled stdout; null -> the SAME fail-closed
+  // fallback as today ({ok:false} -> caller parks). A parseable {ok:false} is returned as-is (no retry).
+  const r = await execJson(`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`)
+  if (r == null) return { ok: false, error: 'provenance leaf did not run' }
+  return r
 }
 
 // Record final-review-clean. Caller does not check .ok today (preserve that), but stay fail-closed-safe.
 async function recordFinalReviewClean(workItem) {
-  const _res = await exec([
+  // Caller does not branch on .ok today (preserve that), but stay fail-closed-safe + retry the courier.
+  const r = await execJson(
     `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
-  ])
-  const _r0 = _res && _res[0]
-  if (!_r0 || !_r0.ok) return { ok: false }
-  try { return JSON.parse(_r0.stdout) } catch (_e) { return { ok: false } }
+  )
+  if (r == null) return { ok: false }
+  return r
 }
 
 // fenceOrPark: lease-fence acquire. CRITICAL fail-closed: an exec/parse failure must read as a LOST
 // fence (false), NEVER as ok — a fence failure read as ok would let an unfenced write through (UFR-10).
 async function fenceOrPark(workItem, generation) {
-  const _res = await exec([
+  // execJson retries the courier ONCE on a dropped/garbled stdout; null -> false (fence reads LOST),
+  // preserving the CRITICAL fail-closed semantic (an exec/parse failure must NEVER read as ok — an
+  // unfenced write would slip through, UFR-10). A parseable {ok:false} returns false the same.
+  const f = await execJson(
     `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
-  ])
-  const _r0 = _res && _res[0]
-  if (!_r0 || !_r0.ok) return false
-  let f
-  try { f = JSON.parse(_r0.stdout) } catch (_e) { return false }
+  )
   return !!(f && f.ok)
 }
 
@@ -314,15 +343,12 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
-      // exec+parse, fail closed: a leaf that can't run / returns unparseable output must NOT read
-      // as a clean trailer state — park honestly (UFR-7).
-      const _chkRes = await exec([
+      // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
+      // can't run / returns unparseable output must NOT read as a clean trailer state — park (UFR-7).
+      const chk = await execJson(
         `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
-      ])
-      const _chk0 = _chkRes && _chkRes[0]
-      let chk
-      if (!_chk0 || !_chk0.ok) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
-      try { chk = JSON.parse(_chk0.stdout) } catch (_e) { return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' } }
+      )
+      if (chk == null) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
       // A structured base-resolution error (C-I3) must park with its specific reason, not slip past
       // the unmapped check below (where {error} has no unmapped_commits and would read as clean).
       if (typeof chk.error === 'string') return { parked: true, reason: chk.error }
@@ -333,15 +359,15 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       // explicitly (defense-in-depth for invariant #4): a failed journal must NOT advance into the
       // review loop — park honestly (#115 final review FIX 8). The FR-4a forward-walk no longer
       // self-heals a missed journal per-iteration, so this guard is the advance fence.
-      // exec/parse fail -> jrnl = {ok:false} so the guard parks (a missed journal must NOT advance).
-      const _jrnlRes = await exec([
+      // execJson retries the courier ONCE on a dropped/garbled stdout (the OBSERVED live failure: the
+      // courier returned stdout:"" though the journal wrote, so JSON.parse("") threw and the build
+      // parked). null after the retry -> jrnl = {ok:false} so the guard parks (a missed journal must
+      // NOT advance); a parseable {"ok":false} (a real durable-write failure) is returned without a
+      // retry and parks the same.
+      const jrnl = await execJson(
         `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
         + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
-      ])
-      const _jrnl0 = _jrnlRes && _jrnlRes[0]
-      let jrnl
-      if (!_jrnl0 || !_jrnl0.ok) jrnl = { ok: false }
-      else { try { jrnl = JSON.parse(_jrnl0.stdout) } catch (_e) { jrnl = { ok: false } } }
+      )
       if (!(jrnl && jrnl.ok)) {
         return { parked: true, reason: 'task journal write failed (record-before-advance) — park' }
       }
@@ -414,16 +440,18 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     }
     if (d.action === 'complete') {
       if (Array.isArray(d.minors) && d.minors.length) {
-        // append the carried-forward Minors (result unused — best-effort accumulator write).
-        await exec([
+        // append the carried-forward Minors (result unused — best-effort accumulator write). Route
+        // through execJson so a dropped/garbled courier stdout is retried once (the write is idempotent).
+        await execJson(
           `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
-        ])
+        )
       }
       // record-before-advance: record-reviewed must succeed before the task counts reviewed.
-      // (Caller does not branch on .ok today; keep behavior — the exec call still records it.)
-      await exec([
+      // (Caller does not branch on .ok today; keep behavior — the exec call still records it. Route
+      // through execJson so a dropped/garbled courier stdout is retried once; the record is idempotent.)
+      await execJson(
         `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(task.id)}`,
-      ])
+      )
       return { parked: false }
     }
     // d.action === 'review': fence, fix the blockers + cannot-verify items, then re-review (FR-6/UFR-5).
@@ -440,20 +468,16 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
 }
 
 async function runFinalReview(workItem, generation, branch, wt) {
-  // verify command via exec+parse; on exec/parse fail -> 'none' (verify command unknown -> the
-  // verify_gate twin fails closed downstream; a missing verify command already maps to a safe path).
-  const _verifyRes = await exec([`python3 ${LIB}/verify_command_cli.py`])
-  const _verify0 = _verifyRes && _verifyRes[0]
-  let verify = 'none'
-  if (_verify0 && _verify0.ok) { try { verify = JSON.parse(_verify0.stdout).command || 'none' } catch (_e) { verify = 'none' } }
+  // verify command via execJson (retry the courier once on a dropped/garbled stdout); on fail -> 'none'
+  // (verify command unknown -> the verify_gate twin fails closed downstream; a missing verify command
+  // already maps to a safe path).
+  const _verify = await execJson(`python3 ${LIB}/verify_command_cli.py`)
+  const verify = (_verify && _verify.command) || 'none'
   // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
   const reviewerModel = modelTierTwin.resolveModel('reviewer-deep', _overrides(), null)
   const fixerModel = modelTierTwin.resolveModel('fixer', _overrides(), 'code')
-  // carried-forward Minors via exec+parse; on exec/parse fail -> [].
-  const _minorsRes = await exec([`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`])
-  const _minors0 = _minorsRes && _minorsRes[0]
-  let _minorsResult = null
-  if (_minors0 && _minors0.ok) { try { _minorsResult = JSON.parse(_minors0.stdout) } catch (_e) { _minorsResult = null } }
+  // carried-forward Minors via execJson (retry the courier once on a dropped/garbled stdout); on fail -> [].
+  const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
   const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
