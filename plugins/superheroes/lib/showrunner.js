@@ -1036,35 +1036,53 @@ async function reviewCodePhase(workItem, opts) {
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
     : `/tmp/showrunner-${workItem}-review-code`)
-  const initialHead = opts.expectedHead || null
-  if (opts.expectedHead) {
-    const actual = await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
-    if (!actual || actual !== opts.expectedHead) {
-      return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${opts.expectedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
+  // FIX A: when opts.worktree is absent, resolve the build worktree via resolveBuildTarget (the
+  // stubbable seam). Explicit opts.worktree always wins (loop-smoke + targeted-smoke pass it). On
+  // a production call (runPhases -> reviewCodePhase(workItem) with no opts), resolution runs and
+  // fails CLOSED on error — never fall back to reviewing root (that IS the original bug).
+  let resolvedWorktree = opts.worktree || null
+  let resolvedHead = opts.expectedHead || null
+  if (!opts.worktree) {
+    const resolver = opts.resolveTarget || resolveBuildTarget
+    const resolved = await resolver(workItem)
+    if (!resolved) {
+      return {
+        phaseResult: { confidence: 'low', assumptions: ['review-code: could not resolve the build worktree — refusing to review the showrunner tree'] },
+        gate: 'changes-requested',
+      }
+    }
+    resolvedWorktree = resolved.worktree
+    resolvedHead = resolved.expectedHead
+  }
+  const initialHead = resolvedHead || null
+  if (resolvedHead) {
+    const actual = await resolveHead(resolvedWorktree || null, opts.ref || 'HEAD')
+    if (!actual || actual !== resolvedHead) {
+      return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${resolvedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
     }
   }
-  const targetWorktree = opts.worktree || null
+  const targetWorktree = resolvedWorktree || null
   // premortem-002: the fixer is a freeform subagent that receives the target worktree only as a TEXT
   // hint (withTargetCommandPrompts retargets just the "Run exactly this" cmdRunner prompts). If it
   // commits to the showrunner CWD instead of the target tree, the target HEAD never advances, the
   // expectedHead checks still pass (both = pre-fix HEAD), and a stale `clean` covers-stamp would
   // publish unmodified code. Snapshot CWD HEAD so we can detect that divergence after the loop.
-  const cwdHeadBefore = (targetWorktree && opts.expectedHead) ? await resolveHead(null, opts.ref || 'HEAD') : null
+  const cwdHeadBefore = (targetWorktree && resolvedHead) ? await resolveHead(null, opts.ref || 'HEAD') : null
   const cfg = await cmdRunner(
     inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree),
     { schema: CONFIG_SCHEMA })
   const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
-    target: { worktree: opts.worktree, head: opts.expectedHead },
+    target: { worktree: resolvedWorktree, head: resolvedHead },
   })
   const verdict = await runReviewCodePanel({
     runDir, context: workItem, rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
-  const finalHead = opts.expectedHead
-    ? await resolveHead(opts.worktree || null, opts.ref || 'HEAD')
+  const finalHead = resolvedHead
+    ? await resolveHead(resolvedWorktree || null, opts.ref || 'HEAD')
     : null
-  if (opts.expectedHead && !finalHead) {
+  if (resolvedHead && !finalHead) {
     return { phaseResult: { confidence: 'low', assumptions: ['review-code final target head could not be resolved'] }, gate: 'changes-requested', terminal, head: null, changed: false }
   }
   // #104's advance/park mapping, read off the terminal (plan Key decision 2).
@@ -1075,7 +1093,7 @@ async function reviewCodePhase(workItem, opts) {
   // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If
   // the CWD advanced while the target HEAD did not, the fixer's commits landed outside the shipped tree
   // — refuse to advance/stamp rather than certify (and ship) code the fixes never touched.
-  if (targetWorktree && opts.expectedHead) {
+  if (targetWorktree && resolvedHead) {
     const cwdHeadAfter = await resolveHead(null, opts.ref || 'HEAD')
     const cwdMoved = cwdHeadBefore && cwdHeadAfter && cwdHeadBefore !== cwdHeadAfter
     const targetMoved = initialHead && finalHead && initialHead !== finalHead
@@ -1086,8 +1104,8 @@ async function reviewCodePhase(workItem, opts) {
   // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
   // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
-    const targetArgs = opts.worktree || opts.expectedHead
-      ? ` --worktree ${shq(opts.worktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
+    const targetArgs = resolvedWorktree || resolvedHead
+      ? ` --worktree ${shq(resolvedWorktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
       : ''
     const prov = await cmdRunner(
       `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
@@ -1128,6 +1146,38 @@ async function resolveHead(worktree, ref) {
 // All of that orchestration lives in build_phase.js; the spine just delegates, threading the lease
 // generation reconcile() acquired so the build can fence every branch-mutating boundary (UFR-10).
 const buildPhase = (workItem, generation) => require('./build_phase.js').buildPhase(workItem, generation)
+
+// Resolve the build worktree + expected head for review-code. Mirrors build_phase.js's execJson
+// pattern (cheap exec dumb-pipe, NOT a genuine agent) so the call is deterministic + stubbable.
+// Runs build_entry.py WITHOUT --generation (idempotent: reclaim_or_create returns REUSED for an
+// existing clean worktree; lockGeneration is only set when --generation is passed).
+// Returns {worktree: <path>, expectedHead: <sha>} or null on any failure (caller parks on null).
+async function resolveBuildTarget(workItem) {
+  // Step 1: resolve branch + build-worktree path via build_entry.py (side-effect-safe: no --generation).
+  let setup = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await exec([`python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) {
+      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
+      if (s) { try { setup = JSON.parse(s); break } catch (_) { /* garbled -> retry */ } }
+    }
+  }
+  if (!setup || setup.error || !setup.path) return null   // fail-closed: no usable worktree
+  const wt = setup.path
+  // Step 2: read the build-branch tip HEAD (the head the code-review should certify).
+  let head = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await exec([`git -C ${shq(wt)} rev-parse HEAD`])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) {
+      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
+      if (s) { head = s; break }
+    }
+  }
+  if (!head) return null   // fail-closed: can't determine the head to certify
+  return { worktree: wt, expectedHead: head }
+}
 
 module.exports.verdictToGate = verdictToGate
 module.exports.reviewCodePhase = reviewCodePhase

@@ -73,23 +73,31 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
 
 const BLOCKER = [{ file: 'a.py', line: 1, title: 'bug', severity: 'Important', evidence: 'e' }]
 
+// Stub resolveTarget: returns a synthetic build worktree so loop-terminal scenarios can exercise the
+// full reviewCodePhase path without a real build worktree on disk. The seam is on opts.resolveTarget.
+// expectedHead is null here so the head-mismatch check (which needs a real git HEAD) is not armed;
+// the loop-terminal scenarios focus on clean/halt/fix/skips/cc/ufr2, not head-verification coverage
+// (that is covered by the targeted smoke + the new resolver-seam smoke below).
+const STUB_WT = '/tmp/review-loop-stub-wt'
+const stubResolveTarget = async () => ({ worktree: STUB_WT, expectedHead: null })
+
 async function main() {
   // 1. clean -> advance + covers stamped (FR-9), gate passed.
   let calls = install({ roundFindings: [[]] })
-  let r = await sr.reviewCodePhase('wi-clean', { runDir: fresh() })
+  let r = await sr.reviewCodePhase('wi-clean', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'clean -> passed')
   assert.strictEqual(calls.prov, 1, 'clean stamps covers exactly once')
 
   // 2. clean-with-skips -> advance, gate passed, NO covers stamp (parks later at the ship gate). The
   //    blocker is flagged every round but the fixer DEFERS it -> round 2 is present-∩-deferred.
   calls = install({ roundFindings: [BLOCKER], fix: 'defer' })
-  r = await sr.reviewCodePhase('wi-skips', { runDir: fresh() })
+  r = await sr.reviewCodePhase('wi-skips', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'clean-with-skips advances like clean')
   assert.strictEqual(calls.prov, 0, 'clean-with-skips records NO covers stamp')
 
   // 3. halted -> park (changes-requested) + readout posted (UFR-1). A blocker whose fix step fails.
   calls = install({ roundFindings: [BLOCKER], fix: 'fail' })
-  r = await sr.reviewCodePhase('wi-halt', { runDir: fresh() })
+  r = await sr.reviewCodePhase('wi-halt', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'changes-requested', 'halted -> park')
   assert.ok(calls.readout === 1 && calls.readoutPost === 1, 'halted posts the uniform readout')
   assert.strictEqual(calls.prov, 0, 'a park never stamps covers')
@@ -104,20 +112,20 @@ async function main() {
     if (label.startsWith('architecture-reviewer')) { incomplete += 1; return { notFindings: true } }
     return realAgent(prompt, opts)
   }
-  r = await sr.reviewCodePhase('wi-cc', { runDir: fresh() })
+  r = await sr.reviewCodePhase('wi-cc', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'changes-requested', 'cannot-certify -> park')
   assert.ok(incomplete >= 1, 'an incomplete reviewer drives cannot-certify')
 
   // 5. UFR-2: clean but the covers-stamp write fails -> low-confidence park, NOT ship-ready.
   calls = install({ roundFindings: [[]], provOk: false })
-  r = await sr.reviewCodePhase('wi-ufr2', { runDir: fresh() })
+  r = await sr.reviewCodePhase('wi-ufr2', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'changes-requested', 'failed covers stamp -> park, never ship-ready (UFR-2)')
   assert.strictEqual(r.phaseResult.confidence, 'low', 'UFR-2 park is low-confidence (resumable)')
 
   // 6. continue -> fix step + recordDeferred -> re-review clean (the fix path is wired, loop converges).
   //    Round 1 flags the blocker (continue); the fixer RESOLVES it; round 2 returns [] -> clean.
   calls = install({ roundFindings: [BLOCKER, []], fix: 'resolve' })
-  r = await sr.reviewCodePhase('wi-fix', { runDir: fresh() })
+  r = await sr.reviewCodePhase('wi-fix', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'continue then clean converges to passed')
   assert.ok(calls.fix === 1 && calls.recordDeferred === 1, 'the fix step + recordDeferred leaves are invoked')
   assert.strictEqual(calls.prov, 1, 'a fix-applied clean still stamps covers (X′)')

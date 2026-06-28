@@ -81,7 +81,29 @@ async function main() {
       'one durable accumulator record is written for the round')
   }
 
-  console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator')
+  // 7. verifyAgent boundary coercion: a courier leaf returning stringified returncode/timedOut fields
+  //    (returncode:'0', timedOut:'false') must be classified as 'pass', not 'timeout'.
+  //    Before fix: timedOut='false' was truthy -> 'timeout' -> halted (even though verify passed).
+  //    After fix: boundary coercion normalises to boolean false + number 0 -> 'pass' -> clean.
+  {
+    const dir = freshDir()
+    global.reviewerAgent = async () => []
+    // The code leg's verifyAgent dispatches an `agent()` call with label starting 'verify:'.
+    // Override agent to return stringified fields as the courier would.
+    const prevAgent = global.agent
+    global.agent = async (prompt, opts) => {
+      if (opts && opts.label && opts.label.startsWith('verify:')) {
+        return { command: 'run-tests', returncode: '0', timedOut: 'false' }  // courier-stringified
+      }
+      return null
+    }
+    v = await reviewPanel({ ...base(dir), legKind: { panel: false, code: true }, verifyCommand: 'run-tests' })
+    global.agent = prevAgent
+    assert.strictEqual(v.terminal, 'clean',
+      'verifyAgent: courier-stringified returncode:"0" timedOut:"false" must classify as pass -> clean (not timeout -> halted)')
+  }
+
+  console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator + verify-coercion')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

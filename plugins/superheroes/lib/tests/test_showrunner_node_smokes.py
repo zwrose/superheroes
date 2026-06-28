@@ -55,6 +55,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
     "plugins/superheroes/lib/tests/showrunner_base_smoke.js",
+    # FIX A: resolveTarget seam targets build worktree + null-resolver parks (never reviews root).
+    "plugins/superheroes/lib/tests/showrunner_reviewcode_resolver_smoke.js",
 ]
 
 
