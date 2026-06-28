@@ -6,7 +6,7 @@
 // build_progress.reconcile are called ONLY on entry/resume (not per loop iteration).
 const { reviewPanel } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
-const { reconcile } = require('./build_progress.js')
+const modelTierTwin = require('./model_tier.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
@@ -15,8 +15,28 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function park(reason) { return { confidence: 'low', assumptions: [reason] } }
 function ok() { return { confidence: 'high', assumptions: [] } }
 
+// Reuse the spine's proven exec primitive (lazy require avoids a load-time cycle: showrunner's
+// build_phase reference is itself lazy, and deferring keeps build_phase's require surface unchanged
+// for the smokes). One exec, no duplication, no front-half change.
+let _execFn = null
+function exec(commands) {
+  if (!_execFn) _execFn = require('./showrunner.js').exec
+  return _execFn(commands)
+}
+
+// build_progress.reconcile via the module (NOT a destructured load-time binding) so reconcileState
+// calls THROUGH the module export — keeps the twin the single source AND makes it spy-able in smokes
+// (a testability improvement; the FR-4a entry-once property is re-asserted by spying reconcile).
+function _reconcile(...a) { return require('./build_progress.js').reconcile(...a) }
+
+// model_tier overrides: mirror showrunner.js's authorModel — read from globalThis.__SR_OVERRIDES
+// (set by the Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS).
+function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null }
+
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON. Forwards the caller's
 // label (so real-run records AND smokes can distinguish calls — unlike showrunner's fixed 'lib').
+// #115 increment A: the IO/side-effect leaves below are ported to exec(raw)+in-process-parse; this
+// cmdRunner remains for the two SMART judgement leaves not yet twinned (worker_recovery, task_review).
 async function cmdRunner(cmd, opts = {}) {
   // Map each top-level key of the command's stdout JSON to the same-named StructuredOutput field —
   // never collapse the whole JSON into one field (a schema-valid-but-wrong live-only derailment).
@@ -29,21 +49,26 @@ async function cmdRunner(cmd, opts = {}) {
 }
 
 // FR-4a: gather authoritative git state (entry/resume only, NOT per loop iteration).
-// Label 'gather-entry' is distinguishable from the per-built-task trailer-check gather
-// (label 'build_state_cli.py gather') so smokes can pin the once-at-entry property exactly.
+// Ported to exec(raw)+in-process-parse: the leaf runs the command and returns its raw stdout; the
+// spine JSON.parses it here (the leaf can no longer derail by mis-copying fields — the live bug).
+// Returns the parsed state object, or NULL on exec-fail / parse-fail (the caller parks honestly).
 // FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
   const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
-  return cmdRunner(
+  const _res = await exec([
     `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${_baseArg}`,
-    { label: 'gather-entry', schema: { type: 'object' } })
+  ])
+  const _r0 = _res && _res[0]
+  if (!_r0 || !_r0.ok) return null
+  try { return JSON.parse(_r0.stdout) } catch (_e) { return null }
 }
 
 // FR-4a: derive the starting action + resume_at from authoritative state using the in-process twin.
-// Returns the reconcile decision object ({action, resume_at?, reason?}).
+// Returns the reconcile decision object ({action, resume_at?, reason?}). Calls THROUGH the module
+// export (_reconcile) so the twin stays the single source and is spy-able in smokes.
 function reconcileState(taskList, state) {
-  return reconcile(
+  return _reconcile(
     taskList,
     state.committed_task_ids || [],
     state.unmapped_commits || 0,
@@ -55,25 +80,36 @@ function reconcileState(taskList, state) {
 
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
-  // UFR-1: refuse unless the tasks gate is passed (read-gate prints a plain string, not JSON).
-  const gate = String(await agent(
-    `Run exactly this and return only stdout: python3 ${LIB}/definition_doc.py read-gate `
-    + `--doc tasks --work-item ${shq(workItem)} --root "${root}"`, { label: 'tasks-gate' })).trim()
+  // UFR-1: refuse unless the tasks gate is passed. read-gate prints a PLAIN STRING (e.g. 'passed'),
+  // NOT JSON — exec returns the raw stdout; trim it directly (no JSON.parse). Fail closed on exec-fail.
+  const _gateRes = await exec([
+    `python3 ${LIB}/definition_doc.py read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+  ])
+  const _gate0 = _gateRes && _gateRes[0]
+  if (!_gate0 || !_gate0.ok) return park('could not read the tasks gate — failing closed')
+  const gate = String(_gate0.stdout || '').trim()
   if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
-  const setup = await cmdRunner(
+  const _setupRes = await exec([
     `python3 ${LIB}/build_entry.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
-    { label: 'build-setup', schema: { type: 'object', properties: { branch: { type: 'string' }, path: { type: 'string' }, error: { type: 'string' } } } })
+  ])
+  const _setup0 = _setupRes && _setupRes[0]
+  if (!_setup0 || !_setup0.ok) return park('build setup failed: no branch')
+  let setup
+  try { setup = JSON.parse(_setup0.stdout) } catch (_e) { return park('build setup failed: no branch') }
   if (!setup.branch) return park('build setup failed: ' + (setup.error || 'no branch'))
   const branch = setup.branch
   // The build branch is checked out in a SEPARATE managed build worktree (build_entry -> buildtree);
   // every git read/write below must operate there, not in the showrunner's main checkout.
   const wt = setup.path
   // UFR-8: zero executable tasks -> finish without building.
-  // BUG-2 fix: pin tasks as array in schema so StructuredOutput enforces shape.
-  // BUG-3 fix: defensively recover a JSON string; non-array after recovery -> park.
-  const _taskResult = await cmdRunner(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`,
-    { label: 'task-list', schema: { type: 'object', properties: { tasks: { type: 'array' }, raw_task_heading_count: { type: 'number' } }, required: ['tasks'] } })
+  // With exec+JSON.parse the BUG-2 string-recovery is structurally moot, but KEEP the
+  // typeof===string JSON.parse recovery + Array.isArray guard as defense-in-depth (BUG-3).
+  const _taskRes = await exec([`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`])
+  const _task0 = _taskRes && _taskRes[0]
+  if (!_task0 || !_task0.ok) return park('task-list command did not run — failing closed')
+  let _taskResult
+  try { _taskResult = JSON.parse(_task0.stdout) } catch (_e) { return park('task-list returned unparseable output — failing closed') }
   let tasks = _taskResult.tasks
   if (typeof tasks === 'string') {
     try { tasks = JSON.parse(tasks) } catch (_) { tasks = null }
@@ -93,7 +129,10 @@ async function buildPhase(workItem, generation) {
 
   // FR-4a: gather authoritative git state ONCE at entry (not per iteration).
   // A fresh invocation (after park/crash) re-gathers here — resume correctness preserved.
+  // gatherState returns null on exec/parse failure — park honestly (fail closed; never walk on a
+  // mis-read or absent git state — the live bug that mis-reported a clean tree as dirty).
   let state = await gatherState(workItem, branch, validIds, wt)
+  if (!state) return park('could not gather authoritative git state — failing closed')
 
   // Handle entry-level non-forward reconcile actions before entering the forward-walk.
   // reset_uncommitted: fence, reset, then re-gather + re-reconcile ONCE (a reset is resume-like).
@@ -105,6 +144,7 @@ async function buildPhase(workItem, generation) {
     if (!rr.ok) return park('could not reset uncommitted changes: ' + (rr.error || 'unknown'))
     // Re-gather + re-reconcile after reset (ground truth mutated).
     state = await gatherState(workItem, branch, validIds, wt)
+    if (!state) return park('could not gather authoritative git state — failing closed')
     d = reconcileState(tasks, state)
     if (d.action === 'park') return park(d.reason || 'build_progress parked after reset')
     // If the SECOND reconcile is STILL reset_uncommitted, the reset did not fully clean the worktree.
@@ -211,22 +251,34 @@ async function resetUncommitted(wt, branch) {
 }
 
 // Record build provenance once over HEAD = X (FR-9), via the existing prov_entry leaf.
+// exec/parse fail -> {ok:false, error:'provenance leaf did not run'} so the caller's !p.ok parks.
 async function writeProvenance(workItem) {
-  return cmdRunner(
-    `python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`,
-    { label: 'prov_entry.py', schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
+  const _res = await exec([`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`])
+  const _r0 = _res && _res[0]
+  if (!_r0 || !_r0.ok) return { ok: false, error: 'provenance leaf did not run' }
+  try { return JSON.parse(_r0.stdout) } catch (_e) { return { ok: false, error: 'provenance leaf did not run' } }
 }
 
+// Record final-review-clean. Caller does not check .ok today (preserve that), but stay fail-closed-safe.
 async function recordFinalReviewClean(workItem) {
-  return cmdRunner(
+  const _res = await exec([
     `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
-    { label: 'record-final-review', schema: { type: 'object', required: ['ok'] } })
+  ])
+  const _r0 = _res && _res[0]
+  if (!_r0 || !_r0.ok) return { ok: false }
+  try { return JSON.parse(_r0.stdout) } catch (_e) { return { ok: false } }
 }
 
+// fenceOrPark: lease-fence acquire. CRITICAL fail-closed: an exec/parse failure must read as a LOST
+// fence (false), NEVER as ok — a fence failure read as ok would let an unfenced write through (UFR-10).
 async function fenceOrPark(workItem, generation) {
-  const f = await cmdRunner(
+  const _res = await exec([
     `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
-    { label: 'fence', schema: { type: 'object', required: ['ok'] } })
+  ])
+  const _r0 = _res && _res[0]
+  if (!_r0 || !_r0.ok) return false
+  let f
+  try { f = JSON.parse(_r0.stdout) } catch (_e) { return false }
   return !!(f && f.ok)
 }
 
@@ -248,9 +300,15 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
-      const chk = await cmdRunner(
+      // exec+parse, fail closed: a leaf that can't run / returns unparseable output must NOT read
+      // as a clean trailer state — park honestly (UFR-7).
+      const _chkRes = await exec([
         `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
-        { label: 'build_state_cli.py gather', schema: { type: 'object' } })
+      ])
+      const _chk0 = _chkRes && _chkRes[0]
+      let chk
+      if (!_chk0 || !_chk0.ok) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
+      try { chk = JSON.parse(_chk0.stdout) } catch (_e) { return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' } }
       if ((chk.unmapped_commits || 0) > 0) {
         return { parked: true, reason: 'a commit lacks its Task-Id trailer — park (UFR-7)' }
       }
@@ -258,10 +316,15 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       // explicitly (defense-in-depth for invariant #4): a failed journal must NOT advance into the
       // review loop — park honestly (#115 final review FIX 8). The FR-4a forward-walk no longer
       // self-heals a missed journal per-iteration, so this guard is the advance fence.
-      const jrnl = await cmdRunner(
+      // exec/parse fail -> jrnl = {ok:false} so the guard parks (a missed journal must NOT advance).
+      const _jrnlRes = await exec([
         `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
         + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
-        { label: 'journal_entry.py', schema: { type: 'object', required: ['ok'] } })
+      ])
+      const _jrnl0 = _jrnlRes && _jrnlRes[0]
+      let jrnl
+      if (!_jrnl0 || !_jrnl0.ok) jrnl = { ok: false }
+      else { try { jrnl = JSON.parse(_jrnl0.stdout) } catch (_e) { jrnl = { ok: false } } }
       if (!(jrnl && jrnl.ok)) {
         return { parked: true, reason: 'task journal write failed (record-before-advance) — park' }
       }
@@ -282,9 +345,8 @@ async function reviewOneTask(workItem, generation, task, branch, wt) {
 
 // The bespoke two-verdict review + bounded fix loop (FR-4..7, UFR-4/5). Never uses reviewPanel.
 async function reviewLoop(workItem, generation, task, branch, wt) {
-  const fixerModel = (await cmdRunner(
-    `python3 ${LIB}/model_tier_resolve.py --role fixer --context code`,
-    { label: 'model_tier_resolve.py', schema: { type: 'object' } })).model
+  // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
+  const fixerModel = modelTierTwin.resolveModel('fixer', _overrides(), 'code')
   const history = []
   let round = 1
   for (;;) {
@@ -302,14 +364,16 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     if (d.action === 're_request') continue        // both verdicts required (FR-5) -> re-review
     if (d.action === 'complete') {
       if (Array.isArray(d.minors) && d.minors.length) {
-        await cmdRunner(
+        // append the carried-forward Minors (result unused — best-effort accumulator write).
+        await exec([
           `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
-          { label: 'minor_rollup_cli.py', schema: { type: 'object' } })
+        ])
       }
       // record-before-advance: record-reviewed must succeed before the task counts reviewed.
-      await cmdRunner(
+      // (Caller does not branch on .ok today; keep behavior — the exec call still records it.)
+      await exec([
         `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(task.id)}`,
-        { label: 'record-reviewed', schema: { type: 'object', required: ['ok'] } })
+      ])
       return { parked: false }
     }
     // d.action === 'review': fence, fix the blockers + cannot-verify items, then re-review (FR-6/UFR-5).
@@ -326,17 +390,20 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
 }
 
 async function runFinalReview(workItem, generation, branch, wt) {
-  const verify = (await cmdRunner(`python3 ${LIB}/verify_command_cli.py`,
-    { label: 'verify_command_cli.py', schema: { type: 'object', required: ['command'] } })).command || 'none'
-  const reviewerModel = (await cmdRunner(
-    `python3 ${LIB}/model_tier_resolve.py --role reviewer-deep`,
-    { label: 'model_tier_resolve.py --role reviewer-deep', schema: { type: 'object' } })).model
-  const fixerModel = (await cmdRunner(
-    `python3 ${LIB}/model_tier_resolve.py --role fixer --context code`,
-    { label: 'model_tier_resolve.py --role fixer', schema: { type: 'object' } })).model
-  const _minorsResult = await cmdRunner(
-    `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`,
-    { label: 'minor_rollup_cli.py', schema: { type: 'object' } })
+  // verify command via exec+parse; on exec/parse fail -> 'none' (verify command unknown -> the
+  // verify_gate twin fails closed downstream; a missing verify command already maps to a safe path).
+  const _verifyRes = await exec([`python3 ${LIB}/verify_command_cli.py`])
+  const _verify0 = _verifyRes && _verifyRes[0]
+  let verify = 'none'
+  if (_verify0 && _verify0.ok) { try { verify = JSON.parse(_verify0.stdout).command || 'none' } catch (_e) { verify = 'none' } }
+  // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
+  const reviewerModel = modelTierTwin.resolveModel('reviewer-deep', _overrides(), null)
+  const fixerModel = modelTierTwin.resolveModel('fixer', _overrides(), 'code')
+  // carried-forward Minors via exec+parse; on exec/parse fail -> [].
+  const _minorsRes = await exec([`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`])
+  const _minors0 = _minorsRes && _minorsRes[0]
+  let _minorsResult = null
+  if (_minors0 && _minors0.ok) { try { _minorsResult = JSON.parse(_minors0.stdout) } catch (_e) { _minorsResult = null } }
   const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its

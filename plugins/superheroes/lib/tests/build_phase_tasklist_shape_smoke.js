@@ -1,6 +1,10 @@
 // plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js
 // Guards for BUG-2 (schema lets tasks be a string) and BUG-3 (string "[]" passes .length===0 but
 // crashes .map), plus the silent-zero park guard (raw_task_heading_count > 0 but tasks:[]).
+// #115 increment A: read-gate/build_entry/task_list/gather all route through the 'exec' label now;
+// the stub inspects the exec PROMPT to choose stdout. The tasks-as-string cases keep the JSON
+// string-recovery + Array.isArray guard as defense-in-depth (exec+JSON.parse makes BUG-2 moot, but
+// the spine still recovers a tasks:"<string>" value).
 const assert = require('assert')
 const logs = []
 global.log = (m) => logs.push(m)
@@ -14,6 +18,19 @@ function makeAgent(routes) {
 }
 const bp = require('../build_phase.js')
 
+// SETUP: read-gate -> 'passed' (plain string), build_entry -> a branch. taskListJson is the raw
+// stdout string the task_list_cli.py leaf returns; gatherJson (optional) the gather state.
+function makeExecRoute(taskListJson, gatherJson) {
+  return ['exec', (p) => {
+    let stdout = '{}'
+    if (p.includes('read-gate')) stdout = 'passed'
+    else if (p.includes('build_entry.py')) stdout = JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
+    else if (p.includes('task_list_cli.py')) stdout = taskListJson
+    else if (p.includes('build_state_cli.py gather') && gatherJson) stdout = gatherJson
+    return [{ index: 0, ok: true, stdout }]
+  }]
+}
+
 ;(async () => {
   // ===========================================================================
   // (1) BUG-3: task-list leaf returns {tasks: "[]"} (string, not array).
@@ -21,15 +38,10 @@ const bp = require('../build_phase.js')
   //     (park) — a non-array tasks value is unrecoverable at this point.
   // ===========================================================================
   logs.length = 0
-  global.agent = makeAgent([
-    ['read-gate --doc tasks', 'passed'],
-    ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
-    ['task_list_cli.py', { tasks: '[]', raw_task_heading_count: 0 }],
-  ])
+  global.agent = makeAgent([makeExecRoute(JSON.stringify({ tasks: '[]', raw_task_heading_count: 0 }))])
   let r = await bp.buildPhase('wi', 5)
-  // With tasks as a string '[]': length===2 so tasks.length===0 is FALSE — without the fix
-  // it crashes .map. After the fix it must park (or treat as zero tasks if string parses to []).
-  // Either outcome is acceptable; the key property is NO CRASH (no unhandled rejection).
+  // With tasks as a string '[]': the spine recovers it via JSON.parse -> [] -> zero tasks -> ok.
+  // Either a low park or a high finish is acceptable; the key property is NO CRASH.
   assert.ok(
     r && (r.confidence === 'low' || r.confidence === 'high'),
     'BUG-3: tasks:"[]" (string) must not crash — got: ' + JSON.stringify(r)
@@ -38,14 +50,16 @@ const bp = require('../build_phase.js')
 
   // ===========================================================================
   // (2) BUG-3 variant: task-list returns {tasks: "[{\"id\":\"1\",\"title\":\"A\"}]"} (non-empty string).
-  //     Without fix, .map crashes. After fix: recovered or parked, never throws.
+  //     Without the recovery, .map crashes. After it: recovered or parked, never throws.
   // ===========================================================================
   logs.length = 0
   global.agent = makeAgent([
-    ['read-gate --doc tasks', 'passed'],
-    ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
-    // tasks is a JSON string of a one-item array — a real derailment scenario
-    ['task_list_cli.py', { tasks: '[{"id":"1","title":"A"}]', raw_task_heading_count: 1 }],
+    // tasks is a JSON string of a one-item array — a real derailment scenario. gather parks at entry
+    // (unmapped commit) so the run doesn't proceed into the loop.
+    makeExecRoute(
+      JSON.stringify({ tasks: '[{"id":"1","title":"A"}]', raw_task_heading_count: 1 }),
+      JSON.stringify({ committed_task_ids: [], unmapped_commits: 1, worktree_dirty: false })
+    ),
   ])
   let threw = false
   try {
@@ -62,11 +76,7 @@ const bp = require('../build_phase.js')
   //     build_phase must PARK with a descriptive reason rather than silently finish (UFR-8 bypass).
   // ===========================================================================
   logs.length = 0
-  global.agent = makeAgent([
-    ['read-gate --doc tasks', 'passed'],
-    ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
-    ['task_list_cli.py', { tasks: [], raw_task_heading_count: 3 }],
-  ])
+  global.agent = makeAgent([makeExecRoute(JSON.stringify({ tasks: [], raw_task_heading_count: 3 }))])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low',
     'silent-zero guard: tasks:[] + raw_task_heading_count:3 must park, not finish silently')
@@ -82,11 +92,7 @@ const bp = require('../build_phase.js')
   //     This is the real "nothing to build" case; the guard must NOT incorrectly park it.
   // ===========================================================================
   logs.length = 0
-  global.agent = makeAgent([
-    ['read-gate --doc tasks', 'passed'],
-    ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
-    ['task_list_cli.py', { tasks: [], raw_task_heading_count: 0 }],
-  ])
+  global.agent = makeAgent([makeExecRoute(JSON.stringify({ tasks: [], raw_task_heading_count: 0 }))])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'high',
     'genuine empty task list must still finish ok (UFR-8)')
@@ -95,16 +101,15 @@ const bp = require('../build_phase.js')
   // ===========================================================================
   // (5) Normal array tasks -> proceeds normally (regression / sanity check).
   //     Just the enumerate path — does NOT go all the way through the task loop.
-  //     Stubs only through gather-entry so it parks at "park: build_progress parked"
-  //     (unmapped commit); the point is tasks.map does NOT crash.
+  //     gather returns an unmapped commit so it parks at "build_progress parked"; the point is
+  //     tasks.map does NOT crash.
   // ===========================================================================
   logs.length = 0
   global.agent = makeAgent([
-    ['read-gate --doc tasks', 'passed'],
-    ['build_entry.py', { branch: 'superheroes/wi-abc', path: '/tmp/wt' }],
-    ['task_list_cli.py', { tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }],
-    // unmapped_commits > 0 -> reconcile (twin) returns park immediately after entry gather
-    ['gather-entry', { committed_task_ids: [], unmapped_commits: 1, worktree_dirty: false }],
+    makeExecRoute(
+      JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }),
+      JSON.stringify({ committed_task_ids: [], unmapped_commits: 1, worktree_dirty: false })
+    ),
   ])
   threw = false
   try {
@@ -115,6 +120,21 @@ const bp = require('../build_phase.js')
   assert.ok(!threw, 'normal array tasks: must not throw')
   assert.strictEqual(r.confidence, 'low')    // parked at reconcile (expected)
   console.log('ok: normal array tasks shape does not crash build_phase')
+
+  // ===========================================================================
+  // (6) task-list leaf FAILS to run (ok:false) -> park (fail closed), no crash.
+  // ===========================================================================
+  logs.length = 0
+  global.agent = makeAgent([
+    ['exec', (p) => {
+      if (p.includes('read-gate')) return [{ index: 0, ok: true, stdout: 'passed' }]
+      if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'b', path: '/tmp/wt' }) }]
+      if (p.includes('task_list_cli.py')) return [{ index: 0, ok: false, stdout: 'leaf crashed' }]
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  r = await bp.buildPhase('wi', 5)
+  assert.strictEqual(r.confidence, 'low', 'a failed task-list leaf must park (fail closed)')
 
   console.log('ALL build_phase_tasklist_shape smoke tests passed')
 })()

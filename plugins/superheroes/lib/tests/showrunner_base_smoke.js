@@ -151,6 +151,9 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
   // (C) gatherState in build_phase.js: __SR_BASE must thread into build_state_cli.py --base
   // ---------------------------------------------------------------------------
 
+  // #115 increment A: gatherState now dispatches via exec (label 'exec'); the exec prompt LISTS the
+  // build_state_cli.py gather command, so the --base threading PIN survives by capturing that prompt.
+
   // (C1) base set -> --base in gatherState call
   {
     const capturedCmds = []
@@ -159,15 +162,17 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     globalThis.__SR_BASE = 'live-showrunner-102'
     global.agent = async (p, opts) => {
       const label = (opts && opts.label) || 'other'
-      if (label === 'gather-entry') { capturedCmds.push(p); return {} }
+      // exec's leaf returns the array shape; capture the prompt (it contains the gather command).
+      if (label === 'exec') { capturedCmds.push(p); return [{ index: 0, ok: true, stdout: '{}' }] }
       return null
     }
     // Invoke gatherState directly (it is exported).
     await bp.gatherState('wi', 'branch', '1,2', '/wt')
     globalThis.__SR_BASE = savedBase
 
-    assert.ok(capturedCmds.length > 0, '(C1) gatherState must call build_state_cli.py')
+    assert.ok(capturedCmds.length > 0, '(C1) gatherState must call build_state_cli.py via exec')
     const gatherCmd = capturedCmds[0]
+    assert.ok(gatherCmd.includes('build_state_cli.py gather'), '(C1) exec prompt must list the gather command')
     assert.ok(gatherCmd.includes('--base'), '(C1) __SR_BASE set -> --base must appear in gather command')
     assert.ok(gatherCmd.includes('live-showrunner-102'), '(C1) base branch name must appear in gather command')
   }
@@ -181,15 +186,16 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     delete globalThis.__SR_BASE
     global.agent = async (p, opts) => {
       const label = (opts && opts.label) || 'other'
-      if (label === 'gather-entry') { capturedCmds.push(p); return {} }
+      if (label === 'exec') { capturedCmds.push(p); return [{ index: 0, ok: true, stdout: '{}' }] }
       return null
     }
     await bp.gatherState('wi', 'branch', '1,2', '/wt')
     if (savedBase !== undefined) globalThis.__SR_BASE = savedBase
     else delete globalThis.__SR_BASE
 
-    assert.ok(capturedCmds.length > 0, '(C2) gatherState must call build_state_cli.py')
+    assert.ok(capturedCmds.length > 0, '(C2) gatherState must call build_state_cli.py via exec')
     const gatherCmd = capturedCmds[0]
+    assert.ok(gatherCmd.includes('build_state_cli.py gather'), '(C2) exec prompt must list the gather command')
     assert.ok(!gatherCmd.includes('--base'), '(C2) __SR_BASE unset -> no --base in gather (default behavior)')
   }
 
