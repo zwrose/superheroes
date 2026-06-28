@@ -36,6 +36,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).
     "plugins/superheroes/lib/tests/showrunner_draftpr_smoke.js",
+    # #115 Task 17: startup overrides read + unconditional cheapest dumb-pipe pin (bundle wrapper).
+    "plugins/superheroes/lib/tests/showrunner_task17_smoke.js",
     # #115: the build_phase smokes — registered here (the discovery guard now also matches
     # build_phase_*_smoke.js). The loop/setup/pertask smokes exercise the build LOOP (unchanged until
     # Task 15) and pass as-is; only build_phase_final_review_smoke.js is rewritten to the in-memory

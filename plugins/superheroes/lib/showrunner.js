@@ -562,6 +562,17 @@ async function showrunner({ workItem }) {
   if (startup.action !== 'proceed') {
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
+  // Task 17: load model-tier overrides once at startup from the review-crew profile. The Python script
+  // returns a {role:model} JSON map (or {} when the profile is absent/unreadable — the safe degenerate
+  // path). We pass no --profile here (→ load_overrides(None) → {}); a throwaway run has no profile, so
+  // {} is correct there; production uses the session-wide profile read elsewhere. Fail-safe: any exec
+  // error or bad JSON yields {} so resolveModel falls back to DEFAULT_TIERS — startup never crashes.
+  const _ovRes = await exec(['python3 plugins/superheroes/lib/model_tier_overrides.py'])
+  let _ovMap = {}
+  try { const _p = (_ovRes[0] && _ovRes[0].stdout) || ''; _ovMap = JSON.parse(_p) } catch (_) {}
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
+  }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
@@ -1133,3 +1144,4 @@ module.exports.exec = exec
 module.exports.persistPhase = persistPhase
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained
+module.exports.authorModel = authorModel

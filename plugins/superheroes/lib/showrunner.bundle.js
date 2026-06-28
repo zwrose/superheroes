@@ -4,8 +4,9 @@ export const meta = {
 }
 // The Workflow runtime provides agent()/parallel()/log() in scope; bind them onto globalThis so the
 // inlined spine (which reads globals) sees them. agent is WRAPPED so EVERY leaf gets, centrally:
-//  (1) an optional cheap-model override — globalThis.__SR_LEAF_MODEL, set from args.model; useful for
-//      throwaway/test runs where the produced content does not matter, so the cheapest model is fine;
+//  (1) model pinning — dumb pipes (exec/io) are UNCONDITIONALLY pinned to the cheapest model
+//      (DEFAULT_TIERS.mechanical) regardless of __SR_LEAF_MODEL or any session default; genuine-LLM
+//      (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test runs) or the session default.
 //  (2) the current phase as its progress group — globalThis.__SR_PHASE, set by runPhases — so the
 //      Workflow UI shows named phases instead of a flat undifferentiated list.
 // Display label: turn a generic 'lib'/'io' leaf into the lib script (+ subcommand) or io op it runs,
@@ -19,10 +20,26 @@ function __leafLabel(p, fallback) {
   if (p.indexOf('cat ') >= 0) return 'io:read'
   return fallback || 'lib'
 }
+// __cheapest: resolves the mechanical (cheapest) model tier once via the bundled model_tier module and
+// caches it. Called lazily inside the wrapper (at agent-call time, after the module registry is set up).
+var __cheapestCache = null
+function __cheapest() {
+  if (__cheapestCache === null) __cheapestCache = __require('model_tier').DEFAULT_TIERS.mechanical
+  return __cheapestCache
+}
 const __realAgent = agent
 globalThis.agent = function (prompt, opts) {
   var o = Object.assign({}, opts || {})
-  if (globalThis.__SR_LEAF_MODEL) o.model = globalThis.__SR_LEAF_MODEL
+  // Dumb-pipe detection: check the INCOMING label (before __leafLabel may relabel it) to identify
+  // the mechanical tier. exec and io leaves are pure side-effect executors — they ALWAYS run at the
+  // cheapest model unconditionally, independent of __SR_LEAF_MODEL or any session default.
+  // Genuine-LLM (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test run override).
+  var __isDumb = (o.label === 'exec' || o.label === 'io')
+  if (__isDumb) {
+    o.model = __cheapest()
+  } else if (globalThis.__SR_LEAF_MODEL) {
+    o.model = globalThis.__SR_LEAF_MODEL
+  }
   if (!o.phase && globalThis.__SR_PHASE) o.phase = globalThis.__SR_PHASE
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
   return __realAgent(prompt, o)
@@ -2913,6 +2930,17 @@ async function showrunner({ workItem }) {
   if (startup.action !== 'proceed') {
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
+  // Task 17: load model-tier overrides once at startup from the review-crew profile. The Python script
+  // returns a {role:model} JSON map (or {} when the profile is absent/unreadable — the safe degenerate
+  // path). We pass no --profile here (→ load_overrides(None) → {}); a throwaway run has no profile, so
+  // {} is correct there; production uses the session-wide profile read elsewhere. Fail-safe: any exec
+  // error or bad JSON yields {} so resolveModel falls back to DEFAULT_TIERS — startup never crashes.
+  const _ovRes = await exec(['python3 plugins/superheroes/lib/model_tier_overrides.py'])
+  let _ovMap = {}
+  try { const _p = (_ovRes[0] && _ovRes[0].stdout) || ''; _ovMap = JSON.parse(_p) } catch (_) {}
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
+  }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
@@ -3484,6 +3512,7 @@ module.exports.exec = exec
 module.exports.persistPhase = persistPhase
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained
+module.exports.authorModel = authorModel
 
 };
 
