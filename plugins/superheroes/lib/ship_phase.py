@@ -1,7 +1,7 @@
 # plugins/superheroes/lib/ship_phase.py
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import freshness, ci_loop, control_plane, journal, ci_status, checkpoint as ckpt_lib
+import freshness, ci_loop, control_plane, journal, ci_status, checkpoint as ckpt_lib, base_ref
 
 
 def _resolve_pr_number(work_item):
@@ -60,19 +60,28 @@ ap.add_argument("--base", default=None,
 a = ap.parse_args()
 
 if a.step == "freshness":
-    # is the branch up to date with base = does HEAD contain origin/<base> = is origin/<base> an
-    # ancestor of HEAD. (rc 0 = yes/up-to-date, 1 = behind, other = unreadable -> gate.)
+    # is the branch up to date with base = does HEAD contain <base> = is <base> an ancestor of HEAD.
+    # (rc 0 = yes/up-to-date, 1 = behind, other = unreadable -> gate.)
     # FR-8: --base is a caller-supplied branch name (e.g. 'live-showrunner-102' or 'main').
-    # Default to 'main' when absent so existing behavior is byte-identical.
-    base = a.base if a.base else "main"
-    try:
-        rc = subprocess.run(["git", "merge-base", "--is-ancestor", f"origin/{base}", "HEAD"],
-                            capture_output=True, timeout=10).returncode
-    except subprocess.TimeoutExpired:
-        rc = 2                                           # a hung read -> unreadable -> freshness gate
-    is_anc = True if rc == 0 else (False if rc == 1 else None)
-    decision, _reason = freshness.decide(is_anc, 1)
-    print(json.dumps({"decision": decision}))
+    # Default to 'main' when absent so existing behavior is unchanged.
+    base_name = a.base if a.base else "main"
+    # C-I1: resolve the base via the SHARED resolver (local->origin) — the SAME resolution
+    # build_state_cli's gather uses — so a base that exists LOCALLY but is not pushed to origin
+    # (gather honored it via the local fallback) is no longer gated here as if behind. Fail CLOSED
+    # with a SPECIFIC reason on an unresolvable base, not an opaque ancestor-read error.
+    resolved = base_ref.resolve_configured_base(".", base_name)
+    if resolved is None:
+        print(json.dumps({"decision": "gate",
+                          "reason": base_ref.unresolvable_reason(base_name, ".")}))
+    else:
+        try:
+            rc = subprocess.run(["git", "merge-base", "--is-ancestor", resolved, "HEAD"],
+                                capture_output=True, timeout=10).returncode
+        except subprocess.TimeoutExpired:
+            rc = 2                                       # a hung read -> unreadable -> freshness gate
+        is_anc = True if rc == 0 else (False if rc == 1 else None)
+        decision, _reason = freshness.decide(is_anc, 1)
+        print(json.dumps({"decision": decision}))
 elif a.emit_checks:
     # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
     # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).

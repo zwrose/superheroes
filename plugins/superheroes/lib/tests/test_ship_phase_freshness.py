@@ -80,3 +80,47 @@ def test_freshness_default_behavior_unchanged_no_base_arg(tmp_path):
     # Both should give the same decision.
     assert result_default["decision"] == result_explicit["decision"], (
         "default (no --base) must equal --base main")
+
+
+# ---------------------------------------------------------------------------
+# C-I1: freshness must resolve --base the SAME way build_state_cli's gather does
+# (local -> origin/<base>), so a base that exists only LOCALLY (not pushed to
+# origin) is honored — not gated as if behind. And an unresolvable base fails
+# CLOSED with a specific reason, not an opaque ancestor-read error.
+# ---------------------------------------------------------------------------
+
+def _commit(clone, msg):
+    ge = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+          "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    env = dict(os.environ, **ge)
+    subprocess.run(["git", "-C", str(clone), "commit", "--allow-empty", "-m", msg],
+                   env=env, check=True)
+
+
+def test_freshness_honors_local_only_base(tmp_path):
+    """A base branch that exists LOCALLY but is NOT pushed to origin -> resolved via the local
+    fallback. HEAD contains that local base -> up_to_date (not falsely gated). This is the bug:
+    origin/<base>-only resolution gated a genuinely-up-to-date branch."""
+    # Bare origin with only 'main'; clone is up to date with main.
+    repo = _make_repo_with_origin_branch(tmp_path)
+    # Create a base branch that lives ONLY locally (never pushed), AT the current HEAD.
+    subprocess.run(["git", "-C", str(repo), "branch", "local-only-base", "HEAD"], check=True)
+    # Sanity: origin/local-only-base does NOT exist (so origin-only resolution would fail/gate).
+    rp = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet",
+                         "origin/local-only-base"], capture_output=True)
+    assert rp.returncode != 0, "precondition: origin/local-only-base must not exist"
+    rc, result = _run_freshness(tmp_path, repo, extra_args=["--base", "local-only-base"])
+    assert result is not None, "ship_phase must produce JSON"
+    assert result["decision"] == "up_to_date", (
+        f"local-only base at HEAD -> up_to_date (not gated), got {result}")
+
+
+def test_freshness_unresolvable_base_gates_with_specific_reason(tmp_path):
+    """An unresolvable --base (neither local nor origin) fails CLOSED -> decision 'gate' with a
+    SPECIFIC reason naming the base, not an opaque ancestor-read error."""
+    repo = _make_repo_with_origin_branch(tmp_path)
+    rc, result = _run_freshness(tmp_path, repo, extra_args=["--base", "no-such-base-anywhere"])
+    assert result is not None, "ship_phase must produce JSON"
+    assert result["decision"] == "gate", f"unresolvable base must gate, got {result}"
+    assert "reason" in result, "gate must carry a specific reason"
+    assert "no-such-base-anywhere" in result["reason"], "reason must name the specific base"

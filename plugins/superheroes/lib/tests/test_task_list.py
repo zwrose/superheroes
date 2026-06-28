@@ -60,6 +60,30 @@ def test_non_task_heading_not_parsed():
     assert task_list.parse(body) == []
 
 
+# ---------------------------------------------------------------------------
+# Fence-aware raw_heading_count (C-I2): the count must be computed over the SAME
+# unfenced lines as parse, so it never disagrees with parse about fenced examples.
+# ---------------------------------------------------------------------------
+
+def test_raw_heading_count_ignores_fenced_headings():
+    body = "```\n### Task 1: Fenced example\n### Task 2: Another\n```\nno real tasks\n"
+    assert task_list.parse(body) == []
+    assert task_list.raw_heading_count(body) == 0
+
+
+def test_raw_heading_count_catches_unfenced_bad_separator():
+    # Real unfenced heading the strict parser rejects (bad separator) -> still counted.
+    body = "### Task 1 = bad sep\n"
+    assert task_list.parse(body) == []
+    assert task_list.raw_heading_count(body) == 1
+
+
+def test_raw_heading_count_matches_parse_on_valid_headings():
+    body = "### Task 1: One\n### Task 2: Two\n"
+    assert len(task_list.parse(body)) == 2
+    assert task_list.raw_heading_count(body) == 2
+
+
 def test_golden_realistic_tasks_doc():
     # Realistic multi-section tasks doc: only outer ### Task N: ... headings should parse;
     # the ### Task N: ... line inside a fenced block must be skipped.

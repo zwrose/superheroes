@@ -57,5 +57,41 @@ function execRoute(map) {
   ])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low')
-  console.log('ok: build_phase setup/enumerate (UFR-1/2/8, exec fail-closed)')
+
+  // C-I3: an unresolvable --base makes the gather leaf emit a STRUCTURED {error:...} on stdout.
+  // gatherState surfaces it as {__error}; buildPhase parks with THAT specific reason — not the
+  // generic 'could not gather authoritative git state' (which would misdirect the owner).
+  const baseErr = "--base 'no-such-base' could not be resolved in /tmp/wt (tried local and origin/<branch>) — failing closed"
+  global.agent = makeAgent([
+    execRoute((p) => {
+      if (p.includes('read-gate')) return 'passed'
+      if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
+      if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'One' }], raw_task_heading_count: 1 })
+      if (p.includes('build_state_cli.py gather')) return JSON.stringify({ error: baseErr })
+      return '{}'
+    }),
+  ])
+  r = await bp.buildPhase('wi', 5)
+  assert.strictEqual(r.confidence, 'low')
+  assert.strictEqual((r.assumptions || [])[0], baseErr,
+    'buildPhase must park with the SPECIFIC base-resolution reason, not the generic gather park')
+
+  // gatherState() surfaces the structured error directly as {__error}.
+  global.agent = makeAgent([
+    execRoute((p) => (p.includes('build_state_cli.py gather') ? JSON.stringify({ error: baseErr }) : '{}')),
+  ])
+  const gs = await bp.gatherState('wi', 'superheroes/wi-abc', '1', '/tmp/wt')
+  assert.deepStrictEqual(gs, { __error: baseErr }, 'gatherState surfaces {__error} from a structured leaf error')
+
+  // A normal successful gather (no error key) still returns the full state object unchanged.
+  global.agent = makeAgent([
+    execRoute((p) => (p.includes('build_state_cli.py gather')
+      ? JSON.stringify({ committed_task_ids: ['1'], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' })
+      : '{}')),
+  ])
+  const gs2 = await bp.gatherState('wi', 'superheroes/wi-abc', '1', '/tmp/wt')
+  assert.strictEqual(gs2.__error, undefined, 'normal gather has no __error')
+  assert.deepStrictEqual(gs2.committed_task_ids, ['1'], 'normal gather returns the state object')
+
+  console.log('ok: build_phase setup/enumerate (UFR-1/2/8, exec fail-closed, C-I3 base error surfaced)')
 })()

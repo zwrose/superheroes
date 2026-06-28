@@ -99,8 +99,10 @@ def test_gather_default_base_unchanged_when_base_arg_absent(tmp_path):
     assert "1" in st["committed_task_ids"]
 
 
-def test_gather_unresolvable_base_fails_closed(tmp_path):
-    """An unresolvable --base must exit non-zero (fail closed), never open UFR-7."""
+def test_gather_unresolvable_base_emits_structured_stdout_error(tmp_path):
+    """An unresolvable --base must FAIL CLOSED as a STRUCTURED stdout error (C-I3): exit 0 with a
+    {"error": <specific reason>} on stdout (NOT a stderr SystemExit the exec pipe discards). The
+    spine parks on that specific reason instead of the generic 'could not gather' park."""
     repo = str(tmp_path)
     _git(repo, "init", "-q")
     _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
@@ -112,8 +114,13 @@ def test_gather_unresolvable_base_fails_closed(tmp_path):
          "--branch", "superheroes/wi-abc", "--valid-ids", "1",
          "--base", "nonexistent-branch-xyz"],
         cwd=repo, env=env, capture_output=True, text=True)
-    # Must fail closed: non-zero exit (never silently yield a result with 0 unmapped)
-    assert out.returncode != 0, "unresolvable base must fail closed (non-zero exit)"
+    # Exit 0 so the exec dumb-pipe captures stdout (it returns only {ok, stdout}).
+    assert out.returncode == 0, out.stderr
+    payload = json.loads(out.stdout)
+    # Structured error key — and crucially NOT a usable state (no silent 0-unmapped result).
+    assert "error" in payload, "unresolvable base must surface a structured stdout error"
+    assert "nonexistent-branch-xyz" in payload["error"], "error must name the specific base"
+    assert "committed_task_ids" not in payload, "must not emit a usable state on an unresolvable base"
 
 
 def test_record_reviewed_then_gather_reads_it(tmp_path):

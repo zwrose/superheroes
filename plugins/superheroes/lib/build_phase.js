@@ -56,7 +56,9 @@ function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.
 // FR-4a: gather authoritative git state (entry/resume only, NOT per loop iteration).
 // Ported to exec(raw)+in-process-parse: the leaf runs the command and returns its raw stdout; the
 // spine JSON.parses it here (the leaf can no longer derail by mis-copying fields — the live bug).
-// Returns the parsed state object, or NULL on exec-fail / parse-fail (the caller parks honestly).
+// Returns the parsed state object on success; NULL on exec-fail / parse-fail (the caller parks
+// honestly); or {__error: <reason>} when the leaf emitted a STRUCTURED base-resolution error on
+// stdout (C-I3) so the caller can park with THAT specific reason instead of the generic one.
 // FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
   const _res = await exec([
@@ -64,7 +66,14 @@ async function gatherState(workItem, branch, validIds, wt) {
   ])
   const _r0 = _res && _res[0]
   if (!_r0 || !_r0.ok) return null
-  try { return JSON.parse(_r0.stdout) } catch (_e) { return null }
+  let parsed
+  try { parsed = JSON.parse(_r0.stdout) } catch (_e) { return null }
+  // Structured fail-closed signal: the leaf could not resolve --base. Surface the SPECIFIC reason
+  // (C-I3) rather than collapsing to the generic "could not gather authoritative git state" park.
+  if (parsed && typeof parsed === 'object' && typeof parsed.error === 'string') {
+    return { __error: parsed.error }
+  }
+  return parsed
 }
 
 // FR-4a: derive the starting action + resume_at from authoritative state using the in-process twin.
@@ -135,6 +144,7 @@ async function buildPhase(workItem, generation) {
   // gatherState returns null on exec/parse failure — park honestly (fail closed; never walk on a
   // mis-read or absent git state — the live bug that mis-reported a clean tree as dirty).
   let state = await gatherState(workItem, branch, validIds, wt)
+  if (state && state.__error) return park(state.__error)
   if (!state) return park('could not gather authoritative git state — failing closed')
 
   // Handle entry-level non-forward reconcile actions before entering the forward-walk.
@@ -147,6 +157,7 @@ async function buildPhase(workItem, generation) {
     if (!rr.ok) return park('could not reset uncommitted changes: ' + (rr.error || 'unknown'))
     // Re-gather + re-reconcile after reset (ground truth mutated).
     state = await gatherState(workItem, branch, validIds, wt)
+    if (state && state.__error) return park(state.__error)
     if (!state) return park('could not gather authoritative git state — failing closed')
     d = reconcileState(tasks, state)
     if (d.action === 'park') return park(d.reason || 'build_progress parked after reset')
@@ -312,6 +323,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       let chk
       if (!_chk0 || !_chk0.ok) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
       try { chk = JSON.parse(_chk0.stdout) } catch (_e) { return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' } }
+      // A structured base-resolution error (C-I3) must park with its specific reason, not slip past
+      // the unmapped check below (where {error} has no unmapped_commits and would read as clean).
+      if (typeof chk.error === 'string') return { parked: true, reason: chk.error }
       if ((chk.unmapped_commits || 0) > 0) {
         return { parked: true, reason: 'a commit lacks its Task-Id trailer — park (UFR-7)' }
       }
