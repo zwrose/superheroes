@@ -3194,7 +3194,11 @@ async function exec(commands, opts) {
     'Run each of the following commands in order using the Bash tool. ' +
     'Return ONLY a raw JSON array and NOTHING else — no prose, no explanation, no markdown fences; ' +
     'your entire response must be valid for JSON.parse. ' +
-    'Each element: {"index":<0-based>,"ok":<true|false>,"stdout":<string>}.\n\n' +
+    'Each element: {"index":<0-based>,"ok":<true|false>,"stdout":<string>}. ' +
+    'The "stdout" value MUST be the command\'s COMPLETE raw stdout, copied verbatim as a single JSON ' +
+    'string (JSON-escape quotes/newlines as needed). Do NOT parse it, extract a field from it, summarize ' +
+    'it, pretty-print it, or change it in any way — even when the stdout is itself a JSON object, return ' +
+    'that object byte-for-byte as the string value, never a parsed/abbreviated version of it.\n\n' +
     cmdList
   const o = Object.assign({}, opts || {}, { model: cheapestModel(), label: 'exec' })
   const out = await globalThis.agent(prompt, o)
