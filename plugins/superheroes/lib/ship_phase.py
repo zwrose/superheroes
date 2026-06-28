@@ -53,6 +53,8 @@ def _read_ci(work_item):
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True, choices=["freshness", "ci"])
 ap.add_argument("--work-item", required=True)
+ap.add_argument("--emit-checks", action="store_true",
+                help="IO-only mode: emit raw checks array (or {error:...}) without classifying")
 a = ap.parse_args()
 
 if a.step == "freshness":
@@ -67,6 +69,21 @@ if a.step == "freshness":
     is_anc = True if rc == 0 else (False if rc == 1 else None)
     decision, _reason = freshness.decide(is_anc, 1)
     print(json.dumps({"decision": decision}))
+elif a.emit_checks:
+    # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
+    # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).
+    pr = _resolve_pr_number(a.work_item)
+    if not pr:
+        print(json.dumps({"error": "CI status could not be read"}))
+    else:
+        try:
+            out = subprocess.run(["gh", "pr", "checks", pr, "--json", "name,bucket,state"],
+                                 capture_output=True, text=True, timeout=30)
+            # gh pr checks exits non-zero when checks are failing/pending; JSON is still on stdout.
+            checks = json.loads(out.stdout) if out.stdout.strip() else []
+        except Exception:
+            checks = []
+        print(json.dumps(checks))
 else:
     # Real CI read: classify the PR's checks (green / red / none) via ci_status. Fail-CLOSED — any
     # read error returns 'red' (never 'green'), so ship never posts a false "merge-ready: CI green".

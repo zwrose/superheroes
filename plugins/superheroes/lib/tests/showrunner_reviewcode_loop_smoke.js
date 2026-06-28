@@ -42,7 +42,8 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
-    if (label.startsWith('verify')) return { result: 'pass' }
+    // #115 Task 16: verifyAgent emits raw run data; JS twin classifies in-process
+    if (label.startsWith('verify')) return { command: 'run-tests', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis')) return { verdicts: [] }   // keep all merged findings
     if (label === 'exec') {                                       // the cheap recordDeferred pipe
       if (prompt.includes('record_deferred.py')) return [{ index: 0, ok: true, stdout: runRecordDeferred(prompt) }]

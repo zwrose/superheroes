@@ -28,7 +28,8 @@ const sr = require('../showrunner.js')
     }
     if (label && label.startsWith('verify')) {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')
-      return { result: 'pass' }
+      // #115 Task 16: verifyAgent now emits raw run data; JS twin classifies in-process
+      return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }
     }
     if (label && label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
@@ -56,7 +57,7 @@ const sr = require('../showrunner.js')
     if (label === 'lib' && prompt.includes('git -C')) return gitHeads.shift() || 'head-2\n'
     if (label === 'resume') return '1'
     if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
-    if (label && label.startsWith('verify')) return { result: 'pass' }
+    if (label && label.startsWith('verify')) return { command: 'none', returncode: null, timedOut: false }
     if (label && label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
     return { findings: [] }   // every reviewer leg returns an empty findings array (clean round)

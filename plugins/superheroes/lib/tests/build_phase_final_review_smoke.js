@@ -9,7 +9,9 @@ global.log = () => {}
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 
 // reviewerFindings: what the (single) reviewer leaf returns this run. verifyResult: the verify-gate
-// classification. Routes the cmdRunner config leaves by prompt substring.
+// classification ('pass'|'fail'|'timeout'|'skipped'). Routes the cmdRunner config leaves by prompt
+// substring. #115 Task 16: verifyAgent now emits raw run data ({command,returncode,timedOut}) for the
+// JS twin to classify — stubs return the raw-run form that produces the target verifyResult.
 function makeAgent({ reviewerFindings, verifyResult }) {
   const routes = [
     ['verify_command_cli.py', { command: 'pytest -q' }],
@@ -17,11 +19,18 @@ function makeAgent({ reviewerFindings, verifyResult }) {
     ['model_tier_resolve.py --role fixer', { model: 'sonnet' }],
     ['minor_rollup_cli.py', { minors: [] }],
   ]
+  // Map a desired classify result back to the raw run data that produces it
+  function runDataFor(result) {
+    if (result === 'skipped') return { command: 'none', returncode: null, timedOut: false }
+    if (result === 'timeout') return { command: 'pytest -q', returncode: null, timedOut: true }
+    if (result === 'pass')    return { command: 'pytest -q', returncode: 0,    timedOut: false }
+    return                           { command: 'pytest -q', returncode: 1,    timedOut: false }  // fail
+  }
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
     if (label.startsWith('reviewer:')) return { findings: reviewerFindings }   // RETURNS findings (no file)
-    if (label.startsWith('verify')) return { result: verifyResult }
+    if (label.startsWith('verify')) return runDataFor(verifyResult)  // raw run data; JS twin classifies
     if (label === 'exec') return []           // recordDeferred's cheap pipe (unused on the clean path)
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return resp
     return ''

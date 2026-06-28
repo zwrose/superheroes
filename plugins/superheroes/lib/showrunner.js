@@ -10,6 +10,8 @@ const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
 const modelTierTwin = require('./model_tier.js')
+// #115 Task 16: back-half twins — CI status + PR recover (prAction already via recoverTwin above)
+const ciStatusTwin = require('./ci_status.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -1011,14 +1013,37 @@ async function loadPr(workItem) {
   return out.pr
 }
 
-// draft-PR: pr_entry.py runs recover.pr_action (adopt/create exactly-once) + ship_gate.decide,
-// returns { pr: {number,url,isDraft} }. The pr is recorded as the cursor side effect (FR-4).
+// draft-PR: split IO from judgment (#115 Task 16).
+// --emit-world reads the PR world (IO-only); recoverTwin.prAction decides adopt/create/gate in-process.
+// On 'create': the full pr_entry.py path (ship_gate.decide + gh pr create + read-back) stays in Python.
+// The {pr} capture happens before recordCursor persists it (FR-4 exactly-once preserved).
 async function draftPRPhase(workItem) {
-  const out = await cmdRunner(
+  const worldResults = await exec([
+    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)} --emit-world`,
+  ])
+  let world = { pr: 'unknown' }  // fail-closed default
+  if (worldResults[0] && worldResults[0].ok) {
+    try { world = JSON.parse(worldResults[0].stdout) } catch (_) {}
+  }
+  const act = recoverTwin.prAction(world)
+  if (act === 'gate') {
+    return { phaseResult: { confidence: 'low', assumptions: ['PR read transient/merged — not creating a 2nd PR'] }, sideEffect: null }
+  }
+  if (act === 'adopt') {
+    return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: world.pr } }
+  }
+  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh)
+  const createResults = await exec([
     `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, pr: {}, reason: { type: 'string' } } } })
-  if (!out.ok) return { phaseResult: { confidence: 'low', assumptions: [out.reason || 'draft-PR gated'] }, sideEffect: null }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
+  ])
+  let createOut = null
+  if (createResults[0] && createResults[0].ok) {
+    try { createOut = JSON.parse(createResults[0].stdout) } catch (_) {}
+  }
+  if (!createOut || !createOut.ok) {
+    return { phaseResult: { confidence: 'low', assumptions: [createOut && createOut.reason || 'draft-PR gated'] }, sideEffect: null }
+  }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: createOut.pr } }
 }
 
 // mark-ready: pr_entry.py world-reads isDraft (pr_phase.mark_ready_action), flips if needed,
@@ -1048,20 +1073,32 @@ async function shipPhase(workItem, pr) {
   if (fresh.decision !== 'up_to_date') {
     return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)
   }
-  // ship_phase.py --step ci returns 'green' (all required checks pass), 'red' (some check is
-  // failing/pending/errored), or 'none' (no required checks gate the PR). green -> merge-ready;
-  // red (or any non-green/none) -> park with the reason; none -> merge-ready WITH the
-  // no-required-checks carve-out (the owner confirms checks before merging).
-  const ci = await cmdRunner(
-    `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' }, reason: { type: 'string' } } } })
-  if (ci.decision === 'green') {
+  // CI split (#115 Task 16): exec reads raw checks array (IO-only); ciStatusTwin classifies in-process.
+  // green -> merge-ready; none -> merge-ready with carve-out; red -> park.
+  // Fail-closed: exec error or {error} response -> park (never a false green).
+  const ciResults = await exec([
+    `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)} --emit-checks`,
+  ])
+  if (!ciResults[0] || !ciResults[0].ok) {
+    return park(workItem, pr, 'CI status could not be read')
+  }
+  let ciChecks = null
+  try { ciChecks = JSON.parse(ciResults[0].stdout) } catch (_) {}
+  if (ciChecks && !Array.isArray(ciChecks) && ciChecks.error) {
+    return park(workItem, pr, ciChecks.error || 'CI status could not be read')
+  }
+  const checksArr = Array.isArray(ciChecks) ? ciChecks : []
+  const ciRes = ciStatusTwin.classify(checksArr)
+  if (ciRes.status === 'green') {
     return park(workItem, pr, 'merge-ready: CI green and branch up to date — awaiting owner merge', true)
   }
-  if (ci.decision === 'none') {
+  if (ciRes.status === 'none') {
     return park(workItem, pr, 'merge-ready: no required checks gate this PR — confirm checks before merging', true)
   }
-  return park(workItem, pr, ci.reason || 'CI could not be made green')
+  const ciReason = ciRes.failing && ciRes.failing.length
+    ? 'checks not green: ' + ciRes.failing.join(', ')
+    : 'CI could not be made green'
+  return park(workItem, pr, ciReason)
 }
 
 // park posts the readout (scrubbed) to the PR; on a failed post it records to the store (UFR-4).

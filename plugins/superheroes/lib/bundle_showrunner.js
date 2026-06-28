@@ -11,7 +11,10 @@ const LIB = __dirname
 // dependency order (circuit_breaker -> loop_state -> loop_synthesis -> panel_tally).
 // #115 Task 12: phase_step, recover, front_half added — showrunner.js now requires them in-process.
 // #115 Task 15: build_progress added — build_phase.js now requires it in-process (FR-4a).
+// #115 Task 16: ci_status + verify_gate added — back-half twins (ship CI + verify gate classify in-process).
+// ci_status before review_panel_shell (shell requires verify_gate; showrunner.js requires ci_status).
 const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
+                 'ci_status.js', 'verify_gate.js',
                  'review_panel_shell.js', 'test_pilot_phase.js', 'build_progress.js', 'build_phase.js',
                  'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'showrunner.js']
 

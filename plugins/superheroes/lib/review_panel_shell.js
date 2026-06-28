@@ -24,6 +24,8 @@ const panelTally = require('./panel_tally.js')
 const loopSynthesis = require('./loop_synthesis.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
+// #115 Task 16: verify gate split — subprocess run stays a cheap pipe, classification is in-process
+const verifyGateTwin = require('./verify_gate.js')
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
@@ -172,13 +174,16 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   return loopSynthesis.consume(merged, Array.isArray(leafVerdicts) ? leafVerdicts : []) // {findings, drops}
 }
 
-// Code-leg verify gate (verify_gate.run_verify — protected classification, still an agent).
+// Code-leg verify gate split (#115 Task 16): agent runs the subprocess (--emit-run, IO-only);
+// verifyGateTwin.classify maps the raw run data to pass/fail/timeout/skipped in-process.
+// Fail-closed: if the agent gives nothing or the result is unparseable -> 'fail'.
 async function verifyAgent(verifyCommand, runDir, round) {
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
-    `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')}`,
+    `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
     { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
-  return (out && out.result) || 'fail'   // fail-closed if the runner gave nothing
+  if (!out) return 'fail'  // fail-closed if the runner gave nothing
+  return verifyGateTwin.classify({ command: out.command, returncode: out.returncode, timedOut: out.timedOut })
 }
 
 // In-process tally — the parity-locked twins decide gate/confidence/terminal + the circuit breaker,
@@ -280,8 +285,9 @@ const VERDICT_SCHEMA = {
 }
 const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
   properties: { findings: { type: 'array' }, drops: { type: 'array' } } }
-const VERIFY_SCHEMA = { type: 'object', required: ['result'],
-  properties: { result: { enum: ['pass', 'fail', 'timeout', 'skipped'] } } }
+// #115 Task 16: VERIFY_SCHEMA now matches the --emit-run output (raw run data, not classified result)
+const VERIFY_SCHEMA = { type: 'object', required: ['command'],
+  properties: { command: {}, returncode: {}, timedOut: {} } }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 

@@ -9,6 +9,8 @@ import checkpoint as ckpt_lib, control_plane, pr_phase, recover, ship_gate, test
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True, choices=["draft", "mark-ready"])
 ap.add_argument("--work-item", required=True)
+ap.add_argument("--emit-world", action="store_true",
+                help="IO-only mode: world-read the PR and emit {pr} without judgment or creation")
 a = ap.parse_args()
 root = os.getcwd()
 paths = control_plane.paths(root, a.work_item)
@@ -37,6 +39,13 @@ def _gh_pr(branch):
         return "unknown"                                 # malformed gh output -> fail closed
     return arr[0] if arr else None
 
+
+if a.step == "draft" and a.emit_world:
+    # IO-only emit mode: world-read the PR and emit {pr} — no judgment, no creation. The JS twin
+    # (recover.prAction) decides adopt/create/gate in-process.
+    world = {"pr": _gh_pr(branch)}
+    print(json.dumps(world))
+    sys.exit(0)
 
 if a.step == "draft":
     world = {"pr": _gh_pr(branch)}
