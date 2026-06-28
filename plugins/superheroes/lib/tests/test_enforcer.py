@@ -74,17 +74,27 @@ def test_denies_gh_release_and_workflow_run():
     assert enforcer.classify_command("gh workflow run deploy.yml")[0] == "deny"
 
 
-def test_denies_force_push_and_deploy_and_destructive():
+def test_denies_force_push():
+    # force-push stays gated — it's the producer's "never rewrite shared history" invariant.
     assert enforcer.classify_command("git push --force origin main")[0] == "deny"
-    assert enforcer.classify_command("kubectl apply -f prod.yaml")[0] == "deny"
-    assert enforcer.classify_command("psql -c 'DROP TABLE users'")[0] == "deny"
 
 
-def test_denies_rm_rf_flag_order_agnostic():
-    # rm-rf deny must catch both -rf AND -fr flag orderings (security-002).
-    assert enforcer.classify_command("rm -rf /tmp/build")[0] == "deny"
-    assert enforcer.classify_command("rm -fr build/")[0] == "deny"
-    assert enforcer.classify_command("rm -Rf dist/")[0] == "deny"
+def test_allows_generic_dangerous_commands_left_to_the_harness():
+    # Generic dangerous-command classes are deliberately OFF the deterministic hook (they're
+    # contemplated by the host harness's permission prompt + `rm -rf /|~` circuit breaker, and
+    # covered by the cooperative F5 layer). The enforcer must ALLOW them so it doesn't
+    # false-positive on routine build commands or duplicate harness controls.
+    for cmd in ("kubectl apply -f prod.yaml",        # deploy
+                "terraform apply",                    # deploy
+                "vercel --prod",                      # deploy (--prod shortcut)
+                "npx vercel --prod",
+                "psql -c 'DROP TABLE users'",         # destructive SQL
+                "psql -c 'TRUNCATE events'",
+                "rm -rf /tmp/build",                  # rm -rf (routine cleanup)
+                "rm -rf node_modules",
+                "rm -fr build/",
+                "rm -Rf dist/"):
+        assert enforcer.classify_command(cmd)[0] == "allow", cmd
 
 
 def test_denies_canary():
@@ -306,14 +316,15 @@ def _scoped_cwd(tmp_path):
 
 def test_gated_is_ask_on_claude_in_scope():
     for cmd in ("gh pr merge 42 --squash", "gh release create v1",
-                "git push --force origin main", "kubectl apply -f prod.yaml"):
+                "git push --force origin main", "git push origin main",
+                "gh workflow run deploy.yml"):
         assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "ask", cmd
 
 
 def test_gated_is_deny_on_codex_in_scope():
     # Deny-only host: the deny is the backstop that forces the ask (the hook overlays the
     # single-use allowance flow on top).
-    for cmd in ("gh pr merge 42", "gh release create v1", "rm -rf build/"):
+    for cmd in ("gh pr merge 42", "gh release create v1", "git push --force-with-lease"):
         assert enforcer.classify_command(cmd, host="codex", in_scope=True)[0] == "deny", cmd
 
 
@@ -487,17 +498,6 @@ def test_hook_unparseable_fails_closed(capsys):
     enforcer.hook("{ not json")
     out = json.loads(capsys.readouterr().out)
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_denies_vercel_prod_shortcut():
-    # the standalone production-deploy flag (no 'deploy' subcommand) must deny
-    assert enforcer.classify_command("vercel --prod")[0] == "deny"
-    assert enforcer.classify_command("npx vercel --prod")[0] == "deny"
-
-
-def test_allows_production_longflag_lookalike():
-    # --production (e.g. npm install --production) must NOT be denied — only --prod
-    assert enforcer.classify_command("npm install --production")[0] == "allow"
 
 
 def test_denies_merge_api_with_variable_pr_number():

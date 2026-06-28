@@ -541,11 +541,18 @@ The producer's back-half loop (workhorse steps 0–9) is **reality-wins, reconci
   **GATEs** — a downstream run is invalidated when its upstream definition-doc changes.
 - **Escalation to the owner** follows the F5 policy (`escalation-base.md`): act
   autonomously on agent-verifiable / reversible decisions; escalate on owner-authority or
-  high-stakes-irreversible ones. The irreversible / owner-authority actions — **merge,
-  release, deploy, force-push, destructive ops** — are gated on the owner's **live, in-turn
-  approval** (a real prompt the owner answers, never an agent-set token): the producer never
-  does them unattended (no approver → it **parks**), but performs them on explicit go-ahead.
-  **PR-create stays autonomous.** (The live-approval gate — [#14](https://github.com/zwrose/superheroes/issues/14).)
+  high-stakes-irreversible ones. The **owner-role / repo-shaping** actions — **merge,
+  release, run-workflow, force-push, push-to-default** — are gated on the owner's **live,
+  in-turn approval** (a real prompt the owner answers, never an agent-set token) and are
+  enforced deterministically by the producer's PreToolUse hook (which overrides an
+  allowlist-allow and fires even under bypassPermissions — the guarantee the harness's own
+  prompt can't give): the producer never does them unattended (no approver → it **parks**),
+  but performs them on explicit go-ahead. Generic high-stakes operations the host harness
+  *already* contemplates — **deploy, destructive data ops, `rm -rf`** — stay on the
+  **cooperative F5 layer** (the model GATEs them via `escalation_resolve`; the harness's own
+  permission prompt + `rm -rf /|~` circuit breaker is the backstop), deliberately off the
+  deterministic hook so it doesn't false-positive on routine build commands. **PR-create
+  stays autonomous.** (The live-approval gate — [#14](https://github.com/zwrose/superheroes/issues/14).)
 
 (The fuller walk-away approval-gate contract — defer-vs-block, where approvals are
 recorded — remains deferred to §7, Phase 2a-plus.)

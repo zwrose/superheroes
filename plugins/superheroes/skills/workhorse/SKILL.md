@@ -434,11 +434,10 @@ Route every seam through F5 (review-crew's `escalation_resolve.py`): **PROCEED**
 layer routes the UX; the **PreToolUse enforcer** (`enforcer.py`, self-checked in step 0)
 is the deterministic backstop. The owner-authority set — `gh pr merge` (incl. the
 `gh api`/GraphQL forms) / `gh release create` / `gh workflow run` / `git push
---force` / push-to-default / deploy / destructive — is **GATED on the owner's live,
-in-turn approval** (issue #14), not hard-denied, and only **inside a superheroes
-repo** (outside one, the gate doesn't fire). Two things stay an **unconditional
-deny** regardless of host or scope: edits/Bash-writes to band safety-machinery, and
-the self-check canary.
+--force` / push-to-default — is **GATED on the owner's live, in-turn approval**
+(issue #14), not hard-denied, and only **inside a superheroes repo** (outside one,
+the gate doesn't fire). Two things stay an **unconditional deny** regardless of host
+or scope: edits/Bash-writes to band safety-machinery, and the self-check canary.
 
 **Host-aware mechanism, same functionality (approve → proceed; no owner → park):**
 - **Claude Code** — the hook emits `permissionDecision: ask`: a native live prompt
@@ -451,13 +450,22 @@ the self-check canary.
   `hosts/codex-tools.md`. Codex runs plugin-bundled hooks only once trusted —
   **verify the enforcer hook is trusted before relying on it; if not, refuse/warn.**
 
-**Scope of the deterministic gate (explicit).** The enforcer's command set covers the
-named *irreversible, repo-shaping* classes above — deliberately NOT the softer
-`spend`/`egress` heuristics F5's `classify_floor` also carries (those are broad and
-false-positive-prone on a build agent: a command merely mentioning `stripe`/`upload`
-isn't an action). Those classes stay on the **cooperative F5 layer** (a GATE via
-`escalation_resolve`), not the hook. This is the design's two-layer split, made
-explicit here so the boundary is a deliberate choice, not a gap.
+**Scope of the deterministic gate (explicit).** The enforcer's command set is *only* the
+actions that encode an **owner-role / repo-shaping invariant the host harness cannot
+express** — "the producer never merges, publishes, pushes to the default branch, or
+rewrites shared history." A hook `ask` earns its place here because it **overrides an
+allowlist-allow and fires even under bypassPermissions** — the one guarantee the harness's
+own permission prompt can't give. The gate deliberately does **NOT** re-implement *generic
+dangerous-command detection* — `rm -rf`, destructive SQL (`DROP`/`TRUNCATE`/`DELETE FROM`),
+`deploy`/`kubectl apply`/`--prod`, and the softer `spend`/`egress` heuristics F5's
+`classify_floor` also carries. Those are **already contemplated by the harness** (its
+permission prompt in prompting modes + its built-in `rm -rf /|~` circuit breaker in bypass),
+they are broad and false-positive-prone on a build agent (a routine `rm -rf node_modules` or
+a script merely *named* `deploy` is not an owner action), and they remain covered by the
+**cooperative F5 layer** (a GATE via `escalation_resolve`; `escalation.FLOOR_PATTERNS` still
+lists deploy/destructive/delete). Keeping them off the deterministic hook is the design's
+two-layer split — the hook is for *policy the harness can't know*, not for *danger the
+harness already handles*.
 
 ## Supervised assumption — park safely on a GATE
 

@@ -5,11 +5,14 @@ deterministically; the happy path is the acceptance gate, not the only gate.**
 
 ## Deterministic invariants (the hard gate — pytest)
 
-- **Never-merge floor.** Every merge/release/deploy/force-push shape — incl. the
-  `gh api`/GraphQL merge paths — is DENIED by the enumerated deny-list, and the
-  producer's own `git push` is ALLOWED (`test_enforcer.py`,
+- **Never-merge floor.** Every owner-role / repo-shaping shape —
+  merge/release/run-workflow/force-push/push-to-default, incl. the `gh api`/GraphQL
+  merge paths — is GATED by the enumerated set (deny on the deny-only host), and the
+  producer's own feature-branch `git push` is ALLOWED (`test_enforcer.py`,
   `test_safety_invariants.py::test_never_merge_invariant_across_every_merge_shape`
-  + `::test_producer_push_is_allowed`).
+  + `::test_producer_push_is_allowed`). Generic dangerous-command classes
+  (`rm -rf`, destructive SQL, `deploy`) are deliberately NOT on the deterministic
+  hook — they are left to the host harness + the cooperative F5 layer.
 - **Self-protection (two surfaces).** Edits to band safety-machinery via Edit/Write
   AND via Bash (`sed -i` / redirection) are refused, and the Bash-write deny list
   covers every escalation safety basename (`test_hook_wiring.py`,
