@@ -1,0 +1,1 @@
+{"input": [{"completed_phases": [], "notify": [{"phase": "plan", "message": "First notification"}, {"phase": "plan", "message": "Second notification"}]}], "expected": "# Front-half run outcome\n\n**Completed phases:** (none)\n\n**NOTIFY defaults (named — owner may veto):**\n- [plan] First notification\n- [plan] Second notification\n"}

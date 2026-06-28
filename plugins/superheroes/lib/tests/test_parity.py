@@ -37,6 +37,7 @@ PARITY_TWINS = [
     ("recover", "rearmAction", "recover", "rearm_action"),
     ("front_half", "gateForTerminal", "front_half", "gate_for_terminal"),
     ("front_half", "isUsableDraft", "front_half", "is_usable_draft"),
+    ("front_half", "renderRunOutcome", "front_half", "render_run_outcome"),
     ("build_progress", "reconcile", "build_progress", "reconcile"),
 ]
 

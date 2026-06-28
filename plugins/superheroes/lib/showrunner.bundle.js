@@ -2360,7 +2360,121 @@ function isUsableDraft(docText, completionSignal, expectedSignal, requiredSectio
   return true
 }
 
-module.exports = { gateForTerminal, isUsableDraft }
+// ---------------------------------------------------------------------------
+// renderRunOutcome — faithful JS twin of front_half.py:render_run_outcome (FR-7).
+// Composes the front-half run-outcome envelope in-process (pure; never throws).
+// For phase_records, calls the optional renderReadout(record) injected by the spine
+// (exec-backed in the real run; a stub in unit tests).  Parity fixtures NEVER have
+// phase_records, so renderReadout is undefined for all parity cases — the loop body
+// is simply never reached.
+//
+// Return value: when all renderReadout calls return plain strings (or renderReadout is
+// absent), the function returns a string synchronously.  When renderReadout is async
+// (exec-backed in the spine), it returns a Promise<string>.  The spine always awaits it.
+// FR-8 sandbox: no fs/child_process/time-funcs/rand-funcs/process/bare-global (use globalThis).
+// ---------------------------------------------------------------------------
+
+function renderRunOutcome(outcome, renderReadout) {
+  const o = (outcome !== null && typeof outcome === 'object' && !Array.isArray(outcome)) ? outcome : {}
+  const lines = ['# Front-half run outcome', '']
+  const completed = (o.completed_phases && Array.isArray(o.completed_phases)) ? o.completed_phases : []
+  lines.push('**Completed phases:** ' + (completed.length ? completed.join(', ') : '(none)'))
+  lines.push('')
+
+  const docs = (o.docs && typeof o.docs === 'object' && !Array.isArray(o.docs)) ? o.docs : {}
+  if (Object.keys(docs).length > 0) {
+    lines.push('**Docs:**')
+    for (const k of Object.keys(docs)) {
+      lines.push('- ' + k + ' → ' + docs[k])
+    }
+    lines.push('')
+  }
+
+  if (o.parked_phase) {
+    lines.push('**Parked at:** ' + o.parked_phase + ' — ' + (o.park_reason || ''))
+    lines.push('')
+  }
+
+  // Deduplicated NOTIFY defaults: key is (phase, identity || message) — distinct un-identified
+  // NOTIFYs (no identity) fall back to message so they don't collapse on (phase, undefined).
+  const notify = Array.isArray(o.notify) ? o.notify : []
+  const deduped = []
+  const seen = new Set()
+  for (const n of notify) {
+    if (!n || typeof n !== 'object') continue
+    const key = JSON.stringify([n.phase, n.identity !== undefined ? n.identity : n.message])
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(n)
+  }
+  lines.push('**NOTIFY defaults (named — owner may veto):**')
+  if (deduped.length) {
+    for (const n of deduped) {
+      lines.push('- [' + (n.phase !== undefined ? n.phase : '?') + '] ' + (n.message !== undefined ? n.message : ''))
+    }
+  } else {
+    lines.push('- (none)')
+  }
+  lines.push('')
+
+  // Collect phase_records to embed (skip non-dict entries per oracle parity).
+  const phaseRecords = Array.isArray(o.phase_records) ? o.phase_records : []
+  const validRecords = phaseRecords.filter(function(pr) {
+    return pr && typeof pr === 'object' && !Array.isArray(pr)
+  })
+
+  const ufr6 = o.readout_record_ok === false
+
+  // Internal finalizer: receives per-record rendered texts (string[]) and assembles the full output.
+  function _finish(renderedTexts) {
+    const out = lines.slice()
+    for (let i = 0; i < validRecords.length; i++) {
+      const pr = validRecords[i]
+      const phase = pr.phase !== undefined ? pr.phase : '?'
+      out.push('## ' + phase + ' — review loop readout')
+      out.push('')
+      out.push(renderedTexts[i])
+      out.push('')
+    }
+    if (ufr6) {
+      out.push('> ⚠️ The durable readout record could not be written — this outcome is ' +
+        'reported to the invoking session only; treat the durable copy as missing (UFR-6).')
+      out.push('')
+    }
+    return out.join('\n').replace(/\s+$/, '') + '\n'
+  }
+
+  // If there are no phase_records or no renderReadout, compose synchronously.
+  if (validRecords.length === 0 || typeof renderReadout !== 'function') {
+    return _finish([])
+  }
+
+  // Call renderReadout for each valid record. If any call returns a Promise, collect all as promises.
+  const results = validRecords.map(function(pr) {
+    try {
+      return renderReadout(pr.record !== undefined ? pr.record : null)
+    } catch (_) {
+      return ''
+    }
+  })
+
+  // Check if any result is a thenable (async renderReadout).
+  const hasPromise = results.some(function(r) {
+    return r && typeof r === 'object' && typeof r.then === 'function'
+  })
+  if (!hasPromise) {
+    // All synchronous — return string directly (parity path + sync stub tests).
+    return _finish(results.map(function(r) { return typeof r === 'string' ? r : '' }))
+  }
+
+  // At least one async — return a Promise that resolves to the assembled string.
+  return Promise.all(results.map(function(r) {
+    if (r && typeof r === 'object' && typeof r.then === 'function') return r
+    return Promise.resolve(typeof r === 'string' ? r : '')
+  })).then(_finish, function() { return _finish(results.map(function() { return '' })) })
+}
+
+module.exports = { gateForTerminal, isUsableDraft, renderRunOutcome }
 
 };
 
@@ -2687,9 +2801,11 @@ module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.notifyLedgerFor = notifyLedgerFor
 
-// FR-7: compose the front-half run-outcome envelope (embedding each phase's #104 readout via
-// front_half render-outcome) and return a parked result. Reads best-effort per-phase terminal records
-// + the durable NOTIFY ledger; render_run_outcome tolerates missing records.
+// FR-7: compose the front-half run-outcome envelope (in-process via frontHalfTwin.renderRunOutcome)
+// and return a parked result. Reads best-effort per-phase terminal records + the durable NOTIFY ledger.
+// The ENVELOPE judgment is in-process (no front_half.py render-outcome agent); only the per-phase
+// loop_readout RENDER stays an exec leaf (loop_readout.py --record <path>).
+// #115 Task 18: rewired from 1 decider agent to 0 — envelope is the twin, readout stays exec.
 async function frontHalfBoundary(workItem) {
   // The io() seam is async (it shares one contract with the bundle's Promise-returning leaf-bash io),
   // so await every read BEFORE building the outcome literal — embedding an un-awaited Promise would
@@ -2707,19 +2823,39 @@ async function frontHalfBoundary(workItem) {
     ],
     readout_record_ok: true,
   }
+  // recordOk guards UFR-6: if we cannot write the durable readout records, flag it in the reason.
+  // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
+  // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
   let recordOk = true
   try { await io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
-  // render-outcome prints TEXT (not JSON); call the leaf directly (no cmdRunner schema). If the
-  // outcome record could not be written, render has nothing to read -> flag UFR-6 in the reason.
+
+  // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
+  // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
+  // Used only when recordOk (the write seam is available); if recordOk is false the loop body is
+  // skipped (phase_records still embeds headers with no readout text — tolerable since UFR-6 fires).
+  async function renderReadout(record) {
+    const recPath = `/tmp/showrunner-${workItem}-fronthalf-readout-tmp.json`
+    try { await io().writeFile(recPath, JSON.stringify(record || {})) } catch (_) { return '' }
+    const text = await agent(
+      `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+      selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
+      { label: 'readout' })
+    return typeof text === 'string' ? text : ''
+  }
+
+  // In-process envelope composition (no agent for the judgment — only the per-phase readout is exec).
+  // If the durable outcome JSON could not be written, skip phase_records embed (no readout seam) and
+  // surface UFR-6 in the fallback reason instead; the twin still composes the envelope shell.
   const rendered = recordOk
-    ? await agent(
-        `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-        selfContained(`python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`),
-        { label: 'lib' })
-    : null
-  const reason = (typeof rendered === 'string' && rendered.trim())
-    ? rendered
+    ? frontHalfTwin.renderRunOutcome(outcome, renderReadout)
+    : frontHalfTwin.renderRunOutcome({ ...outcome, phase_records: [], readout_record_ok: false })
+
+  // rendered is a Promise when renderReadout is async (it is, above) — await it.
+  const text = await rendered
+
+  const reason = (typeof text === 'string' && text.trim())
+    ? text
     : recordOk
       ? 'front-half complete: plan and tasks gated — parked at the front-half boundary, awaiting owner'
       : '⚠️ front-half complete (plan and tasks gated) but the run-outcome record could not be written ' +

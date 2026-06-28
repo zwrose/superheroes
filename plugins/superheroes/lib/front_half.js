@@ -37,4 +37,118 @@ function isUsableDraft(docText, completionSignal, expectedSignal, requiredSectio
   return true
 }
 
-module.exports = { gateForTerminal, isUsableDraft }
+// ---------------------------------------------------------------------------
+// renderRunOutcome — faithful JS twin of front_half.py:render_run_outcome (FR-7).
+// Composes the front-half run-outcome envelope in-process (pure; never throws).
+// For phase_records, calls the optional renderReadout(record) injected by the spine
+// (exec-backed in the real run; a stub in unit tests).  Parity fixtures NEVER have
+// phase_records, so renderReadout is undefined for all parity cases — the loop body
+// is simply never reached.
+//
+// Return value: when all renderReadout calls return plain strings (or renderReadout is
+// absent), the function returns a string synchronously.  When renderReadout is async
+// (exec-backed in the spine), it returns a Promise<string>.  The spine always awaits it.
+// FR-8 sandbox: no fs/child_process/time-funcs/rand-funcs/process/bare-global (use globalThis).
+// ---------------------------------------------------------------------------
+
+function renderRunOutcome(outcome, renderReadout) {
+  const o = (outcome !== null && typeof outcome === 'object' && !Array.isArray(outcome)) ? outcome : {}
+  const lines = ['# Front-half run outcome', '']
+  const completed = (o.completed_phases && Array.isArray(o.completed_phases)) ? o.completed_phases : []
+  lines.push('**Completed phases:** ' + (completed.length ? completed.join(', ') : '(none)'))
+  lines.push('')
+
+  const docs = (o.docs && typeof o.docs === 'object' && !Array.isArray(o.docs)) ? o.docs : {}
+  if (Object.keys(docs).length > 0) {
+    lines.push('**Docs:**')
+    for (const k of Object.keys(docs)) {
+      lines.push('- ' + k + ' → ' + docs[k])
+    }
+    lines.push('')
+  }
+
+  if (o.parked_phase) {
+    lines.push('**Parked at:** ' + o.parked_phase + ' — ' + (o.park_reason || ''))
+    lines.push('')
+  }
+
+  // Deduplicated NOTIFY defaults: key is (phase, identity || message) — distinct un-identified
+  // NOTIFYs (no identity) fall back to message so they don't collapse on (phase, undefined).
+  const notify = Array.isArray(o.notify) ? o.notify : []
+  const deduped = []
+  const seen = new Set()
+  for (const n of notify) {
+    if (!n || typeof n !== 'object') continue
+    const key = JSON.stringify([n.phase, n.identity !== undefined ? n.identity : n.message])
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(n)
+  }
+  lines.push('**NOTIFY defaults (named — owner may veto):**')
+  if (deduped.length) {
+    for (const n of deduped) {
+      lines.push('- [' + (n.phase !== undefined ? n.phase : '?') + '] ' + (n.message !== undefined ? n.message : ''))
+    }
+  } else {
+    lines.push('- (none)')
+  }
+  lines.push('')
+
+  // Collect phase_records to embed (skip non-dict entries per oracle parity).
+  const phaseRecords = Array.isArray(o.phase_records) ? o.phase_records : []
+  const validRecords = phaseRecords.filter(function(pr) {
+    return pr && typeof pr === 'object' && !Array.isArray(pr)
+  })
+
+  const ufr6 = o.readout_record_ok === false
+
+  // Internal finalizer: receives per-record rendered texts (string[]) and assembles the full output.
+  function _finish(renderedTexts) {
+    const out = lines.slice()
+    for (let i = 0; i < validRecords.length; i++) {
+      const pr = validRecords[i]
+      const phase = pr.phase !== undefined ? pr.phase : '?'
+      out.push('## ' + phase + ' — review loop readout')
+      out.push('')
+      out.push(renderedTexts[i])
+      out.push('')
+    }
+    if (ufr6) {
+      out.push('> ⚠️ The durable readout record could not be written — this outcome is ' +
+        'reported to the invoking session only; treat the durable copy as missing (UFR-6).')
+      out.push('')
+    }
+    return out.join('\n').replace(/\s+$/, '') + '\n'
+  }
+
+  // If there are no phase_records or no renderReadout, compose synchronously.
+  if (validRecords.length === 0 || typeof renderReadout !== 'function') {
+    return _finish([])
+  }
+
+  // Call renderReadout for each valid record. If any call returns a Promise, collect all as promises.
+  const results = validRecords.map(function(pr) {
+    try {
+      return renderReadout(pr.record !== undefined ? pr.record : null)
+    } catch (_) {
+      return ''
+    }
+  })
+
+  // Check if any result is a thenable (async renderReadout).
+  const hasPromise = results.some(function(r) {
+    return r && typeof r === 'object' && typeof r.then === 'function'
+  })
+  if (!hasPromise) {
+    // All synchronous — return string directly (parity path + sync stub tests).
+    return _finish(results.map(function(r) { return typeof r === 'string' ? r : '' }))
+  }
+
+  // At least one async — return a Promise that resolves to the assembled string.
+  return Promise.all(results.map(function(r) {
+    if (r && typeof r === 'object' && typeof r.then === 'function') return r
+    return Promise.resolve(typeof r === 'string' ? r : '')
+  })).then(_finish, function() { return _finish(results.map(function() { return '' })) })
+}
+
+module.exports = { gateForTerminal, isUsableDraft, renderRunOutcome }

@@ -319,9 +319,11 @@ module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.notifyLedgerFor = notifyLedgerFor
 
-// FR-7: compose the front-half run-outcome envelope (embedding each phase's #104 readout via
-// front_half render-outcome) and return a parked result. Reads best-effort per-phase terminal records
-// + the durable NOTIFY ledger; render_run_outcome tolerates missing records.
+// FR-7: compose the front-half run-outcome envelope (in-process via frontHalfTwin.renderRunOutcome)
+// and return a parked result. Reads best-effort per-phase terminal records + the durable NOTIFY ledger.
+// The ENVELOPE judgment is in-process (no front_half.py render-outcome agent); only the per-phase
+// loop_readout RENDER stays an exec leaf (loop_readout.py --record <path>).
+// #115 Task 18: rewired from 1 decider agent to 0 — envelope is the twin, readout stays exec.
 async function frontHalfBoundary(workItem) {
   // The io() seam is async (it shares one contract with the bundle's Promise-returning leaf-bash io),
   // so await every read BEFORE building the outcome literal — embedding an un-awaited Promise would
@@ -339,19 +341,39 @@ async function frontHalfBoundary(workItem) {
     ],
     readout_record_ok: true,
   }
+  // recordOk guards UFR-6: if we cannot write the durable readout records, flag it in the reason.
+  // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
+  // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
   let recordOk = true
   try { await io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
-  // render-outcome prints TEXT (not JSON); call the leaf directly (no cmdRunner schema). If the
-  // outcome record could not be written, render has nothing to read -> flag UFR-6 in the reason.
+
+  // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
+  // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
+  // Used only when recordOk (the write seam is available); if recordOk is false the loop body is
+  // skipped (phase_records still embeds headers with no readout text — tolerable since UFR-6 fires).
+  async function renderReadout(record) {
+    const recPath = `/tmp/showrunner-${workItem}-fronthalf-readout-tmp.json`
+    try { await io().writeFile(recPath, JSON.stringify(record || {})) } catch (_) { return '' }
+    const text = await agent(
+      `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
+      selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
+      { label: 'readout' })
+    return typeof text === 'string' ? text : ''
+  }
+
+  // In-process envelope composition (no agent for the judgment — only the per-phase readout is exec).
+  // If the durable outcome JSON could not be written, skip phase_records embed (no readout seam) and
+  // surface UFR-6 in the fallback reason instead; the twin still composes the envelope shell.
   const rendered = recordOk
-    ? await agent(
-        `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-        selfContained(`python3 plugins/superheroes/lib/front_half.py render-outcome --outcome ${shq(outPath)}`),
-        { label: 'lib' })
-    : null
-  const reason = (typeof rendered === 'string' && rendered.trim())
-    ? rendered
+    ? frontHalfTwin.renderRunOutcome(outcome, renderReadout)
+    : frontHalfTwin.renderRunOutcome({ ...outcome, phase_records: [], readout_record_ok: false })
+
+  // rendered is a Promise when renderReadout is async (it is, above) — await it.
+  const text = await rendered
+
+  const reason = (typeof text === 'string' && text.trim())
+    ? text
     : recordOk
       ? 'front-half complete: plan and tasks gated — parked at the front-half boundary, awaiting owner'
       : '⚠️ front-half complete (plan and tasks gated) but the run-outcome record could not be written ' +
