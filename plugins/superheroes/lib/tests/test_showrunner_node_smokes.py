@@ -77,3 +77,11 @@ def test_showrunner_node_smoke_passes(rel):
     # whole suite into a single red assertion.
     result = subprocess.run(["node", rel], cwd=ROOT, text=True, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_eval_clamp_runs():
+    # Runs the standalone Node test for eval_clamp.js. NOT in SHOWRUNNER_SMOKES because
+    # the enforcement guard only matches showrunner_*_smoke.js / build_phase_*_smoke.js.
+    rel = "plugins/superheroes/lib/tests/test_eval_clamp.js"
+    result = subprocess.run(["node", rel], cwd=ROOT, text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
