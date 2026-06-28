@@ -2,8 +2,11 @@
 // The native "workhorse" build phase (#87). CONTROL FLOW ONLY (CONVENTIONS §10.1): every judgement
 // is a pure Python decider behind a *_cli.py bridge; this module detects events and sequences them.
 // It makes NO PR/merge/force-push (FR-10).
+// FR-4a (#115): build state lives in memory during a continuous run. build_state gather /
+// build_progress.reconcile are called ONLY on entry/resume (not per loop iteration).
 const { reviewPanel } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
+const { reconcile } = require('./build_progress.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
@@ -23,6 +26,28 @@ async function cmdRunner(cmd, opts = {}) {
     `values exactly as printed. Do NOT put the whole JSON into a single field, do NOT stringify or nest ` +
     `it, and do NOT add commentary or extra fields:\n\n${cmd}`,
     { label: opts.label || 'lib', schema: opts.schema })
+}
+
+// FR-4a: gather authoritative git state (entry/resume only, NOT per loop iteration).
+// Label 'gather-entry' is distinguishable from the per-built-task trailer-check gather
+// (label 'build_state_cli.py gather') so smokes can pin the once-at-entry property exactly.
+async function gatherState(workItem, branch, validIds, wt) {
+  return cmdRunner(
+    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
+    { label: 'gather-entry', schema: { type: 'object' } })
+}
+
+// FR-4a: derive the starting action + resume_at from authoritative state using the in-process twin.
+// Returns the reconcile decision object ({action, resume_at?, reason?}).
+function reconcileState(taskList, state) {
+  return reconcile(
+    taskList,
+    state.committed_task_ids || [],
+    state.unmapped_commits || 0,
+    state.review_records || {},
+    !!(state.worktree_dirty),
+    state.final_review || null,
+    state.provenance || null)
 }
 
 async function buildPhase(workItem, generation) {
@@ -45,54 +70,103 @@ async function buildPhase(workItem, generation) {
   const tasks = (await cmdRunner(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`,
     { label: 'task-list', schema: { type: 'object' } })).tasks || []
   if (tasks.length === 0) { log('no tasks to build'); return ok() }
-  // Reconcile-driven loop: reality (commits + records) wins; any ambiguity parks. Bounded by a
-  // guard so a non-progressing reconcile can never spin forever.
+
   const validIds = tasks.map((t) => t.id).join(',')
-  let lastAction = 'none'      // last reconcile action + gathered state, for guard-bound diagnosability
-  let lastState = {}
-  for (let guard = 0; guard < tasks.length * 4 + 8; guard += 1) {
-    const state = await cmdRunner(
-      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
-      { label: 'build_state_cli.py gather', schema: { type: 'object' } })
-    lastState = state
-    const d = await cmdRunner(
-      `python3 ${LIB}/build_progress_cli.py --state ${shq(JSON.stringify({ ...state, task_list: tasks }))}`,
-      { label: 'build_progress_cli.py', schema: { type: 'object', required: ['action'] } })
-    lastAction = d.action
-    if (d.action === 'complete') return ok()
-    if (d.action === 'park') return park(d.reason || 'build_progress parked')
-    if (d.action === 'reset_uncommitted') {
-      // Fence before any worktree mutation (UFR-10: the plan requires a fence before every
-      // commit/RESET), and park honestly if the reset itself fails (UFR-6).
-      if (!(await fenceOrPark(workItem, generation))) return park('lease lost before reset — park (UFR-10)')
-      const rr = await resetUncommitted(wt, branch)
-      if (!rr.ok) return park('could not reset uncommitted changes: ' + (rr.error || 'unknown'))
-      continue
-    }
-    if (d.action === 'build_task') {
-      const r = await buildOneTask(workItem, generation, d.resume_at, branch, validIds, wt)
-      if (r.parked) return park(r.reason); continue
-    }
-    if (d.action === 'review_task') {
-      const r = await reviewOneTask(workItem, generation, d.resume_at, branch, wt)
-      if (r.parked) return park(r.reason); continue
-    }
-    if (d.action === 'final_review') {
-      const fr = await runFinalReview(workItem, generation, branch, wt)
-      // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
-      // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-      if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
-      await recordFinalReviewClean(workItem); continue
-    }
-    if (d.action === 'write_provenance') {
-      const p = await writeProvenance(workItem)
-      if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown')); continue
-    }
-    return park('unexpected reconcile action: ' + d.action)
+
+  // FR-4a: gather authoritative git state ONCE at entry (not per iteration).
+  // A fresh invocation (after park/crash) re-gathers here — resume correctness preserved.
+  let state = await gatherState(workItem, branch, validIds, wt)
+
+  // Handle entry-level non-forward reconcile actions before entering the forward-walk.
+  // reset_uncommitted: fence, reset, then re-gather + re-reconcile ONCE (a reset is resume-like).
+  let d = reconcileState(tasks, state)
+  if (d.action === 'park') return park(d.reason || 'build_progress parked at entry')
+  if (d.action === 'reset_uncommitted') {
+    if (!(await fenceOrPark(workItem, generation))) return park('lease lost before reset — park (UFR-10)')
+    const rr = await resetUncommitted(wt, branch)
+    if (!rr.ok) return park('could not reset uncommitted changes: ' + (rr.error || 'unknown'))
+    // Re-gather + re-reconcile after reset (ground truth mutated).
+    state = await gatherState(workItem, branch, validIds, wt)
+    d = reconcileState(tasks, state)
+    if (d.action === 'park') return park(d.reason || 'build_progress parked after reset')
   }
-  return park('build loop exceeded its guard bound without completing (last action: ' + lastAction
-    + ', committed: ' + ((lastState.committed_task_ids || []).length)
-    + ', unmapped: ' + (lastState.unmapped_commits || 0) + ')')
+
+  // FR-4a forward-walk: in-memory state for the continuous run.
+  // Seed from the entry gather; advance only on confirmed durable success.
+  const builtTaskIds = new Set(state.committed_task_ids || [])
+  const reviewRecords = Object.assign({}, state.review_records || {})
+  // Determine the starting index from the entry reconcile's resume_at.
+  const resumeTaskId = d.resume_at ? d.resume_at.id : null
+
+  // Forward-walk states that are already-past (handled after all-tasks-built+reviewed):
+  // final_review, write_provenance, complete are processed after the task loop.
+  // If the entry action indicates we're already past the task loop, skip it.
+  const pastTaskLoop = (d.action === 'final_review' || d.action === 'write_provenance' || d.action === 'complete')
+
+  if (!pastTaskLoop) {
+    // Guard: bound so a non-progressing forward-walk can't spin forever.
+    const MAX_GUARD = tasks.length * 4 + 8
+    let guard = 0
+    // Find the start index (resume from the first un-built or un-reviewed task).
+    let startIdx = 0
+    if (resumeTaskId !== null) {
+      const idx = tasks.findIndex((t) => t.id === resumeTaskId)
+      if (idx >= 0) startIdx = idx
+    }
+
+    for (let i = startIdx; i < tasks.length; i += 0) {
+      guard += 1
+      if (guard > MAX_GUARD) {
+        return park('build loop exceeded its guard bound without completing (last task: '
+          + (tasks[i] ? tasks[i].id : '?') + ')')
+      }
+      const task = tasks[i]
+      const isBuilt = builtTaskIds.has(task.id)
+      const isReviewed = reviewRecords[task.id] === 'passed'
+
+      if (isBuilt && isReviewed) {
+        // Already done in memory; advance.
+        i += 1; continue
+      }
+      if (!isBuilt) {
+        // Build the task (fence, dispatch worker, commit, journal, then review).
+        const r = await buildOneTask(workItem, generation, task, branch, validIds, wt)
+        if (r.parked) return park(r.reason)
+        // On confirmed success (buildOneTask only returns !parked when journal+review both passed):
+        builtTaskIds.add(task.id)
+        reviewRecords[task.id] = 'passed'
+        i += 1; continue
+      }
+      if (isBuilt && !isReviewed) {
+        // Task implemented but not reviewed (e.g. after a crash mid-review): review it.
+        const r = await reviewOneTask(workItem, generation, task, branch, wt)
+        if (r.parked) return park(r.reason)
+        reviewRecords[task.id] = 'passed'
+        i += 1; continue
+      }
+    }
+  }
+
+  // All tasks built+reviewed. Run the whole-branch final review.
+  // Only run final_review if not already done (state.final_review?.clean covers the resume case
+  // where final_review is already clean but provenance is absent).
+  const alreadyFinalClean = state.final_review && state.final_review.clean
+  if (!alreadyFinalClean) {
+    const fr = await runFinalReview(workItem, generation, branch, wt)
+    // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
+    // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
+    if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
+    await recordFinalReviewClean(workItem)
+  }
+
+  // Write provenance if absent (FR-9): idempotent, only after final review clean.
+  const alreadyProv = state.provenance && state.provenance !== 'absent'
+  if (!alreadyProv) {
+    const p = await writeProvenance(workItem)
+    if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown'))
+  }
+
+  return ok()
 }
 
 // Reset ONLY uncommitted/untracked changes; never discard a commit (UFR-12). Returns {ok,error?}
@@ -142,12 +216,14 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       { label: 'worker', schema: { type: 'object', required: ['ok'] } })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
+      // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       const chk = await cmdRunner(
         `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
         { label: 'build_state_cli.py gather', schema: { type: 'object' } })
       if ((chk.unmapped_commits || 0) > 0) {
         return { parked: true, reason: 'a commit lacks its Task-Id trailer — park (UFR-7)' }
       }
+      // record-before-advance: journal must succeed before the task counts as built.
       await cmdRunner(
         `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
         + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
@@ -193,6 +269,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
           `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
           { label: 'minor_rollup_cli.py', schema: { type: 'object' } })
       }
+      // record-before-advance: record-reviewed must succeed before the task counts reviewed.
       await cmdRunner(
         `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(task.id)}`,
         { label: 'record-reviewed', schema: { type: 'object', required: ['ok'] } })

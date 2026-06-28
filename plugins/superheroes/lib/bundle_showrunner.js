@@ -10,9 +10,10 @@ const LIB = __dirname
 // #115: review_panel_shell.js now requires the panel twins in-process, so they bundle BEFORE it in
 // dependency order (circuit_breaker -> loop_state -> loop_synthesis -> panel_tally).
 // #115 Task 12: phase_step, recover, front_half added — showrunner.js now requires them in-process.
+// #115 Task 15: build_progress added — build_phase.js now requires it in-process (FR-4a).
 const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
-                 'review_panel_shell.js', 'test_pilot_phase.js', 'build_phase.js', 'model_tier.js',
-                 'phase_step.js', 'recover.js', 'front_half.js', 'showrunner.js']
+                 'review_panel_shell.js', 'test_pilot_phase.js', 'build_progress.js', 'build_phase.js',
+                 'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'showrunner.js']
 
 // Registry keys are the bare module name (no './' prefix, no '.js' suffix). `norm` MUST match the
 // runtime `__require`'s key derivation exactly, or every lookup throws "unknown module".
