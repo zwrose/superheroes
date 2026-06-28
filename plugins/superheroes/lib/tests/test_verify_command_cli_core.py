@@ -36,7 +36,7 @@ def test_vcc_falls_back_to_legacy(tmp_path, monkeypatch):
 
 
 def test_repo_doctor_prefers_core_md_verify(tmp_path, monkeypatch):
-    # repo_doctor.doctor uses core_md.read(cwd) verify when present; pure read (no migration).
+    # repo_doctor.doctor uses core_md.read(root) verify when present; pure read (no migration).
     repo = str(tmp_path)
     store = str(tmp_path / "store")
     _write_core(repo, verify="echo ok")
@@ -45,7 +45,7 @@ def test_repo_doctor_prefers_core_md_verify(tmp_path, monkeypatch):
     # capture the REAL read before patching (rd.core_md is cm — a lambda calling cm.read would recurse).
     _real_read = cm.read
     monkeypatch.setattr(rd.core_md, "read", lambda cwd, root=None: _real_read(repo, root=store))
-    res = rd.doctor(prof, "0.2.0", 3, repo, dict(os.environ), cwd=repo)
+    res = rd.doctor(prof, "0.2.0", 3, repo, dict(os.environ))
     # core.md's "echo ok" (a resolvable binary) wins → no "no longer resolves" drift for SHOULD_NOT_WIN
     assert res["readable"] is True
     assert not any("SHOULD_NOT_WIN" in d for d in res["drift"])

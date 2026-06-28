@@ -316,11 +316,12 @@ def _soft_fail():
     }
 
 
-def doctor(profile_path, plugin_ver, rubric_ver, root, env, *, cwd=None):
+def doctor(profile_path, plugin_ver, rubric_ver, root, env):
     """Core check. Returns the result dict. Catches everything → soft-fail. The verify command
-    prefers core_md.read(cwd).verifyCommand (a PURE read — never migrates, never writes), so the
-    2am staleness probe stays read-only; else the profile's recorded command."""
-    cwd = cwd or os.getcwd()
+    prefers core_md.read(root).verifyCommand (a PURE read — never migrates, never writes), so the
+    2am staleness probe stays read-only; else the profile's recorded command. Reading from `root`
+    (the project under inspection) ensures the core.md override is scoped to the correct project,
+    not the caller's working directory."""
     try:
         with open(profile_path) as fh:
             text = fh.read()
@@ -335,7 +336,7 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env, *, cwd=None):
     try:
         core_verify = None
         try:
-            rec = core_md.read(cwd)
+            rec = core_md.read(root)
             if rec and rec.get("verifyCommand"):
                 core_verify = rec["verifyCommand"]
         except Exception:
@@ -401,7 +402,7 @@ def main(argv, env=None):
         profile_path, plugin_ver, rubric_raw = positional[0], positional[1], positional[2]
         rubric_ver = _to_int(rubric_raw)
 
-        result = doctor(profile_path, plugin_ver, rubric_ver, root, env, cwd=os.getcwd())
+        result = doctor(profile_path, plugin_ver, rubric_ver, root, env)
     except Exception:
         result = _soft_fail()
 

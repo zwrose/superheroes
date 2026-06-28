@@ -294,3 +294,56 @@ def test_signal_hash_stable_and_empty(tmp_path, capsys):
     rcc, rc_res = run(clean, "review-crew@0.1.0", 2, root, env, capsys)
     assert rc_res["drift"] == []
     assert rc_res["signal_hash"] == ""
+
+
+def _write_core_md(root, verify_command):
+    """Write a minimal core.md under root/.claude/superheroes/core.md
+    so core_md.read(root) resolves it as the in-repo core.md for root."""
+    core_dir = os.path.join(root, ".claude", "superheroes")
+    os.makedirs(core_dir, exist_ok=True)
+    block = json.dumps({"schemaVersion": 1, "verifyCommand": verify_command,
+                        "stackTags": []}, indent=2)
+    text = (
+        "<!-- superheroes-core: schemaVersion=1 status=provisional"
+        " created=2026-01-01 updated=2026-01-01 -->\n\n"
+        "## Threat model\n\n_none_\n\n"
+        "## Canonical patterns\n\n_none_\n\n"
+        "```json superheroes-core\n%s\n```\n" % block
+    )
+    p = os.path.join(core_dir, "core.md")
+    with open(p, "w") as fh:
+        fh.write(text)
+    return p
+
+
+def test_core_md_override_uses_root_verify_path_present(tmp_path, capsys):
+    """core.md override is scoped to root: when root has a core.md whose verifyCommand
+    names a path that EXISTS under root, doctor uses that command and reports no path drift."""
+    root, env = make_root(tmp_path, src_dirs=["src", "lib/tests"], deps=["a"])
+    # Place core.md under root with a verifyCommand whose path exists under root.
+    _write_core_md(root, "verifybin -m pytest lib/tests/ -q")
+    # Profile records a different verify command (the override is the interesting part).
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify="verifybin --old-cmd")
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["ok"] is True
+    # The core.md override kicked in and the path exists → no path drift.
+    assert not any("missing path" in d.lower() for d in res["drift"])
+
+
+def test_core_md_override_uses_root_verify_path_absent(tmp_path, capsys):
+    """core.md override is scoped to root: when root has a core.md whose verifyCommand
+    names a path ABSENT under root, doctor reports the missing-path drift (not the
+    caller's cwd's paths — proving the scope is root, not cwd)."""
+    root, env = make_root(tmp_path, src_dirs=["src"], deps=["a"])
+    # Place core.md under root with a verifyCommand naming a path that does NOT exist under root.
+    _write_core_md(root, "verifybin -m pytest lib/gone/tests/ -q")
+    profile = write_profile(tmp_path, rubric_version=2, dep_set=["a"],
+                            verify="verifybin --old-cmd")
+    rc, res = run(profile, "review-crew@0.1.0", 2, root, env, capsys)
+    assert rc == 0
+    assert res["ok"] is True
+    # The core.md override kicked in and the path is absent under root → path drift.
+    assert any("missing path" in d.lower() for d in res["drift"])
+    assert any("lib/gone/tests" in d for d in res["drift"])
