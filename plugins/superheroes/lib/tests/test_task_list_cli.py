@@ -9,4 +9,6 @@ def test_cli_emits_tasks_json_for_missing_doc(tmp_path):
     out = subprocess.run([sys.executable, CLI, "--work-item", "does-not-exist"],
                          cwd=str(tmp_path), capture_output=True, text=True)
     assert out.returncode == 0
-    assert json.loads(out.stdout) == {"tasks": []}
+    data = json.loads(out.stdout)
+    assert data["tasks"] == []
+    assert data["raw_task_heading_count"] == 0

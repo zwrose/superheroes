@@ -1,4 +1,4 @@
-<!-- produce-leaf-version: 2 -->
+<!-- produce-leaf-version: 3 -->
 # Author-only produce leaf (front-half #88)
 
 The leaf the showrunner front-half dispatches to **author** a `plan` or `tasks` definition-doc
@@ -58,6 +58,19 @@ checks for `##`-level headings; bold labels fail the content check and the doc w
 This overrides the writing-plans body format for section labels only: use architect-tasks for
 *how to decompose* (bite-sized test-first steps, exact paths, complete code, no placeholders),
 but the section FORMAT must be `##` headings.
+
+### Task headings (CRITICAL for tasks docs)
+
+Every task heading MUST use a **colon** as the separator:
+
+```markdown
+### Task N: <title>
+```
+
+Do NOT use an em-dash (`—`), en-dash (`–`), or hyphen (`-`) as the separator. The parser
+tolerates those variants as a safety net, but the canonical format is colon. A tasks doc with
+non-colon separators is valid but non-canonical; author the doc with colons so the format
+contract is met and the doc is readable by all downstream tooling.
 
 For a **plan** doc, the required sections are already `##` headings in the plan template — no
 change needed.

@@ -5,7 +5,11 @@ task. A task is a top-level '### Task N: Title' heading in the writing-plans bod
 §3.2); headings inside fenced code blocks are ignored."""
 import re
 
-_TASK_RE = re.compile(r"^###\s+Task\s+(\d+)\s*:\s*(.+?)\s*$")
+# Separator-tolerance: accept colon, em-dash (U+2014), en-dash (U+2013), or plain hyphen as the
+# separator between the task number and title. The canonical authored format is colon
+# ('### Task N: Title'); the alternatives are tolerated to survive format drift by the produce
+# leaf. The produce-leaf prompt MUST keep instructing colon — this regex is a safety net only.
+_TASK_RE = re.compile(r"^###\s+Task\s+(\d+)\s*[:—–-]\s*(.+?)\s*$")
 
 
 def parse(body):

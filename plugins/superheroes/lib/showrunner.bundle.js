@@ -1908,8 +1908,23 @@ async function buildPhase(workItem, generation) {
   // every git read/write below must operate there, not in the showrunner's main checkout.
   const wt = setup.path
   // UFR-8: zero executable tasks -> finish without building.
-  const tasks = (await cmdRunner(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`,
-    { label: 'task-list', schema: { type: 'object' } })).tasks || []
+  // BUG-2 fix: pin tasks as array in schema so StructuredOutput enforces shape.
+  // BUG-3 fix: defensively recover a JSON string; non-array after recovery -> park.
+  const _taskResult = await cmdRunner(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`,
+    { label: 'task-list', schema: { type: 'object', properties: { tasks: { type: 'array' }, raw_task_heading_count: { type: 'number' } }, required: ['tasks'] } })
+  let tasks = _taskResult.tasks
+  if (typeof tasks === 'string') {
+    try { tasks = JSON.parse(tasks) } catch (_) { tasks = null }
+  }
+  if (!Array.isArray(tasks)) return park('task-list returned non-array tasks — schema mismatch, failing closed')
+  // Silent-zero guard: if the doc has raw task headings but the parser returned nothing,
+  // the format is wrong (e.g. em-dash in an old doc not yet re-authored). Park explicitly
+  // instead of silently finishing (which would be a UFR-8 bypass — building nothing when
+  // there are tasks to build). raw_task_heading_count===0 is the genuine empty case.
+  const rawHeadingCount = typeof _taskResult.raw_task_heading_count === 'number' ? _taskResult.raw_task_heading_count : 0
+  if (tasks.length === 0 && rawHeadingCount > 0) {
+    return park('tasks doc present but no parseable ### Task N: headings — format mismatch, refusing to build nothing')
+  }
   if (tasks.length === 0) { log('no tasks to build'); return ok() }
 
   const validIds = tasks.map((t) => t.id).join(',')
@@ -2124,7 +2139,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     if (d.action === 'park') return { parked: true, reason: d.reason }
     if (d.action === 're_request') continue        // both verdicts required (FR-5) -> re-review
     if (d.action === 'complete') {
-      if ((d.minors || []).length) {
+      if (Array.isArray(d.minors) && d.minors.length) {
         await cmdRunner(
           `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
           { label: 'minor_rollup_cli.py', schema: { type: 'object' } })
@@ -2157,9 +2172,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
   const fixerModel = (await cmdRunner(
     `python3 ${LIB}/model_tier_resolve.py --role fixer --context code`,
     { label: 'model_tier_resolve.py --role fixer', schema: { type: 'object' } })).model
-  const minors = (await cmdRunner(
+  const _minorsResult = await cmdRunner(
     `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`,
-    { label: 'minor_rollup_cli.py', schema: { type: 'object' } })).minors || []
+    { label: 'minor_rollup_cli.py', schema: { type: 'object' } })
+  const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
