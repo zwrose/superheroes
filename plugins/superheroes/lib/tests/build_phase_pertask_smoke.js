@@ -41,7 +41,6 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
     execRoute({ unmapped: 0, capture: (p) => { if (p.includes('build_state_cli.py gather')) gatherPrompt = p } }),
     ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
     ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-    ['task_review_cli.py', { action: 'complete', blocking: [], minors: [], cannot_verify: [] }],
   ])
   let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1,2', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a clean task should not park')

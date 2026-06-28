@@ -1925,9 +1925,11 @@ module.exports = { decide }
 // ===== build_phase.js =====
 __modules["build_phase"] = function (module, exports, require) {
 // plugins/superheroes/lib/build_phase.js
-// The native "workhorse" build phase (#87). CONTROL FLOW ONLY (CONVENTIONS §10.1): every judgement
-// is a pure Python decider behind a *_cli.py bridge; this module detects events and sequences them.
-// It makes NO PR/merge/force-push (FR-10).
+// The native "workhorse" build phase (#87). CONTROL FLOW ONLY: this module detects events and
+// sequences them — it makes NO judgement inline. #115: every judgement is an in-process parity-locked
+// JS twin (model_tier / worker_recovery / task_review / build_progress.reconcile); every IO/side-effect
+// runs through the exec(raw)+in-process-parse dumb pipe, parsed deterministically and fail-closed (the
+// old "trust-the-leaf-JSON" *_cli.py bridge is gone). It makes NO PR/merge/force-push (FR-10).
 // FR-4a (#115): build state lives in memory during a continuous run. build_state gather /
 // build_progress.reconcile are called ONLY on entry/resume (not per loop iteration).
 const { reviewPanel } = require('./review_panel_shell.js')
