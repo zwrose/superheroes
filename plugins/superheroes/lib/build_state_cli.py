@@ -60,6 +60,8 @@ def _gather(root, work_item, valid_ids, worktree=None, base_branch=None):
     rows = []
     for line in (log.stdout or "").splitlines():
         sha, _sep, tid = line.partition("\x1f")
+        if not sha.strip():  # spurious empty row from the trailers' trailing newline — not a commit
+            continue
         rows.append((sha, tid.strip()))
     committed, unmapped = build_state.parse_trailers(rows, valid_ids)
     dirty = bool(_git(git_root, "status", "--porcelain").stdout.strip())

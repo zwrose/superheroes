@@ -1948,6 +1948,15 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function park(reason) { return { confidence: 'low', assumptions: [reason] } }
 function ok() { return { confidence: 'high', assumptions: [] } }
 
+// FR-8: the configured base (--base) arg, threaded into EVERY build_state_cli gather so the entry
+// gather and the per-task UFR-7 check measure against the same base. Extracted to one helper so the
+// two call sites can't drift (the live bug: the per-task check omitted --base and parked off a
+// non-main base). Empty string when globalThis.__SR_BASE is unset -> byte-identical to today.
+function baseArg() {
+  const b = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  return b ? ` --base ${shq(b)}` : ''
+}
+
 // Reuse the spine's proven exec primitive (lazy require avoids a load-time cycle: showrunner's
 // build_phase reference is itself lazy, and deferring keeps build_phase's require surface unchanged
 // for the smokes). One exec, no duplication, no front-half change.
@@ -1976,10 +1985,8 @@ function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.
 // Returns the parsed state object, or NULL on exec-fail / parse-fail (the caller parks honestly).
 // FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
-  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
-  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
   const _res = await exec([
-    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${_baseArg}`,
+    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
   ])
   const _r0 = _res && _res[0]
   if (!_r0 || !_r0.ok) return null
@@ -2225,7 +2232,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       // exec+parse, fail closed: a leaf that can't run / returns unparseable output must NOT read
       // as a clean trailer state — park honestly (UFR-7).
       const _chkRes = await exec([
-        `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}`,
+        `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
       ])
       const _chk0 = _chkRes && _chkRes[0]
       let chk

@@ -48,6 +48,28 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
     'the write-time trailer check must score against the FULL valid-id set, not just this task')
   assert.ok(gatherPrompt.includes("--worktree '/tmp/wt'"),
     'the write-time gather must read git from the build worktree, not the ambient cwd')
+  // BUG-1 guard (byte-identical-to-today): with __SR_BASE UNSET the per-task gather carries NO --base.
+  assert.ok(!gatherPrompt.includes('--base'),
+    'with __SR_BASE unset the per-task trailer gather must NOT append --base (byte-identical to today)')
+
+  // (1a) Configurable base (FR-8): with __SR_BASE set, the PER-TASK UFR-7 gather must thread --base so
+  //      a build off a non-main base measures against that base (the live bug: the per-task check
+  //      omitted --base and parked off origin/main). Pins baseArg() threading on the per-task site.
+  let basePrompt = ''
+  globalThis.__SR_BASE = 'live-showrunner-102'
+  try {
+    global.agent = makeAgent([
+      execRoute({ unmapped: 0, capture: (p) => { if (p.includes('build_state_cli.py gather')) basePrompt = p } }),
+      ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ])
+    r = await bp.buildOneTask('wi', 5, TASK, 'live-showrunner-102', '1,2', '/tmp/wt')
+    assert.strictEqual(r.parked, false, 'a clean task on a configured base should not park')
+    assert.ok(basePrompt.includes("--base 'live-showrunner-102'"),
+      'the per-task UFR-7 gather must thread the configured base (FR-8) so it does not park off origin/main')
+  } finally {
+    delete globalThis.__SR_BASE  // don't leak the global into later cases / other smokes
+  }
 
   // (1b) Fail-closed: the trailer-check leaf fails to run (ok:false) -> park (UFR-7), NOT advance.
   global.agent = makeAgent([

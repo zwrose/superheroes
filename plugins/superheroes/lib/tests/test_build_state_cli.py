@@ -26,7 +26,7 @@ def test_gather_maps_trailered_commit_and_flags_untrailered(tmp_path):
                          cwd=repo, env=env, capture_output=True, text=True)
     st = json.loads(out.stdout)
     assert "1" in st["committed_task_ids"]
-    assert st["unmapped_commits"] >= 1                 # the stray commit
+    assert st["unmapped_commits"] == 1                 # EXACTLY the stray commit (no spurious empty row)
     assert st["provenance"] in ("absent", "present", "garbled")
 
 
@@ -50,7 +50,7 @@ def test_gather_reads_git_from_the_worktree_not_cwd(tmp_path):
                          cwd=cwd, env=env, capture_output=True, text=True)
     st = json.loads(out.stdout)
     assert "1" in st["committed_task_ids"]              # read came from the worktree, not cwd
-    assert st["unmapped_commits"] >= 1                  # the stray commit
+    assert st["unmapped_commits"] == 1                  # EXACTLY the stray commit (no spurious empty row)
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +74,11 @@ def test_gather_with_explicit_base_uses_configured_base(tmp_path):
         cwd=repo, env=env, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     st = json.loads(out.stdout)
-    # Only 1 commit above the configured base and it has a valid Task-Id.
-    # git log output has a trailing blank line that produces 1 spurious empty row;
-    # the key invariant is that the task commit IS mapped (committed_task_ids has "1").
+    # Only 1 commit above the configured base and it carries a valid Task-Id.
     assert "1" in st["committed_task_ids"]
-    # The only "unmapped" entry should be from the trailing blank line (not a real commit).
-    # When using the default base without --base the test has a stray commit -> >= 2 unmapped.
-    # With the correct --base, only the blank-line artifact remains.
-    assert st["unmapped_commits"] <= 1
+    # No stray commit above the configured base, and the trailers' trailing-newline artifact is
+    # now dropped (sha-less rows skipped in _gather) -> EXACTLY zero unmapped.
+    assert st["unmapped_commits"] == 0
 
 
 def test_gather_default_base_unchanged_when_base_arg_absent(tmp_path):
