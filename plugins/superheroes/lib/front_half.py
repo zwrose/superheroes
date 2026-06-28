@@ -74,6 +74,41 @@ def is_usable_draft(doc_text, completion_signal, expected_signal, required_secti
     return True
 
 
+def usable_draft_gaps(doc_text, required_sections=()):
+    """Additive diagnostic: return the SPECIFIC gaps that make a draft not fully usable.
+
+    Computes the same logic as is_usable_draft's content-completeness check (b) without
+    touching the completion-signal check (a). Returns:
+        {"missing_sections": [str], "placeholder": bool}
+
+    missing_sections: required section names that are absent OR not a ``##``-level heading
+        OR have an empty content segment.
+    placeholder: True if a placeholder token (_PLACEHOLDER) is found in the text.
+
+    Used by the produce repair loop (Layer 2b) to generate a targeted re-prompt hint.
+    Never raises. The is_usable_draft DECISION is frozen (this function does NOT change it).
+    """
+    missing = []
+    placeholder = bool(_PLACEHOLDER.search(doc_text)) if doc_text else False
+    # extract body (same slice as is_usable_draft)
+    body = ""
+    if doc_text and doc_text.startswith("---\n"):
+        end = doc_text.find("\n---", 4)
+        if end != -1:
+            body = doc_text[end + 4:]
+    for sec in required_sections:
+        m = re.search(r"^#{1,6}\s+" + re.escape(sec) + r"\s*$", body, re.MULTILINE)
+        if not m:
+            missing.append(sec)
+            continue
+        rest = body[m.end():]
+        nxt = re.search(r"^#{1,6}\s+", rest, re.MULTILINE)
+        segment = rest[:nxt.start()] if nxt else rest
+        if not segment.strip():
+            missing.append(sec)
+    return {"missing_sections": missing, "placeholder": placeholder}
+
+
 def render_run_outcome(outcome):
     """Compose the front-half's run-outcome envelope (FR-7): completed phases, where the docs
     landed, the park reason, the deduplicated produce/revise NOTIFY defaults (UFR-2), and each

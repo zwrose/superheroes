@@ -1,4 +1,4 @@
-<!-- produce-leaf-version: 1 -->
+<!-- produce-leaf-version: 2 -->
 # Author-only produce leaf (front-half #88)
 
 The leaf the showrunner front-half dispatches to **author** a `plan` or `tasks` definition-doc
@@ -32,6 +32,35 @@ You are the author-only produce leaf for the superheroes engine. Author ONE defi
    deterministically stamps the content-bound **completion signal** (`is_usable_draft`, the doc's
    body hash) so a crash mid-author leaves the draft re-producible (UFR-4). Author the complete
    doc and return; an incomplete/abandoned draft is the engine's re-produce path.
+
+## Section format (CRITICAL for tasks docs)
+
+For a **tasks** doc, emit the required sections `Goal`, `Architecture`, and `Tech Stack` as
+**`##` markdown headings** with non-empty content:
+
+```markdown
+## Goal
+
+<content>
+
+## Architecture
+
+<content>
+
+## Tech Stack
+
+<content>
+```
+
+Do NOT use bold inline labels (`**Goal:**`, `**Architecture:**`, `**Tech Stack:**`). The engine
+checks for `##`-level headings; bold labels fail the content check and the doc will be rejected.
+
+This overrides the writing-plans body format for section labels only: use architect-tasks for
+*how to decompose* (bite-sized test-first steps, exact paths, complete code, no placeholders),
+but the section FORMAT must be `##` headings.
+
+For a **plan** doc, the required sections are already `##` headings in the plan template — no
+change needed.
 
 ## Escalation (unattended)
 Follow the shared PROCEED / NOTIFY / GATE rubric (rubric/escalation-base.md). A GATE-class

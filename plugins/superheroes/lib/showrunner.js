@@ -200,45 +200,89 @@ function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phas
 // The --write-marker stamp is FOLDED into the author agent (FR-4 fold): the author's prompt
 // instructs it to run front_half_usable.py --write-marker after authoring the doc, so there is
 // no separate cmdRunner call — the author leaf handles its own completion stamp.
+// Layer 2b: bounded repair loop (N=2 retries, 3 total attempts). On a failed post-check the
+// author is re-dispatched with a TARGETED gap hint derived from the --emit-signals why-signal
+// (missing_sections + placeholder). Only parks (confidence:'low') after all attempts exhausted.
+// NOTIFY defaults are accumulated across all attempts (not dropped on a failed attempt).
+const _PRODUCE_MAX_RETRIES = 2   // N=2 retries -> 3 total author attempts
 async function producePhase(phase, workItem) {
   const doc = phase                                    // 'plan' | 'tasks'
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
   const model = authorModel()
-  // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
-  // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-  const authored = await agent(
-    `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
-    `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
-    `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
-    `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
-    selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
-    `Do NOT run review or record the review gate. Return ` +
-    `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
-    `{ identity, message }.`,
-    { label: `produce-${doc}`, model,
-      schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
-  if (authored == null) {
-    return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
-  }
-  // surface any produce-phase NOTIFY default in the durable ledger the boundary reads (UFR-2): a
-  // produce phase has no #104 loop record to ride, so it is named via the ledger, not the extras seam.
-  if (authored.notify && authored.notify.length) {
-    const ok = await appendNotify(workItem, authored.notify.map(
-      (n) => ({ phase: doc, identity: n && n.identity, message: n && n.message })))
-    if (!ok) {
-      // a NOTIFY default that can't be durably recorded must NOT be silently lost (UFR-2): park and
-      // name it. No marker is stamped yet, so a resume re-produces and retries the NOTIFY.
-      return { confidence: 'low', assumptions: ['produce NOTIFY default not durably recorded: ' +
-               authored.notify.map((n) => (n && n.message) || '').join('; ')] }
+  // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
+  // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
+  // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
+  // FR-8 sandbox: no banned tokens in this function body.
+  function _authorPrompt(gapSignal) {
+    const base =
+      `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
+      `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
+      `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
+      `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
+      selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+      `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
+      `Do NOT run review or record the review gate. Return ` +
+      `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
+      `{ identity, message }.`
+    if (!gapSignal) return base
+    const hints = []
+    const missing = (gapSignal.missing_sections && Array.isArray(gapSignal.missing_sections))
+      ? gapSignal.missing_sections : []
+    if (missing.length > 0) {
+      hints.push(
+        `Your previous draft was rejected: the following required sections must be ## markdown headings ` +
+        `with non-empty content: ${missing.join(', ')}. ` +
+        `Use "## ${missing[0]}" (a heading), NOT "**${missing[0]}:**" (bold inline label).`)
     }
+    if (gapSignal.placeholder) {
+      hints.push(`A placeholder token was found (e.g. TBD, {{…}}, or "similar to Task N") — remove it.`)
+    }
+    if (hints.length === 0) return base
+    return base + `\n\nIMPORTANT (retry): ` + hints.join(' ')
   }
-  // Verify the author actually stamped the marker (UFR-4 guard). usableDraft re-reads via exec+twin.
-  const after = await usableDraft(workItem, doc)
-  if (!after.usable) return { confidence: 'low', assumptions: [`produce step yielded no usable ${doc} draft`] } // UFR-4
-  return { confidence: 'high', assumptions: [] }
+  // Bounded author+repair loop: up to _PRODUCE_MAX_RETRIES retries (3 total attempts).
+  // lastSignal carries the why-signal from the previous failed check for the gap hint.
+  let lastSignal = null
+  for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
+    // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
+    // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
+    const authored = await agent(
+      _authorPrompt(attempt > 0 ? lastSignal : null),
+      { label: `produce-${doc}`, model,
+        schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    if (authored == null) {
+      return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
+    }
+    // surface any produce-phase NOTIFY default in the durable ledger the boundary reads (UFR-2): a
+    // produce phase has no #104 loop record to ride, so it is named via the ledger, not the extras seam.
+    // NOTIFY defaults are recorded on EVERY attempt (not dropped on a failed check — UFR-2).
+    if (authored.notify && authored.notify.length) {
+      const ok = await appendNotify(workItem, authored.notify.map(
+        (n) => ({ phase: doc, identity: n && n.identity, message: n && n.message })))
+      if (!ok) {
+        // a NOTIFY default that can't be durably recorded must NOT be silently lost (UFR-2): park and
+        // name it. No marker is stamped yet, so a resume re-produces and retries the NOTIFY.
+        return { confidence: 'low', assumptions: ['produce NOTIFY default not durably recorded: ' +
+                 authored.notify.map((n) => (n && n.message) || '').join('; ')] }
+      }
+    }
+    // Verify the author actually stamped the marker (UFR-4 guard). usableDraft re-reads via exec+twin.
+    // The why-signal (missing_sections, placeholder) is preserved for the next retry's gap hint.
+    const after = await usableDraft(workItem, doc)
+    if (after.usable) return { confidence: 'high', assumptions: [] }
+    // Store the gap signal for the next attempt's targeted hint.
+    lastSignal = after
+    // If more retries remain, loop back and re-dispatch the author with the gap hint.
+    // On the last attempt, fall through to park.
+  }
+  // All attempts exhausted — park low-confidence, naming the persistent gap.
+  const gapDesc = (lastSignal && lastSignal.missing_sections && lastSignal.missing_sections.length)
+    ? `missing ## headings: ${lastSignal.missing_sections.join(', ')}`
+    : (lastSignal && lastSignal.placeholder ? 'placeholder token present' : 'content check failed')
+  return { confidence: 'low',
+    assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
@@ -282,9 +326,12 @@ function gateForTerminal(terminal) {
 
 // usableDraft: exec runs front_half_usable.py --emit-signals, which computes the verdict
 // Python-side at the IO boundary (calls front_half.is_usable_draft) and returns a small
-// {usable, recorded, expected} signal — the large doc text never crosses the cheapest-model
-// pipe (live-surfaced large-payload-transport limit). The frontHalfTwin.isUsableDraft JS twin
-// stays for parity testing only; it is no longer called here on the live doc text.
+// {usable, recorded, expected, missing_sections, placeholder} signal — the large doc text
+// never crosses the cheapest-model pipe (live-surfaced large-payload-transport limit).
+// The frontHalfTwin.isUsableDraft JS twin stays for parity testing only; it is no longer
+// called here on the live doc text.
+// Layer 2a: the why-signal fields (missing_sections, placeholder) are forwarded so the
+// produce repair loop (producePhase) can craft a targeted gap hint for re-prompting.
 async function usableDraft(workItem, doc) {
   const results = await exec([
     `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
@@ -293,7 +340,11 @@ async function usableDraft(workItem, doc) {
   let signals = null
   try { signals = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
-  return { usable: !!signals.usable }
+  return {
+    usable: !!signals.usable,
+    missing_sections: Array.isArray(signals.missing_sections) ? signals.missing_sections : [],
+    placeholder: !!signals.placeholder,
+  }
 }
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
