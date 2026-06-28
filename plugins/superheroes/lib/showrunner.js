@@ -28,9 +28,17 @@ const REVIEW_CODE_REVIEWERS = [
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
 const ADVANCE_TERMINALS = new Set(['clean', 'clean-with-skips'])
 
+// the canonical severity tiers (panel_tally.SEV_RANK): Critical > Important > Minor > Nit.
+const DEFERRED_ITEMS = {
+  type: 'array',
+  items: {
+    type: 'object', required: ['id'],
+    properties: { id: { type: 'string' }, severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+  },
+}
 const FIX_REPORT_SCHEMA = {
   type: 'object',
-  properties: { fixed: { type: 'array' }, deferred: { type: 'array' } },
+  properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
 const CONFIG_SCHEMA = {
   type: 'object', required: ['verifyCommand'],
@@ -99,7 +107,11 @@ function reviewCodeLeaves(tiers, opts) {
     // Attach the computed extras to the fix report so #104's shared shell threads it
     // (report.extras -> tally -> readout). FR-6. Parse the cheap pipe's stdout (best-effort).
     let parsed = null
-    try { parsed = JSON.parse((out && out[0] && out[0].stdout) || '') } catch (_) {}
+    // enrichment-only: a parse miss silently drops the readout extras (fixes + parentOrigin). No
+    // control-flow rides on this (the deferred-set is the script's own file write), but log it so the
+    // dropped enrichment is observable.
+    try { parsed = JSON.parse((out && out[0] && out[0].stdout) || '') }
+    catch (_) { try { log(`recordDeferred: could not parse record_deferred.py extras — readout enrichment dropped`) } catch (_e) {} }
     if (parsed && parsed.extras && report && typeof report === 'object') report.extras = parsed.extras
   }
 
@@ -155,10 +167,15 @@ async function docRecordDeferred(report, _verdict, runDir) {
   // written first, then front_half.py record-deferred (frozen) appends the deferred identities to
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
   await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
-  await exec([
+  const results = await exec([
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
   ])
+  // A failed deferred-set write under-counts deferrals (a finding could re-block); surface it.
+  // No park: an under-count is itself fail-closed (a finding stays blocking; the loop doesn't falsely exit).
+  if (!(results && results[0] && results[0].ok)) {
+    try { log(`docRecordDeferred: deferred-set write may have failed for ${runDir} (under-count risk)`) } catch (_) {}
+  }
 }
 
 // the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
@@ -171,7 +188,12 @@ async function docReviser(blockers, runDir, context) {
     `name it in extras.parentOrigin. Return ONLY the report JSON ` +
     `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
     { label: 'doc-reviser',
-      schema: { type: 'object', properties: { fixes: { type: 'array' }, deferred: { type: 'array' },
+      // the doc-reviser path keys deferred items by `identity` (front_half.record_deferred reads
+      // d["identity"]), NOT `id` (the code-fixer/record_deferred.py key) — pin the actual on-wire shape.
+      schema: { type: 'object', properties: { fixes: { type: 'array' },
+                deferred: { type: 'array', items: { type: 'object', required: ['identity'],
+                  properties: { identity: { type: 'string' },
+                    severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } } } },
                 extras: { type: 'object' } } } })
   return out || null
 }
@@ -561,7 +583,20 @@ async function persistPhase(workItem, opts) {
     : [journalCmd, checkpointCmd]
 
   const results = await exec(commands)
-  return { ok: results.every(function(r) { return r && r.ok }) }
+  // Fail-CLOSE on a durable-write failure. r.ok is only the exec/bash exit code, but
+  // journal_entry.py / checkpoint_entry.py print {"ok":false} and exit 0 on a failed durable
+  // write (DurableWriteError / OSError) — so a script-level {"ok":false} must also fail the batch,
+  // or reviewDocPhase advances high-confidence on un-recorded state (UFR-5). set-gate is covered by
+  // its exec-ok (it sys.exit(1) on failure, and its non-JSON stdout falls through the parse).
+  const allOk = results.every(function (r) {
+    if (!r || !r.ok) return false                  // exec-level failure (e.g. set-gate sys.exit(1))
+    try {                                           // script-level {"ok":false} (journal/checkpoint exit 0 on failure)
+      const p = JSON.parse(r.stdout)
+      if (p && typeof p === 'object' && p.ok === false) return false
+    } catch (_e) { /* non-JSON stdout (e.g. set-gate) — exec-ok already covered it above */ }
+    return true
+  })
+  return { ok: allOk }
 }
 
 function inWorktree(cmd, worktree) {

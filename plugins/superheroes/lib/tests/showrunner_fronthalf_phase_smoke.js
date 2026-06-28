@@ -15,8 +15,11 @@ global.log = () => {}
 
 const BLOCKER = [{ file: 'docs/superheroes/wi/plan.md', line: 1, title: 'gap', severity: 'Critical', evidence: 'e' }]
 
-// gate: what read-gate returns. setGateFails: the set-gate step in persistPhase returns ok:false.
-function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails }) {
+// gate: what read-gate returns. setGateFails: the set-gate step in persistPhase returns ok:false
+// (exec-level failure: set-gate sys.exit(1) -> leaf ok:false). journalWriteFails: the journal command
+// reports exec ok:true (bash exit 0) but its STDOUT is {"ok":false} — the durable-write fail-OPEN case
+// (journal_entry.py DurableWriteError prints {"ok":false} and exits 0). persistPhase must fail-CLOSE on it.
+function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, journalWriteFails }) {
   let panelRuns = 0
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
@@ -29,7 +32,9 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
         const ok = !setGateFails
         return [
           { index: 0, ok, stdout: '' },   // set-gate
-          { index: 1, ok: true, stdout: '' },  // journal_entry
+          // journalWriteFails: bash exit 0 (exec ok:true) but stdout is {"ok":false} — the exact
+          // durable-write fail-OPEN shape persistPhase must now catch by parsing the stdout.
+          { index: 1, ok: true, stdout: journalWriteFails ? JSON.stringify({ ok: false, error: 'durable write failed' }) : '' },  // journal_entry
           { index: 2, ok: true, stdout: '' },  // checkpoint_entry
         ]
       }
@@ -84,7 +89,41 @@ async function main() {
   r = await sr.reviewDocPhase('plan', 'wi-d')
   assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed')
   assert.strictEqual(r.phaseResult.confidence, 'low', 'a failed gate write parks (low confidence, UFR-5)')
-  console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard (exec+twin, no cmdRunner)')
+
+  // (e) DURABLE-WRITE FAIL-CLOSE (the C1 regression): the journal command's bash exits 0 (exec ok:true)
+  //     but its STDOUT is {"ok":false} — journal_entry.py's DurableWriteError print-then-exit-0 shape.
+  //     The pre-fix `every(r => r.ok)` ignored stdout -> persistPhase returned {ok:true} -> reviewDocPhase
+  //     advanced HIGH-confidence on un-recorded state (silent UFR-5 defeat). After the fix persistPhase
+  //     parses each stdout and fails-CLOSE on a script-level {"ok":false}, so we park LOW.
+  clean('wi-e')
+  ag = makeAgent({ gate: 'pending', reviewerFindings: [], journalWriteFails: true })
+  global.agent = ag
+  r = await sr.reviewDocPhase('plan', 'wi-e')
+  assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed')
+  assert.strictEqual(r.phaseResult.confidence, 'low',
+    'a journal {"ok":false} durable-write failure (bash exit 0) parks LOW — persistPhase fails-close (C1)')
+  assert.deepStrictEqual(r.phaseResult.assumptions, ['gate write did not record for plan'],
+    'the park reason names the un-recorded gate write (UFR-5)')
+
+  // (e-unit) persistPhase directly: exec ok:true + stdout {"ok":false} must return {ok:false}; a
+  // matching all-{"ok":true} batch must return {ok:true}. Proves the parse fold (vs the pre-fix every(r.ok)).
+  global.agent = async () => [
+    { index: 0, ok: true, stdout: '' },                                  // set-gate (non-JSON stdout)
+    { index: 1, ok: true, stdout: JSON.stringify({ ok: false }) },       // journal durable-write failed, exit 0
+    { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },        // checkpoint ok
+  ]
+  let pp = await sr.persistPhase('wi-e2', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
+  assert.deepStrictEqual(pp, { ok: false },
+    'persistPhase fails-close when a batched command stdout is {"ok":false} despite exec ok:true (C1)')
+  global.agent = async () => [
+    { index: 0, ok: true, stdout: '' },
+    { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
+    { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },
+  ]
+  pp = await sr.persistPhase('wi-e3', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
+  assert.deepStrictEqual(pp, { ok: true }, 'persistPhase happy path: all stdout {"ok":true} -> {ok:true}')
+
+  console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard + durable-write fail-close (C1)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
