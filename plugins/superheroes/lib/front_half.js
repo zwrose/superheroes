@@ -79,7 +79,7 @@ function renderRunOutcome(outcome, renderReadout) {
   const seen = new Set()
   for (const n of notify) {
     if (!n || typeof n !== 'object') continue
-    const key = JSON.stringify([n.phase, n.identity !== undefined ? n.identity : n.message])
+    const key = JSON.stringify([n.phase, n.identity || n.message])
     if (seen.has(key)) continue
     seen.add(key)
     deduped.push(n)
