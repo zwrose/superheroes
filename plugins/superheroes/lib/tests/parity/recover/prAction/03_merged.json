@@ -1,1 +1,1 @@
-{"input": [{"pr": {"state": "merged", "number": 42}}], "expected": "gate"}
+{"input": [{"pr": {"state": "MERGED", "number": 42}}], "expected": "gate"}

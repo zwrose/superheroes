@@ -50,7 +50,7 @@ def reconcile(checkpoint, world):
 
     # (d) the owner ended the work by merging.
     pr = world.get("pr")
-    if isinstance(pr, dict) and pr.get("state") == "merged":
+    if isinstance(pr, dict) and str(pr.get("state", "")).lower() == "merged":
         return {"action": "gate",
                 "reason": "PR already merged — the work is done (merge is the owner's)"}
 
@@ -80,7 +80,7 @@ def pr_action(world):
     if isinstance(pr, dict):
         if not pr.get("number"):
             return "gate"      # malformed/empty PR read -> don't guess (anomalous)
-        return "gate" if pr.get("state") == "merged" else "adopt"
+        return "gate" if str(pr.get("state", "")).lower() == "merged" else "adopt"
     if pr is not None:
         return "gate"          # unexpected type/value -> don't guess (fail-closed)
     return "create"            # pr is None -> no PR exists -> create exactly one

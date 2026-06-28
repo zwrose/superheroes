@@ -1,1 +1,1 @@
-{"input": [{"lastGoodStep": 5}, {"pr": {"state": "merged", "number": 42}}], "expected": {"action": "gate", "reason": "PR already merged — the work is done (merge is the owner's)"}}
+{"input": [{"lastGoodStep": 5}, {"pr": {"state": "MERGED", "number": 42}}], "expected": {"action": "gate", "reason": "PR already merged — the work is done (merge is the owner's)"}}

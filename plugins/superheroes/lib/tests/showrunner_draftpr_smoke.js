@@ -91,5 +91,19 @@ function makeStubs({ worldPayload, createPayload }) {
     assert.strictEqual(out.sideEffect, null, 'gate: sideEffect null (no 2nd PR)')
   }
 
-  console.log('OK: draftPRPhase twin-boundary: adopt->high+pr, create->high+newPR(exec-hit), gate->low+null')
+  // ── Case 4: GATE (dropped pr key — fail-CLOSED) ──────────────────────────────
+  // The cheap leaf summarized the world to valid-JSON {} (the top-level `pr` key dropped).
+  // JSON.parse SUCCEEDS, so the old code overwrote the sentinel → world={} → world.pr undefined
+  // → prAction fell through to 'create' → a DUPLICATE draft PR. The fix re-arms the
+  // { pr: 'unknown' } sentinel when the parsed object has no own `pr` key → routes to GATE.
+  // makeStubs is constructed with createPayload:undefined, so the create exec THROWS if reached —
+  // this case FAILS pre-fix (it would create) and passes post-fix (it gates).
+  {
+    const sr = makeStubs({ worldPayload: {} /* valid JSON, no pr key */, createPayload: undefined })
+    const out = await sr.draftPRPhase('my-work-item')
+    assert.strictEqual(out.phaseResult.confidence, 'low', 'dropped-pr: confidence low (gated, not created)')
+    assert.strictEqual(out.sideEffect, null, 'dropped-pr: sideEffect null (no 2nd PR)')
+  }
+
+  console.log('OK: draftPRPhase twin-boundary: adopt->high+pr, create->high+newPR(exec-hit), gate->low+null, dropped-pr->gate(no 2nd PR)')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

@@ -2520,7 +2520,7 @@ function reconcile(checkpoint, world) {
     }
   }
   const pr = world.pr
-  if (pr && typeof pr === 'object' && pr.state === 'merged') {
+  if (pr && typeof pr === 'object' && String(pr.state).toLowerCase() === 'merged') {
     return { action: 'gate', reason: "PR already merged — the work is done (merge is the owner's)" }
   }
   if (pr === _UNKNOWN) {
@@ -2536,7 +2536,7 @@ function prAction(world) {
   if (pr === _UNKNOWN) return 'gate'
   if (pr && typeof pr === 'object' && !Array.isArray(pr)) {
     if (!pr.number) return 'gate'
-    return pr.state === 'merged' ? 'gate' : 'adopt'
+    return String(pr.state).toLowerCase() === 'merged' ? 'gate' : 'adopt'
   }
   if (pr !== null && pr !== undefined) return 'gate'
   return 'create'
@@ -3860,7 +3860,12 @@ async function draftPRPhase(workItem) {
   ])
   let world = { pr: 'unknown' }  // fail-closed default
   if (worldResults[0] && worldResults[0].ok) {
-    try { world = JSON.parse(worldResults[0].stdout) } catch (_) {}
+    try {
+      // A dropped top-level `pr` key (valid-JSON {} that summarized the world away) must NOT fall
+      // through to 'create' (a duplicate PR) — treat it as a read failure and keep the gate sentinel.
+      const parsed = JSON.parse(worldResults[0].stdout)
+      world = (parsed && typeof parsed === 'object' && ('pr' in parsed)) ? parsed : { pr: 'unknown' }
+    } catch (_) { /* world stays { pr: 'unknown' } */ }
   }
   const act = recoverTwin.prAction(world)
   if (act === 'gate') {

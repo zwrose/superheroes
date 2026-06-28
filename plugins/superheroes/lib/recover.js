@@ -26,7 +26,7 @@ function reconcile(checkpoint, world) {
     }
   }
   const pr = world.pr
-  if (pr && typeof pr === 'object' && pr.state === 'merged') {
+  if (pr && typeof pr === 'object' && String(pr.state).toLowerCase() === 'merged') {
     return { action: 'gate', reason: "PR already merged — the work is done (merge is the owner's)" }
   }
   if (pr === _UNKNOWN) {
@@ -42,7 +42,7 @@ function prAction(world) {
   if (pr === _UNKNOWN) return 'gate'
   if (pr && typeof pr === 'object' && !Array.isArray(pr)) {
     if (!pr.number) return 'gate'
-    return pr.state === 'merged' ? 'gate' : 'adopt'
+    return String(pr.state).toLowerCase() === 'merged' ? 'gate' : 'adopt'
   }
   if (pr !== null && pr !== undefined) return 'gate'
   return 'create'
