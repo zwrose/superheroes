@@ -66,8 +66,9 @@ function standardLeaf(p, { provOk = true } = {}) {
 // reviewerAgent/recordDeferred are set on globalThis below.
 const SMART_STUBS = [
   ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+  // #115 increment B: task_review is now an in-process TWIN (no leaf). The reviewer returns clean
+  // verdicts + no findings, so the real twin decides 'complete' in-process — no stub route needed.
   ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-  ['task_review_cli.py', { action: 'complete', blocking: [], minors: [], cannot_verify: [] }],
   // verify_gate.py is called by the panel's verify leaf (label 'verify:r<round>'). Raw run data -> twin -> 'pass'.
   ['verify_gate.py', { command: 'pytest -q', returncode: 0, timedOut: false }],
 ]
@@ -184,8 +185,8 @@ const SMART_STUBS = [
         return standardLeaf(p)
       }),
       ['worker', () => { workerBuilt += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      // #115 increment B: task_review is an in-process twin now; clean verdicts -> twin says 'complete'.
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-      ['task_review_cli.py', { action: 'complete', blocking: [], minors: [], cannot_verify: [] }],
       // verify_gate.py is a FINAL-REVIEW-ONLY leaf — counting it proves the whole-branch final review
       // actually RE-RAN (never reached on a skip). record-final-review corroborates.
       ['verify_gate.py', () => { finalReviewRan += 1; return { command: 'none', returncode: 0, timedOut: false } }],

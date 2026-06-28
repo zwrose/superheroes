@@ -1,0 +1,1 @@
+{"input": [2, "needs_context"], "expected": {"action": "escalate", "reason": "retry budget nearly spent — escalate to a more capable worker (UFR-3)"}}

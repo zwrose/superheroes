@@ -7,6 +7,11 @@
 const { reviewPanel } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
 const modelTierTwin = require('./model_tier.js')
+// #115 increment B: the two SMART judgement leaves (worker_recovery, task_review) are now
+// parity-locked in-process twins (no leaf — judgments live in twins, called in-process). Pure
+// deciders with no IO, so a top-level require is safe (no load-time cycle).
+const workerRecoveryTwin = require('./worker_recovery.js')
+const taskReviewTwin = require('./task_review.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
@@ -33,20 +38,9 @@ function _reconcile(...a) { return require('./build_progress.js').reconcile(...a
 // (set by the Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS).
 function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null }
 
-// JS<->Python bridge: run a lib command in a leaf, return its stdout JSON. Forwards the caller's
-// label (so real-run records AND smokes can distinguish calls — unlike showrunner's fixed 'lib').
-// #115 increment A: the IO/side-effect leaves below are ported to exec(raw)+in-process-parse; this
-// cmdRunner remains for the two SMART judgement leaves not yet twinned (worker_recovery, task_review).
-async function cmdRunner(cmd, opts = {}) {
-  // Map each top-level key of the command's stdout JSON to the same-named StructuredOutput field —
-  // never collapse the whole JSON into one field (a schema-valid-but-wrong live-only derailment).
-  return agent(
-    `Use the Bash tool to run exactly this command. It prints ONE JSON object to stdout. Return that ` +
-    `object via StructuredOutput by copying each of its top-level keys to the same-named output field, ` +
-    `values exactly as printed. Do NOT put the whole JSON into a single field, do NOT stringify or nest ` +
-    `it, and do NOT add commentary or extra fields:\n\n${cmd}`,
-    { label: opts.label || 'lib', schema: opts.schema })
-}
+// #115 increment B: cmdRunner is gone. The IO/side-effect leaves are ported to exec(raw)+in-process
+// -parse (increment A); the two SMART judgement leaves (worker_recovery, task_review) are now
+// parity-locked in-process twins (above) — no JS<->Python bridge remains in this module.
 
 // FR-4a: gather authoritative git state (entry/resume only, NOT per loop iteration).
 // Ported to exec(raw)+in-process-parse: the leaf runs the command and returns its raw stdout; the
@@ -330,9 +324,8 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       }
       return reviewLoop(workItem, generation, task, branch, wt)
     }
-    const rec = await cmdRunner(
-      `python3 ${LIB}/worker_recovery_cli.py --attempt ${attempt} --signal ${shq(worker.signal || 'needs_context')}`,
-      { label: 'worker_recovery_cli.py', schema: { type: 'object', required: ['action'] } })
+    // #115 increment B: bounded recovery decided in-process via the worker_recovery twin (no leaf).
+    const rec = workerRecoveryTwin.decide(attempt, worker.signal || 'needs_context')
     if (rec.action === 'park') return { parked: true, reason: rec.reason }
     attempt += 1                                   // retry_with_context / escalate -> re-dispatch
   }
@@ -355,11 +348,9 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
       + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
       { label: 'review', schema: { type: 'object', required: ['verdicts'] } })
-    const d = await cmdRunner(
-      `python3 ${LIB}/task_review_cli.py --verdicts ${shq(JSON.stringify(review.verdicts || {}))} `
-      + `--findings ${shq(JSON.stringify(review.findings || []))} --round ${round} `
-      + `--max-rounds ${MAX_ROUNDS} --history ${shq(JSON.stringify(history))}`,
-      { label: 'task_review_cli.py', schema: { type: 'object', required: ['action'] } })
+    // #115 increment B: the bespoke two-verdict decision is decided in-process via the task_review
+    // twin (no leaf). Same shape: {action, blocking, minors, cannot_verify, reason}.
+    const d = taskReviewTwin.decide(review.verdicts || {}, review.findings || [], round, MAX_ROUNDS, history)
     if (d.action === 'park') return { parked: true, reason: d.reason }
     if (d.action === 're_request') continue        // both verdicts required (FR-5) -> re-review
     if (d.action === 'complete') {
@@ -443,7 +434,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   return { terminal: verdict && verdict.terminal }
 }
 
-module.exports = { buildPhase, cmdRunner, shq, LIB, MAX_ROUNDS, park, ok }
+module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok }
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

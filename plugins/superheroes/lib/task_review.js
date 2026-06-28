@@ -1,0 +1,48 @@
+// plugins/superheroes/lib/task_review.js
+// In-process twin of task_review.py (#115 increment B) — byte-for-byte parity is CI-enforced
+// (test_parity.py). The BESPOKE two-verdict per-task review decision (FR-5/FR-6/FR-7, UFR-5), NOT
+// routed through reviewPanel. Reuses only the loop primitives: circuit_breaker.BLOCKING (the
+// Critical/Important set), circuit_breaker.checkCircuitBreaker, and loop_state.decide.
+const circuitBreaker = require('./circuit_breaker.js')
+const loopState = require('./loop_state.js')
+
+const REQUIRED_VERDICTS = ['spec_compliance', 'code_quality']
+// exit_skipped maps to PARK, never complete: a deliberately-left-unresolved blocker must park (UFR-4).
+// (The bespoke loop passes skippedBlocking=0 so loop_state never returns exit_skipped today; the
+// fail-closed mapping guards against a future contract change rather than fail open.)
+const _MAP = { review: 'review', exit_clean: 'complete', exit_skipped: 'park', halt: 'park' }
+
+function _partition(findings) {
+  const blocking = []; const minors = []; const cannotVerify = []
+  for (const f of findings || []) {
+    if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
+    if (f && circuitBreaker.BLOCKING.has(f.severity)) blocking.push(f)
+    else minors.push(f)
+  }
+  return { blocking, minors, cannotVerify }
+}
+
+function decide(verdicts, findings, rnd, maxRounds, history) {
+  verdicts = verdicts || {}
+  if (!REQUIRED_VERDICTS.every((k) => verdicts[k])) {
+    return { action: 're_request', blocking: [], minors: [], cannot_verify: [],
+      reason: 'both verdicts (spec-compliance + code-quality) are required (FR-5)' }
+  }
+  const { blocking, minors, cannotVerify } = _partition(findings)
+  const rounds = (history || []).concat([{ round: rnd, findings: findings || [] }])
+  const brk = circuitBreaker.checkCircuitBreaker(rounds, maxRounds)
+  const [action, , loopReason] = loopState.decide(blocking.length, 0, rnd, maxRounds, !!brk.halt)
+  let mapped = _MAP[action]
+  let reason = loopReason
+  if (brk.halt) {
+    reason = brk.detail !== undefined ? brk.detail : reason
+  }
+  // UFR-5: never complete while a cannot-verify item is unresolved — force a resolution round.
+  if (mapped === 'complete' && cannotVerify.length) {
+    mapped = 'review'
+    reason = "unresolved 'cannot verify from diff' item(s) must be confirmed, sent back, or parked (UFR-5)"
+  }
+  return { action: mapped, blocking, minors, cannot_verify: cannotVerify, reason }
+}
+
+module.exports = { decide }

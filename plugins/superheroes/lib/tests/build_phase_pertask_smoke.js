@@ -63,24 +63,29 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   assert.strictEqual(r.parked, true, 'a failed trailer-check leaf must park (fail closed, UFR-7)')
   assert.ok(/verify commit trailers/i.test(r.reason || ''), 'honest UFR-7 fail-closed reason')
 
-  // (2) Worker stuck (plan_wrong) -> recovery says park (UFR-3).
+  // (2) Worker stuck (plan_wrong) -> the worker_recovery TWIN parks for real (UFR-3). No leaf: the
+  //     worker returns {ok:false, signal:'plan_wrong'} and workerRecoveryTwin.decide parks in-process.
   global.agent = makeAgent([
     execRoute(),
-    ['worker_recovery_cli.py', { action: 'park', reason: 'plan wrong' }],
     ['worker', { ok: false, signal: 'plan_wrong' }],
   ])
   r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'worker plan_wrong should park (UFR-3)')
+  assert.ok(/plan\/task is wrong/i.test(r.reason || ''), 'park reason is the twin\'s real plan_wrong reason')
 
-  // (3) Review parks (cap reached) -> park (UFR-4).
+  // (3) Review never converges -> the task_review TWIN parks (UFR-4). No leaf: a persistent identical
+  //     Important finding makes the real twin return 'review' (fix) on round 1, then 'park' on round 2
+  //     when the circuit breaker sees the SAME blocking finding recur after a fix was committed. The
+  //     park is genuine (the twin halts a non-progressing loop), not a stubbed action.
   global.agent = makeAgent([
     execRoute(),
-    ['task_review_cli.py', { action: 'park', reason: 'cap reached' }],
     ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' },
                  findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }],
+    ['fixer', ''],
   ])
   r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'unconverged review should park (UFR-4)')
+  assert.ok(/recurred/i.test(r.reason || ''), 'park reason is the twin\'s real recurring-finding breaker reason')
 
   // (4) Fence lost before a build write -> park (UFR-10). The fence leaf returns {ok:false}.
   global.agent = makeAgent([
@@ -97,24 +102,25 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'a failed fence leaf must read as lost (fail closed, UFR-10)')
 
-  // (5) Converging fix loop: round 1 blocking -> review -> fix; round 2 clean -> complete.
-  //     The task_review mock is ROUND-DRIVEN (it reads --round from the command), not call-count:
-  //     a mutant that dropped `round += 1` would never reach round 2, so the loop would never
-  //     converge — genuinely pinning round++/history.push (a frozen counter fails to complete).
+  // (5) Converging fix loop: round 1 returns a blocking finding -> the real task_review TWIN says
+  //     'review' -> fix; the FIXER then resolves it, so round 2's review is clean -> twin says
+  //     'complete'. The reviewer mock is STATEFUL (blocking on call 1, clean afterward), so a mutant
+  //     that dropped `round += 1` / `history.push` (a frozen loop) would re-fix the same finding
+  //     forever and never reach the clean second review -> genuinely pins the loop advance.
+  let reviewCalls = 0
   global.agent = makeAgent([
     execRoute(),
-    ['task_review_cli.py', (p) => {
-      const round = parseInt((p.match(/--round (\d+)/) || [])[1] || '0', 10)
-      return round >= 2
-        ? { action: 'complete', blocking: [], minors: [], cannot_verify: [] }
-        : { action: 'review', blocking: [{ severity: 'Important', file: 'a', title: 'bug' }], minors: [], cannot_verify: [] }
+    ['review', () => {
+      reviewCalls += 1
+      return reviewCalls >= 2
+        ? { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }
+        : { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }
     }],
-    ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' },
-                 findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }],
     ['fixer', ''],
   ])
   r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a converging fix loop should complete, not park')
+  assert.ok(reviewCalls >= 2, 'the loop advances to a second (clean) review round before completing')
 
   console.log('ok: build_phase per-task (FR-6/UFR-3/4/5/7/10, exec fail-closed)')
 })()
