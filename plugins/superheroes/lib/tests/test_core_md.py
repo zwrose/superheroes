@@ -492,6 +492,54 @@ def test_resume_both_files_present_completes_retirement(tmp_path):
     assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
 
 
+def test_resume_empty_placeholder_rescues_rich_legacy(tmp_path):
+    # Part D / #121 (DATA LOSS): the destination core + layer exist only as EMPTY placeholders
+    # (a botched/interrupted set-up) while a RICH legacy still holds the only copy of the real
+    # threat model + patterns. The RESUME branch must NOT retire the legacy and keep the empty
+    # core — it re-derives losslessly from the legacy, THEN retires it.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)  # rich: verify npm test, threat multi-tenant, patterns
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))  # empty body
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    # the rich content was rescued into the destination — not lost
+    got = CM.read(repo, root=store)
+    assert got is not None
+    assert got["verifyCommand"] == "npm test"
+    assert "multi-tenant" in got["threatModel"]
+    layer = open(_hero_layer_path(repo, "review-crew")).read()
+    assert "## Scope exclusions" in layer
+    # legacy retired only AFTER its content was secured
+    assert not os.path.exists(legacy)
+    assert res["action"] in ("migrated", "completed")
+
+
+def test_resume_empty_placeholder_refuses_to_destroy_ambiguous_legacy(tmp_path):
+    # Part D / #121: an ambiguous (non-auto-derivable) legacy must NEVER be silently deleted over
+    # an empty placeholder — surface it for hand-reconcile, legacy preserved.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))  # ambiguous
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "ambiguous"
+    assert os.path.exists(legacy)  # NOT destroyed
+
+
 def test_resume_core_present_layer_absent_rederives(tmp_path):
     # UFR-5: a crash between (1) and (2) left core.md but no layer → re-derive the split from
     # the still-present legacy profile (never lose the layer).

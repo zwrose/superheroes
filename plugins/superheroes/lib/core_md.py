@@ -371,6 +371,31 @@ def _in_repo_mode(cwd, root):
     return store_core.run_git(cwd, "rev-parse", "--show-toplevel") is not None
 
 
+def _facts_are_empty(rec):
+    """An EMPTY PLACEHOLDER core: it parses, but carries no real shared facts (no verify command,
+    threat model, patterns, or stack). Presence of such a record must never be mistaken for a
+    populated calibration when deciding whether a legacy profile is safe to retire (#121 Part D)."""
+    if rec is None:
+        return True
+    return not ((rec.get("verifyCommand") or "").strip()
+                or (rec.get("threatModel") or "").strip()
+                or (rec.get("patterns") or "").strip()
+                or rec.get("stackTags"))
+
+
+def _layer_is_empty(layer_p):
+    """True when the layer file is absent or carries only its provenance line (no body sections)."""
+    try:
+        with open(layer_p, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return True
+    lines = text.splitlines()
+    if lines and lines[0].lstrip().startswith("<!--"):
+        lines = lines[1:]  # drop the §2.2 provenance comment line
+    return "\n".join(lines).strip() == ""
+
+
 def migrate_on_read(cwd, hero, *, root=None, now=None):
     """Convert a hero's legacy profile to core.md + a layer, all-or-nothing, under the lock,
     with the convergent resume rule (UFR-5/FR-11). Returns
@@ -416,6 +441,36 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             # Remove a still-present legacy file (a prior run wrote both new files but did not
             # finish retiring the legacy).
             if legacy_present:
+                # DATA-LOSS GUARD (#121 Part D): "present" is not "populated". A prior interrupted
+                # set-up can leave the new core/layer as EMPTY PLACEHOLDERS while the legacy still
+                # holds the only copy of the real threat model + patterns — retiring it here would
+                # lose that content. Before unlinking, RESCUE any empty placeholder from the legacy
+                # (lossless populate-then-retire); a non-empty / hand-edited piece is left untouched
+                # (FR-11). A rich legacy that cannot be safely re-derived (ambiguous) is NOT retired
+                # over a placeholder — surfaced for hand-reconcile instead of silently destroyed.
+                core_empty = _facts_are_empty(read(cwd, root))
+                layer_empty = _layer_is_empty(layer_p)
+                if core_empty or layer_empty:
+                    try:
+                        with open(legacy, encoding="utf-8") as fh:
+                            legacy_text = fh.read()
+                    except OSError:
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "legacy-unreadable"})
+                        return {"action": "deferred"}
+                    if classify(legacy_text, hero) != "standard":
+                        return {"action": "ambiguous"}  # never destroy an un-derivable legacy over a placeholder
+                    core_facts, layer_text = split_profile(legacy_text, hero)
+                    try:
+                        if core_empty:
+                            store_core.atomic_write(
+                                core_p, render_core(core_facts, "provisional", stamp, stamp))
+                        if layer_empty:
+                            store_core.atomic_write(
+                                layer_p, _render_layer(layer_text, hero, "provisional", stamp))
+                    except OSError:
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
+                        return {"action": "deferred"}
+                    did_work = True
                 try:
                     os.unlink(legacy)
                 except OSError:
