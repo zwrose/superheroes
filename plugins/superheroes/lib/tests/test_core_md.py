@@ -392,6 +392,20 @@ def test_cli_confirm_flips_core(tmp_path, capsys):
     assert CM.read(repo, root=store)["status"] == "confirmed"
 
 
+def test_confirm_does_not_downgrade_a_newer_schema_core(tmp_path):
+    # #121 Part A / UFR-3: confirm() must NEVER rewrite a forward-schema (behind) core — that
+    # would downgrade schemaVersion and drop fields the running version doesn't understand. write()
+    # and migrate_on_read() both refuse to rewrite a behind record; confirm() must too.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, CM.SCHEMA_VERSION + 1, status="provisional")  # newer schema, provisional
+    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
+    before = open(core_p).read()
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "behind"
+    assert open(core_p).read() == before  # file untouched — not downgraded, not re-rendered
+
+
 def test_classify_standard_review_profile():
     assert CM.classify(_REVIEW_PROFILE, "review-crew") == "standard"
 

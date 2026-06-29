@@ -585,11 +585,14 @@ def confirm(cwd, *, root=None, now=None):
       - {action: "confirmed"}  flipped provisional → confirmed
       - {action: "noop"}       already confirmed (idempotent)
       - {action: "absent"}     no core.md to confirm
+      - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
       - {action: "deferred"}   lock contended / store unwritable (UFR-4)"""
     stamp = now or _today()
     existing = read(cwd, root)
     if existing is None:
         return {"action": "absent", "record": None}
+    if existing.get("behind"):
+        return {"action": "behind", "record": existing}
     if existing.get("status") == "confirmed":
         return {"action": "noop", "record": existing}
     if mode_registry.ensure_project_store(cwd, root) is None:
@@ -602,6 +605,10 @@ def confirm(cwd, *, root=None, now=None):
         existing = read(cwd, root)  # re-read under the lock
         if existing is None:
             return {"action": "absent", "record": None}
+        # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
+        # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.
+        if existing.get("behind"):
+            return {"action": "behind", "record": existing}
         if existing.get("status") == "confirmed":
             return {"action": "noop", "record": existing}
         facts = {k: existing[k] for k in ("verifyCommand", "stackTags", "threatModel", "patterns")}
