@@ -46,6 +46,14 @@ connected browser), **offer** to set it up now or leave it for later. If the own
 still **completes** and the project is usable without it. If they opt into test-pilot but no browser
 tool is connected, guide them to connect one (or set it aside) rather than fail (UFR-4).
 
+When the owner **explicitly declines** an optional hero (not merely "later"), record it so the
+view tune-menu does not re-offer it on every run (FR-6 / #121):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
+```
+
 ## 5 — Secrets stay out of shared calibration (NFR)
 
 Any hero credential (such as test-pilot's sign-in) records **only non-secret references — the names
