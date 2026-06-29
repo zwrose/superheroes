@@ -103,7 +103,47 @@ async function main() {
   )
   assert.ok(!reviewerDispatched, 'null resolver: no reviewer or config dispatched — root is NOT reviewed')
 
-  console.log('ok: FIX A — resolveTarget seam targets build worktree + null-resolver parks (never reviews root)')
+  // ─────────────────────────────────────────────────────────────────────────
+  // (c) The REAL resolveBuildTarget (not the seam): it execs build_entry.py then `git rev-parse
+  //     HEAD`, and fail-CLOSES on a 'created' outcome (a fresh empty build worktree is never
+  //     certified). A 'reused' outcome resolves {worktree, expectedHead}; a missing outcome stays
+  //     permissive (older build_entry.py). exec() dispatches via agent({label:'exec'}) and expects an
+  //     array of {index, ok, stdout}; build_entry.py's stdout is a JSON object string.
+  // ─────────────────────────────────────────────────────────────────────────
+  function execStubForOutcome(outcome) {
+    return async (prompt, opts) => {
+      const label = (opts && opts.label) || ''
+      if (label !== 'exec') return { findings: [] }
+      if (prompt.includes('build_entry.py')) {
+        const setup = { branch: 'codex/x', path: '/tmp/real-build-wt' }
+        if (outcome !== undefined) setup.outcome = outcome
+        return [{ index: 0, ok: true, stdout: JSON.stringify(setup) }]
+      }
+      if (prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'real-head-deadbeef\n' }]
+      }
+      return [{ index: 0, ok: false, stdout: '' }]
+    }
+  }
+
+  // 'reused' -> resolves the worktree + head
+  global.agent = execStubForOutcome('reused')
+  const reused = await sr.resolveBuildTarget('wi-real-reused')
+  assert.deepStrictEqual(reused, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef' },
+    `'reused' outcome resolves {worktree, expectedHead} (got: ${JSON.stringify(reused)})`)
+
+  // 'created' -> fail-closed: returns null (never certifies a fresh empty build worktree)
+  global.agent = execStubForOutcome('created')
+  const created = await sr.resolveBuildTarget('wi-real-created')
+  assert.strictEqual(created, null, "'created' outcome must fail-closed to null (empty worktree never certified)")
+
+  // missing outcome (older build_entry.py) -> permissive, resolves normally
+  global.agent = execStubForOutcome(undefined)
+  const legacy = await sr.resolveBuildTarget('wi-real-legacy')
+  assert.deepStrictEqual(legacy, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef' },
+    `missing outcome stays permissive (got: ${JSON.stringify(legacy)})`)
+
+  console.log('ok: FIX A — resolveTarget seam targets build worktree + null-resolver parks; resolveBuildTarget fail-closes on a created worktree')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

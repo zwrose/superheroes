@@ -3996,6 +3996,7 @@ async function resolveBuildTarget(workItem) {
 
 module.exports.verdictToGate = verdictToGate
 module.exports.reviewCodePhase = reviewCodePhase
+module.exports.resolveBuildTarget = resolveBuildTarget
 module.exports.runReviewCodePanel = runReviewCodePanel
 module.exports.buildPhase = buildPhase
 

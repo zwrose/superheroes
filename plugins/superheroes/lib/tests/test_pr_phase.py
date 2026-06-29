@@ -220,6 +220,17 @@ def test_pr_entry_draft_omits_base_arg_when_unset(tmp_path):
         assert "--base" not in args_text, "no --base arg expected when base is unset"
 
 
+def test_pr_entry_draft_uses_fill_first_not_bare_fill(tmp_path):
+    """gh pr create must use --fill-first (conventional title from the first commit), not bare
+    --fill (which uses the branch NAME as the title and fails a conventional-title CI check)."""
+    repo = _make_bare_repo(tmp_path)
+    proc, capture = _run_pr_entry_draft(repo, tmp_path, "feature/wi-base")
+    if capture.exists():
+        args = capture.read_text(encoding="utf-8").splitlines()  # the fake gh writes one argv per line
+        assert "--fill-first" in args, "draft PR must use --fill-first for a conventional-commit title"
+        assert "--fill" not in args, "draft PR must NOT use bare --fill (yields the branch name as title)"
+
+
 def test_pr_entry_draft_passes_base_arg_when_set(tmp_path):
     """When --base <branch> is supplied, gh pr create must receive --base <branch>."""
     repo = _make_bare_repo(tmp_path)
