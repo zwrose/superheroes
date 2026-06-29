@@ -801,8 +801,17 @@ function testPilotDeps(workItem, generation) {
       // FIX B: resolve build worktree (same way review-code does) + thread configurable base.
       // resolveBuildTarget is defined later in this file but testPilotDeps is called after module
       // load, so the forward reference resolves correctly at call time.
+      // Fail-closed: an unresolvable build worktree must PARK, never silently run the context CLI
+      // against the showrunner's OWN tree. Without --worktree, test_pilot_context_cli falls back to
+      // the showrunner checkout, whose diff misclassifies applicability (typically 'not_applicable')
+      // and SKIPS test-pilot with no park/log — a silent fail-open. Throwing here is caught by
+      // resolveApplicabilityAndSetup -> a low-confidence park (mirrors reviewCodePhase's null-resolver
+      // park; honors the profile invariant "unresolvable -> fail-closed PARK, never act on the wrong tree").
       const target = await resolveBuildTarget(workItem).catch(() => null)
-      const wtArg = (target && target.worktree) ? ` --worktree ${shq(target.worktree)}` : ''
+      if (!target || !target.worktree) {
+        throw new Error('could not resolve the build worktree for test-pilot — refusing to run against the showrunner tree')
+      }
+      const wtArg = ` --worktree ${shq(target.worktree)}`
       // FR-8: mirror the __SR_BASE pattern from shipPhase / draftPRPhase.
       const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
       const baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''

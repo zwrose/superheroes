@@ -225,10 +225,12 @@ def test_pr_entry_draft_uses_fill_first_not_bare_fill(tmp_path):
     --fill (which uses the branch NAME as the title and fails a conventional-title CI check)."""
     repo = _make_bare_repo(tmp_path)
     proc, capture = _run_pr_entry_draft(repo, tmp_path, "feature/wi-base")
-    if capture.exists():
-        args = capture.read_text(encoding="utf-8").splitlines()  # the fake gh writes one argv per line
-        assert "--fill-first" in args, "draft PR must use --fill-first for a conventional-commit title"
-        assert "--fill" not in args, "draft PR must NOT use bare --fill (yields the branch name as title)"
+    # _make_draft_pr_env wires provenance + review_result so ship_gate.decide proceeds and gh pr create
+    # MUST run — assert the capture exists so this test cannot pass vacuously (the gh argv is recorded).
+    assert capture.exists(), f"gh pr create did not run (ship gate?) — proc: {proc.stdout}\n{proc.stderr}"
+    args = capture.read_text(encoding="utf-8").splitlines()  # the fake gh writes one argv per line
+    assert "--fill-first" in args, "draft PR must use --fill-first for a conventional-commit title"
+    assert "--fill" not in args, "draft PR must NOT use bare --fill (yields the branch name as title)"
 
 
 def test_pr_entry_draft_passes_base_arg_when_set(tmp_path):

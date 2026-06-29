@@ -88,6 +88,12 @@ async function notApplicableProceeds() {
 async function productionWrapperHandlesNotApplicableWithoutMissingLeaf() {
   const previousAgent = global.agent
   global.agent = async (prompt) => {
+    // resolveContext now fail-closes unless resolveBuildTarget resolves a worktree (execs build_entry.py
+    // + `git rev-parse HEAD`), so the real-deps path must stub those before reaching the context CLI.
+    if (prompt.includes('build_entry.py')) {
+      return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'wi', path: '/build/wt-pw', outcome: 'reused' }) }]
+    }
+    if (prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'pw-head\n' }]
     if (prompt.includes('test_pilot_context_cli.py resolve')) {
       return baseContext({ workItem: 'wi', generation: 3, pr: { number: 7 }, diff: { files: ['docs/readme.md'] }, detectors: {} })
     }
@@ -693,8 +699,21 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
     },
   })
 
+  const RESOLVED_WT = '/build/wt-coerce'
+  let contextResolvePrompt = null
   global.agent = async (prompt) => {
+    // resolveBuildTarget execs build_entry.py then `git rev-parse HEAD` (exec shape: [{index,ok,stdout}]).
+    // resolveContext now fail-closes (throws -> low park) if this returns null, so it MUST resolve a
+    // worktree for the coercion path to run; threading --worktree is then asserted below (the dead
+    // build_target_cli.py reference this replaced never matched — resolveBuildTarget uses build_entry.py).
+    if (prompt.includes('build_entry.py')) {
+      return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'codex/example', path: RESOLVED_WT, outcome: 'reused' }) }]
+    }
+    if (prompt.includes('rev-parse HEAD')) {
+      return [{ index: 0, ok: true, stdout: 'wt-head-abc\n' }]
+    }
     if (prompt.includes('test_pilot_context_cli.py resolve')) {
+      contextResolvePrompt = prompt
       // Simulate courier stringification: every nested object/array field arrives as a string.
       return {
         workItem: 'wi',
@@ -712,11 +731,6 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
       return { verdict: 'not_applicable', rationale: 'docs-only' }
     }
     if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
-    // resolveBuildTarget (the worktree resolver) execs build_entry.py + `git rev-parse HEAD`, not a
-    // CLI named build_target_cli.py — left unstubbed here, it falls through and returns null, so the
-    // build-worktree path / --worktree threading is NOT exercised by this test. That is intentional:
-    // this test verifies resolveContext's field-coercion; the --worktree threading through the CLI
-    // boundary is covered by test_test_pilot_context_cli.py.
     return previousAgent(prompt)
   }
 
@@ -736,6 +750,11 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
     assert.strictEqual(context.branch, 'codex/example', 'branch string must not be coerced')
     assert.strictEqual(context.head, 'abc123', 'head string must not be coerced')
 
+    // (a2) FIX B / test-002: resolveBuildTarget resolved a worktree, so resolveContext threads
+    // --worktree into the context CLI (and would fail-closed/throw if the worktree were unresolvable).
+    assert.ok(contextResolvePrompt && contextResolvePrompt.includes(`--worktree '${RESOLVED_WT}'`),
+      `resolveContext threads --worktree from resolveBuildTarget (got: ${contextResolvePrompt && contextResolvePrompt.slice(0, 220)})`)
+
     // (b) decideApplicability must write applicability-diff.json as a proper object, not double-encoded.
     await deps.decideApplicability(context)
     assert.ok('applicability-diff.json' in writtenFiles, 'applicability-diff.json must be written')
@@ -747,6 +766,31 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
   } finally {
     global.agent = previousAgent
     global.io = previousIo
+  }
+}
+
+async function unresolvableWorktreeParksNotSkips() {
+  // premortem-001 (round-3 finding): when resolveBuildTarget cannot resolve the build worktree, the
+  // real resolveContext must FAIL-CLOSED (throw -> low park), NOT silently run the context CLI against
+  // the showrunner's own tree and skip test-pilot via a bogus not_applicable. Drives the real
+  // resolveContext (via testPilotDeps) with a failing build_entry.py exec.
+  const previousAgent = global.agent
+  global.agent = async (prompt) => {
+    if (prompt.includes('build_entry.py')) return [{ index: 0, ok: false, stdout: '' }]   // resolver fails
+    if (prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: false, stdout: '' }]
+    // These must NOT be reached — the phase parks at setup, before applicability/skip.
+    if (prompt.includes('test_pilot_context_cli.py resolve')) throw new Error('context CLI must not run against the showrunner tree')
+    if (prompt.includes('test_pilot_applicability_cli.py decide')) throw new Error('applicability must not run when the worktree is unresolvable')
+    return previousAgent(prompt)
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    const out = await testPilotPhase('wi', 3, deps)
+    assert.strictEqual(out.confidence, 'low', 'unresolvable build worktree -> low-confidence park (not a skip)')
+    assert.match(out.assumptions[0], /could not resolve the build worktree/,
+      `park names the worktree resolution failure (got: ${JSON.stringify(out.assumptions)})`)
+  } finally {
+    global.agent = previousAgent
   }
 }
 
@@ -778,5 +822,6 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
   helperContractsCoverFailureCollectionAndMutationReconciliation()
   await phaseOrderAndGate()
   await resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArray()
+  await unresolvableWorktreeParksNotSkips()
   console.log('OK: test-pilot phase skeleton smokes passed')
 })().catch((e) => { console.error('FAIL:', e.stack || e.message); process.exit(1) })
