@@ -1,0 +1,13 @@
+{
+  "should_fire": [
+    "set up superheroes in this project for the first time",
+    "move this project between in-repo and out-of-repo storage",
+    "show the whole project's superheroes calibration on one screen",
+    "fix my superheroes configuration for this repo",
+    "tune a superheroes calibration setting for this project"
+  ],
+  "should_not_fire": [
+    "review my code changes on this branch before merging",
+    "turn the approved plan into bite-sized executable tasks"
+  ]
+}

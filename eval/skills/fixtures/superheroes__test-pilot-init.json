@@ -1,12 +1,10 @@
 {
   "should_fire": [
-    "this project has no test-pilot profile yet, set one up",
-    "initialize the test-pilot profile and browser tooling for this repo",
-    "refresh the project's testing calibration after the app changed",
-    "set up the seeding blocks and test-pilot configuration"
+    "refresh test-pilot's profile, seeding blocks, and browser tooling layer",
+    "re-calibrate the test-pilot seeding blocks and browser tooling"
   ],
   "should_not_fire": [
-    "write a manual test plan with seeded data for this pull request",
-    "run the test plan and verify the branch in the browser"
+    "set up superheroes in this project for the first time",
+    "drive the test plan in a real browser and verify the branch"
   ]
 }

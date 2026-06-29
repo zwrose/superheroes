@@ -190,9 +190,11 @@ would strand every already-written calibration file and definition-doc.)
 - **Living profiles.** A *staleness nudge*, a *learning-loop proposal* (any hero may
   **propose** a calibration edit, applied only on confirmation), and a **`nudge-ack` map**
   so a dismissed signal does not re-fire until it changes.
-- **Rendered single view.** Although calibration is stored as several files, `init`
-  (and a future `superheroes:profile` view) renders core + layers + the pinned patterns
-  as **one screen**, so the owner sees "one profile" while the disk stays coordinated.
+- **Rendered single view.** Although calibration is stored as several files,
+  `superheroes:configure` (the band-wide calibration front door — what "`init`" refers to
+  throughout this doc) renders core + layers + the pinned patterns as **one screen**, so the
+  owner sees "one profile" while the disk stays coordinated. The per-hero `*-init` skills are
+  now reached only from within `configure`, not advertised as their own entry points.
 
 ---
 
@@ -282,7 +284,8 @@ updated: <date>
   per doc-type per work-item.
   the-architect now implements this: the prior in-repo-only hardcode is closed, and
   the in-repo location plus committed/gitignored choice is the doc-policy established
-  by `architect-init`.
+  via `superheroes:configure` (which drives the-architect's doc-policy; the standalone
+  `architect-init` is now an internal helper reached only from `configure`).
 - **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
   needs it.
@@ -540,11 +543,18 @@ The producer's back-half loop (workhorse steps 0–9) is **reality-wins, reconci
   **GATEs** — a downstream run is invalidated when its upstream definition-doc changes.
 - **Escalation to the owner** follows the F5 policy (`escalation-base.md`): act
   autonomously on agent-verifiable / reversible decisions; escalate on owner-authority or
-  high-stakes-irreversible ones. The irreversible / owner-authority actions — **merge,
-  release, deploy, force-push, destructive ops** — are gated on the owner's **live, in-turn
-  approval** (a real prompt the owner answers, never an agent-set token): the producer never
-  does them unattended (no approver → it **parks**), but performs them on explicit go-ahead.
-  **PR-create stays autonomous.** (The live-approval gate — [#14](https://github.com/zwrose/superheroes/issues/14).)
+  high-stakes-irreversible ones. The **owner-role / repo-shaping** actions — **merge,
+  release, run-workflow, force-push, push-to-default** — are gated on the owner's **live,
+  in-turn approval** (a real prompt the owner answers, never an agent-set token) and are
+  enforced deterministically by the producer's PreToolUse hook (which overrides an
+  allowlist-allow and fires even under bypassPermissions — the guarantee the harness's own
+  prompt can't give): the producer never does them unattended (no approver → it **parks**),
+  but performs them on explicit go-ahead. Generic high-stakes operations the host harness
+  *already* contemplates — **deploy, destructive data ops, `rm -rf`** — stay on the
+  **cooperative F5 layer** (the model GATEs them via `escalation_resolve`; the harness's own
+  permission prompt + `rm -rf /|~` circuit breaker is the backstop), deliberately off the
+  deterministic hook so it doesn't false-positive on routine build commands. **PR-create
+  stays autonomous.** (The live-approval gate — [#14](https://github.com/zwrose/superheroes/issues/14).)
 
 (The fuller walk-away approval-gate contract — defer-vs-block, where approvals are
 recorded — remains deferred to §7, Phase 2a-plus.)

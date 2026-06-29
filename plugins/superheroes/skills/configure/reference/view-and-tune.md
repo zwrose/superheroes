@@ -1,0 +1,60 @@
+# configure — view & tune path
+
+Reached from `configure` when a project is configured and healthy (FR-1). Renders the whole
+calibration on one screen and offers a small menu of targeted changes. A view-only run on an
+up-to-date project changes nothing (FR-12).
+
+`ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
+
+## 1 — Render the combined view (FR-4) + drift notice (FR-7)
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -c "
+import sys; sys.path.insert(0,'$ROOT_DIR/lib'); import configure_view
+print(configure_view.render('.'))"
+```
+
+One plain-text screen, top to bottom: the project's core facts, each hero's layer, the pinned
+patterns — "here is everything superheroes knows about this project," not a list of files. Any
+current staleness/drift is shown as a **single, dismissible reminder on every run** (whether or not
+it was dismissed before); the owner can act on it or dismiss it again for that run. Rendering is
+read-only — it never confirms a provisional calibration (FR-18).
+
+## 2 — The tune menu (FR-5)
+
+Present, inline beneath the view, the things the owner can change — each routed to the **smallest**
+action that owns it, leaving the rest of the calibration untouched:
+
+- **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
+  through `core_md`.
+- **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
+- **Set up a hero skipped at set-up** (FR-6) → run that hero's set-up from here.
+- **Switch the storage mode** → the confirmed switch below.
+
+## 3 — Switch the storage mode (FR-10), always showing what will move
+
+The switch is the only destructive action — always show **exactly what will move** and require an
+explicit confirm before doing anything. First preview, then (on confirm) execute:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
+# present the calibration + definition documents it lists, and the collaborator-visibility note;
+# on the owner's explicit confirm:
+python3 "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global>
+```
+
+- **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns) and
+  **every definition document**. A switch into the repo newly publishes all of it to collaborators —
+  say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
+  relocated.
+- **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath
+  it), warn the owner — naming the work and what could break — and proceed only on an explicit
+  confirm. Check with `configure_route.work_in_flight('.')`. This is a strong warning, not a hard block.
+- **Switch to the mode already in effect (FR-11):** reported as already in that mode; no change.
+- **Destination unwritable (UFR-6):** an `execute` result of `blocked` means the destination could
+  not be written — report exactly what it needs; the project stays in its prior mode with nothing
+  removed from the source.
+- **Interrupted switch:** finished or backed out automatically by the Step-1 `recover` on the next
+  run (UFR-1) — every file ends up in exactly one location.

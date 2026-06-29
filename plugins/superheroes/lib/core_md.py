@@ -104,6 +104,15 @@ def _repo_root(cwd):
     return os.path.realpath(out) if out else os.path.realpath(cwd)
 
 
+def relocate_file(src, dst):
+    """The single relocate primitive (copy-then-unlink, atomic on the destination) that
+    mode_migrate reuses for the cross-mode move (the plan's "one mover, no second engine").
+    Mirrors the atomic-write discipline the rest of this module uses."""
+    with open(src, encoding="utf-8") as fh:
+        store_core.atomic_write(dst, fh.read())
+    os.remove(src)
+
+
 def core_path(cwd, root=None):
     """Mode-aware path to core.md (FR-1): in-repo .claude/superheroes/core.md, else the
     project store's config/core.md. An EXISTING file resolves to where it physically lives;

@@ -1,12 +1,10 @@
 {
   "should_fire": [
-    "set up where the-architect should store its definition-docs for this project",
-    "configure whether specs and plans are committed in-repo or kept gitignored here",
-    "initialize the-architect's doc-policy before the first discovery in this repo",
-    "decide where the-architect writes spec, plan, and tasks docs for this project"
+    "refresh the-architect's doc-policy layer",
+    "re-calibrate whether definition-docs are committed in-repo or kept gitignored for the-architect"
   ],
   "should_not_fire": [
-    "begin discovery to turn a fuzzy idea into an approved spec",
-    "this project has no review profile yet, set one up"
+    "set up superheroes in this project for the first time",
+    "show the whole project's superheroes calibration on one screen"
   ]
 }

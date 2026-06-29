@@ -26,7 +26,7 @@ test-pilot-execute.
 ## Flow
 
 1. **Resolve.** `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/store.py" resolve` →
-   `location: none` means run the test-pilot-init skill first, then return.
+   `location: none` means run superheroes:configure first, then return.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

@@ -11,9 +11,11 @@ def _repo_root():
 
 def test_never_merge_invariant_across_every_merge_shape():
     # The deny-list is self-contained for commands (no classify_floor consult), so
-    # every merge/release/deploy/force-push shape — incl. the gh-api / GraphQL forms
-    # and the git-native push-to-default-branch paths — is denied without resolving
-    # any sibling lib.
+    # every owner-role / repo-shaping shape — merge/release/run-workflow/force-push and
+    # the git-native push-to-default-branch paths, incl. the gh-api / GraphQL merge forms
+    # — is denied without resolving any sibling lib. (Generic dangerous-command classes
+    # like deploy/destructive/rm -rf are deliberately NOT here — see test_enforcer.py
+    # ::test_allows_generic_dangerous_commands_left_to_the_harness.)
     for cmd in ("gh pr merge 1", "gh pr merge 1 --squash --admin",
                 "gh pr merge --auto 1",
                 "gh api -X PUT repos/o/r/pulls/1/merge",
