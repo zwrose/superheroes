@@ -151,11 +151,36 @@ def _missing_required_setup(detectors, profile):
     return missing
 
 
+def _coerce_json_object(value):
+    """Defense-in-depth: parse a string that the courier may have stringified.
+
+    If *value* is a string that JSON-parses to a dict or None, return the parsed
+    result (so the decision can classify).  A non-parseable string, or a string
+    that parses to something other than a dict/None, is returned unchanged so that
+    the _is_object guard below can still park on it (fail-closed preserved).
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = __import__("json").loads(value)
+    except (ValueError, TypeError):
+        return value  # non-parseable string -> stays a string -> _is_object parks
+    if parsed is None or isinstance(parsed, dict):
+        return parsed
+    return value  # parsed to something else (list, int, …) -> unchanged -> parks
+
+
 def decide(diff=None, detectors=None, profile=None, plan_result=None):
     """Return {"verdict": applicable|not_applicable|park, "reason": str}.
 
-    All inputs are JSON-like dicts. Non-object inputs park instead of guessing.
+    All inputs are JSON-like dicts (or None). String inputs that JSON-parse to a
+    dict or None are coerced (defense-in-depth against courier stringification —
+    same posture as verify_gate).  A non-parseable string still parks (fail-closed).
     """
+    diff = _coerce_json_object(diff)
+    detectors = _coerce_json_object(detectors)
+    profile = _coerce_json_object(profile)
+    plan_result = _coerce_json_object(plan_result)
     if not all(_is_object(value) for value in (diff, detectors, profile, plan_result)):
         return _verdict("park", "malformed inputs")
 
