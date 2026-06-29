@@ -281,6 +281,117 @@ chrome-devtools
 """
 
 
+_CORE_FACTS = {"verifyCommand": "npm test", "stackTags": ["node"],
+               "threatModel": "single-user", "patterns": "- x: a.ts:1"}
+
+
+def test_confirm_flips_provisional_core_preserving_created(tmp_path):
+    # #121 Part A: write() (reuse-not-clobber) cannot flip an existing provisional core; confirm()
+    # does — preserving `created`, bumping `updated`, leaving the facts untouched.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    got = CM.read(repo, root=store)
+    assert got["status"] == "confirmed"
+    assert got["created"] == "2026-06-26"            # preserved
+    assert got["updated"] == "2026-06-28"            # bumped
+    assert got["verifyCommand"] == "npm test"        # facts untouched
+    assert got["patterns"] == "- x: a.ts:1"
+    assert got["threatModel"] == "single-user"
+
+
+def test_confirm_idempotent_on_already_confirmed(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "noop"
+    assert CM.read(repo, root=store)["updated"] == "2026-06-26"  # untouched
+
+
+def test_confirm_absent_core_is_absent(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.confirm(repo, root=store)["action"] == "absent"
+
+
+def test_confirm_deferred_when_lock_contended_leaves_provisional(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "deferred"
+    assert CM.read(repo, root=store)["status"] == "provisional"  # unchanged
+
+
+def test_confirm_layer_flips_status_preserving_body_created_nudge_ack(tmp_path):
+    # #121 Part A (layers): a surgical provenance flip — status + updated change; created,
+    # nudge-ack, and the body are preserved verbatim (FR-11; never rewrite a hand-edited layer).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    prov = ('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+            'updated=2026-06-20 nudge-ack={"rubric-v1":true} -->')
+    body = "\n\n## Scope exclusions\n- hand-edited note\n"
+    open(layer_p, "w").write(prov + body)
+    res = CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    out = open(layer_p).read()
+    assert "status=confirmed" in out
+    assert "created=2026-06-20" in out                  # preserved
+    assert "updated=2026-06-28" in out                  # bumped
+    assert 'nudge-ack={"rubric-v1":true}' in out        # preserved verbatim
+    assert "## Scope exclusions\n- hand-edited note" in out  # body untouched
+
+
+def test_confirm_layer_idempotent_and_absent(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.confirm_layer(repo, "review-crew", root=store)["action"] == "absent"
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    open(layer_p, "w").write(
+        '<!-- review-crew: schemaVersion=1 status=confirmed created=2026-06-20 '
+        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    assert CM.confirm_layer(repo, "review-crew", root=store)["action"] == "noop"
+
+
+def test_confirm_all_confirms_core_and_present_layers(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    open(layer_p, "w").write(
+        '<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    res = CM.confirm_all(repo, root=store, now="2026-06-28")
+    assert res["core"]["action"] == "confirmed"
+    assert res["layers"]["review-crew"]["action"] == "confirmed"
+    assert CM.read(repo, root=store)["status"] == "confirmed"
+    assert "status=confirmed" in open(layer_p).read()
+
+
+def test_cli_confirm_flips_core(tmp_path, capsys):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    CM.main(["confirm", "--cwd", repo, "--root", store])
+    out = json.loads(capsys.readouterr().out)
+    assert out["core"]["action"] == "confirmed"
+    assert CM.read(repo, root=store)["status"] == "confirmed"
+
+
 def test_classify_standard_review_profile():
     assert CM.classify(_REVIEW_PROFILE, "review-crew") == "standard"
 

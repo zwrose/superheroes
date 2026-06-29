@@ -576,6 +576,90 @@ def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
         return {"action": "written", "path": layer_p}
 
 
+def confirm(cwd, *, root=None, now=None):
+    """FR-18 owner-confirm for the shared core: flip an existing PROVISIONAL core.md to confirmed
+    IN PLACE. write() (reuse-not-clobber, FR-6) cannot do this on an existing file — it returns
+    `reused`/`proposed` and never re-renders — so confirmation needs its own path. Preserves
+    `created`, bumps `updated`, re-renders through render_core under the config lock. Fail-open
+    like write(). Returns one of:
+      - {action: "confirmed"}  flipped provisional → confirmed
+      - {action: "noop"}       already confirmed (idempotent)
+      - {action: "absent"}     no core.md to confirm
+      - {action: "deferred"}   lock contended / store unwritable (UFR-4)"""
+    stamp = now or _today()
+    existing = read(cwd, root)
+    if existing is None:
+        return {"action": "absent", "record": None}
+    if existing.get("status") == "confirmed":
+        return {"action": "noop", "record": existing}
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred", "record": None}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred", "record": None}
+        existing = read(cwd, root)  # re-read under the lock
+        if existing is None:
+            return {"action": "absent", "record": None}
+        if existing.get("status") == "confirmed":
+            return {"action": "noop", "record": existing}
+        facts = {k: existing[k] for k in ("verifyCommand", "stackTags", "threatModel", "patterns")}
+        created = existing.get("created") or stamp
+        try:
+            store_core.atomic_write(core_path(cwd, root),
+                                    render_core(facts, "confirmed", created, stamp))
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred", "record": None}
+        record = read(cwd, root)
+        clear_pending(cwd, root)
+        return {"action": "confirmed", "record": record}
+
+
+def confirm_layer(cwd, hero, *, root=None, now=None):
+    """FR-18 owner-confirm for a hero LAYER: flip a PROVISIONAL layer to confirmed via a surgical
+    provenance edit — only `status` and `updated` change; `created`, `nudge-ack`, and the body are
+    preserved byte-for-byte (never rewrite a hand-edited layer, FR-11). Fail-open like write_layer.
+    Returns {action: "confirmed"|"noop"|"absent"|"deferred"}."""
+    stamp = now or _today()
+    layer_p = _layer_path(cwd, hero, root)
+    try:
+        with open(layer_p, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return {"action": "absent"}
+    m = re.match(r"^<!--\s*%s:.*?-->" % re.escape(hero), text)
+    if not m:
+        return {"action": "absent"}  # no §2.2 provenance line — not a managed layer
+    if "status=confirmed" in m.group(0):
+        return {"action": "noop", "path": layer_p}
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        return {"action": "deferred"}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            return {"action": "deferred"}
+        prov = re.sub(r"status=\S+", "status=confirmed", m.group(0))
+        prov = re.sub(r"updated=\S+", "updated=%s" % stamp, prov)
+        try:
+            store_core.atomic_write(layer_p, prov + text[m.end(0):])
+        except OSError:
+            return {"action": "deferred"}
+        return {"action": "confirmed", "path": layer_p}
+
+
+def confirm_all(cwd, *, root=None, now=None):
+    """FR-18 owner-confirm for the WHOLE calibration: the shared core + every present hero layer.
+    The entry point the configure fix-path calls once the owner confirms. Returns
+    {core: <confirm result>, layers: {hero: <confirm_layer result>}}."""
+    core_res = confirm(cwd, root=root, now=now)
+    layers = {}
+    for hero in _HEROES:
+        if os.path.isfile(_layer_path(cwd, hero, root)):
+            layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
+    return {"core": core_res, "layers": layers}
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="core_md")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -595,6 +679,9 @@ def main(argv):
     lp.add_argument("--root", default=None)
     lp.add_argument("--hero", choices=_HEROES, required=True)
     lp.add_argument("--status", choices=("provisional", "confirmed"), default="provisional")
+    cp = sub.add_parser("confirm")  # FR-18 owner-confirm: core + every present hero layer
+    cp.add_argument("--cwd", default=".")
+    cp.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -618,11 +705,16 @@ def main(argv):
             out = write(args.cwd, facts, args.status, root=args.root)
         except Exception:
             out = {"action": "deferred", "record": None, "proposals": []}
-    else:  # write-layer
+    elif args.cmd == "write-layer":
         try:
             out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status, root=args.root)
         except Exception:
             out = {"action": "deferred"}
+    else:  # confirm
+        try:
+            out = confirm_all(args.cwd, root=args.root)
+        except Exception:
+            out = {"core": {"action": "deferred"}, "layers": {}}
     sys.stdout.write(json.dumps(out, indent=2) + "\n")
     return 0
 
