@@ -666,6 +666,86 @@ async function phaseOrderAndGate() {
   assert.strictEqual(markReadyReached, false)
 }
 
+// I-1 / I-2 regression test: resolveContext coerces courier-stringified fields including allowedOrigins
+// (an array). Patch global.agent to return all nested fields as JSON strings (simulating the cheap
+// courier's field-extract path), then assert:
+//   (a) resolveContext returns real objects/arrays, not strings
+//   (b) decideApplicability writes applicability-diff.json as a proper object (not a double-encoded string)
+// This test would FAIL against the pre-I-1 code for allowedOrigins (stays string → Array.isArray false).
+async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArray() {
+  const previousAgent = global.agent
+  const previousIo = global.io
+
+  // The stringified context the cheap courier would deliver (every nested field is a JSON string).
+  const rawDiff = { files: ['src/app.js'], additions: 5, deletions: 2 }
+  const rawDetectors = { framework: 'react', hasTests: true }
+  const rawProfile = { baseUrl: 'http://localhost:3000', scenarios: ['login'] }
+  const rawAllowedOrigins = ['http://localhost:3000', 'http://localhost:8080']
+  const rawPr = { number: 42, title: 'fix: test coercion' }
+
+  // Written files captured by the io seam intercept.
+  const writtenFiles = {}
+
+  global.io = Object.assign({}, require('../io_seam.js').defaultIo, {
+    async mkdirp() { /* no-op in test */ },
+    async writeFile(p, content) {
+      writtenFiles[require('path').basename(p)] = content
+    },
+  })
+
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_context_cli.py resolve')) {
+      // Simulate courier stringification: every nested object/array field arrives as a string.
+      return {
+        workItem: 'wi',
+        generation: 3,
+        branch: 'codex/example',
+        head: 'abc123',
+        diff: JSON.stringify(rawDiff),
+        detectors: JSON.stringify(rawDetectors),
+        profile: JSON.stringify(rawProfile),
+        allowedOrigins: JSON.stringify(rawAllowedOrigins),
+        pr: JSON.stringify(rawPr),
+      }
+    }
+    if (prompt.includes('test_pilot_applicability_cli.py decide')) {
+      return { verdict: 'not_applicable', rationale: 'docs-only' }
+    }
+    if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
+    if (prompt.includes('build_target_cli.py')) return {}
+    return previousAgent(prompt)
+  }
+
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+
+    // (a) resolveContext must coerce all stringified fields back to their real types.
+    const context = await deps.resolveContext()
+    assert.deepStrictEqual(context.diff, rawDiff, 'diff must be coerced to object')
+    assert.deepStrictEqual(context.detectors, rawDetectors, 'detectors must be coerced to object')
+    assert.deepStrictEqual(context.profile, rawProfile, 'profile must be coerced to object')
+    assert.deepStrictEqual(context.pr, rawPr, 'pr must be coerced to object')
+    // I-1 regression: allowedOrigins is an ARRAY — must coerce even though Array.isArray(p) is true.
+    assert.ok(Array.isArray(context.allowedOrigins), 'allowedOrigins must be coerced to an array (I-1 regression)')
+    assert.deepStrictEqual(context.allowedOrigins, rawAllowedOrigins, 'allowedOrigins array values must match')
+    // Scalar strings (head, branch) must pass through unchanged.
+    assert.strictEqual(context.branch, 'codex/example', 'branch string must not be coerced')
+    assert.strictEqual(context.head, 'abc123', 'head string must not be coerced')
+
+    // (b) decideApplicability must write applicability-diff.json as a proper object, not double-encoded.
+    await deps.decideApplicability(context)
+    assert.ok('applicability-diff.json' in writtenFiles, 'applicability-diff.json must be written')
+    const writtenContent = writtenFiles['applicability-diff.json']
+    const parsed = JSON.parse(writtenContent)
+    assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed),
+      'applicability-diff.json must be a JSON object, not a double-encoded string')
+    assert.deepStrictEqual(parsed, rawDiff, 'applicability-diff.json must contain the original diff object')
+  } finally {
+    global.agent = previousAgent
+    global.io = previousIo
+  }
+}
+
 ;(async () => {
   await notApplicableProceeds()
   await productionWrapperHandlesNotApplicableWithoutMissingLeaf()
@@ -693,5 +773,6 @@ async function phaseOrderAndGate() {
   await finalPublishFailureParksBeforeApplicableReadyStatus()
   helperContractsCoverFailureCollectionAndMutationReconciliation()
   await phaseOrderAndGate()
+  await resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArray()
   console.log('OK: test-pilot phase skeleton smokes passed')
 })().catch((e) => { console.error('FAIL:', e.stack || e.message); process.exit(1) })

@@ -766,13 +766,15 @@ async function defaultTestPilotPhase(workItem, generation) {
 
 // Boundary coercion: parse a value the courier may have stringified (#115 "parse facts at boundary").
 // Applies to known nested-object fields in the resolveContext result. If the value is a string that
-// JSON-parses to a dict or null, return the parsed result. Otherwise return the value unchanged so
-// downstream consumers (writeJson, _is_object guards) still fail-closed on non-parseable strings.
+// JSON-parses to a dict, array, or null, return the parsed result. Otherwise return the value unchanged
+// so downstream consumers (writeJson, _is_object guards) still fail-closed on non-parseable strings.
+// Arrays are included because allowedOrigins is a JSON array (e.g. '["http://localhost:3000"]') and
+// must coerce back to an array; a non-container parse result (number, bool) stays as the original string.
 const _coerceObj = (v) => {
   if (typeof v !== 'string') return v
   try {
     const p = JSON.parse(v)
-    if (p === null || (typeof p === 'object' && !Array.isArray(p))) return p
+    if (p === null || (typeof p === 'object')) return p
   } catch (_) { /* fall through */ }
   return v
 }
