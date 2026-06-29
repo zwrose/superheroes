@@ -32,5 +32,9 @@ def test_build_entry_writes_lock_generation(tmp_path, monkeypatch):
     res = json.loads(out.stdout)
     assert "branch" in res
     assert "path" in res            # build_entry now also emits the managed build-worktree path
+    # build_entry also emits the reclaim_or_create outcome; resolveBuildTarget's fail-closed guard
+    # parks on 'created', so a silent drop of this field must be caught here.
+    assert "outcome" in res
+    assert res["outcome"] in ("reused", "created")
     cp = ckpt_lib.read(control_plane.paths(repo, "wi")["checkpoint"])
     assert cp["lockGeneration"] == 7

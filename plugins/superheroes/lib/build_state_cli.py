@@ -3,11 +3,21 @@
 review / final-review. Git + store IO live here; build_state.py stays pure."""
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import build_state, control_plane, ship_gate
+import build_state, control_plane, ship_gate, base_ref
 
 
 def _git(root, *args):
     return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+
+
+class _BaseUnresolvable(Exception):
+    """Raised by _gather when a caller-supplied --base resolves to nothing. Carried up to main so
+    the unresolvable-base case can be emitted as a STRUCTURED stdout error (C-I3) instead of a
+    stderr SystemExit the exec dumb-pipe discards (which collapsed to a generic 'could not gather'
+    park, misdirecting the owner)."""
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def _base(git_root):
@@ -27,16 +37,27 @@ def _base(git_root):
     return (r.stdout.split() or ["HEAD"])[0]
 
 
-def _gather(root, work_item, valid_ids, worktree=None):
+def _gather(root, work_item, valid_ids, worktree=None, base_branch=None):
     # Git reads run in the BUILD WORKTREE (where the build branch is checked out); the STORE reads
     # below stay on `root` (the main checkout the showrunner runs in, where the store is keyed).
     git_root = worktree or root
-    base = _base(git_root)
+    if base_branch:
+        # Caller-supplied base: resolve it via the SHARED resolver (local->origin) so this gather
+        # and ship_phase's freshness gate measure against the SAME ref (C-I1). Fail closed on an
+        # unresolvable ref so UFR-7 is never opened by a misconfigured base silently treating
+        # everything as unmapped — raise so main can emit a structured stdout error (C-I3).
+        base = base_ref.resolve_configured_base(git_root, base_branch)
+        if base is None:
+            raise _BaseUnresolvable(base_ref.unresolvable_reason(base_branch, git_root))
+    else:
+        base = _base(git_root)
     mb = _git(git_root, "merge-base", "HEAD", base).stdout.strip() or base
     log = _git(git_root, "log", "--format=%H%x1f%(trailers:key=Task-Id,valueonly)", "%s..HEAD" % mb)
     rows = []
     for line in (log.stdout or "").splitlines():
         sha, _sep, tid = line.partition("\x1f")
+        if not sha.strip():  # spurious empty row from the trailers' trailing newline — not a commit
+            continue
         rows.append((sha, tid.strip()))
     committed, unmapped = build_state.parse_trailers(rows, valid_ids)
     dirty = bool(_git(git_root, "status", "--porcelain").stdout.strip())
@@ -58,6 +79,7 @@ def main(argv):
     g = sub.add_parser("gather"); g.add_argument("--work-item", required=True)
     g.add_argument("--branch", required=True); g.add_argument("--valid-ids", default="")
     g.add_argument("--worktree", default=None)   # the build worktree to read git from (else ambient root)
+    g.add_argument("--base", default=None)       # configurable base branch; absent -> _base() detection
     rr = sub.add_parser("record-reviewed"); rr.add_argument("--work-item", required=True)
     rr.add_argument("--task", required=True)
     rf = sub.add_parser("record-final-review"); rf.add_argument("--work-item", required=True)
@@ -66,7 +88,16 @@ def main(argv):
     root = os.getcwd()
     if a.cmd == "gather":
         valid = [x for x in a.valid_ids.split(",") if x]
-        print(json.dumps(_gather(root, a.work_item, valid, a.worktree)))
+        try:
+            state = _gather(root, a.work_item, valid, a.worktree, a.base)
+        except _BaseUnresolvable as e:
+            # Emit the SPECIFIC base-resolution reason on STDOUT (exit 0) so the exec dumb-pipe
+            # captures it and gatherState can park with THAT reason — not the generic "could not
+            # gather authoritative git state" (C-I3). Still fail-closed: the spine treats the
+            # presence of an `error` key as a park signal, never as a usable state.
+            print(json.dumps({"error": e.reason}))
+            return 0
+        print(json.dumps(state))
         return 0
     sp = build_state.state_path(root, a.work_item)
     os.makedirs(os.path.dirname(sp), exist_ok=True)

@@ -26,7 +26,7 @@ def test_gather_maps_trailered_commit_and_flags_untrailered(tmp_path):
                          cwd=repo, env=env, capture_output=True, text=True)
     st = json.loads(out.stdout)
     assert "1" in st["committed_task_ids"]
-    assert st["unmapped_commits"] >= 1                 # the stray commit
+    assert st["unmapped_commits"] == 1                 # EXACTLY the stray commit (no spurious empty row)
     assert st["provenance"] in ("absent", "present", "garbled")
 
 
@@ -50,7 +50,77 @@ def test_gather_reads_git_from_the_worktree_not_cwd(tmp_path):
                          cwd=cwd, env=env, capture_output=True, text=True)
     st = json.loads(out.stdout)
     assert "1" in st["committed_task_ids"]              # read came from the worktree, not cwd
-    assert st["unmapped_commits"] >= 1                  # the stray commit
+    assert st["unmapped_commits"] == 1                  # EXACTLY the stray commit (no spurious empty row)
+
+
+# ---------------------------------------------------------------------------
+# Configurable base branch (--base) tests
+# ---------------------------------------------------------------------------
+
+def test_gather_with_explicit_base_uses_configured_base(tmp_path):
+    """--base <branch> feeds the merge-base instead of origin/HEAD detection."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base-commit", "-q")
+    # Create a local 'feature-base' branch at the base commit.
+    _git(repo, "branch", "feature-base", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-cfg")
+    _git(repo, "commit", "--allow-empty", "-m", "task 1\n\nTask-Id: 1", "-q")
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run(
+        [sys.executable, CLI, "gather", "--work-item", "wi",
+         "--branch", "superheroes/wi-cfg", "--valid-ids", "1",
+         "--base", "feature-base"],
+        cwd=repo, env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    st = json.loads(out.stdout)
+    # Only 1 commit above the configured base and it carries a valid Task-Id.
+    assert "1" in st["committed_task_ids"]
+    # No stray commit above the configured base, and the trailers' trailing-newline artifact is
+    # now dropped (sha-less rows skipped in _gather) -> EXACTLY zero unmapped.
+    assert st["unmapped_commits"] == 0
+
+
+def test_gather_default_base_unchanged_when_base_arg_absent(tmp_path):
+    """Absent --base uses the existing _base() resolution; default unchanged."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-abc")
+    _git(repo, "branch", "-f", "main", "HEAD")
+    _git(repo, "commit", "--allow-empty", "-m", "task 1\n\nTask-Id: 1", "-q")
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run(
+        [sys.executable, CLI, "gather", "--work-item", "wi",
+         "--branch", "superheroes/wi-abc", "--valid-ids", "1"],
+        cwd=repo, env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    st = json.loads(out.stdout)
+    assert "1" in st["committed_task_ids"]
+
+
+def test_gather_unresolvable_base_emits_structured_stdout_error(tmp_path):
+    """An unresolvable --base must FAIL CLOSED as a STRUCTURED stdout error (C-I3): exit 0 with a
+    {"error": <specific reason>} on stdout (NOT a stderr SystemExit the exec pipe discards). The
+    spine parks on that specific reason instead of the generic 'could not gather' park."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-abc")
+    _git(repo, "commit", "--allow-empty", "-m", "task 1\n\nTask-Id: 1", "-q")
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run(
+        [sys.executable, CLI, "gather", "--work-item", "wi",
+         "--branch", "superheroes/wi-abc", "--valid-ids", "1",
+         "--base", "nonexistent-branch-xyz"],
+        cwd=repo, env=env, capture_output=True, text=True)
+    # Exit 0 so the exec dumb-pipe captures stdout (it returns only {ok, stdout}).
+    assert out.returncode == 0, out.stderr
+    payload = json.loads(out.stdout)
+    # Structured error key — and crucially NOT a usable state (no silent 0-unmapped result).
+    assert "error" in payload, "unresolvable base must surface a structured stdout error"
+    assert "nonexistent-branch-xyz" in payload["error"], "error must name the specific base"
+    assert "committed_task_ids" not in payload, "must not emit a usable state on an unresolvable base"
 
 
 def test_record_reviewed_then_gather_reads_it(tmp_path):

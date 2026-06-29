@@ -14,6 +14,7 @@ Fail-OPEN: a missing profile, missing block, malformed line, or unknown role yie
 a cost concern, never a safety one. stdlib only.
 """
 import json
+import os
 import re
 import sys
 
@@ -50,13 +51,38 @@ def load_overrides(profile_path):
     return out
 
 
+def _resolve_profile_path():
+    """Auto-resolve the project's review-crew profile path when no --profile was given.
+
+    Uses the same sibling resolver review-crew uses (review_store.resolve --kind profile);
+    returns the resolved path only when one actually exists on disk, else None. Fail-SAFE:
+    ANY error (import failure, resolver exception, location:none, missing file) yields None
+    so the caller degrades to {} — this MUST NOT crash startup, and a throwaway run with no
+    profile correctly stays a no-op. An explicit --profile bypasses this entirely.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import review_store  # sibling lib; in-process resolve (no extra subprocess/exec)
+        info = review_store.resolve(os.getcwd(), "profile", review_store.store_root())
+        path = info.get("path")
+        if path and info.get("exists") and os.path.isfile(path):
+            return path
+    except Exception:
+        return None
+    return None
+
+
 def main(argv):
     import argparse
     ap = argparse.ArgumentParser(description="review-crew model-tier override loader")
     ap.add_argument("--profile", default=None)
     args = ap.parse_args(argv[1:])
     try:
-        ov = load_overrides(args.profile)
+        # An explicit --profile always wins; otherwise self-resolve the session's
+        # review-crew profile (so the override feature actually LOADS in production
+        # without the startup site having to add a second exec to find the path).
+        profile = args.profile if args.profile is not None else _resolve_profile_path()
+        ov = load_overrides(profile)
     except Exception:
         ov = {}  # belt-and-suspenders fail-open
     sys.stdout.write(json.dumps(ov) + "\n")

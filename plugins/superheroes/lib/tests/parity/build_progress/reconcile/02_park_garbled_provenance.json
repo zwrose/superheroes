@@ -1,0 +1,1 @@
+{"input": [[{"id": "t1", "name": "Task 1"}], [], 0, {}, false, null, "garbled"], "expected": {"action": "park", "reason": "build provenance is unreadable (garbled) — fail closed (UFR-6)"}}

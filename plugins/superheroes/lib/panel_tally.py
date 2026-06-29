@@ -337,7 +337,39 @@ def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="co
         return verdict
 
 
+_EMIT_FNS = {
+    "compile_findings": compile_findings,
+    "round_gate": round_gate,
+    "present_deferred": present_deferred,
+    "decide_terminal": decide_terminal,
+}
+
+
+def _emit_main(argv):
+    """Subcommand: --emit <fn> --input <json-array> → json.dumps(fn(*args), sort_keys=True).
+    round_gate returns a tuple; emitted as {gate, confidence, incomplete} so the JS twin
+    contract is an object.  No existing function is modified."""
+    ap = argparse.ArgumentParser(description="emit subcommand for parity testing")
+    ap.add_argument("--emit", required=True, choices=list(_EMIT_FNS))
+    ap.add_argument("--input", required=True, help="JSON array of positional args")
+    args = ap.parse_args(argv[1:])
+    fn = _EMIT_FNS[args.emit]
+    fn_args = json.loads(args.input)
+    result = fn(*fn_args)
+    if args.emit == "round_gate":
+        gate, confidence, incomplete = result
+        result = {"gate": gate, "confidence": confidence, "incomplete": incomplete}
+    elif args.emit == "decide_terminal":
+        terminal, reason = result
+        result = {"reason": reason, "terminal": terminal}
+    sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
+    return 0
+
+
 def main(argv):
+    # Dispatch to the --emit subcommand when present (additive; existing tally path unchanged).
+    if len(argv) > 1 and argv[1] == "--emit":
+        return _emit_main(argv)
     ap = argparse.ArgumentParser(description="deterministic review-panel tally (review-crew)")
     ap.add_argument("--run-dir", required=True)
     ap.add_argument("--round", type=int, required=True, dest="rnd")

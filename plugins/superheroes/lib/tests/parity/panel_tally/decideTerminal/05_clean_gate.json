@@ -1,0 +1,1 @@
+{"input": ["clean", 0, 0, "completed", 1, 7, false], "expected": {"reason": "no blocking findings to address and none skipped — the loop is genuinely done; exit SUCCESS.", "terminal": "clean"}}

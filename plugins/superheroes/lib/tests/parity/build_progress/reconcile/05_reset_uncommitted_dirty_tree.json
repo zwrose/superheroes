@@ -1,0 +1,1 @@
+{"input": [[{"id": "t1", "name": "Task 1"}], [], 0, {}, true, null, "absent"], "expected": {"action": "reset_uncommitted", "resume_at": {"id": "t1", "name": "Task 1"}, "reason": "uncommitted leftover changes — reset only those, then re-dispatch (UFR-12)"}}

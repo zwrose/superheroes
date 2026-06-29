@@ -1,0 +1,1 @@
+{"input": [1, "plan_wrong"], "expected": {"action": "park", "reason": "worker signalled the plan/task is wrong or too large — park (UFR-3)"}}

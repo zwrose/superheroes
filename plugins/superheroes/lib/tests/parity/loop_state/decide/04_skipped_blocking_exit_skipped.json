@@ -1,0 +1,1 @@
+{"input": [0, 3, 5, 7, false], "expected": ["exit_skipped", false, "no blocking finding addressed; 3 blocking finding(s) were deliberately skipped — exit CLEAN-EXCEPT-FOR-SKIPPED: list the skipped blocker(s); do not report a plain success."]}

@@ -79,6 +79,9 @@ def _phase_cursor_guard(cp, phases=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--work-item", required=True)
+    ap.add_argument("--snapshot", action="store_true",
+                    help="Return {checkpoint, world, generation, early_park?} without calling reconcile; "
+                         "the JS twin calls recover.reconcile() in-process (#115 Task 12).")
     args = ap.parse_args()
     cwd = os.getcwd()
     store = control_plane.ensure_store(cwd)
@@ -117,6 +120,12 @@ def main():
             chash = None
     world = {"store_ok": True, "current_content_hash": chash,
              "pr": _read_pr(cp), "seeded_empty": True}
+    if args.snapshot:
+        # #115 Task 12: return the raw snapshot so the JS spine can call recover.reconcile() in-process
+        # via the JS twin. The cursor_gate check (phase-list guard) already ran above and returned early
+        # if it triggered, so reaching here means the checkpoint is cursor-safe.
+        print(json.dumps({"checkpoint": cp, "world": world, "generation": generation}))
+        return
     out = recover.reconcile(cp, world)
     out["generation"] = generation     # UFR-10: thread the entry generation to build_entry
     print(json.dumps(out))

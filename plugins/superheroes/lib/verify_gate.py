@@ -42,7 +42,24 @@ def main(argv):
     ap.add_argument("--command", required=True)
     ap.add_argument("--cwd", default=None)
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--emit-run", action="store_true",
+                    help="IO-only mode: run subprocess and emit raw run data for the JS twin to classify")
     args = ap.parse_args(argv[1:])
+    if args.emit_run:
+        cmd = args.command
+        if not cmd or cmd.strip().lower() == "none":
+            sys.stdout.write(json.dumps({"command": cmd or "none", "returncode": None, "timedOut": False}) + "\n")
+            return 0
+        try:
+            proc = subprocess.run(cmd, shell=True, cwd=args.cwd, capture_output=True,
+                                  text=True, timeout=args.timeout)
+            sys.stdout.write(json.dumps({"command": cmd, "returncode": proc.returncode, "timedOut": False}) + "\n")
+        except subprocess.TimeoutExpired:
+            sys.stdout.write(json.dumps({"command": cmd, "returncode": None, "timedOut": True}) + "\n")
+        except Exception:
+            # fail-closed: any exec error -> returncode 1 (non-zero = fail in the JS twin)
+            sys.stdout.write(json.dumps({"command": cmd, "returncode": 1, "timedOut": False}) + "\n")
+        return 0
     res = run_verify(args.command, cwd=args.cwd, timeout=args.timeout)
     sys.stdout.write(json.dumps(res, sort_keys=True) + "\n")
     return 0

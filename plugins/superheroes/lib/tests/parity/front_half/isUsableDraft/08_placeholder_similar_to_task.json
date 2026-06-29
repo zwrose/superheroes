@@ -1,0 +1,1 @@
+{"input": ["---\nfoo: bar\n---\n# Head\nSimilar to Task 3 approach.\n", "sig", "sig"], "expected": false}

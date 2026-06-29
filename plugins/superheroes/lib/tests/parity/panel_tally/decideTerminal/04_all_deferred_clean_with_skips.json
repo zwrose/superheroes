@@ -1,0 +1,1 @@
+{"input": ["blocking", 2, 2, "completed", 1, 7, false], "expected": {"reason": "no blocking finding addressed; 2 blocking finding(s) were deliberately skipped — exit CLEAN-EXCEPT-FOR-SKIPPED: list the skipped blocker(s); do not report a plain success.", "terminal": "clean-with-skips"}}

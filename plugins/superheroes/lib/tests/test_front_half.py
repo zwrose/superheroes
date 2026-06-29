@@ -182,3 +182,84 @@ def test_append_notify_tolerates_empty(tmp_path):
     ledger = _os.path.join(str(tmp_path), "notify.json")
     assert fh.append_notify(ledger, []) == 0
     assert fh.append_notify(ledger, None) == 0
+
+
+# --- Layer 2a: usable_draft_gaps (additive; is_usable_draft behavior frozen) ---
+
+def test_gaps_no_gaps_on_complete_doc():
+    """A complete doc with all required sections as ## headings: no missing, no placeholder."""
+    doc = (
+        "---\ndocType: tasks\ngates: {review: pending}\n---\n"
+        "# Title\n\n"
+        "## Goal\n\nDo X.\n\n"
+        "## Architecture\n\nLives in lib/.\n\n"
+        "## Tech Stack\n\nPython 3.9.\n\n"
+    )
+    gaps = fh.usable_draft_gaps(doc, required_sections=("Goal", "Architecture", "Tech Stack"))
+    assert gaps["missing_sections"] == []
+    assert gaps["placeholder"] is False
+
+
+def test_gaps_bold_label_format_listed_as_missing():
+    """Bold-label sections (**Goal:**) are absent as headings -> in missing_sections."""
+    doc = (
+        "---\ndocType: tasks\ngates: {review: pending}\n---\n"
+        "**Goal:** Do X.\n"
+        "**Architecture:** Lives in lib/.\n"
+        "**Tech Stack:** Python 3.9.\n"
+    )
+    gaps = fh.usable_draft_gaps(doc, required_sections=("Goal", "Architecture", "Tech Stack"))
+    assert set(gaps["missing_sections"]) == {"Goal", "Architecture", "Tech Stack"}
+    assert gaps["placeholder"] is False
+
+
+def test_gaps_empty_required_section_listed_as_missing():
+    """A heading present but with empty content segment -> in missing_sections."""
+    doc = (
+        "---\ndocType: tasks\ngates: {review: pending}\n---\n"
+        "## Goal\n\n"
+        "## Architecture\n\nHas content.\n\n"
+        "## Tech Stack\n\nPython.\n\n"
+    )
+    gaps = fh.usable_draft_gaps(doc, required_sections=("Goal", "Architecture", "Tech Stack"))
+    assert "Goal" in gaps["missing_sections"]
+    assert "Architecture" not in gaps["missing_sections"]
+
+
+def test_gaps_placeholder_detected():
+    """TBD in doc body -> placeholder=True."""
+    doc = (
+        "---\ndocType: tasks\ngates: {review: pending}\n---\n"
+        "## Goal\n\nDo X. TBD.\n\n"
+        "## Architecture\n\na\n\n"
+        "## Tech Stack\n\nt\n\n"
+    )
+    gaps = fh.usable_draft_gaps(doc, required_sections=("Goal", "Architecture", "Tech Stack"))
+    assert gaps["placeholder"] is True
+
+
+def test_gaps_partial_missing():
+    """Only some sections missing -> only those in missing_sections."""
+    doc = (
+        "---\ndocType: tasks\ngates: {review: pending}\n---\n"
+        "## Goal\n\nDo X.\n\n"
+        "## Architecture\n\nLives in lib/.\n\n"
+    )
+    gaps = fh.usable_draft_gaps(doc, required_sections=("Goal", "Architecture", "Tech Stack"))
+    assert "Tech Stack" in gaps["missing_sections"]
+    assert "Goal" not in gaps["missing_sections"]
+    assert "Architecture" not in gaps["missing_sections"]
+
+
+def test_gaps_empty_doc_all_missing():
+    """Empty/no-frontmatter doc -> all required sections missing."""
+    gaps = fh.usable_draft_gaps("", required_sections=("Goal", "Architecture", "Tech Stack"))
+    assert set(gaps["missing_sections"]) == {"Goal", "Architecture", "Tech Stack"}
+
+
+def test_gaps_no_required_sections_empty():
+    """No required sections -> missing_sections is []."""
+    doc = "---\nx: 1\n---\nbody\n"
+    gaps = fh.usable_draft_gaps(doc)
+    assert gaps["missing_sections"] == []
+    assert gaps["placeholder"] is False

@@ -49,6 +49,9 @@ def main(argv):
     ap.add_argument("--doc", required=True, choices=["plan", "tasks"])
     ap.add_argument("--root", default=None)
     ap.add_argument("--write-marker", action="store_true")
+    ap.add_argument("--emit-signals", action="store_true",
+                    help="Return {usable, recorded, expected} — verdict computed Python-side at the "
+                         "IO boundary so the large doc text never crosses the cheapest-model pipe.")
     args = ap.parse_args(argv[1:])
     root = args.root or os.getcwd()
     base = os.path.join(root, "docs", "superheroes", args.work_item)
@@ -58,6 +61,18 @@ def main(argv):
         with open(doc_path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
+        if args.emit_signals:
+            # No doc -> not usable. Verdict computed here; large text never crosses the pipe.
+            # All required sections are missing; no placeholder (no text).
+            sections = tuple(_SECTIONS.get(args.doc, ()))
+            print(json.dumps({
+                "usable": False,
+                "recorded": "",
+                "expected": "",
+                "missing_sections": list(sections),
+                "placeholder": False,
+            }))
+            return 0
         print(json.dumps({"usable": False, "wrote": False})); return 0
     if args.write_marker:
         try:
@@ -66,6 +81,29 @@ def main(argv):
             print(json.dumps({"wrote": True}))
         except OSError:
             print(json.dumps({"wrote": False}))
+        return 0
+    if args.emit_signals:
+        # Compute the usability verdict at the IO boundary (Python-side) so the large doc text
+        # never crosses the cheapest-model exec pipe (live-surfaced large-payload-transport limit).
+        # The spine reads signals.usable directly — no JS twin call on the doc text.
+        # Also emit the specific gaps (missing_sections, placeholder) so the produce repair loop
+        # can generate a targeted re-prompt hint without re-sending the large doc text (Layer 2a).
+        expected = _body_hash(text)
+        try:
+            with open(marker_path, encoding="utf-8") as f:
+                recorded = f.read().strip()
+        except OSError:
+            recorded = ""
+        sections = tuple(_SECTIONS.get(args.doc, ()))
+        usable = front_half.is_usable_draft(text, recorded, expected, sections)
+        gaps = front_half.usable_draft_gaps(text, sections)
+        print(json.dumps({
+            "usable": bool(usable),
+            "recorded": recorded,
+            "expected": expected,
+            "missing_sections": gaps["missing_sections"],
+            "placeholder": gaps["placeholder"],
+        }))
         return 0
     # check mode: marker (recorded) must equal the doc's CURRENT body hash (expected).
     expected = _body_hash(text)

@@ -135,11 +135,15 @@ def reap_decision(pr_state, *, dirty, branch_deletable):
     (UFR-3); unknown/indeterminate -> gate (UFR-2)."""
     if dirty:
         return PRESERVE_NOTIFY
-    if pr_state == "merged":
+    # Normalize case: `gh pr --json state` returns UPPERCASE ("MERGED"/"CLOSED"/"OPEN");
+    # lowercase so a live caller passing raw gh state hits the right tier (same merged-case
+    # class the recover gate was normalized for in G2).
+    state = str(pr_state or "").lower()
+    if state == "merged":
         return REMOVE_AND_DELETE if branch_deletable else REMOVE_KEEP_BRANCH
-    if pr_state == "closed":
+    if state == "closed":
         return REMOVE_KEEP_BRANCH
-    if pr_state == "open":
+    if state == "open":
         return SKIP_OPEN
     return GATE_FAILCLOSED
 

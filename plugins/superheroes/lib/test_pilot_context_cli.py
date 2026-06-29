@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import base_ref
 import checkpoint
 import control_plane
 import detect
@@ -21,12 +22,28 @@ import engine
 import store
 
 
-def _git(*args):
-    r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=10)
+def _git(*args, cwd=None):
+    cmd = ["git"]
+    if cwd:
+        cmd += ["-C", cwd]
+    cmd += list(args)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     return r.stdout.strip() if r.returncode == 0 else ""
 
 
-def resolve(work_item, generation):
+def resolve(work_item, generation, worktree=None, base_name="main"):
+    """Resolve the test-pilot phase context.
+
+    Args:
+        work_item: The work-item identifier.
+        generation: The generation number (or None).
+        worktree: Optional path to the build worktree. When given, all git ops run
+            against that tree (not the showrunner cwd) so the diff reflects the
+            deliverable, not the orchestrator's state (FIX B).
+        base_name: Base branch name for the diff (default 'main'). Resolved via
+            base_ref.resolve_configured_base for local→origin fallback. When
+            unresolvable, falls back to 'main...HEAD' rather than crashing (FIX B).
+    """
     paths = control_plane.paths(os.getcwd(), work_item)
     cp = checkpoint.read(paths["checkpoint"])
     if isinstance(cp, dict) and cp.get("_incompatible"):
@@ -34,11 +51,21 @@ def resolve(work_item, generation):
         # carry the truthy marker dict forward — re-derive branch/pr from git reality (treat as empty).
         cp = {}
     cp = cp or {}
-    root = _git("rev-parse", "--show-toplevel") or os.getcwd()
-    head = _git("rev-parse", "HEAD")
-    branch = cp.get("branch") or _git("rev-parse", "--abbrev-ref", "HEAD")
+
+    # FIX B: git ops run against the build worktree when provided; fall back to cwd root.
+    git_root = worktree if worktree else (_git("rev-parse", "--show-toplevel") or os.getcwd())
+    head = _git("rev-parse", "HEAD", cwd=git_root)
+    branch = cp.get("branch") or _git("rev-parse", "--abbrev-ref", "HEAD", cwd=git_root)
+
     res = store.resolve(os.getcwd(), store.store_root())
-    trusted_store = control_plane.ensure_store(root)
+    # The control-plane store is keyed per checkout (sha256 of `git rev-parse --absolute-git-dir`,
+    # DISTINCT per worktree) and holds the generation lease acquired in the SHOWRUNNER's own checkout.
+    # It must resolve from os.getcwd() (the showrunner root), NOT git_root: a build worktree has a
+    # different --absolute-git-dir -> a different, lease-less store, so publish's renew()/fence_ok()
+    # would park ("lease renewal failed before publish"). Only the GIT ops (head/branch/diff/detectors/
+    # base) above target git_root — the store is control-plane state, not a git op. (Matches
+    # control_plane.paths(os.getcwd()) and store.resolve(os.getcwd()) here.)
+    trusted_store = control_plane.ensure_store(os.getcwd())
     profile = {}
     profile_error = None
     if res.get("profile"):
@@ -51,18 +78,27 @@ def resolve(work_item, generation):
                or ([base] if base else []))
     browser_tools = (profile.get("browserTools") or profile.get("browser_tools")
                      or profile.get("browserTool"))
-    files = subprocess.run(["git", "diff", "--name-only", "main...HEAD"],
-                           capture_output=True, text=True, timeout=20)
+
+    # FIX B: resolve the base ref (local→origin fallback) and diff against the build worktree.
+    # Unresolvable base falls back to 'main...HEAD' (note: degraded, not a crash).
+    resolved_base = base_ref.resolve_configured_base(git_root, base_name)
+    if resolved_base is None:
+        # Fall back to hardcoded main...HEAD (preserves prior behavior, noted as degradation).
+        resolved_base = "main"
+    diff_range = "%s...HEAD" % resolved_base
+    diff_cmd = ["git", "-C", git_root, "diff", "--name-only", diff_range]
+    files = subprocess.run(diff_cmd, capture_output=True, text=True, timeout=20)
     changed = [line for line in files.stdout.splitlines() if line]
+
     return {
         "workItem": work_item, "generation": generation,
-        "worktree": root, "branch": branch, "head": head,
+        "worktree": git_root, "branch": branch, "head": head,
         "pr": cp.get("pr"), "store": trusted_store,
         "profile": profile or None, "profileError": profile_error,
         "baseUrl": base, "allowedOrigins": allowed,
         "browserTool": {"source": "profile", "tools": browser_tools} if browser_tools else None,
         "diff": {"files": changed},
-        "detectors": detect.detect_dev_server(root, profile),
+        "detectors": detect.detect_dev_server(git_root, profile),
     }
 
 
@@ -72,6 +108,11 @@ def main(argv):
     res = sub.add_parser("resolve")
     res.add_argument("--work-item", required=True)
     res.add_argument("--generation", default=None)
+    res.add_argument("--worktree", default=None,
+                     help="Path to the build worktree (FIX B). When given, git ops run "
+                          "against that tree so the diff reflects the deliverable.")
+    res.add_argument("--base", default="main",
+                     help="Base branch name for diff (FIX B, default: main).")
     args = ap.parse_args(argv[1:])
 
     if args.cmd == "resolve":
@@ -79,7 +120,12 @@ def main(argv):
         generation = args.generation
         if isinstance(generation, str) and generation.isdigit():
             generation = int(generation)
-        sys.stdout.write(json.dumps(resolve(args.work_item, generation)) + "\n")
+        sys.stdout.write(json.dumps(resolve(
+            args.work_item,
+            generation,
+            worktree=args.worktree,
+            base_name=args.base,
+        )) + "\n")
         return 0
     return 2
 

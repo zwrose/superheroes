@@ -42,6 +42,10 @@ bite-sized, test-first **Tasks** — each gated by review-crew. You live in the 
 handles the *how*, pausing only to escalate genuinely consequential calls in
 plain-language pros/cons.
 
+Once Discovery approves the spec, it offers a **post-approval path choice** — run the
+showrunner (recommended) to take the work-item all the way to a ready-for-review PR, or take
+the manual bridged path and drive `plan`/`tasks`/build yourself.
+
 ### Commands
 
 | Command | Use it to… |
@@ -161,6 +165,41 @@ Once a tasks doc is approved:
 
 ```
 /superheroes:workhorse          # build it and take it to a PR
+```
+
+---
+
+## showrunner
+
+**The run engine — turns one approved work-item into a ready-for-review PR, hands-off.**
+
+workhorse builds the back half on demand; showrunner runs the *whole* loop for one approved
+work-item with a single launch. It runs a **fail-closed pre-flight gate** (spec approved, `gh`
+write access, no conflicting live run, repo/verify/config resolvable), then drives the native
+**plan → review → tasks → review → build → review-code → draft-PR → test-pilot → mark-ready →
+ship** pipeline to a ready-for-review PR — parking at any gate it can't pass and handing back a
+codified readout (PR link, CI status, built-vs-acceptance, merge reminder). The showrunner path
+is **superpowers-free**: it authors natively. It **never merges** — that's always yours.
+
+After Discovery approves a spec, the-architect offers a **post-approval path choice**: run the
+showrunner (recommended) or take the manual bridged path. Pick the showrunner and it launches the
+run for you; pick manual and the existing hand-off is unchanged.
+
+> **Re-invocable.** The same entry covers a fresh start, a resume/relaunch after a park or crash,
+> and a status read — the run reconciles its inputs from disk, so a launch is idempotent. Full
+> superpowers removal is tracked by [#111](https://github.com/zwrose/superheroes/issues/111);
+> durable repeatable agentic acceptance by [#112](https://github.com/zwrose/superheroes/issues/112).
+
+### Commands
+
+| Command | Use it to… |
+| --- | --- |
+| `/superheroes:showrunner` | Run an approved work-item end-to-end to a ready-for-review PR (pre-flight → bundle → ship). |
+
+Once a spec is approved (the-architect offers this automatically):
+
+```
+/superheroes:showrunner         # run it all the way to a ready-for-review PR
 ```
 
 ---

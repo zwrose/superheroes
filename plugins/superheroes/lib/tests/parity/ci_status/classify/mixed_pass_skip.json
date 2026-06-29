@@ -1,0 +1,1 @@
+{"input": [[{"name": "check1", "conclusion": "success"}, {"name": "check2", "conclusion": "skipped"}]], "expected": {"status": "green", "failing": []}}

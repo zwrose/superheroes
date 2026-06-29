@@ -1,0 +1,1 @@
+{"input": [[{"round": 1, "findings": [{"severity": "Critical", "file": "a.js", "title": "Null deref"}]}, {"round": 2, "findings": [{"severity": "Critical", "file": "a.js", "title": "Null deref"}]}], 7], "expected": {"halt": true, "reason": "recurring-finding", "detail": "1 blocking finding(s) recurred after a fix was committed: a.js::null deref"}}

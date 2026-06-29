@@ -10,10 +10,11 @@ def _read(name):
 
 def test_produce_leaf_prompt_present_and_versioned():
     t = _read("produce-leaf.md")
-    assert "produce-leaf-version: 1" in t
+    assert "produce-leaf-version: 3" in t                        # bumped to v3 (Layer 2: colon task heading instruction)
     assert "author-only" in t.lower()
     assert "Do NOT run review-plan / review-tasks" in t          # the specific no-review-fanout instruction
     assert "completion signal" in t.lower()                      # records completion (FR-8/UFR-4)
+    assert "## Goal" in t or "## heading" in t.lower()           # v2: authoritative ## heading format
 
 
 def test_doc_reviser_leaf_prompt_present_and_versioned():

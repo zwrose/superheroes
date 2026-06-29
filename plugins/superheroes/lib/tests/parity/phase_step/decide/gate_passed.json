@@ -1,0 +1,2 @@
+{"input": [{"confidence": "high", "assumptions": []}, "passed"],
+ "expected": {"action": "proceed", "reason": "gate passed"}}

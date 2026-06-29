@@ -1,0 +1,1 @@
+{"input": [{"pr": {"state": "open", "number": 42}}], "expected": "adopt"}

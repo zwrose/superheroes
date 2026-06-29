@@ -1,0 +1,1 @@
+{"input": ["  FIX: the Bug! (critical)  "], "expected": "fix the bug critical"}

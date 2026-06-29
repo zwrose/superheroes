@@ -1,0 +1,1 @@
+{"input": [{"completed_phases": ["plan"], "parked_phase": "review-plan", "park_reason": "review loop changes-requested"}], "expected": "# Front-half run outcome\n\n**Completed phases:** plan\n\n**Parked at:** review-plan — review loop changes-requested\n\n**NOTIFY defaults (named — owner may veto):**\n- (none)\n"}

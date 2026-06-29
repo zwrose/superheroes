@@ -90,6 +90,12 @@
       "the single front door for superheroes configuration",
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
+    ],
+    "superheroes/showrunner": [
+      "RUN end-to-end by the live showrunner",
+      "Runs a deterministic pre-flight gate",
+      "drives the native front-half → build → review → ship pipeline to a ready-for-review PR",
+      "It NEVER merges — that is always yours"
     ]
   }
 }

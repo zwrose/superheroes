@@ -120,3 +120,41 @@ def test_cli_decide_prints_verdict_json(tmp_path):
         check=True,
     )
     assert json.loads(out.stdout)["verdict"] == "not_applicable"
+
+
+# FIX A: defense-in-depth — decide() coerces stringified-but-valid JSON inputs rather than parking.
+
+
+def test_stringified_valid_inputs_classify_not_park():
+    """FIX A: a stringified-but-valid diff/detectors/profile still classifies (no park-on-stringify)."""
+    diff_str = json.dumps({"files": ["plugins/superheroes/lib/eval_clamp.js"]})
+    detectors_str = json.dumps({})
+    profile_str = json.dumps(None)
+    result = applicability.decide(
+        diff=diff_str,
+        detectors=detectors_str,
+        profile=profile_str,
+    )
+    # With coercion: lib path -> not_applicable
+    assert result["verdict"] == "not_applicable", (
+        "FIX A: stringified valid inputs must classify, not park — got: %r" % result
+    )
+    assert "library-only" in result["reason"]
+
+
+def test_non_parseable_stringified_input_still_parks():
+    """FIX A: a non-parseable string (not valid JSON) stays park — fail-closed preserved."""
+    result = applicability.decide(diff="not valid json {{{")
+    assert result["verdict"] == "park"
+    assert "malformed inputs" in result["reason"]
+
+
+def test_library_only_path_returns_not_applicable():
+    """FIX A (the skip): /lib/ paths return not_applicable with library-only reason."""
+    result = applicability.decide(
+        diff={"files": ["plugins/superheroes/lib/eval_clamp.js"]},
+        detectors={},
+        profile=None,
+    )
+    assert result["verdict"] == "not_applicable"
+    assert "library-only" in result["reason"]
