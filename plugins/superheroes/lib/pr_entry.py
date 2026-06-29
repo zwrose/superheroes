@@ -75,7 +75,10 @@ if a.step == "draft":
         print(json.dumps({"ok": False, "reason": decision["reason"]})); sys.exit(0)
     # Build the gh pr create command. When --base is supplied, pass it explicitly so the
     # PR targets the configured base (not the remote default). Absent -> omit (default behavior).
-    _gh_create_cmd = ["gh", "pr", "create", "--draft", "--fill", "--head", branch]
+    # --fill-first (not --fill): derive the title from the FIRST commit's subject. `--fill` uses the
+    # branch NAME as the title for a multi-commit branch, which is not a Conventional Commit and fails
+    # a conventional-title CI check (blocking ship); the build's first commit subject IS conventional.
+    _gh_create_cmd = ["gh", "pr", "create", "--draft", "--fill-first", "--head", branch]
     if a.base:
         _gh_create_cmd.extend(["--base", a.base])
     try:
