@@ -57,6 +57,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_base_smoke.js",
     # FIX A: resolveTarget seam targets build worktree + null-resolver parks (never reviews root).
     "plugins/superheroes/lib/tests/showrunner_reviewcode_resolver_smoke.js",
+    # FR-5 cwd-rooting for cmdRunner: selfContained() in cmdRunner pins cwd to repo root when
+    # __SR_ROOT is set (RED->GREEN after the fix); no-op when unset; no double-cd guard.
+    "plugins/superheroes/lib/tests/showrunner_cmdrunner_cwd_smoke.js",
 ]
 
 

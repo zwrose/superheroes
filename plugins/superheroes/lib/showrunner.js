@@ -643,6 +643,9 @@ async function withTargetCommandPrompts(worktree, fn) {
 }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
+// FR-5 (cwd-rooting): wrap the command with selfContained() so the courier leaf always runs from
+// the repo root when globalThis.__SR_ROOT is set. selfContained is a no-op when __SR_ROOT is unset
+// (smoke/test backward-compat) and skips commands already starting with `cd ` (no double-cd).
 async function cmdRunner(cmd, { schema }) {
   // The command prints ONE JSON object to stdout. The leaf must map each top-level key of that
   // object to the SAME-named StructuredOutput field — NOT stuff the whole JSON text into one field
@@ -652,7 +655,7 @@ async function cmdRunner(cmd, { schema }) {
     `Use the Bash tool to run exactly this command. It prints ONE JSON object to stdout. Return that ` +
     `object via StructuredOutput by copying each of its top-level keys to the same-named output field, ` +
     `values exactly as printed. Do NOT put the whole JSON into a single field, do NOT stringify or nest ` +
-    `it, and do NOT add commentary or extra fields:\n\n${cmd}`,
+    `it, and do NOT add commentary or extra fields:\n\n${selfContained(cmd)}`,
     { label: 'lib', schema },
   )
 }
@@ -1054,9 +1057,11 @@ function verdictToGate(verdict) {
 async function renderAndPostReadout(workItem, runDir, verdict) {
   const recPath = `${runDir}/terminal-record.json`
   try { await io().writeFile(recPath, JSON.stringify(verdict || {})) } catch (_) {}
+  // FR-5 (cwd-rooting): selfContained() pins the loop_readout.py call to the repo root when
+  // __SR_ROOT is set — same as renderReadout in frontHalfBoundary (line ~431). No-op without __SR_ROOT.
   const text = await agent(
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-    `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`,
+    selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
     { label: 'readout' })
   await cmdRunner(
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
