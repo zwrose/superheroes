@@ -617,6 +617,37 @@ def test_resume_both_files_present_completes_retirement(tmp_path):
     assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
 
 
+def test_migrate_in_repo_with_out_of_repo_legacy_commits_and_records(tmp_path, monkeypatch):
+    # #121 Part E: IN_REPO registry but the legacy lives in review-crew's GLOBAL store (out-of-repo,
+    # a realistic mixed state). The commit must land core+layer (not fail on an out-of-repo
+    # pathspec) and report `migrated` HONESTLY — never a false `migrated` with calibration left
+    # staged-but-uncommitted in the developer's index.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    open(os.path.join(repo, "README"), "w").write("x\n")  # give the repo a HEAD
+    _git(repo, "add", "README")
+    _git(repo, "commit", "-q", "-m", "init")
+    hero_root = str(tmp_path / "review_store")
+    import review_store
+    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
+    prof_path = review_store.create(repo, "profile", "global", hero_root)
+    open(prof_path, "w").write(_REVIEW_PROFILE)
+    legacy = CM._legacy_path(repo, "review-crew")
+    assert legacy == prof_path  # out-of-repo (global hero store)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "migrated"
+    # the migration commit actually landed core+layer in HEAD
+    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
+    assert ".claude/superheroes/core.md" in names
+    assert ".claude/superheroes/review-crew.md" in names
+    # out-of-repo legacy retired (plain unlink, not a git pathspec)
+    assert not os.path.exists(prof_path)
+    # NO false success: nothing left staged-but-uncommitted
+    staged = _git(repo, "diff", "--cached", "--name-only").stdout
+    assert ".claude/superheroes" not in staged
+
+
 def test_resume_empty_placeholder_rescues_rich_legacy(tmp_path):
     # Part D / #121 (DATA LOSS): the destination core + layer exist only as EMPTY placeholders
     # (a botched/interrupted set-up) while a RICH legacy still holds the only copy of the real
