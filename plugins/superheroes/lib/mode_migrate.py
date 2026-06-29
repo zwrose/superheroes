@@ -255,7 +255,17 @@ def _backout_flip(files):
 def recover(cwd, *, root=None):
     """Run first on every configure run. Detect a half-finished flip/rebind journal (scanning
     BOTH the active config_key store and the rebind-invariant common-dir store) and finish or
-    back out to one consistent state. Idempotent; with no journal → noop (UFR-1/UFR-10)."""
+    back out to one consistent state. Idempotent; with no journal → noop (UFR-1/UFR-10).
+
+    On a REAL run (no explicit root override) it first settles the one-time store-root rename
+    (#121 Part B) — auto-migrating ~/.claude/workhorse → ~/.claude/superheroes before any store
+    path is computed. Gated on `root is None` so the test suite (which always passes an explicit
+    tmp root) never moves the real store; best-effort so it never blocks recovery."""
+    if root is None:
+        try:
+            control_plane.migrate_store_root()
+        except Exception:
+            pass
     active_dir = mode_registry.project_store_dir(cwd, root)
     common_dir = _common_dir_store(cwd, root)
     for store_dir in dict.fromkeys([active_dir, common_dir]):

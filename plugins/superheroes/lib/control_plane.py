@@ -11,15 +11,53 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 
-DEFAULT_STORE_ROOT = "~/.claude/workhorse"
+DEFAULT_STORE_ROOT = "~/.claude/superheroes"
+LEGACY_STORE_ROOT = "~/.claude/workhorse"  # pre-#121 name; auto-migrated, still resolvable
 SCHEMA_VERSION = 1
 
 
+def _store_env():
+    """The store-root override, new var preferred, legacy var honored for back-compat (#121)."""
+    return os.environ.get("SUPERHEROES_STORE_ROOT") or os.environ.get("WORKHORSE_STORE_ROOT")
+
+
 def store_root():
-    return os.path.realpath(os.path.expanduser(
-        os.environ.get("WORKHORSE_STORE_ROOT", DEFAULT_STORE_ROOT)))
+    """The band-wide per-project store root. Precedence: env override → the new default if it
+    exists → the legacy default if only IT exists (back-compat, never strand an existing store)
+    → the new default. Pure (no side effects); the physical rename is migrate_store_root()."""
+    env = _store_env()
+    if env:
+        return os.path.realpath(os.path.expanduser(env))
+    new = os.path.expanduser(DEFAULT_STORE_ROOT)
+    if not os.path.exists(new) and os.path.isdir(os.path.expanduser(LEGACY_STORE_ROOT)):
+        return os.path.realpath(os.path.expanduser(LEGACY_STORE_ROOT))
+    return os.path.realpath(new)
+
+
+def migrate_store_root():
+    """One-time atomic rename of the legacy store root (~/.claude/workhorse) to the new name
+    (~/.claude/superheroes) — #121 Part B. No-op when an env override is set (the owner pinned a
+    location), the new root already exists, or the legacy root is absent. The two share a parent
+    (~/.claude), so os.rename is atomic + instant (no copy). Race/partial-failure safe: a
+    concurrent migrator that already moved it leaves the new root in place. Never raises."""
+    if _store_env():
+        return {"migrated": False, "reason": "env-override"}
+    new = os.path.expanduser(DEFAULT_STORE_ROOT)
+    old = os.path.expanduser(LEGACY_STORE_ROOT)
+    if os.path.exists(new) or not os.path.isdir(old):
+        return {"migrated": False, "reason": "nothing-to-migrate"}
+    try:
+        os.makedirs(os.path.dirname(new), exist_ok=True)
+        os.rename(old, new)
+    except OSError as exc:
+        if os.path.exists(new):
+            return {"migrated": False, "reason": "raced"}
+        return {"migrated": False, "reason": "failed", "detail": str(exc)}
+    sys.stderr.write("superheroes: migrated store root %s -> %s\n" % (old, new))
+    return {"migrated": True, "from": old, "to": new}
 
 
 def _run_git(cwd, *args):
