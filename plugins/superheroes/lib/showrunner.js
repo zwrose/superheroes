@@ -764,6 +764,19 @@ async function defaultTestPilotPhase(workItem, generation) {
   return testPilotPhase(workItem, generation, testPilotDeps(workItem, generation))
 }
 
+// Boundary coercion: parse a value the courier may have stringified (#115 "parse facts at boundary").
+// Applies to known nested-object fields in the resolveContext result. If the value is a string that
+// JSON-parses to a dict or null, return the parsed result. Otherwise return the value unchanged so
+// downstream consumers (writeJson, _is_object guards) still fail-closed on non-parseable strings.
+const _coerceObj = (v) => {
+  if (typeof v !== 'string') return v
+  try {
+    const p = JSON.parse(v)
+    if (p === null || (typeof p === 'object' && !Array.isArray(p))) return p
+  } catch (_) { /* fall through */ }
+  return v
+}
+
 function testPilotDeps(workItem, generation) {
   const runDir = joinPath(io().tmpdir(), `showrunner-${workItem}-test-pilot`)
   // writeJson is async (the io() seam is async — see io_seam.js) and lazily ensures runDir, so every
@@ -779,10 +792,29 @@ function testPilotDeps(workItem, generation) {
   const keyFor = (branch) => encodeURIComponent(branch || workItem).replace(/~/g, '%7E')
 
   return {
-    resolveContext: async () => cli(
-      `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
-      `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}`,
-      { type: 'object' }),
+    resolveContext: async () => {
+      // FIX B: resolve build worktree (same way review-code does) + thread configurable base.
+      // resolveBuildTarget is defined later in this file but testPilotDeps is called after module
+      // load, so the forward reference resolves correctly at call time.
+      const target = await resolveBuildTarget(workItem).catch(() => null)
+      const wtArg = (target && target.worktree) ? ` --worktree ${shq(target.worktree)}` : ''
+      // FR-8: mirror the __SR_BASE pattern from shipPhase / draftPRPhase.
+      const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+      const baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
+      const raw = await cli(
+        `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
+        `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}` +
+        `${wtArg}${baseArg}`,
+        { type: 'object' })
+      // FIX A: coerce nested fields the cheap courier may have stringified (same class as verify_gate).
+      // Strings, head, branch, workItem stay as-is; only known object/null fields are coerced.
+      if (raw && typeof raw === 'object') {
+        for (const field of ['diff', 'detectors', 'profile', 'pr', 'browserTool', 'allowedOrigins', 'store']) {
+          if (field in raw) raw[field] = _coerceObj(raw[field])
+        }
+      }
+      return raw
+    },
 
     decideApplicability: async (context) => {
       const diff = await writeJson('applicability-diff', context.diff || {})
