@@ -1067,6 +1067,7 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
     { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
 }
+module.exports.renderAndPostReadout = renderAndPostReadout
 
 // the review-code phase: drive the shared loop, map its terminal to advance/park, stamp covers on a
 // pure `clean` (X'), and surface the readout at a park. Returns { phaseResult, gate } for runPhases.
@@ -1203,6 +1204,12 @@ async function resolveBuildTarget(workItem) {
     }
   }
   if (!setup || setup.error || !setup.path) return null   // fail-closed: no usable worktree
+  // Fail-closed: at review-code / test-pilot time the build worktree MUST already exist (outcome
+  // 'reused'). An explicit 'created' means build_entry.py just forged a FRESH EMPTY worktree off base
+  // (the build artifact vanished) — never certify that empty tree. Only an explicit 'created' parks;
+  // a missing outcome stays permissive (older stubs). resolveBuildTarget runs WITHOUT --generation, so
+  // this never blocks the build phase, which legitimately creates with --generation.
+  if (setup.outcome && String(setup.outcome).toLowerCase() === 'created') return null
   const wt = setup.path
   // Step 2: read the build-branch tip HEAD (the head the code-review should certify).
   let head = null

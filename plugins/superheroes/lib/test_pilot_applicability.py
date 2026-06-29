@@ -4,6 +4,8 @@ The helper is intentionally conservative: browser-relevant evidence sends work
 to test-pilot, positive no-browser evidence may skip it, and uncertainty parks.
 """
 
+import json
+
 WEB_KEYS = {
     "user_facing",
     "userFacing",
@@ -162,7 +164,7 @@ def _coerce_json_object(value):
     if not isinstance(value, str):
         return value
     try:
-        parsed = __import__("json").loads(value)
+        parsed = json.loads(value)
     except (ValueError, TypeError):
         return value  # non-parseable string -> stays a string -> _is_object parks
     if parsed is None or isinstance(parsed, dict):

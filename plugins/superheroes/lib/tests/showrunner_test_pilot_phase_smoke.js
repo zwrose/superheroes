@@ -712,7 +712,11 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
       return { verdict: 'not_applicable', rationale: 'docs-only' }
     }
     if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
-    if (prompt.includes('build_target_cli.py')) return {}
+    // resolveBuildTarget (the worktree resolver) execs build_entry.py + `git rev-parse HEAD`, not a
+    // CLI named build_target_cli.py — left unstubbed here, it falls through and returns null, so the
+    // build-worktree path / --worktree threading is NOT exercised by this test. That is intentional:
+    // this test verifies resolveContext's field-coercion; the --worktree threading through the CLI
+    // boundary is covered by test_test_pilot_context_cli.py.
     return previousAgent(prompt)
   }
 

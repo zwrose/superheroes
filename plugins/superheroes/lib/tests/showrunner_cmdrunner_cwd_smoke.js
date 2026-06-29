@@ -89,37 +89,42 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
   // and a cmdRunner() call for readout_post.py. Both need selfContained when __SR_ROOT is set.
   // We stub io() writeFile to avoid real fs access.
 
-  // (B1) __SR_ROOT set -> loop_readout.py prompt is cd-prefixed
-  {
+  // renderAndPostReadout(workItem, runDir, verdict) makes a direct agent() call (label 'readout')
+  // that runs loop_readout.py wrapped in selfContained(), then a cmdRunner() readout_post.py call.
+  // We capture the 'readout'-labelled prompt and assert its cd-rooting. io().writeFile is stubbed to
+  // avoid fs; the readout agent returns text; cmdRunner's readout_post call returns a posted shape.
+  const READOUT_CMD = 'python3 plugins/superheroes/lib/loop_readout.py --record'
+  function captureReadoutPrompt(rootValue) {
     delete require.cache[require.resolve('../showrunner.js')]
-    // Set io stub before requiring (io() is called at runtime, not module load time)
     const sr = require('../showrunner.js')
     const savedRoot = globalThis.__SR_ROOT
-    globalThis.__SR_ROOT = ROOT
-    const capturedReadout = []
+    if (rootValue === undefined) delete globalThis.__SR_ROOT
+    else globalThis.__SR_ROOT = rootValue
+    let readoutPrompt = null
     global.agent = async (p, opts) => {
-      capturedReadout.push({ p, label: (opts && opts.label) || '' })
-      if ((opts && opts.label) === 'readout') return 'readout text'
+      if ((opts && opts.label) === 'readout') { readoutPrompt = p; return 'readout text' }
       return { posted: true }
     }
-    // Stub io to avoid real fs writes
     sr.__setIo && sr.__setIo({ writeFile: async () => {} })
-    // Call renderAndPostReadout via the exported symbol if available, or test via a full phase
-    // Since it's not directly exported, trigger it through reviewCodePhase park path.
-    // But the simplest is: if renderAndPostReadout is not exported, we can't test it directly.
-    // The contract is: it IS called in reviewCodePhase when the terminal is not an ADVANCE_TERMINAL.
-    // Let's set up a minimal reviewCodePhase call that parks and triggers renderAndPostReadout.
-    const phaseCalls = []
-    // Restore root for this section
-    globalThis.__SR_ROOT = savedRoot
-    // Since renderAndPostReadout is not directly exported, we test via reviewCodePhase.
-    // This test section is intentionally omitted here; the B assertions are already covered
-    // by the fact that renderAndPostReadout uses a direct agent() call with a raw python3 command
-    // (see Fix 2 in the implementation — we apply selfContained there too).
-    // The existing reviewcode smokes will catch any regression there.
-    // Mark B as covered by code inspection + the Fix 2 implementation.
-    console.log('(B) renderAndPostReadout fix applied in code (not directly exported; covered by reviewcode smokes)')
+    return sr.renderAndPostReadout('wi', '/tmp/run-dir', { verdict: 'changes-requested' })
+      .then(() => { if (savedRoot === undefined) delete globalThis.__SR_ROOT; else globalThis.__SR_ROOT = savedRoot; return readoutPrompt })
   }
 
-  console.log('OK: cmdRunner cwd-rooting (A1: cd-prefix when __SR_ROOT set, A2: no-op when unset, A3: no double-cd)')
+  // (B1) __SR_ROOT set -> the loop_readout.py 'readout' prompt is cd-prefixed
+  {
+    const prompt = await captureReadoutPrompt(ROOT)
+    assert.ok(prompt && prompt.includes(READOUT_CMD), '(B1) renderAndPostReadout issues the loop_readout.py readout call')
+    assert.ok(prompt.includes(`cd '${ROOT}' && ${READOUT_CMD}`),
+      `(B1) loop_readout.py prompt must be cd-rooted when __SR_ROOT is set.\nExpected substring: cd '${ROOT}' && ${READOUT_CMD}\nGot: ${prompt.slice(0, 300)}`)
+  }
+
+  // (B2) __SR_ROOT unset -> the loop_readout.py 'readout' prompt is NOT cd-prefixed
+  {
+    const prompt = await captureReadoutPrompt(undefined)
+    assert.ok(prompt && prompt.includes(READOUT_CMD), '(B2) renderAndPostReadout issues the loop_readout.py readout call')
+    assert.ok(!prompt.includes('cd '),
+      `(B2) loop_readout.py prompt must NOT contain a cd prefix when __SR_ROOT is unset.\nGot: ${prompt.slice(0, 300)}`)
+  }
+
+  console.log('OK: cmdRunner + renderAndPostReadout cwd-rooting (A1/A2/A3 cmdRunner, B1/B2 loop_readout)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })

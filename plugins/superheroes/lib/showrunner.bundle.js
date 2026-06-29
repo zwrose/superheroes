@@ -300,12 +300,15 @@ function classify(runResult) {
   // A stringified 'false' is NOT timed out (the original bug: any non-empty string was truthy).
   const timedOut = r.timedOut === true || String(r.timedOut).toLowerCase() === 'true'
   if (timedOut) return 'timeout'
-  // Tolerate stringified returncode: pass iff numeric 0 OR coercible string '0'.
-  // Fail-closed: NaN / undefined / null / missing -> fail. Explicit null guard: Number(null)===0
-  // but a null returncode signals no exit code (timeout or error), which is never a pass.
-  const rc = r.returncode
-  if (rc === null || rc === undefined) return 'fail'
-  return Number(rc) === 0 ? 'pass' : 'fail'
+  // Tolerate a stringified returncode: pass iff an unambiguous integer 0 (numeric 0 or the string
+  // '0'). Fail-CLOSED on anything that is not a plain integer string — crucially the empty string,
+  // because Number('')===0 (and Number('  ')===0, Number(null)===0). An empty/whitespace/dropped
+  // returncode is a plausible courier garble — exactly the corruption this layer exists to catch —
+  // and must NEVER read as a pass. Match an integer string first; everything else (''/NaN/null/
+  // undefined/missing) -> fail.
+  const rcStr = String(r.returncode).trim()
+  if (!/^-?\d+$/.test(rcStr)) return 'fail'
+  return Number(rcStr) === 0 ? 'pass' : 'fail'
 }
 module.exports = { classify }
 
@@ -498,18 +501,17 @@ async function verifyAgent(verifyCommand, runDir, round) {
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
     { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
   if (!out) return 'fail'  // fail-closed if the runner gave nothing
-  // Boundary coercion: the courier leaf may return returncode/timedOut as strings ('0', 'false').
-  // Normalise to typed values before calling the twin so the twin always sees correct types.
-  // This is the primary fix for the stringified-field class (#115 follow-up eval finding).
-  const rc = out.returncode
-  const normalizedRc = (rc === null || rc === undefined) ? rc : (Number.isFinite(Number(rc)) ? Number(rc) : rc)
-  const normalizedTimedOut = out.timedOut === true || String(out.timedOut).toLowerCase() === 'true'
   // Classify with the command the SPINE knows (verifyCommand), NOT the leaf's echoed out.command.
   // A garbled leaf that drops `command` would make the twin see !cmd -> 'skipped' (a pass-equivalent
   // in _VERIFY_OK) — certifying clean without verify passing. Using verifyCommand here means a real
-  // verifyCommand can never be misclassified 'skipped' by a missing echo; a garbled returncode still
-  // falls to 'fail' (fail-closed). (#115 final review FIX 2.)
-  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: normalizedRc, timedOut: normalizedTimedOut })
+  // verifyCommand can never be misclassified 'skipped' by a missing echo. (#115 final review FIX 2.)
+  //
+  // Do NOT pre-normalize returncode/timedOut here: the parity-locked twin (verify_gate.js) OWNS the
+  // boundary coercion of the courier-stringified fields and fail-CLOSES on an empty/garbled
+  // returncode. The old pre-normalizer (`Number.isFinite(Number(rc)) ? Number(rc) : rc`) laundered an
+  // empty-string returncode ('' -> Number('') === 0) into a spurious PASS before the twin saw it — a
+  // fail-OPEN. Pass the raw fields through so the single fail-closed coercion site is the twin.
+  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }
 
 // In-process tally — the parity-locked twins decide gate/confidence/terminal + the circuit breaker,
@@ -3834,6 +3836,7 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
     { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
 }
+module.exports.renderAndPostReadout = renderAndPostReadout
 
 // the review-code phase: drive the shared loop, map its terminal to advance/park, stamp covers on a
 // pure `clean` (X'), and surface the readout at a park. Returns { phaseResult, gate } for runPhases.
@@ -3970,6 +3973,12 @@ async function resolveBuildTarget(workItem) {
     }
   }
   if (!setup || setup.error || !setup.path) return null   // fail-closed: no usable worktree
+  // Fail-closed: at review-code / test-pilot time the build worktree MUST already exist (outcome
+  // 'reused'). An explicit 'created' means build_entry.py just forged a FRESH EMPTY worktree off base
+  // (the build artifact vanished) — never certify that empty tree. Only an explicit 'created' parks;
+  // a missing outcome stays permissive (older stubs). resolveBuildTarget runs WITHOUT --generation, so
+  // this never blocks the build phase, which legitimately creates with --generation.
+  if (setup.outcome && String(setup.outcome).toLowerCase() === 'created') return null
   const wt = setup.path
   // Step 2: read the build-branch tip HEAD (the head the code-review should certify).
   let head = null

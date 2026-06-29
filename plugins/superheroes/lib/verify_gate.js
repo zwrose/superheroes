@@ -11,11 +11,14 @@ function classify(runResult) {
   // A stringified 'false' is NOT timed out (the original bug: any non-empty string was truthy).
   const timedOut = r.timedOut === true || String(r.timedOut).toLowerCase() === 'true'
   if (timedOut) return 'timeout'
-  // Tolerate stringified returncode: pass iff numeric 0 OR coercible string '0'.
-  // Fail-closed: NaN / undefined / null / missing -> fail. Explicit null guard: Number(null)===0
-  // but a null returncode signals no exit code (timeout or error), which is never a pass.
-  const rc = r.returncode
-  if (rc === null || rc === undefined) return 'fail'
-  return Number(rc) === 0 ? 'pass' : 'fail'
+  // Tolerate a stringified returncode: pass iff an unambiguous integer 0 (numeric 0 or the string
+  // '0'). Fail-CLOSED on anything that is not a plain integer string — crucially the empty string,
+  // because Number('')===0 (and Number('  ')===0, Number(null)===0). An empty/whitespace/dropped
+  // returncode is a plausible courier garble — exactly the corruption this layer exists to catch —
+  // and must NEVER read as a pass. Match an integer string first; everything else (''/NaN/null/
+  // undefined/missing) -> fail.
+  const rcStr = String(r.returncode).trim()
+  if (!/^-?\d+$/.test(rcStr)) return 'fail'
+  return Number(rcStr) === 0 ? 'pass' : 'fail'
 }
 module.exports = { classify }

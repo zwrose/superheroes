@@ -37,4 +37,8 @@ try:
 except OSError as e:                                              # disk -> fail closed (no branch emitted)
     print(json.dumps({"error": "checkpoint write failed: %s" % e}))
     sys.exit(0)   # exit 0 so the fail-closed JSON is reliably consumed (buildPhase parks on no branch)
-print(json.dumps({"branch": branch, "path": res.get("path")}))  # path = the build worktree (git reads run there)
+# `outcome` ('reused'/'created') is emitted so a side-effect-safe resolver (resolveBuildTarget, run
+# WITHOUT --generation at review-code/test-pilot time) can fail-closed on 'created': a fresh worktree
+# at that stage means the build artifact is gone, and certifying its empty tree would be a fail-open.
+# Additive — the build phase consumer reads branch/path and ignores outcome (CREATED is expected there).
+print(json.dumps({"branch": branch, "path": res.get("path"), "outcome": outcome}))

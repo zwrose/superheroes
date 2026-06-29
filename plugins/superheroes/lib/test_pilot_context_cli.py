@@ -58,7 +58,14 @@ def resolve(work_item, generation, worktree=None, base_name="main"):
     branch = cp.get("branch") or _git("rev-parse", "--abbrev-ref", "HEAD", cwd=git_root)
 
     res = store.resolve(os.getcwd(), store.store_root())
-    trusted_store = control_plane.ensure_store(git_root)
+    # The control-plane store is keyed per checkout (sha256 of `git rev-parse --absolute-git-dir`,
+    # DISTINCT per worktree) and holds the generation lease acquired in the SHOWRUNNER's own checkout.
+    # It must resolve from os.getcwd() (the showrunner root), NOT git_root: a build worktree has a
+    # different --absolute-git-dir -> a different, lease-less store, so publish's renew()/fence_ok()
+    # would park ("lease renewal failed before publish"). Only the GIT ops (head/branch/diff/detectors/
+    # base) above target git_root — the store is control-plane state, not a git op. (Matches
+    # control_plane.paths(os.getcwd()) and store.resolve(os.getcwd()) here.)
+    trusted_store = control_plane.ensure_store(os.getcwd())
     profile = {}
     profile_error = None
     if res.get("profile"):
