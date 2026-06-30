@@ -93,6 +93,8 @@ ap.add_argument("--attempt", type=int, default=1,
                 help="1-based catch-up attempt threaded into freshness.decide (default 1)")
 ap.add_argument("--worktree", default=None,
                 help="the build worktree the git mechanics run in; absent -> cwd")
+ap.add_argument("--round", type=int, default=None, help="1-based CI-fix round for ci-record")
+ap.add_argument("--failing", default=None, help="JSON array of current failing check signatures")
 a = ap.parse_args()
 
 if a.step == "freshness":
@@ -172,6 +174,31 @@ elif a.step == "freshen":
             sys.exit(0)
     print(json.dumps({"ok": True, "head": after_head, "conflict": False,
                       "reason": "base integrated" if after_head != before_head else "already up to date"}))
+elif a.step == "ci-decide":
+    # FR-3/FR-4/UFR-5: replay the write-ahead round count from the journal (survives a crash),
+    # then let ci_loop.decide (parity-locked) choose fix vs revert_and_gate.
+    try:
+        failing = json.loads(a.failing) if a.failing else []
+    except ValueError:
+        failing = []
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    prior_rounds, history = journal.ci_attempts(paths["events"])
+    rnd = prior_rounds + 1
+    action, reason = ci_loop.decide(failing, history, rnd)
+    print(json.dumps({"action": action, "round": rnd, "reason": reason}))
+elif a.step == "ci-record":
+    # Write-ahead ONE ci_fix_attempt BEFORE the fixer runs (UFR-5: a crash over-counts, never under).
+    try:
+        failing = json.loads(a.failing) if a.failing else []
+    except ValueError:
+        failing = []
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    try:
+        journal.append(paths["events"], "ci_fix_attempt",
+                       payload={"round": a.round, "failing": failing}, root=os.getcwd())
+        print(json.dumps({"ok": True}))
+    except journal.DurableWriteError as e:
+        print(json.dumps({"ok": False, "reason": "durable write failed: %s" % e}))
 elif a.emit_checks:
     # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
     # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).

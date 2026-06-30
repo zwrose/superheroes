@@ -129,3 +129,39 @@ def test_freshness_reads_the_worktree_not_cwd(tmp_path):
     r = _run("freshness", "--base", "main", "--worktree", str(repo), "--attempt", "1", cwd=LIB)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["decision"] == "sync"   # behind base, attempt 1 -> sync (not gate/up_to_date)
+
+
+def test_ci_decide_respects_cap_after_replayed_rounds(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    import importlib
+    sys.path.insert(0, LIB)
+    cp = importlib.import_module("control_plane")
+    jr = importlib.import_module("journal")
+    paths = cp.paths(str(tmp_path), "wi")
+    # seed 4 prior ci_fix_attempt rounds -> the next decide is round 5 = the cap -> revert_and_gate.
+    for i in range(1, 5):
+        jr.append(paths["events"], "ci_fix_attempt", payload={"round": i, "failing": ["x"]}, root=str(tmp_path))
+    r = _run("ci-decide", "--failing", json.dumps(["x"]), cwd=str(tmp_path))
+    out = json.loads(r.stdout)
+    assert out["action"] == "revert_and_gate"
+    assert out["round"] == 5
+
+
+def test_ci_decide_first_round_fixes(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    r = _run("ci-decide", "--failing", json.dumps(["build"]), cwd=str(tmp_path))
+    out = json.loads(r.stdout)
+    assert out["action"] == "fix"
+    assert out["round"] == 1
+
+
+def test_ci_record_appends_round(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    import importlib
+    sys.path.insert(0, LIB)
+    cp = importlib.import_module("control_plane"); jr = importlib.import_module("journal")
+    paths = cp.paths(str(tmp_path), "wi")
+    r = _run("ci-record", "--round", "1", "--failing", json.dumps(["build"]), cwd=str(tmp_path))
+    assert json.loads(r.stdout)["ok"] is True
+    rounds, hist = jr.ci_attempts(paths["events"])
+    assert rounds == 1 and hist == [["build"]]
