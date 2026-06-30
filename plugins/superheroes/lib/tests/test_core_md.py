@@ -1037,3 +1037,116 @@ def test_render_layer_always_ends_with_one_newline(tmp_path):
     assert out.endswith("- x\n") and not out.endswith("\n\n")
     out2 = CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26")
     assert out2.endswith("- none\n")
+
+
+def test_confirm_layer_rejects_provenance_without_status_field(tmp_path):
+    # /code-review #3: a provenance with no status= token must NOT report 'confirmed' (the surgical
+    # re.sub would be a no-op) — that was a silent false-success.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").write("<!-- review-crew: schemaVersion=1 created=2026-06-20 nudge-ack={} -->"
+                        "\n\n## Scope exclusions\n- none\n")
+    res = CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    assert res["action"] != "confirmed"
+    assert "status=confirmed" not in open(lp).read()
+
+
+def test_confirm_layer_does_not_corrupt_nudge_ack_with_status_token(tmp_path):
+    # /code-review #3: the surgical sub must touch only the leading status=/updated= fields, never a
+    # status=/updated= substring inside the nudge-ack map.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").write('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+                        'updated=2026-06-20 nudge-ack={"k":"status=x"} -->\n\n## Scope exclusions\n- none\n')
+    res = CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    out = open(lp).read()
+    assert res["action"] == "confirmed"
+    assert 'nudge-ack={"k":"status=x"}' in out  # ack preserved verbatim
+    assert "status=confirmed" in out
+
+
+def test_confirm_layer_reads_under_lock_not_stale(tmp_path, monkeypatch):
+    # /code-review #1: confirm_layer must re-read the layer UNDER the lock, so a concurrent write
+    # that lands while it waits for the lock is not clobbered by a stale pre-lock read.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    prov = ('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+            'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- %s\n')
+    open(lp, "w").write(prov % "OLD")
+    from contextlib import contextmanager
+    real_lock = CM.mode_registry.config_lock
+
+    @contextmanager
+    def _lock_then_mutate(cwd, root=None):
+        open(lp, "w").write(prov % "NEW BODY")  # a concurrent write_layer landed first
+        with real_lock(cwd, root) as got:
+            yield got
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _lock_then_mutate)
+    CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    out = open(lp).read()
+    assert "NEW BODY" in out and "OLD" not in out  # concurrent body survived
+    assert "status=confirmed" in out
+
+
+def test_confirm_all_does_not_flip_layers_when_core_not_confirmed(tmp_path):
+    # /code-review #5: a behind/deferred/absent core must NOT leave layers advertising 'confirmed'
+    # over an unconfirmed shared core (no split state).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, CM.SCHEMA_VERSION + 1, status="provisional")  # behind core → confirm -> 'behind'
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").write('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+                        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    res = CM.confirm_all(repo, root=store, now="2026-06-28")
+    assert res["core"]["action"] == "behind"
+    assert all(v["action"] != "confirmed" for v in res["layers"].values())
+    assert "status=confirmed" not in open(lp).read()
+
+
+def test_resume_ambiguous_over_placeholder_marks_pending(tmp_path):
+    # /code-review #9: refusing to retire an ambiguous legacy over a placeholder must drop a
+    # calibration-pending marker so mode_reconcile surfaces it for hand-reconcile.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))  # ambiguous
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "ambiguous"
+    assert os.path.exists(legacy)                       # preserved
+    assert os.path.isfile(CM._pending_path(repo, store))  # surfaced as calibration-not-saved
+
+
+def test_resume_rescue_preserves_confirmed_status_and_created(tmp_path):
+    # /code-review #10: rescuing an empty placeholder must NOT downgrade a confirmed status or
+    # reset the created date.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "confirmed", "2026-06-01", "2026-06-01"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "confirmed", "2026-06-01"))
+    CM.migrate_on_read(repo, "review-crew", root=store)
+    got = CM.read(repo, root=store)
+    assert got["verifyCommand"] == "npm test"   # rescued
+    assert got["status"] == "confirmed"          # NOT downgraded
+    assert got["created"] == "2026-06-01"        # preserved

@@ -469,7 +469,8 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
                 # (lossless populate-then-retire); a non-empty / hand-edited piece is left untouched
                 # (FR-11). A rich legacy that cannot be safely re-derived (ambiguous) is NOT retired
                 # over a placeholder — surfaced for hand-reconcile instead of silently destroyed.
-                core_empty = _facts_are_empty(read(cwd, root))
+                core_rec_now = read(cwd, root)
+                core_empty = _facts_are_empty(core_rec_now)
                 layer_empty = _layer_is_empty(layer_p)
                 if core_empty or layer_empty:
                     try:
@@ -479,15 +480,22 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
                         mark_pending(cwd, root, detail={"hero": hero, "reason": "legacy-unreadable"})
                         return {"action": "deferred"}
                     if classify(legacy_text, hero) != "standard":
-                        return {"action": "ambiguous"}  # never destroy an un-derivable legacy over a placeholder
+                        # never destroy an un-derivable legacy over a placeholder; surface it as a
+                        # calibration-not-saved marker so the owner can hand-reconcile (/code-review #9).
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "ambiguous-legacy"})
+                        return {"action": "ambiguous"}
                     core_facts, layer_text = split_profile(legacy_text, hero)
+                    # Preserve the placeholder's own status + created: rescuing content must never
+                    # downgrade a confirmed core or reset its creation date (/code-review #10).
+                    prev_status = (core_rec_now or {}).get("status") or "provisional"
+                    prev_created = (core_rec_now or {}).get("created") or stamp
                     try:
                         if core_empty:
                             store_core.atomic_write(
-                                core_p, render_core(core_facts, "provisional", stamp, stamp))
+                                core_p, render_core(core_facts, prev_status, prev_created, stamp))
                         if layer_empty:
                             store_core.atomic_write(
-                                layer_p, _render_layer(layer_text, hero, "provisional", stamp))
+                                layer_p, _render_layer(layer_text, hero, prev_status, stamp))
                     except OSError:
                         mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
                         return {"action": "deferred"}
@@ -663,23 +671,34 @@ def confirm_layer(cwd, hero, *, root=None, now=None):
     Returns {action: "confirmed"|"noop"|"absent"|"deferred"}."""
     stamp = now or _today()
     layer_p = _layer_path(cwd, hero, root)
-    try:
-        with open(layer_p, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError:
+    if not os.path.isfile(layer_p):
         return {"action": "absent"}
-    m = re.match(r"^<!--\s*%s:.*?-->" % re.escape(hero), text)
-    if not m:
-        return {"action": "absent"}  # no §2.2 provenance line — not a managed layer
-    if "status=confirmed" in m.group(0):
-        return {"action": "noop", "path": layer_p}
     if mode_registry.ensure_project_store(cwd, root) is None:
         return {"action": "deferred"}
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             return {"action": "deferred"}
-        prov = re.sub(r"status=\S+", "status=confirmed", m.group(0))
-        prov = re.sub(r"updated=\S+", "updated=%s" % stamp, prov)
+        # Read UNDER the lock (never from a stale pre-lock read) so a concurrent write_layer that
+        # landed while we waited for the lock is not clobbered (/code-review #1).
+        try:
+            with open(layer_p, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            return {"action": "absent"}
+        # DOTALL so a hand-wrapped multi-line provenance comment still matches.
+        m = re.match(r"^<!--\s*%s:.*?-->" % re.escape(hero), text, re.DOTALL)
+        if not m:
+            return {"action": "absent"}  # no §2.2 provenance line — not a managed layer
+        if "status=confirmed" in m.group(0):
+            return {"action": "noop", "path": layer_p}
+        # Surgical, anchored to the FIRST status=/updated= field only (count=1) so a status=/
+        # updated= substring inside the nudge-ack map is never rewritten (/code-review #3).
+        prov = re.sub(r"status=\S+", "status=confirmed", m.group(0), count=1)
+        prov = re.sub(r"updated=\S+", "updated=%s" % stamp, prov, count=1)
+        if "status=confirmed" not in prov:
+            # the provenance carried no status= field to flip — not a flippable managed layer;
+            # never report a false 'confirmed' for a no-op edit (/code-review #3).
+            return {"action": "absent"}
         try:
             store_core.atomic_write(layer_p, prov + text[m.end(0):])
         except OSError:
@@ -693,9 +712,13 @@ def confirm_all(cwd, *, root=None, now=None):
     {core: <confirm result>, layers: {hero: <confirm_layer result>}}."""
     core_res = confirm(cwd, root=root, now=now)
     layers = {}
-    for hero in _HEROES:
-        if os.path.isfile(_layer_path(cwd, hero, root)):
-            layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
+    # Only flip layers when the shared core is (now) confirmed — a deferred/behind/absent core must
+    # not leave layers advertising 'confirmed' over an unconfirmed core, a split state (/code-review
+    # #5). `noop` means the core was already confirmed, so layers may still flip.
+    if core_res.get("action") in ("confirmed", "noop"):
+        for hero in _HEROES:
+            if os.path.isfile(_layer_path(cwd, hero, root)):
+                layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
     return {"core": core_res, "layers": layers}
 
 
