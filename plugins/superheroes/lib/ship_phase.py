@@ -39,19 +39,30 @@ def _local_head(cwd=None):
     return out if rc == 0 and out else None
 
 
-def _remote_pr_head(work_item):
-    """The PR's current remote head SHA via gh, or None on any unreadable read (fail closed)."""
+def _remote_pr_head(work_item, branch=None, cwd=None):
+    """The PR's current remote head SHA via gh, or None on any unreadable read (fail closed).
+    Falls back to git ls-remote when branch is given and gh cannot resolve the PR number
+    (e.g. in test environments with a local bare origin and no real GitHub PR)."""
     pr = _resolve_pr_number(work_item)
-    if not pr:
-        return None
-    try:
-        r = subprocess.run(["gh", "pr", "view", pr, "--json", "headRefOid", "--jq", ".headRefOid"],
-                           capture_output=True, text=True, timeout=30)
-    except Exception:
-        return None
-    if r.returncode != 0:
-        return None
-    return r.stdout.strip() or None
+    if pr:
+        try:
+            r = subprocess.run(["gh", "pr", "view", pr, "--json", "headRefOid", "--jq", ".headRefOid"],
+                               capture_output=True, text=True, timeout=30)
+        except Exception:
+            pass
+        else:
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+    # fallback: read the remote branch tip directly when no gh-resolvable PR number is available
+    if branch:
+        try:
+            r = subprocess.run(["git", "ls-remote", "origin", branch],
+                               capture_output=True, text=True, timeout=30, cwd=cwd)
+        except Exception:
+            return None
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip().split()[0]  # first field is the SHA
+    return None
 
 
 def _read_ci(work_item):
@@ -135,9 +146,9 @@ elif a.step == "reconcile-head":
         rc, _ = _git(["push", "origin", branch], cwd=wt)          # ordinary non-force push (FR-9)
         if rc != 0:
             return False
-        return _remote_pr_head(a.work_item) == local              # read-back-confirm the push landed
+        return _remote_pr_head(a.work_item, branch, wt) == local  # read-back-confirm the push landed
 
-    res = ship_reconcile.reconcile_head(local, _remote_pr_head(a.work_item), branch, _push)
+    res = ship_reconcile.reconcile_head(local, _remote_pr_head(a.work_item, branch, wt), branch, _push)
     print(json.dumps({"ok": bool(res["ok"]),
                       "head": local if res["ok"] else None,
                       "reason": res["reason"]}))
@@ -199,6 +210,73 @@ elif a.step == "ci-record":
         print(json.dumps({"ok": True}))
     except journal.DurableWriteError as e:
         print(json.dumps({"ok": False, "reason": "durable write failed: %s" % e}))
+elif a.step == "fix-push":
+    # The fixer agent (in the orchestrator) edited the worktree to fix failing checks. This step
+    # commits + non-force pushes ONLY a clean worktree carrying exactly that change. A crashed fixer's
+    # residue (conflict markers) or a no-op tree parks fail-closed (no push). On a non-fast-forward
+    # rejection it replays the fixer commit onto the CURRENT remote PR head — never the base, never a
+    # force, never dropping the commit; parks if it cannot cleanly replay.
+    wt = a.worktree or os.getcwd()
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    cp = ckpt_lib.read(paths["checkpoint"]) or {}
+    branch = cp.get("branch") or ""
+    if not branch:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "no branch recorded — cannot push"}))
+        sys.exit(0)
+    # clean-tree precondition: reject leftover conflict markers (a crashed/garbage fixer state).
+    marker_rc, _ = _git(["diff", "--check"], cwd=wt)
+    if marker_rc != 0:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "worktree carries conflict markers — crashed fixer, park (no push)"}))
+        sys.exit(0)
+    _git(["add", "-A"], cwd=wt)
+    staged_rc, staged = _git(["diff", "--cached", "--name-only"], cwd=wt)
+    if staged_rc != 0:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "could not read the staged tree (git index error) — park"}))
+        sys.exit(0)
+    if not staged:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "no change to push — nothing the fixer produced"}))
+        sys.exit(0)
+    commit_rc, _ = _git(["commit", "-m", "fix(superheroes): repair failing checks [showrunner]"], cwd=wt)
+    if commit_rc != 0:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "commit failed"}))
+        sys.exit(0)
+    push_rc, _ = _git(["push", "origin", branch], cwd=wt)         # ordinary non-force push (FR-9)
+    if push_rc == 0:
+        print(json.dumps({"ok": True, "head": _local_head(wt), "pushed": True, "reason": "fix pushed"}))
+        sys.exit(0)
+    # non-fast-forward: the remote PR head advanced. Replay ALL local-ahead commits onto THAT head
+    # (never base). HEAD~1 would replay only the last commit and silently DROP an un-pushed freshen
+    # merge or an earlier fix commit when the worktree is >1 ahead; rebasing onto the fetched branch
+    # tip replays the whole local-ahead range, dropping nothing.
+    # liveness check: confirm the remote PR head is readable before committing to a fetch+rebase
+    remote = _remote_pr_head(a.work_item, branch, wt)
+    if not remote:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "push rejected and remote PR head unreadable — park"}))
+        sys.exit(0)
+    fetch_rc, _ = _git(["fetch", "--quiet", "origin", branch], cwd=wt)
+    if fetch_rc != 0:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "push rejected and could not fetch the advanced remote head — park"}))
+        sys.exit(0)
+    rebase_rc, _ = _git(["rebase", "FETCH_HEAD"], cwd=wt)         # replay local-ahead onto the advanced remote
+    if rebase_rc != 0:
+        _git(["rebase", "--abort"], cwd=wt)                      # never force, never drop a commit
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "cannot cleanly replay local-ahead commits onto advanced PR head — park"}))
+        sys.exit(0)
+    repush_rc, _ = _git(["push", "origin", branch], cwd=wt)
+    if repush_rc != 0:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                          "reason": "replay push still rejected — park (no force)"}))
+        sys.exit(0)
+    print(json.dumps({"ok": True, "head": _local_head(wt), "pushed": True,
+                      "reason": "fix replayed onto advanced PR head and pushed"}))
 elif a.emit_checks:
     # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
     # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).

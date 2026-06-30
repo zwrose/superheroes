@@ -165,3 +165,107 @@ def test_ci_record_appends_round(tmp_path, monkeypatch):
     assert json.loads(r.stdout)["ok"] is True
     rounds, hist = jr.ci_attempts(paths["events"])
     assert rounds == 1 and hist == [["build"]]
+
+
+def _seed_branch_checkpoint(store_root, worktree, work_item, branch):
+    """Seed a checkpoint with a branch name so fix-push can reach past the no-branch guard."""
+    import importlib
+    sys.path.insert(0, LIB)
+    cp_mod = importlib.import_module("control_plane"); ckpt = importlib.import_module("checkpoint")
+    old_store = os.environ.get("SUPERHEROES_STORE_ROOT")
+    os.environ["SUPERHEROES_STORE_ROOT"] = store_root
+    try:
+        paths = cp_mod.paths(str(worktree), work_item)
+        ckpt.write(paths["checkpoint"], ckpt.new(work_item, branch, lock_generation=1))
+    finally:
+        if old_store is None:
+            os.environ.pop("SUPERHEROES_STORE_ROOT", None)
+        else:
+            os.environ["SUPERHEROES_STORE_ROOT"] = old_store
+
+
+def test_fix_push_dirty_conflict_marker_parks_no_push(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "f").write_text("base\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    # seed a branch so the no-branch guard passes; the conflict marker must be the thing that parks
+    store_root = str(tmp_path / "store")
+    _seed_branch_checkpoint(store_root, repo, "wi", "feat")
+    # leave a conflict marker in the worktree (a crashed fixer's residue)
+    (repo / "f").write_text("<<<<<<< HEAD\na\n=======\nb\n>>>>>>> x\n")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"), "--step", "fix-push",
+                        "--work-item", "wi", "--worktree", str(repo)],
+                       capture_output=True, text=True, cwd=str(repo), env=monkey, timeout=30)
+    out = json.loads(r.stdout)
+    assert out["pushed"] is False
+    assert out["ok"] is False
+    assert "conflict" in out["reason"] or "marker" in out["reason"]
+
+
+def test_fix_push_no_change_parks(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "f").write_text("base\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    # seed a branch so the no-branch guard passes; the clean tree must be the thing that parks
+    store_root = str(tmp_path / "store")
+    _seed_branch_checkpoint(store_root, repo, "wi", "feat")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"), "--step", "fix-push",
+                        "--work-item", "wi", "--worktree", str(repo)],
+                       capture_output=True, text=True, cwd=str(repo), env=monkey, timeout=30)
+    out = json.loads(r.stdout)
+    assert out["pushed"] is False
+    assert out["ok"] is False
+    assert "no change" in out["reason"] or "nothing" in out["reason"]
+
+
+def test_fix_push_nff_two_ahead_replays_both_commits(tmp_path):
+    # NFF recovery: local has 2 unpushed commits and the remote branch advanced; the push is rejected,
+    # then fetch + rebase FETCH_HEAD must replay BOTH local commits onto the advanced remote (never drop one).
+    import importlib
+    origin = tmp_path / "origin.git"; subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    def g(*a, cwd=work): subprocess.run(["git", *a], cwd=cwd, check=True)
+    g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (work / "f").write_text("base\n"); g("add", "-A"); g("commit", "-qm", "base")
+    g("branch", "-M", "feat"); g("push", "-q", "origin", "feat")
+    # a second clone advances origin/feat (the "remote advanced" case)
+    other = tmp_path / "other"; subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    subprocess.run(["git", "config", "user.email", "o@o"], cwd=other, check=True); subprocess.run(["git", "config", "user.name", "o"], cwd=other, check=True)
+    # bare repo HEAD may not auto-track feat; check it out explicitly so the commit lands on the right branch
+    subprocess.run(["git", "checkout", "-q", "-b", "feat", "origin/feat"], cwd=other, check=True)
+    (other / "remote_file").write_text("from remote\n")
+    subprocess.run(["git", "add", "-A"], cwd=other, check=True); subprocess.run(["git", "commit", "-qm", "remote advance"], cwd=other, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "feat"], cwd=other, check=True)
+    # local makes a freshen-style commit + the fixer's dirty change (2 commits' worth: one committed, one staged-by-fix-push)
+    (work / "freshen_file").write_text("freshen\n"); g("add", "-A"); g("commit", "-qm", "freshen merge (unpushed)")
+    (work / "fix_file").write_text("the fix\n")   # the fixer's change, left dirty for fix-push to commit
+    # seed a checkpoint with branch=feat in an isolated store, then run fix-push from the work clone
+    store_root = str(tmp_path / "store")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    sys.path.insert(0, LIB)
+    cp_mod = importlib.import_module("control_plane"); ckpt = importlib.import_module("checkpoint")
+    # seed the checkpoint using the same isolated store the subprocess will use
+    old_store = os.environ.get("SUPERHEROES_STORE_ROOT")
+    os.environ["SUPERHEROES_STORE_ROOT"] = store_root
+    try:
+        paths = cp_mod.paths(str(work), "wi")
+        ckpt.write(paths["checkpoint"], ckpt.new("wi", "feat", lock_generation=1))
+    finally:
+        if old_store is None:
+            os.environ.pop("SUPERHEROES_STORE_ROOT", None)
+        else:
+            os.environ["SUPERHEROES_STORE_ROOT"] = old_store
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"), "--step", "fix-push",
+                "--work-item", "wi", "--worktree", str(work)],
+               capture_output=True, text=True, cwd=str(work), env=monkey, timeout=60)
+    out = json.loads(r.stdout)
+    assert out["ok"] is True and out["pushed"] is True, r.stdout + r.stderr
+    # BOTH local-ahead commits (freshen + fix) AND the remote advance are now on origin/feat — none dropped
+    subprocess.run(["git", "fetch", "-q", "origin"], cwd=work, check=True)
+    log = subprocess.run(["git", "log", "--format=%s", "origin/feat"], cwd=work, capture_output=True, text=True).stdout
+    assert "freshen merge (unpushed)" in log and "remote advance" in log, log   # neither dropped
