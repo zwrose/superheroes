@@ -59,6 +59,12 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 "$ROOT_DIR/lib/core_md.py" confirm --cwd .
 ```
 
+**Read the result, don't assume success.** `confirm` returns `{core: {action}, layers: {hero: {action}}}`.
+Only `confirmed`/`noop` means done — surface anything else to the owner instead of reporting success: `behind`
+= the calibration is from a **newer plugin version**, tell them to upgrade rather than confirm; `deferred` =
+the store/lock was busy, retry; `absent` = nothing to confirm. A non-confirmed core leaves the layers
+untouched (no split state), so the whole calibration stays provisional until it genuinely confirms.
+
 Merely viewing the profile never confirms it (FR-18); only this explicit owner-confirm does.
 
 ## Headless posture (FR-17)
