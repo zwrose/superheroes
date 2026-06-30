@@ -139,6 +139,39 @@ elif a.step == "reconcile-head":
     print(json.dumps({"ok": bool(res["ok"]),
                       "head": local if res["ok"] else None,
                       "reason": res["reason"]}))
+elif a.step == "freshen":
+    # FR-1/UFR-1/FR-9: bring the base into the branch. git's own auto-merge of non-overlapping
+    # changes IS the "trivially-correct, high-confidence" resolution (committed + pushed + re-checked,
+    # UFR-1 guarantee b). A real overlapping conflict -> `git merge --abort` leaving the head EXACTLY
+    # where it was (UFR-1 guarantee a) + park; never a guessed or half-integrated branch.
+    wt = a.worktree or os.getcwd()
+    base_name = a.base if a.base else "main"
+    resolved = base_ref.resolve_configured_base(wt, base_name)
+    if resolved is None:
+        print(json.dumps({"ok": False, "head": _local_head(wt), "conflict": False,
+                          "reason": base_ref.unresolvable_reason(base_name, wt)}))
+        sys.exit(0)
+    _git(["fetch", "--quiet", "origin"], cwd=wt)                  # best-effort; local resolve still works
+    before_head = _local_head(wt)
+    rc, _ = _git(["merge", "--no-edit", resolved], cwd=wt)
+    if rc != 0:
+        # conflict (or merge error) -> abort to the exact prior head, leave a clean tree.
+        _git(["merge", "--abort"], cwd=wt)
+        print(json.dumps({"ok": False, "head": _local_head(wt), "conflict": True,
+                          "reason": "base integration conflicts — aborted (head unchanged), owner must resolve"}))
+        sys.exit(0)
+    after_head = _local_head(wt)
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    cp = ckpt_lib.read(paths["checkpoint"]) or {}
+    branch = cp.get("branch") or ""
+    if after_head and after_head != before_head and branch:
+        push_rc, _ = _git(["push", "origin", branch], cwd=wt)     # ordinary non-force push (FR-9)
+        if push_rc != 0:
+            print(json.dumps({"ok": False, "head": after_head, "conflict": False,
+                              "reason": "merged base but push failed — reconcile on resume"}))
+            sys.exit(0)
+    print(json.dumps({"ok": True, "head": after_head, "conflict": False,
+                      "reason": "base integrated" if after_head != before_head else "already up to date"}))
 elif a.emit_checks:
     # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
     # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).

@@ -61,6 +61,56 @@ def test_reconcile_head_helper_paths():
     assert pushed == [1]
 
 
+def _init_repo(tmp_path):
+    repo = tmp_path / "r"; repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+    return repo
+
+
+def test_freshen_conflict_aborts_head_unchanged(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "f").write_text("base\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "feat"], cwd=repo, check=True)
+    (repo / "f").write_text("main-change\n")                       # main edits line 1
+    subprocess.run(["git", "commit", "-qam", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "feat"], cwd=repo, check=True)
+    (repo / "f").write_text("feat-change\n")                       # feat edits the SAME line -> conflict
+    subprocess.run(["git", "commit", "-qam", "feat"], cwd=repo, check=True)
+    before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    r = _run("freshen", "--base", "main", "--worktree", str(repo), cwd=repo)
+    out = json.loads(r.stdout)
+    assert out["conflict"] is True
+    assert out["ok"] is False
+    after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    assert before == after                                         # UFR-1(a): aborted -> head unchanged
+    # the tree is clean after abort (no conflict markers left behind)
+    st = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+    assert st.strip() == ""
+
+
+def test_freshen_clean_automerge_commits(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "f").write_text("base\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
+    subprocess.run(["git", "branch", "feat"], cwd=repo, check=True)
+    (repo / "g").write_text("new-on-main\n")                       # main adds a DIFFERENT file -> auto-merges
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "checkout", "-q", "feat"], cwd=repo, check=True)
+    before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    r = _run("freshen", "--base", "main", "--worktree", str(repo), cwd=repo)
+    out = json.loads(r.stdout)
+    assert out["conflict"] is False
+    after = out["head"]
+    assert after and after != before                              # branch advanced to contain base
+    assert (repo / "g").exists()                                  # base change integrated
+
+
 def test_freshness_reads_the_worktree_not_cwd(tmp_path):
     # CRITICAL (the catch-up loop must converge): --step freshness must judge the BUILD WORKTREE's
     # branch HEAD, not the process cwd. Run from a NEUTRAL cwd (LIB) with --worktree pointed at a
