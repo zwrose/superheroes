@@ -37,7 +37,8 @@ import sys
 import tempfile
 import time
 
-DEFAULT_STORE_ROOT = "~/.claude/workhorse"
+import control_plane  # store-root single source of truth (#121 Part B)
+
 # seconds — owner-chosen (issue #14). Applied independently to each transition:
 # challenge→approve (owner deliberation window) and approve→consume (the "act now"
 # window), so the worst-case challenge→action lifetime is up to 2×TTL. Intentional —
@@ -47,8 +48,10 @@ DEFAULT_TTL = 90
 
 
 def store_root():
-    return os.path.realpath(os.path.expanduser(
-        os.environ.get("WORKHORSE_STORE_ROOT", DEFAULT_STORE_ROOT)))
+    # Single source of truth (#121 Part B): control_plane owns the new default + env back-compat
+    # (SUPERHEROES_STORE_ROOT, then the legacy WORKHORSE_STORE_ROOT) so approvals never land in a
+    # different root than the rest of the store.
+    return control_plane.store_root()
 
 
 def _dir():

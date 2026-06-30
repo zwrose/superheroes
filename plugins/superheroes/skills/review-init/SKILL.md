@@ -204,6 +204,11 @@ printf '%s' "$REVIEW_LAYER_BODY" \
   | python3 "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS"
 ```
 
+`write` above is the **create** path: on an existing core it returns `reused`/`proposed` and
+cannot flip status. Confirming a pre-existing **provisional** core/layer is a separate path —
+`core_md.py confirm` (reached from `superheroes:configure`'s fix flow), which re-renders the core
+and surgically flips each layer, preserving `created`/`nudge-ack` and bumping `updated` (FR-18).
+
 On **reconcile** (a pre-existing legacy profile), call `core_md migrate --hero review-crew`
 first (adopts a standard legacy profile automatically — FR-8), then `core_md resolve` for the
 shared facts; settle any ambiguous/provisional state through the single coalesced reconcile

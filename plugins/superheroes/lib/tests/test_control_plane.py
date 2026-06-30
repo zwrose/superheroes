@@ -54,3 +54,77 @@ def test_paths_has_review_result_and_provenance_keys(tmp_path):
     assert p["provenance"].endswith("/provenance.json")
     assert p["review_result"].startswith(p["issue_dir"])
     assert p["provenance"].startswith(p["issue_dir"])
+
+
+# --- #121 Part B: store-root rename (workhorse → superheroes) + auto-migrate ---
+
+def test_store_root_prefers_new_falls_back_to_legacy(monkeypatch, tmp_path):
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    new = tmp_path / "superheroes"
+    old = tmp_path / "workhorse"
+    monkeypatch.setattr(cp, "DEFAULT_STORE_ROOT", str(new))
+    monkeypatch.setattr(cp, "LEGACY_STORE_ROOT", str(old))
+    # neither holds a store → the new default
+    assert cp.store_root() == os.path.realpath(str(new))
+    # only legacy holds a store → back-compat fallback (don't strand the existing store)
+    (old / "projects").mkdir(parents=True)
+    assert cp.store_root() == os.path.realpath(str(old))
+    # new holds a store → prefer new even if legacy also lingers
+    (new / "projects").mkdir(parents=True)
+    assert cp.store_root() == os.path.realpath(str(new))
+
+
+def test_store_root_does_not_strand_legacy_behind_an_empty_new_root(monkeypatch, tmp_path):
+    # /code-review #6: an EMPTY new root (created by anything other than the rename) must NOT
+    # strand a populated legacy — "a store" means it holds the projects/ tree, not mere existence.
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    new = tmp_path / "superheroes"
+    old = tmp_path / "workhorse"
+    monkeypatch.setattr(cp, "DEFAULT_STORE_ROOT", str(new))
+    monkeypatch.setattr(cp, "LEGACY_STORE_ROOT", str(old))
+    (old / "projects").mkdir(parents=True)   # populated legacy
+    new.mkdir()                               # empty new (not from the rename)
+    assert cp.store_root() == os.path.realpath(str(old))   # legacy still wins
+    res = cp.migrate_store_root()                          # and migration still reconciles it
+    assert res["migrated"] is True
+    assert (new / "projects").is_dir() and not old.exists()
+
+
+def test_store_root_env_precedence(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "wh"))
+    assert cp.store_root() == os.path.realpath(str(tmp_path / "wh"))  # legacy env still honored
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "sh"))
+    assert cp.store_root() == os.path.realpath(str(tmp_path / "sh"))  # new env wins
+
+
+def test_migrate_store_root_renames_legacy_atomically(monkeypatch, tmp_path):
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    new = tmp_path / "claude" / "superheroes"
+    old = tmp_path / "claude" / "workhorse"
+    (old / "projects").mkdir(parents=True)
+    (old / "projects" / "marker").write_text("calibration")
+    monkeypatch.setattr(cp, "DEFAULT_STORE_ROOT", str(new))
+    monkeypatch.setattr(cp, "LEGACY_STORE_ROOT", str(old))
+    res = cp.migrate_store_root()
+    assert res["migrated"] is True
+    assert not old.exists()
+    assert (new / "projects" / "marker").read_text() == "calibration"
+    # idempotent — second call is a no-op
+    assert cp.migrate_store_root()["migrated"] is False
+
+
+def test_migrate_store_root_noops_on_env_or_nothing(monkeypatch, tmp_path):
+    new = tmp_path / "superheroes"
+    old = tmp_path / "workhorse"
+    monkeypatch.setattr(cp, "DEFAULT_STORE_ROOT", str(new))
+    monkeypatch.setattr(cp, "LEGACY_STORE_ROOT", str(old))
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    assert cp.migrate_store_root()["migrated"] is False  # nothing to migrate
+    old.mkdir()
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "pinned"))
+    assert cp.migrate_store_root()["migrated"] is False  # pinned via env → leave it
+    assert old.exists()  # untouched

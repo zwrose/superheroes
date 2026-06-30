@@ -29,7 +29,18 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
   through `core_md`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
-- **Set up a hero skipped at set-up** (FR-6) → run that hero's set-up from here.
+- **Set up a hero skipped at set-up** (FR-6) → list every optional hero not yet set up and not
+  previously declined, and offer to run each one's set-up from here. Get the list from the lib —
+  never guess which heroes apply:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  python3 "$ROOT_DIR/lib/hero_setup.py" offerable --cwd .
+  ```
+
+  This is the mandatory/optional split: a missing **review-crew** layer is an incomplete set-up the
+  route already sends to `fix`; optional heroes (test-pilot) never force a repair — they surface
+  here as an offer. A hero the owner declines (here or at set-up) is recorded so it is not re-offered.
 - **Switch the storage mode** → the confirmed switch below.
 
 ## 3 — Switch the storage mode (FR-10), always showing what will move

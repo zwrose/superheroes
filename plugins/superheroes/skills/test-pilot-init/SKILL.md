@@ -103,7 +103,9 @@ trade-offs AND a recommendation derived from what you detected.
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
    layer (FR-3). On reconcile of a pre-existing profile, run `core_md migrate --hero test-pilot`
    then `core_md resolve` (CONVENTIONS §2.1 / §2.2). Never hand-format core.md — the lib owns
-   the format and the config lock.
+   the format and the config lock. `write --status confirmed` is the CREATE path only; confirming
+   a pre-existing **provisional** core/layer goes through `core_md.py confirm` (reached from
+   `superheroes:configure`), which `write` cannot do on an existing file (it returns `reused`).
 
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.

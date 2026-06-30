@@ -48,8 +48,24 @@ survives the re-anchoring). A headless run records a rebind conflict un-applied 
 ## 4 — Confirm provisional calibration (FR-18)
 
 If the calibration is still **provisional** (auto-generated, not yet validated), surface it as
-unconfirmed and offer the owner to review and confirm it. Once they confirm, write it confirmed
-through the owning hero's calibration. Merely viewing the profile never confirms it.
+unconfirmed and offer the owner to review and confirm it. On the owner's explicit confirm, flip the
+whole calibration — the shared core **and** every present hero layer — through the lib's confirm
+path. `write` cannot do this (reuse-not-clobber returns `reused` on an existing file); `confirm`
+re-renders the core in place and surgically flips each layer, preserving `created`/`nudge-ack` and
+bumping `updated`:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 "$ROOT_DIR/lib/core_md.py" confirm --cwd .
+```
+
+**Read the result, don't assume success.** `confirm` returns `{core: {action}, layers: {hero: {action}}}`.
+Only `confirmed`/`noop` means done — surface anything else to the owner instead of reporting success: `behind`
+= the calibration is from a **newer plugin version**, tell them to upgrade rather than confirm; `deferred` =
+the store/lock was busy, retry; `absent` = nothing to confirm. A non-confirmed core leaves the layers
+untouched (no split state), so the whole calibration stays provisional until it genuinely confirms.
+
+Merely viewing the profile never confirms it (FR-18); only this explicit owner-confirm does.
 
 ## Headless posture (FR-17)
 
