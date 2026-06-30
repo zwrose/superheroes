@@ -22,7 +22,9 @@ if a.ctx:
     try:
         ctx = json.loads(a.ctx)
     except ValueError:
-        ctx = {}
+        print(json.dumps({"posted": False, "recorded": False,
+                          "error": "readout_post: malformed --ctx JSON"}))
+        sys.exit(2)
     ctx.setdefault("root", os.getcwd())
     note = ctx.pop("integration_note", None)
     body = readout.build_readout(ctx)                # every free-text field scrubbed inside build_readout

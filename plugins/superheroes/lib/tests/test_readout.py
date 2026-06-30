@@ -52,6 +52,20 @@ def test_readout_post_guard_requires_ctx_or_reason(tmp_path, monkeypatch):
     assert "requires --ctx or --reason" in out.get("error", "")
 
 
+def test_readout_post_malformed_ctx_exits_nonzero(tmp_path, monkeypatch):
+    # Fail-closed guard: a malformed --ctx JSON must exit non-zero with a clear error,
+    # not silently coerce to {} and record an empty hand-back (mirrors required-args guard).
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    r = subprocess.run([sys.executable, os.path.join(LIB_R, "readout_post.py"),
+                        "--work-item", "wi", "--ctx", "not-valid-json{{{"],
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=30)
+    assert r.returncode != 0, "must exit non-zero when --ctx is malformed JSON"
+    out = json.loads(r.stdout)
+    assert "malformed --ctx JSON" in out.get("error", "")
+    assert out.get("posted") is False
+    assert out.get("recorded") is False
+
+
 def test_readout_post_builds_structured_ctx(tmp_path, monkeypatch):
     # FR-6/FR-7 teeth: --ctx must build (and durably record) a hand-back carrying the PR link,
     # built-vs-asked, the spot-check list, the "never merges" statement, AND the FR-7 integration note.

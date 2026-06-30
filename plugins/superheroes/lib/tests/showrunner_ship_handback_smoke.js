@@ -37,6 +37,10 @@ function run(capture, opts) {
   const out = await sr.shipPhase('wi', { number: 7 }, 5)
   assert.strictEqual(out.outcome, 'ready', 'green -> ready via structured hand-back')
   assert.ok(capture.ctxSeen, 'hand-back posts a STRUCTURED ctx (--ctx), not a one-line reason (FR-6)')
+  assert.ok(
+    !/integration|post-review|check-vetted/i.test(capture.ctxText || ''),
+    'no integration note when not integrated (FR-7 iff)'
+  )
 
   // case 2: integrated path (sync -> freshen -> up_to_date) — FR-7 integration note MUST appear in ctx
   // A mutant deleting `if (info.integrated)` in shipHandback would drop the note and fail this assertion.

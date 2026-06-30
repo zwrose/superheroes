@@ -1374,6 +1374,9 @@ async function shipPhase(workItem, pr, generation) {
     const fresh = await cmdRunner(
       `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}${wtArg} --attempt ${shq(String(attempt))}`,
       { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
+    if (!fresh || !fresh.decision) {
+      return park(workItem, pr, 'branch freshness could not be confirmed (unreadable) — park (UFR-2)')
+    }
     if (fresh.decision === 'up_to_date') break
     if (fresh.decision === 'give_up_notify') {
       return park(workItem, pr, 'branch is behind its base after the catch-up limit — update it before merge')
