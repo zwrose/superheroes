@@ -24,36 +24,55 @@ def _store_env():
     return os.environ.get("SUPERHEROES_STORE_ROOT") or os.environ.get("WORKHORSE_STORE_ROOT")
 
 
+def _holds_store(path):
+    """True when `path` actually holds a store — keyed on the `projects/` tree, not mere existence.
+    An empty directory created by something other than the rename (a manual mkdir, a restore, an
+    interrupted op) must NOT be mistaken for the store, or store_root() would resolve to it and
+    strand the populated legacy (/code-review #6). Single source of truth for store_root() and
+    migrate_store_root() so their precedence can never diverge (/code-review #14)."""
+    return os.path.isdir(os.path.join(os.path.expanduser(path), "projects"))
+
+
 def store_root():
-    """The band-wide per-project store root. Precedence: env override → the new default if it
-    exists → the legacy default if only IT exists (back-compat, never strand an existing store)
-    → the new default. Pure (no side effects); the physical rename is migrate_store_root()."""
+    """The band-wide per-project store root. Precedence: env override → the new default if it holds
+    a store → the legacy default if IT holds a store (back-compat, never strand an existing store
+    behind an empty new root) → the new default. Pure (no side effects); the physical rename is
+    migrate_store_root()."""
     env = _store_env()
     if env:
         return os.path.realpath(os.path.expanduser(env))
-    new = os.path.expanduser(DEFAULT_STORE_ROOT)
-    if not os.path.exists(new) and os.path.isdir(os.path.expanduser(LEGACY_STORE_ROOT)):
+    if _holds_store(DEFAULT_STORE_ROOT):
+        return os.path.realpath(os.path.expanduser(DEFAULT_STORE_ROOT))
+    if _holds_store(LEGACY_STORE_ROOT):
         return os.path.realpath(os.path.expanduser(LEGACY_STORE_ROOT))
-    return os.path.realpath(new)
+    return os.path.realpath(os.path.expanduser(DEFAULT_STORE_ROOT))
 
 
 def migrate_store_root():
     """One-time atomic rename of the legacy store root (~/.claude/workhorse) to the new name
     (~/.claude/superheroes) — #121 Part B. No-op when an env override is set (the owner pinned a
-    location), the new root already exists, or the legacy root is absent. The two share a parent
-    (~/.claude), so os.rename is atomic + instant (no copy). Race/partial-failure safe: a
-    concurrent migrator that already moved it leaves the new root in place. Never raises."""
+    location), the new root already holds a store, or the legacy root holds no store. The two share
+    a parent (~/.claude), so os.rename is atomic + instant (no copy) and replaces an empty new dir.
+    Race/partial-failure safe between concurrent MIGRATORS: one wins, the other re-checks and reports
+    `raced`. Never raises.
+
+    CAVEAT (/code-review #2): this is a one-time event (after the first migration the new root holds
+    a store, so it no-ops forever). It is NOT locked against a CONCURRENT store CONSUMER — if a
+    parallel showrunner/workhorse loop is mid-operation during this single window, the rename can move
+    the store out from under its absolute paths. The blast is bounded (open fds survive the rename;
+    an allowance consume fails closed → a safe re-challenge) and the back-compat fallback keeps reads
+    working, so a consumer-safe live rename (the owner-deferred redesign) is intentionally not done."""
     if _store_env():
         return {"migrated": False, "reason": "env-override"}
     new = os.path.expanduser(DEFAULT_STORE_ROOT)
     old = os.path.expanduser(LEGACY_STORE_ROOT)
-    if os.path.exists(new) or not os.path.isdir(old):
+    if _holds_store(DEFAULT_STORE_ROOT) or not _holds_store(LEGACY_STORE_ROOT):
         return {"migrated": False, "reason": "nothing-to-migrate"}
     try:
         os.makedirs(os.path.dirname(new), exist_ok=True)
-        os.rename(old, new)
+        os.rename(old, new)  # replaces an empty new dir; raises on a non-empty (store-holding) new
     except OSError as exc:
-        if os.path.exists(new):
+        if _holds_store(DEFAULT_STORE_ROOT):
             return {"migrated": False, "reason": "raced"}
         return {"migrated": False, "reason": "failed", "detail": str(exc)}
     sys.stderr.write("superheroes: migrated store root %s -> %s\n" % (old, new))

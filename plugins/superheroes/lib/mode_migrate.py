@@ -260,10 +260,14 @@ def recover(cwd, *, root=None):
     On a REAL run (no explicit root override) it first settles the one-time store-root rename
     (#121 Part B) — auto-migrating ~/.claude/workhorse → ~/.claude/superheroes before any store
     path is computed. Gated on `root is None` so the test suite (which always passes an explicit
-    tmp root) never moves the real store; best-effort so it never blocks recovery."""
+    tmp root) never moves the real store; best-effort so it never blocks recovery. A FAILED rename
+    is surfaced to stderr rather than silently swallowed (/code-review #7)."""
     if root is None:
         try:
-            control_plane.migrate_store_root()
+            res = control_plane.migrate_store_root()
+            if res.get("reason") == "failed":
+                sys.stderr.write("superheroes: store-root migration deferred (%s) — back-compat "
+                                 "resolution still active\n" % res.get("detail", "unknown error"))
         except Exception:
             pass
     active_dir = mode_registry.project_store_dir(cwd, root)

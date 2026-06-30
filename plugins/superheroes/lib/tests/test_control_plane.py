@@ -65,14 +65,31 @@ def test_store_root_prefers_new_falls_back_to_legacy(monkeypatch, tmp_path):
     old = tmp_path / "workhorse"
     monkeypatch.setattr(cp, "DEFAULT_STORE_ROOT", str(new))
     monkeypatch.setattr(cp, "LEGACY_STORE_ROOT", str(old))
-    # neither present → the new default
+    # neither holds a store → the new default
     assert cp.store_root() == os.path.realpath(str(new))
-    # only legacy present → back-compat fallback (don't strand the existing store)
-    old.mkdir()
+    # only legacy holds a store → back-compat fallback (don't strand the existing store)
+    (old / "projects").mkdir(parents=True)
     assert cp.store_root() == os.path.realpath(str(old))
-    # new present → prefer new even if legacy also lingers
-    new.mkdir()
+    # new holds a store → prefer new even if legacy also lingers
+    (new / "projects").mkdir(parents=True)
     assert cp.store_root() == os.path.realpath(str(new))
+
+
+def test_store_root_does_not_strand_legacy_behind_an_empty_new_root(monkeypatch, tmp_path):
+    # /code-review #6: an EMPTY new root (created by anything other than the rename) must NOT
+    # strand a populated legacy — "a store" means it holds the projects/ tree, not mere existence.
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    monkeypatch.delenv("WORKHORSE_STORE_ROOT", raising=False)
+    new = tmp_path / "superheroes"
+    old = tmp_path / "workhorse"
+    monkeypatch.setattr(cp, "DEFAULT_STORE_ROOT", str(new))
+    monkeypatch.setattr(cp, "LEGACY_STORE_ROOT", str(old))
+    (old / "projects").mkdir(parents=True)   # populated legacy
+    new.mkdir()                               # empty new (not from the rename)
+    assert cp.store_root() == os.path.realpath(str(old))   # legacy still wins
+    res = cp.migrate_store_root()                          # and migration still reconciles it
+    assert res["migrated"] is True
+    assert (new / "projects").is_dir() and not old.exists()
 
 
 def test_store_root_env_precedence(monkeypatch, tmp_path):
