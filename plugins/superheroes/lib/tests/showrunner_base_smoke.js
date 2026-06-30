@@ -38,13 +38,16 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
         return { ok: true }
       }
       if (label === 'exec') {
+        // resolveBuildTarget: build_entry.py needs path+outcome, rev-parse needs a sha
+        if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ path: '/wt', outcome: 'reused' }) }]
+        if (p.includes('rev-parse')) return [{ index: 0, ok: true, stdout: '/wt-head-sha' }]
         // ci checks via exec -> return green
         if (p.includes('emit-checks')) return [{ index: 0, ok: true, stdout: '[{"name":"ci","bucket":"pass","state":"success"}]' }]
         return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
       }
       return null
     }
-    await sr.shipPhase('wi', { number: 7 })
+    await sr.shipPhase('wi', { number: 7 }, 5)
     globalThis.__SR_BASE = savedBase
 
     const freshnessCmd = capturedLibCmds.find((c) => c.includes('freshness'))
@@ -69,12 +72,15 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
         return { ok: true }
       }
       if (label === 'exec') {
+        // resolveBuildTarget: build_entry.py needs path+outcome, rev-parse needs a sha
+        if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ path: '/wt', outcome: 'reused' }) }]
+        if (p.includes('rev-parse')) return [{ index: 0, ok: true, stdout: '/wt-head-sha' }]
         if (p.includes('emit-checks')) return [{ index: 0, ok: true, stdout: '[{"name":"ci","bucket":"pass","state":"success"}]' }]
         return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
       }
       return null
     }
-    await sr.shipPhase('wi', { number: 7 })
+    await sr.shipPhase('wi', { number: 7 }, 5)
     if (savedBase !== undefined) globalThis.__SR_BASE = savedBase
     else delete globalThis.__SR_BASE
 

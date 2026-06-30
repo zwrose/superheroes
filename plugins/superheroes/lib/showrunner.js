@@ -1020,7 +1020,7 @@ async function runPhases(workItem, fromStep, deps) {
       return deps.frontHalfBoundary(workItem)
     }
     if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
-      return (deps.ship || shipPhase)(workItem, await loadPr(workItem))
+      return (deps.ship || shipPhase)(workItem, await loadPr(workItem), deps.generation)
     }
     let phaseResult, gate, sideEffect = null
     if (phase === 'review-code') {
@@ -1317,11 +1317,40 @@ module.exports.testPilotPhase = testPilotPhase
 module.exports.defaultTestPilotPhase = defaultTestPilotPhase
 module.exports.testPilotDeps = testPilotDeps
 
-async function shipPhase(workItem, pr) {
-  // freshness.decide -> up_to_date | sync | give_up_notify | gate. For this slice only up_to_date
-  // proceeds; the auto-sync of a behind branch is back-half deepening, so sync/give_up_notify/gate
-  // all park (FR-11: not merge-ready unless up to date).
-  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> default 'main' behavior.
+// renew-then-fence the lease generation immediately before a branch-/PR-mutating boundary (UFR-4).
+// Fail-closed: a null generation or a lost/unreadable lease returns false -> the caller parks BEFORE
+// any mutation. Mirrors build_phase.js's fenceOrPark; #118 folds this seam spine-wide.
+async function shipFenceOrPark(workItem, generation) {
+  if (generation == null) return false
+  const out = await cmdRunner(
+    `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
+  return !!(out && out.ok)
+}
+module.exports.shipFenceOrPark = shipFenceOrPark
+
+async function shipPhase(workItem, pr, generation) {
+  // Resolve the build worktree the back-half git mechanics run in (mirrors review-code/test-pilot).
+  // FAIL-CLOSED: if the build worktree can't be resolved, every git mutation below would otherwise
+  // default to the repo-root checkout (the wrong tree) — park rather than merge/commit/push there.
+  const target = await resolveBuildTarget(workItem)
+  const worktree = target && target.worktree ? target.worktree : null
+  if (!worktree) {
+    return park(workItem, pr, 'could not resolve the build worktree for the back-half — park (no mutation against the repo root)')
+  }
+  const wtArg = ` --worktree ${shq(worktree)}`
+  // UFR-4: the entry reconcile MAY push (when local HEAD is ahead of the remote PR head), so fence first.
+  if (!(await shipFenceOrPark(workItem, generation))) {
+    return park(workItem, pr, 'lease lost before reconciling the PR head — park (UFR-4)')
+  }
+  // UFR-6 entry reconcile: bring the remote PR head into agreement with the local HEAD before judging.
+  const rec = await cmdRunner(
+    `python3 plugins/superheroes/lib/ship_phase.py --step reconcile-head --work-item ${shq(workItem)}${wtArg}`,
+    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, reason: { type: 'string' } } } })
+  if (!rec || !rec.ok) {
+    return park(workItem, pr, `could not reconcile the PR head before judging readiness (${(rec && rec.reason) || 'unreadable'})`)
+  }
+  // (existing freshness + ci logic stays below until Tasks 8-9 replace it)
   const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
   const fresh = await cmdRunner(
@@ -1330,38 +1359,19 @@ async function shipPhase(workItem, pr) {
   if (fresh.decision !== 'up_to_date') {
     return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)
   }
-  // CI split (#115 Task 16): exec reads raw checks array (IO-only); ciStatusTwin classifies in-process.
-  // green -> merge-ready; none -> merge-ready with carve-out; red -> park.
-  // Fail-closed: exec error or {error} response -> park (never a false green).
   const ciResults = await exec([
     `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)} --emit-checks`,
   ])
-  if (!ciResults[0] || !ciResults[0].ok) {
-    return park(workItem, pr, 'CI status could not be read')
-  }
+  if (!ciResults[0] || !ciResults[0].ok) { return park(workItem, pr, 'CI status could not be read') }
   let ciChecks = null
   try { ciChecks = JSON.parse(ciResults[0].stdout) } catch (_) {}
-  // Fail-closed (Critical, #115 final review): a JSON.parse failure (ciChecks === null) means the
-  // leaf returned garbled / non-JSON / truncated stdout — the read genuinely FAILED. Park; do NOT
-  // coerce a parse-failure to [] (which would classify 'none' -> a false "merge-ready: no required
-  // checks"). A genuinely-empty array [] still classifies to 'none' below (correct: no checks gate).
-  if (ciChecks === null) {
-    return park(workItem, pr, 'CI status could not be read')
-  }
-  if (!Array.isArray(ciChecks) && ciChecks.error) {
-    return park(workItem, pr, ciChecks.error || 'CI status could not be read')
-  }
+  if (ciChecks === null) { return park(workItem, pr, 'CI status could not be read') }
+  if (!Array.isArray(ciChecks) && ciChecks.error) { return park(workItem, pr, ciChecks.error || 'CI status could not be read') }
   const checksArr = Array.isArray(ciChecks) ? ciChecks : []
   const ciRes = ciStatusTwin.classify(checksArr)
-  if (ciRes.status === 'green') {
-    return park(workItem, pr, 'merge-ready: CI green and branch up to date — awaiting owner merge', true)
-  }
-  if (ciRes.status === 'none') {
-    return park(workItem, pr, 'merge-ready: no required checks gate this PR — confirm checks before merging', true)
-  }
-  const ciReason = ciRes.failing && ciRes.failing.length
-    ? 'checks not green: ' + ciRes.failing.join(', ')
-    : 'CI could not be made green'
+  if (ciRes.status === 'green') { return park(workItem, pr, 'merge-ready: CI green and branch up to date — awaiting owner merge', true) }
+  if (ciRes.status === 'none') { return park(workItem, pr, 'merge-ready: no required checks gate this PR — confirm checks before merging', true) }
+  const ciReason = ciRes.failing && ciRes.failing.length ? 'checks not green: ' + ciRes.failing.join(', ') : 'CI could not be made green'
   return park(workItem, pr, ciReason)
 }
 
