@@ -4119,14 +4119,37 @@ async function shipPhase(workItem, pr, generation) {
   if (!rec || !rec.ok) {
     return park(workItem, pr, `could not reconcile the PR head before judging readiness (${(rec && rec.reason) || 'unreadable'})`)
   }
-  // (existing freshness + ci logic stays below until Tasks 8-9 replace it)
+  // (Tasks 8-9 replace the single freshness+ci block with the bounded catch-up loop + CI twin)
   const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
-  const fresh = await cmdRunner(
-    `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}`,
-    { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
-  if (fresh.decision !== 'up_to_date') {
-    return park(workItem, pr, `branch not up to date with base (${fresh.decision})`)
+  // FR-1/FR-2/UFR-1: bounded base catch-up. freshness.decide caps at 3 syncs; the attempt is
+  // re-derived from reality each iteration (a merge converges, so no stored counter — FR-2 note).
+  // (_srBase / _baseArg are already declared above by Task 7 — reuse them, don't re-declare.)
+  let integrated = false                                    // FR-7: did a base merge advance HEAD after review?
+  for (let attempt = 1; attempt <= 4; attempt += 1) {       // 4 = max syncs (3) + the terminal read
+    const fresh = await cmdRunner(
+      `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}${wtArg} --attempt ${shq(String(attempt))}`,
+      { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
+    if (fresh.decision === 'up_to_date') break
+    if (fresh.decision === 'give_up_notify') {
+      return park(workItem, pr, 'branch is behind its base after the catch-up limit — update it before merge')
+    }
+    if (fresh.decision !== 'sync') {                        // 'gate' / unknown -> UFR-2 fail-closed
+      return park(workItem, pr, `branch freshness could not be confirmed (${fresh.decision})`)
+    }
+    if (!(await shipFenceOrPark(workItem, generation))) {
+      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
+    }
+    const fr = await cmdRunner(
+      `python3 plugins/superheroes/lib/ship_phase.py --step freshen --work-item ${shq(workItem)}${_baseArg}${wtArg}`,
+      { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, conflict: {}, reason: { type: 'string' } } } })
+    if (fr && fr.conflict) {
+      return park(workItem, pr, 'bringing in the base conflicts — undone (branch unchanged); please resolve and re-run')
+    }
+    if (!fr || !fr.ok) {
+      return park(workItem, pr, `could not bring the base into the branch (${(fr && fr.reason) || 'unknown'})`)
+    }
+    integrated = true
   }
   const ciResults = await exec([
     `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)} --emit-checks`,

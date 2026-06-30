@@ -60,6 +60,8 @@ SHOWRUNNER_SMOKES = [
     # FR-5 cwd-rooting for cmdRunner: selfContained() in cmdRunner pins cwd to repo root when
     # __SR_ROOT is set (RED->GREEN after the fix); no-op when unset; no double-cd guard.
     "plugins/superheroes/lib/tests/showrunner_cmdrunner_cwd_smoke.js",
+    # #120: native ship-phase catch-up stretch (freshen loop, conflict-abort, fence, FR-2 give-up).
+    "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
 ]
 
 
