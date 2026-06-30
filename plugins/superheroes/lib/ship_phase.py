@@ -277,6 +277,38 @@ elif a.step == "fix-push":
         sys.exit(0)
     print(json.dumps({"ok": True, "head": _local_head(wt), "pushed": True,
                       "reason": "fix replayed onto advanced PR head and pushed"}))
+elif a.step == "revert-draft":
+    # FR-4: return the PR to draft on terminal CI failure. Idempotent via the primitive: a no-op
+    # when the PR is already draft. Draft-flip is call-site 2 of the generic idempotency guard.
+    pr = _resolve_pr_number(a.work_item)
+    if not pr:
+        print(json.dumps({"ok": False, "reason": "no PR to revert — fail closed"}))
+        sys.exit(0)
+
+    def _reader():
+        try:
+            r = subprocess.run(["gh", "pr", "view", pr, "--json", "isDraft", "--jq", ".isDraft"],
+                               capture_output=True, text=True, timeout=30)
+        except Exception:
+            return (None, "isDraft unreadable")
+        if r.returncode != 0:
+            return (None, "isDraft unreadable")
+        v = r.stdout.strip()
+        if v == "true":
+            return (True, "already draft")
+        if v == "false":
+            return (False, "ready")
+        return (None, "isDraft ambiguous")
+
+    def _apply():
+        try:
+            rc = subprocess.run(["gh", "pr", "ready", "--undo", pr], capture_output=True, timeout=60).returncode
+        except Exception:
+            return (False, "gh pr ready --undo raised")
+        return (rc == 0, "reverted to draft")
+
+    res = idempotent_write.idempotent_apply("draft:pr=%s" % pr, _reader, _apply)
+    print(json.dumps({"ok": bool(res["ok"]), "reason": res["reason"]}))
 elif a.emit_checks:
     # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
     # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).

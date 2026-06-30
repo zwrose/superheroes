@@ -222,6 +222,40 @@ def test_fix_push_no_change_parks(tmp_path):
     assert "no change" in out["reason"] or "nothing" in out["reason"]
 
 
+def test_revert_draft_no_pr_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))  # isolated store; non-git cwd
+    r = _run("revert-draft", cwd=str(tmp_path))                   # no checkpoint PR, no gh PR -> fail closed
+    out = json.loads(r.stdout)
+    assert out["ok"] is False
+    assert out["reason"]
+
+
+def test_pr_entry_and_ship_phase_use_idempotent_primitive():
+    pe = open(os.path.join(LIB, "pr_entry.py")).read()
+    sp = open(os.path.join(LIB, "ship_phase.py")).read()
+    sr = open(os.path.join(LIB, "ship_reconcile.py")).read()
+    assert "idempotent_write" in pe and "ready:pr=" in pe        # call-site 3: ready-flip
+    assert "idempotent_write" in sp and "draft:pr=" in sp        # call-site 2: draft-flip
+    assert "idempotent_write" in sr and "head=" in sr            # call-site 1: push-reconcile (pure decider)
+    assert "ship_reconcile.reconcile_head" in sp                 # ship_phase delegates the reconcile wiring
+
+
+def test_ship_phase_pushes_are_non_force_to_the_branch():
+    # FR-9: every push the back-half makes is an ordinary non-force push to the work-item's OWN branch
+    # — never a force-push, never a push to a literal default branch. (FR-8's never-merge twin is the
+    # guard smoke; this is FR-9's structural assertion.)
+    import re
+    sp = open(os.path.join(LIB, "ship_phase.py")).read()
+    pushes = re.findall(r'\["push"[^\]]*\]', sp)
+    assert pushes, "expected git push calls in ship_phase.py"
+    for p in pushes:
+        assert "force" not in p.lower(), "force-push found: %s" % p
+        assert '"-f"' not in p and '"+' not in p, "force/forced-refspec push found: %s" % p
+        assert '"origin"' in p, "push not to origin: %s" % p
+    # never a push to a hardcoded default branch (pushes target the checkpoint `branch` variable)
+    assert '"push", "origin", "main"' not in sp and '"push", "origin", "master"' not in sp
+
+
 def test_fix_push_nff_two_ahead_replays_both_commits(tmp_path):
     # NFF recovery: local has 2 unpushed commits and the remote branch advanced; the push is rejected,
     # then fetch + rebase FETCH_HEAD must replay BOTH local commits onto the advanced remote (never drop one).
