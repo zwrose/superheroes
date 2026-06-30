@@ -31,6 +31,9 @@ function run(checksOrError) {
       if (checksOrError === 'garbled') return [{ index: 0, ok: true, stdout: 'not json at all <<<' }]
       return [{ index: 0, ok: true, stdout: JSON.stringify(checksOrError) }]
     }
+    // CI-fix loop (red path): decide -> revert-to-draft so the existing `red -> parked` case still parks
+    if (label === 'lib' && p.includes('--step ci-decide')) return { action: 'revert_and_gate', round: 5, reason: 'cap' }
+    if (label === 'lib' && p.includes('--step revert-draft')) return { ok: true, reason: 'reverted to draft' }
     // readout_post stays as cmdRunner (lib)
     if (label === 'lib' && (p.includes('readout') || p.includes('readout_post') || p.includes('pr_comment'))) return { posted: true }
     throw new Error('unexpected agent: label=' + label + ' prompt=' + p.slice(0, 80))

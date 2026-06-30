@@ -2,7 +2,7 @@
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import freshness, ci_loop, control_plane, journal, ci_status, checkpoint as ckpt_lib, base_ref
-import idempotent_write, ship_reconcile
+import idempotent_write, ship_reconcile, ship_ci
 
 
 def _resolve_pr_number(work_item):
@@ -310,6 +310,15 @@ elif a.step == "revert-draft":
     res = idempotent_write.idempotent_apply("draft:pr=%s" % pr, _reader, _apply)
     print(json.dumps({"ok": bool(res["ok"]), "reason": res["reason"]}))
 elif a.emit_checks:
+    # FR-5 stale-pass rejection: only judge checks on the INTEGRATED head. If the remote PR head gh
+    # reports the rollup for differs from the worktree's local HEAD, the rollup belongs to an EARLIER
+    # commit -> emit {stale:true} so the orchestrator re-waits, never adopting an older green.
+    if a.worktree:
+        _local = _local_head(a.worktree)
+        _remote = _remote_pr_head(a.work_item)
+        if ship_ci.is_stale(_local, _remote):
+            print(json.dumps({"stale": True, "local": _local, "remote": _remote}))
+            sys.exit(0)
     # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
     # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).
     pr = _resolve_pr_number(a.work_item)

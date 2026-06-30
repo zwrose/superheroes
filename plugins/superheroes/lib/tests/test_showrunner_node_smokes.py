@@ -62,6 +62,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_cmdrunner_cwd_smoke.js",
     # #120: native ship-phase catch-up stretch (freshen loop, conflict-abort, fence, FR-2 give-up).
     "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
+    # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).
+    "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
 ]
 
 

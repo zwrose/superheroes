@@ -256,6 +256,17 @@ def test_ship_phase_pushes_are_non_force_to_the_branch():
     assert '"push", "origin", "main"' not in sp and '"push", "origin", "master"' not in sp
 
 
+def test_emit_checks_is_stale():
+    # FR-5: a confirmed head MISMATCH is stale (rollup is for an earlier commit); a match is judgeable;
+    # an unreadable head is NOT 'stale' here (the leaf's own fail-closed paths handle those).
+    sys.path.insert(0, LIB)
+    import ship_ci
+    assert ship_ci.is_stale("abc", "old") is True       # mismatch -> stale (reject the rollup)
+    assert ship_ci.is_stale("abc", "abc") is False      # match -> judge the rollup
+    assert ship_ci.is_stale("abc", None) is False       # unreadable remote -> not stale
+    assert ship_ci.is_stale(None, "abc") is False       # unreadable local -> not stale
+
+
 def test_fix_push_nff_two_ahead_replays_both_commits(tmp_path):
     # NFF recovery: local has 2 unpushed commits and the remote branch advanced; the push is rejected,
     # then fetch + rebase FETCH_HEAD must replay BOTH local commits onto the advanced remote (never drop one).
