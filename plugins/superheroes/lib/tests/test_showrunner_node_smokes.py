@@ -68,6 +68,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",
     # #120: ship-phase guard invariants (UFR-2 unreadable-park, UFR-4 fence fail-closed, FR-8 never-merge).
     "plugins/superheroes/lib/tests/showrunner_ship_guard_smoke.js",
+    # #120: forged-ship DoD walkthrough — catch-up + fix-loop + return-to-draft + hand-back end-to-end.
+    "plugins/superheroes/lib/tests/showrunner_ship_walkthrough_smoke.js",
 ]
 
 

@@ -1329,6 +1329,19 @@ async function shipFenceOrPark(workItem, generation) {
 }
 module.exports.shipFenceOrPark = shipFenceOrPark
 
+// ── Native back-half seam map (for #118 courier-surface collapse, which sequences AFTER #120) ──
+// shipPhase orchestrates four SEPARABLE per-stretch seams, each with the same shape:
+//   world-read → renew-then-fence(generation) → mutate (git/gh leaf) → read-back-confirm.
+//   1. entry reconcile  — ship_phase.py --step reconcile-head  (idempotent push-reconcile)
+//   2. catch-up stretch — ship_phase.py --step freshen          (merge base / conflict-abort / push)
+//   3. ci-fix stretch   — ship_phase.py --step {ci,ci-decide,ci-record,fix-push,revert-draft}
+//   4. hand-back        — readout_post.py --ctx                 (best-effort; never ship-gated)
+// FENCE/LEASE SEAM: the lease generation is threaded from reconcile() → runPhases(deps.generation)
+//   → shipPhase(_, _, generation); every mutating boundary calls shipFenceOrPark(workItem, generation)
+//   (renew-then-fence, fail-closed) BEFORE the mutation — the same generation build_phase.js fences on.
+// IDEMPOTENCY SEAM: create / ready-flip / draft-flip / push-reconcile route through idempotent_write.py
+//   (read-reality, apply-once). #118 generalizes that primitive to EVERY durable write (its FR-4).
+// #118 may fold/relabel these leaves; #120 deliberately leaves them as clean, un-folded seams.
 async function shipPhase(workItem, pr, generation) {
   // Resolve the build worktree the back-half git mechanics run in (mirrors review-code/test-pilot).
   // FAIL-CLOSED: if the build worktree can't be resolved, every git mutation below would otherwise
