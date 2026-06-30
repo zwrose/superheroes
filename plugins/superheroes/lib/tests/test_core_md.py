@@ -994,3 +994,46 @@ def test_relocate_file_copies_then_unlinks_atomically(tmp_path):
     dst = tmp_path / "sub" / "b.txt"
     CM.relocate_file(str(src), str(dst))
     assert dst.read_text() == "hello" and not src.exists()
+
+
+def test_resume_placeholder_with_out_of_repo_legacy_rescues_and_commits(tmp_path, monkeypatch):
+    # #121 Part F: IN_REPO registry, EMPTY placeholder core+layer, and a RICH legacy in the GLOBAL
+    # (out-of-repo) store. The RESUME branch must rescue the content (Part D) AND commit it without
+    # passing the out-of-repo legacy to git (Part E) — the rich global profile is never destroyed
+    # over a placeholder, and the migration is recorded, not left dirty.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    open(os.path.join(repo, "README"), "w").write("x\n")
+    _git(repo, "add", "README")
+    _git(repo, "commit", "-q", "-m", "init")
+    hero_root = str(tmp_path / "review_store")
+    import review_store
+    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
+    prof_path = review_store.create(repo, "profile", "global", hero_root)
+    open(prof_path, "w").write(_REVIEW_PROFILE)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
+    CM.migrate_on_read(repo, "review-crew", root=store)
+    got = CM.read(repo, root=store)
+    assert got["verifyCommand"] == "npm test"          # rescued, not lost
+    assert "multi-tenant" in got["threatModel"]
+    assert "## Scope exclusions" in open(_hero_layer_path(repo, "review-crew")).read()
+    assert not os.path.exists(prof_path)               # rich global legacy retired safely
+    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
+    assert ".claude/superheroes/core.md" in names      # committed, not left dirty
+    assert ".claude/superheroes" not in _git(repo, "diff", "--cached", "--name-only").stdout
+
+
+def test_render_layer_always_ends_with_one_newline(tmp_path):
+    # #121 Part I: a body without a trailing newline must still yield a file ending in exactly one
+    # \n (no "No newline at end of file"); a \n-terminated body is unchanged.
+    out = CM._render_layer("## App launch\n- x", "test-pilot", "provisional", "2026-06-26")
+    assert out.endswith("- x\n") and not out.endswith("\n\n")
+    out2 = CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26")
+    assert out2.endswith("- none\n")

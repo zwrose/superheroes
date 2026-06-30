@@ -358,9 +358,11 @@ def _layer_path(cwd, hero, root=None):
 
 
 def _render_layer(layer_text, hero, status, stamp):
-    """Wrap the split hero sections in the §2.2 provenance line for a layer file."""
-    return ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
-            % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+    """Wrap the split hero sections in the §2.2 provenance line for a layer file. Always ends in a
+    single trailing newline (#121 Part I — never write a "No newline at end of file" layer)."""
+    rendered = ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
+                % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+    return rendered if rendered.endswith("\n") else rendered + "\n"
 
 
 def _in_repo_mode(cwd, root):
