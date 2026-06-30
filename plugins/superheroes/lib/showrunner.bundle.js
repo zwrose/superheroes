@@ -4236,10 +4236,31 @@ async function park(workItem, pr, reason, mergeReady) {
   return { outcome: mergeReady ? 'ready' : 'parked', phase: 'ship', reason: reasonOut }
 }
 
-// Structured hand-back (FR-6/FR-7). Task 10 builds the full readout; for now it delegates to park
-// so the stretch wiring lands and is testable; the merge-ready flag carries through unchanged.
+// Structured hand-back (FR-6/FR-7, scrubbed, best-effort). Assembles a structured ctx
+// (pr_url, ci_status, built-vs-acceptance, smoke list, FR-7 integration note when info.integrated)
+// and posts via readout_post.py --ctx. The run's outcome does NOT depend on the post landing —
+// an undelivered hand-back is surfaced as a warning, but the outcome is still ready/parked.
 async function shipHandback(workItem, pr, info) {
-  return park(workItem, pr, info.reason, !!info.ready)
+  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
+  const prUrl = pr && pr.url ? pr.url : ''
+  const ctx = {
+    pr_url: prUrl,
+    ci_status: info.ci === 'green' ? 'green — all required checks pass'
+      : info.ci === 'none' ? 'no required checks ran on the ready PR — confirm before merging'
+      : 'checks could not be made to pass — returned to draft',
+    built_vs_acceptance: info.reason || '',
+    smoke: ['Confirm the PR branch contains its base', 'Confirm CI on the ready head', 'Review the diff before merging'],
+  }
+  if (info.integrated) {
+    ctx.integration_note = 'the final commit carries base integration done after the code review (the merged-in base was check-vetted, not re-reviewed)'
+  }
+  const rPost = await cmdRunner(
+    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(ctx))}`,
+    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+  const delivered = rPost && (rPost.posted || rPost.recorded)
+  const reasonOut = delivered ? info.reason
+    : `${info.reason} [warning: hand-back could not be delivered (${(rPost && rPost.error) || 'unknown'})]`
+  return { outcome: info.ready ? 'ready' : 'parked', phase: 'ship', reason: reasonOut }
 }
 module.exports.shipHandback = shipHandback
 

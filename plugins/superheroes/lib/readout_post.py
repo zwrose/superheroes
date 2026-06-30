@@ -8,11 +8,29 @@ import control_plane, journal, pr_comment, readout
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--work-item", required=True)
-ap.add_argument("--reason", required=True)
+ap.add_argument("--reason", default=None)
 ap.add_argument("--pr", default=None)             # the run's PR number, when one exists
+ap.add_argument("--ctx", default=None, help="JSON context for readout.build_readout (structured hand-back)")
 a = ap.parse_args()
+if not a.ctx and a.reason is None:
+    print(json.dumps({"posted": False, "recorded": False,
+                      "error": "readout_post requires --ctx or --reason"}))
+    sys.exit(2)
 paths = control_plane.paths(os.getcwd(), a.work_item)
-text, _ok = readout.scrub(a.reason, root=os.getcwd())
+
+if a.ctx:
+    try:
+        ctx = json.loads(a.ctx)
+    except ValueError:
+        ctx = {}
+    ctx.setdefault("root", os.getcwd())
+    note = ctx.pop("integration_note", None)
+    body = readout.build_readout(ctx)                # every free-text field scrubbed inside build_readout
+    if note:
+        body = body + "\n\n> _" + readout.scrub(note, root=os.getcwd())[0] + "_"
+    text = body
+else:
+    text, _ok = readout.scrub(a.reason, root=os.getcwd())
 
 
 def _record_brief(t):

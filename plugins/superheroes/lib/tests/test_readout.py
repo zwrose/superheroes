@@ -1,4 +1,7 @@
+import json, os, subprocess, sys
 import readout
+
+LIB_R = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def test_scrub_uses_test_pilot_when_present():
@@ -35,3 +38,39 @@ def test_build_readout_scrubs_every_freetext_field():
     assert "supersecretvalue123" not in body   # raw_ci_excerpt scrubbed
     assert "leakybeaker0000" not in body        # test_results scrubbed
     assert "hunter2hunter2" not in body          # built_vs_acceptance scrubbed
+
+
+def test_readout_post_guard_requires_ctx_or_reason(tmp_path, monkeypatch):
+    # Defensive guard: a caller passing neither --ctx nor --reason must exit non-zero
+    # with a clear JSON error, not silently record an empty hand-back.
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    r = subprocess.run([sys.executable, os.path.join(LIB_R, "readout_post.py"),
+                        "--work-item", "wi"],
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=30)
+    assert r.returncode != 0, "must exit non-zero when neither --ctx nor --reason given"
+    out = json.loads(r.stdout)
+    assert "requires --ctx or --reason" in out.get("error", "")
+
+
+def test_readout_post_builds_structured_ctx(tmp_path, monkeypatch):
+    # FR-6/FR-7 teeth: --ctx must build (and durably record) a hand-back carrying the PR link,
+    # built-vs-asked, the spot-check list, the "never merges" statement, AND the FR-7 integration note.
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))  # isolate the store (never the real one)
+    sys.path.insert(0, LIB_R)
+    import control_plane
+    ctx = {"pr_url": "https://x/pr/7", "ci_status": "green — all required checks pass",
+           "built_vs_acceptance": "all FRs met", "smoke": ["confirm catch-up", "review the diff"],
+           "integration_note": "the final head carries post-review base integration"}
+    r = subprocess.run([sys.executable, os.path.join(LIB_R, "readout_post.py"),
+                        "--work-item", "wi", "--ctx", json.dumps(ctx)],
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=30)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out.get("recorded") is True or out.get("posted") is True
+    # no --pr -> recorded to the store; read the structured hand-back back and assert the FR-6/FR-7 elements
+    body = open(control_plane.paths(str(tmp_path), "wi")["resume_brief"]).read()
+    assert "https://x/pr/7" in body                          # FR-6: PR link
+    assert "all FRs met" in body                             # FR-6: built-vs-asked
+    assert "confirm catch-up" in body                        # FR-6: spot-check list
+    assert "Merge is yours" in body                          # FR-6: never-merges statement
+    assert "post-review base integration" in body            # FR-7: integration note
