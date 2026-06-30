@@ -66,6 +66,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
     # #120: native ship-phase structured hand-back (FR-6/FR-7, scrubbed, best-effort delivery).
     "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",
+    # #120: ship-phase guard invariants (UFR-2 unreadable-park, UFR-4 fence fail-closed, FR-8 never-merge).
+    "plugins/superheroes/lib/tests/showrunner_ship_guard_smoke.js",
 ]
 
 
