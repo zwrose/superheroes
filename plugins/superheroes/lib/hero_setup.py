@@ -36,11 +36,11 @@ def read_declined(cwd, root=None):
             data = json.load(fh)
     except (OSError, ValueError):
         return set()
-    return set(data) if isinstance(data, list) else set()
-
-
-def is_declined(cwd, hero, root=None):
-    return hero in read_declined(cwd, root)
+    if not isinstance(data, list):
+        return set()
+    # Keep only string elements: a non-string/non-hashable element (e.g. a dict) would make
+    # set(data) raise TypeError and escape the fail-open contract (/code-review #4).
+    return {x for x in data if isinstance(x, str)}
 
 
 def mark_declined(cwd, hero, root=None):
@@ -63,9 +63,10 @@ def mark_declined(cwd, hero, root=None):
 
 
 def _is_set_up(cwd, hero, root=None):
-    """A hero is set up iff its light-layer file exists, co-located with core.md."""
-    layer = os.path.join(os.path.dirname(core_md.core_path(cwd, root)), hero + ".md")
-    return os.path.isfile(layer)
+    """A hero is set up iff its light-layer file exists AND carries real content — an empty
+    placeholder layer (an interrupted set-up) is NOT set up (/code-review #12). Reuses core_md's
+    canonical layer-path + emptiness helpers rather than recomputing them (/code-review #13)."""
+    return not core_md._layer_is_empty(core_md._layer_path(cwd, hero, root))
 
 
 def offerable(cwd, root=None):
