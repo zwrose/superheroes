@@ -499,7 +499,7 @@ async function verifyAgent(verifyCommand, runDir, round) {
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
+    { label: 'run verify', schema: VERIFY_SCHEMA })
   if (!out) return 'fail'  // fail-closed if the runner gave nothing
   // Classify with the command the SPINE knows (verifyCommand), NOT the leaf's echoed out.command.
   // A garbled leaf that drops `command` would make the twin see !cmd -> 'skipped' (a pass-equivalent
@@ -627,6 +627,585 @@ module.exports = { reviewPanel, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
 
 };
 
+// ===== courier_exec.js =====
+__modules["courier_exec"] = function (module, exports, require) {
+let injectedAgent = null
+
+class CourierTransportError extends Error {
+  constructor(label, reason) {
+    super(`courier transport failed after retry (${label}): ${reason}`)
+    this.label = label
+    this.reason = reason
+  }
+}
+
+function setCourierAgent(fn) { injectedAgent = fn }
+
+function currentAgent() {
+  if (injectedAgent) return injectedAgent
+  if (typeof global.agent === 'function') return global.agent
+  throw new Error('courier agent unavailable')
+}
+
+function promptFor(command) {
+  return 'Run exactly this command and return ONLY stdout, unchanged:\n\n' + command
+}
+
+function firstResult(raw) {
+  return Array.isArray(raw) ? raw[0] : raw
+}
+
+function stdoutOf(raw) {
+  const row = firstResult(raw)
+  if (row == null) return ''
+  if (typeof row === 'string') return row
+  if (typeof row.stdout === 'string') return row.stdout
+  return ''
+}
+
+function commandOk(raw) {
+  const row = firstResult(raw)
+  return !(row && Object.prototype.hasOwnProperty.call(row, 'ok') && row.ok === false)
+}
+
+function missingRequired(value, required) {
+  for (const key of required || []) {
+    if (!Object.prototype.hasOwnProperty.call(value || {}, key)) return key
+  }
+  return null
+}
+
+async function callOnce(label, command) {
+  return currentAgent()(promptFor(command), { label })
+}
+
+async function runCourierText(label, command) {
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await callOnce(label, command)
+    if (!commandOk(raw)) {
+      last = stdoutOf(raw).trim() || 'command failed'
+      continue
+    }
+    const out = stdoutOf(raw)
+    if (out.trim() !== '') return out
+    last = 'empty stdout'
+  }
+  throw new CourierTransportError(label, last)
+}
+
+async function runCourierJson(label, command, opts) {
+  const options = opts || {}
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await callOnce(label, command)
+    const out = stdoutOf(raw)
+    if (!commandOk(raw)) {
+      last = out.trim() || 'command failed'
+      continue
+    }
+    if (out.trim() === '') {
+      last = 'empty stdout'
+      continue
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(out)
+    } catch (e) {
+      last = 'unparseable JSON'
+      continue
+    }
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    const missing = missingRequired(parsed, options.require || [])
+    if (missing) {
+      last = `missing required field ${missing}`
+      continue
+    }
+    return parsed
+  }
+  throw new CourierTransportError(label, last)
+}
+
+async function runCourierBatchJson(label, commands, opts) {
+  const joined = commands.join('\n')
+  const parsed = await runCourierJson(label, joined, opts)
+  return parsed
+}
+
+module.exports = {
+  CourierTransportError,
+  runCourierJson,
+  runCourierText,
+  runCourierBatchJson,
+  setCourierAgent,
+}
+
+};
+
+// ===== test_pilot_deciders.js =====
+__modules["test_pilot_deciders"] = function (module, exports, require) {
+// plugins/superheroes/lib/test_pilot_deciders.js
+// Pure test-pilot decision helpers — no IO, no agent, no Python.
+const { normalizeTitle } = require('./circuit_breaker.js')
+
+const WEB_KEYS = new Set([
+  'user_facing', 'userFacing', 'browser', 'route', 'routes', 'page', 'pages', 'frontend',
+  'baseUrl', 'base_url', 'dev-server', 'dev_server', 'devServer', 'runnable_web', 'runnableWeb', 'web',
+])
+const PROFILE_WEB_KEYS = new Set([...WEB_KEYS].filter((k) => k !== 'baseUrl' && k !== 'base_url'))
+const NO_BROWSER_KEYS = {
+  docs_only: 'docs-only',
+  docsOnly: 'docs-only',
+  cli_only: 'CLI-only',
+  cliOnly: 'CLI-only',
+  library_only: 'library-only',
+  libraryOnly: 'library-only',
+  internal_only: 'internal-only',
+  internalOnly: 'internal-only',
+}
+const DOC_EXTS = new Set(['.md', '.mdx', '.rst', '.txt', '.adoc'])
+const CLI_PATH_PARTS = ['/cli/', '/commands/', '/bin/']
+const LIB_PATH_PARTS = ['/lib/', '/src/lib/', '/pkg/']
+const INTERNAL_PATH_PARTS = ['/internal/', '/private/']
+const WEB_EXTS = new Set(['.html', '.css', '.jsx', '.tsx', '.vue', '.svelte'])
+const WEB_PATH_PARTS = ['/web/', '/frontend/', '/pages/', '/routes/', '/app/', '/public/']
+const BROWSER_SOURCES = new Set(['browser', 'playwright', 'chrome-devtools', 'devtools'])
+const DEFAULT_LIMITS = {
+  planRecords: 20,
+  browserSteps: 80,
+  browserPasses: 4,
+  browserFixBatches: 3,
+  uniqueScenarios: 40,
+  seedOperations: 120,
+  elapsedSeconds: 3600,
+  renderedBytes: 200000,
+}
+const MAX_BROWSER_FIX_BATCHES = 3
+const PATHISH = /(?:\/private)?\/tmp\/\S+|\/[\w./-]+(?::\d+)?/g
+const LINE = /:\d+\b/g
+
+function verdict(v, reason) {
+  return { verdict: v, reason }
+}
+
+function isObject(value) {
+  return value === undefined || value === null || (typeof value === 'object' && !Array.isArray(value))
+}
+
+function* walk(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    for (const [key, nested] of Object.entries(value)) {
+      yield [key, nested]
+      yield* walk(nested)
+    }
+  } else if (Array.isArray(value)) {
+    for (const nested of value) yield [null, nested]
+  }
+}
+
+function truthySignal(obj, keys) {
+  if (!obj || typeof obj !== 'object') return null
+  for (const [key, value] of walk(obj)) {
+    if (keys.has(key) && value !== false && value !== null && value !== '' && !(Array.isArray(value) && value.length === 0) && !(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)) {
+      return key
+    }
+  }
+  return null
+}
+
+function files(diff) {
+  if (!diff || typeof diff !== 'object') return []
+  const list = diff.files || diff.paths || diff.changed_files
+  return Array.isArray(list) && list.every((p) => typeof p === 'string') ? list : []
+}
+
+function ext(path) {
+  const base = path.split('/').pop()
+  if (!base.includes('.')) return ''
+  return `.${base.split('.').pop().toLowerCase()}`
+}
+
+function docsOnly(list) {
+  return list.length > 0 && list.every((path) => path.startsWith('docs/') || path.startsWith('documentation/') || DOC_EXTS.has(ext(path)))
+}
+
+function pathSignal(list, parts, exts) {
+  const extensions = exts || new Set()
+  return list.some((path) => {
+    const normalized = `/${path.replace(/^\/+|\/+$/g, '')}`
+    return parts.some((part) => normalized.includes(part)) || extensions.has(ext(path))
+  })
+}
+
+function webPathSignal(list) {
+  return list.some((path) => {
+    const normalized = `/${path.replace(/^\/+|\/+$/g, '')}`
+    if (WEB_PATH_PARTS.some((part) => normalized.includes(part))) return true
+    return WEB_EXTS.has(ext(path)) && !pathSignal([path], [...CLI_PATH_PARTS, ...LIB_PATH_PARTS, ...INTERNAL_PATH_PARTS])
+  })
+}
+
+function planFailed(planResult) {
+  if (planResult == null) return null
+  if (typeof planResult !== 'object') return 'malformed plan result'
+  if (planResult.ok === false || planResult.status === 'failed' || planResult.status === 'error') {
+    return String(planResult.reason || 'plan derivation failed')
+  }
+  return null
+}
+
+function planEmptyApplicable(planResult) {
+  if (!planResult || typeof planResult !== 'object') return false
+  const applicable = planResult.applicable === true || planResult.verdict === 'applicable'
+  const steps = planResult.steps
+  return applicable && Array.isArray(steps) && steps.length === 0
+}
+
+function missingRequiredSetup(detectors, profile) {
+  let required = []
+  if (detectors && typeof detectors === 'object') {
+    required = detectors.requires_setup || detectors.required_setup || []
+  }
+  if (typeof required === 'string') required = [required]
+  if (!Array.isArray(required)) return []
+  profile = profile && typeof profile === 'object' ? profile : {}
+  const missing = []
+  for (const key of required) {
+    if (typeof key !== 'string') continue
+    const val = profile[key]
+    if (val == null || val === '' || (Array.isArray(val) && val.length === 0) || (val && typeof val === 'object' && !Array.isArray(val) && Object.keys(val).length === 0)) {
+      missing.push(key)
+    }
+  }
+  return missing
+}
+
+function coerceJsonObject(value) {
+  if (typeof value !== 'string') return value
+  try {
+    const parsed = JSON.parse(value)
+    if (parsed === null || (parsed && typeof parsed === 'object' && !Array.isArray(parsed))) return parsed
+  } catch (_e) { /* keep string */ }
+  return value
+}
+
+function applicabilityDecision(diff, detectors, profile, planResult) {
+  if (planResult === undefined) planResult = null
+  diff = coerceJsonObject(diff)
+  detectors = coerceJsonObject(detectors)
+  profile = coerceJsonObject(profile)
+  planResult = coerceJsonObject(planResult)
+  if (![diff, detectors, profile, planResult].every(isObject)) {
+    return verdict('park', 'malformed inputs')
+  }
+  diff = diff || {}
+  detectors = detectors || {}
+  profile = profile || {}
+  const failed = planFailed(planResult)
+  if (failed) return verdict('park', failed)
+  if (planEmptyApplicable(planResult)) return verdict('park', 'empty applicable plan derivation')
+
+  const changed = files(diff)
+  let webSignal = truthySignal(detectors, WEB_KEYS) || truthySignal(profile, PROFILE_WEB_KEYS) || truthySignal(planResult, WEB_KEYS)
+  if (!webSignal && webPathSignal(changed)) webSignal = 'frontend path'
+
+  if (webSignal) {
+    const missing = missingRequiredSetup(detectors, profile)
+    if (missing.length) return verdict('park', `missing required setup: ${missing.join(', ')}`)
+    return verdict('applicable', `browser/user-facing signal: ${webSignal}`)
+  }
+
+  for (const [key, label] of Object.entries(NO_BROWSER_KEYS)) {
+    if (detectors[key] === true) return verdict('not_applicable', `${label} change with no browser signal`)
+  }
+  if (docsOnly(changed)) return verdict('not_applicable', 'docs-only change with no browser signal')
+  if (pathSignal(changed, CLI_PATH_PARTS)) return verdict('not_applicable', 'CLI-only change with no browser signal')
+  if (pathSignal(changed, LIB_PATH_PARTS)) return verdict('not_applicable', 'library-only change with no browser signal')
+  if (pathSignal(changed, INTERNAL_PATH_PARTS)) return verdict('not_applicable', 'internal-only change with no browser signal')
+  return verdict('park', 'uncertain applicability')
+}
+
+function parkAggregation(reason) {
+  return { action: 'park', reason }
+}
+
+function browserSource(raw) {
+  return raw.source || raw.evidenceSource || raw.evidence_source
+}
+
+function isBrowserSource(value) {
+  if (typeof value !== 'string') return false
+  const lower = value.toLowerCase()
+  return BROWSER_SOURCES.has(lower) || lower.startsWith('browser:')
+}
+
+function limit(byteLimits, key, fallback) {
+  if (!byteLimits || typeof byteLimits !== 'object') return fallback
+  const aliases = {
+    diagnostics: ['diagnostics', 'diagnosticBytes', 'diagnosticsBytes'],
+    renderedBytes: ['renderedBytes', 'rendered', 'total'],
+  }
+  let value
+  for (const candidate of aliases[key] || [key]) {
+    if (Object.prototype.hasOwnProperty.call(byteLimits, candidate)) {
+      value = byteLimits[candidate]
+      break
+    }
+  }
+  return typeof value === 'number' && value >= 0 ? value : fallback
+}
+
+function byteLength(text) {
+  if (typeof Buffer !== 'undefined') return Buffer.byteLength(text, 'utf8')
+  return new TextEncoder().encode(text).length
+}
+
+function scrubText(text, scrubber, maxBytes) {
+  try {
+    const out = scrubber(String(text || ''))
+    if (byteLength(out) > maxBytes) return [null, 'diagnostics exceed byte limit']
+    return [out, null]
+  } catch (err) {
+    return [null, `scrub failed: ${err && err.message ? err.message : err}`]
+  }
+}
+
+function aggregateResults(rawResults, opts) {
+  opts = opts || {}
+  const scrubber = typeof opts.scrubber === 'function' ? opts.scrubber : (s) => s
+  const byteLimits = opts.byteLimits || {}
+  if (!rawResults || typeof rawResults !== 'object') return parkAggregation('browser results must be a JSON object')
+  if (!isBrowserSource(browserSource(rawResults))) return parkAggregation('browser-derived evidence/source is required')
+
+  const diagnosticLimit = limit(byteLimits, 'diagnostics', 20000)
+  const records = []
+  const steps = rawResults.steps || rawResults.records || []
+  for (const step of steps) {
+    if (!step || typeof step !== 'object') continue
+    const [notes, noteProblem] = scrubText(step.notes || step.diagnostics || '', scrubber, diagnosticLimit)
+    if (noteProblem) return parkAggregation(noteProblem)
+    const stepId = step.id || step.stepId || step.step_id
+    if (!stepId) return parkAggregation('browser result record is missing a step id')
+    const record = {
+      stepId: String(stepId),
+      status: step.status || step.result || 'unknown',
+      notes,
+      browserExecuted: true,
+    }
+    const failureType = step.failureType || step.failure_type || step.kind
+    if (failureType != null) record.failureType = String(failureType)
+    for (const field of ['summary', 'message']) {
+      if (step[field]) {
+        const [text, problem] = scrubText(step[field], scrubber, diagnosticLimit)
+        if (problem) return parkAggregation(problem)
+        record[field] = text
+      }
+    }
+    records.push(record)
+  }
+
+  const result = {
+    action: 'aggregated',
+    source: browserSource(rawResults),
+    records,
+    coverageRationale: rawResults.coverageRationale || rawResults.coverage_rationale,
+  }
+  const fixes = []
+  for (const fix of rawResults.fixes || []) {
+    if (fix && typeof fix === 'object') {
+      fixes.push({ sha: fix.sha || fix.commit, summary: scrubber(String(fix.summary || '')) })
+    }
+  }
+  if (fixes.length) result.fixes = fixes
+  const renderedLimit = limit(byteLimits, 'renderedBytes', 200000)
+  if (byteLength(JSON.stringify(result)) > renderedLimit) {
+    return parkAggregation('rendered output exceeds byte limit')
+  }
+  return result
+}
+
+function withinBudget() {
+  return { action: 'within_budget' }
+}
+
+function parkBudget(reason) {
+  return { action: 'park_budget_exceeded', reason }
+}
+
+function validNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function validateMapping(obj, label) {
+  if (!obj || typeof obj !== 'object') return `${label} must be a JSON object`
+  for (const [key, value] of Object.entries(obj)) {
+    if (!validNumber(value)) return `malformed numeric value for ${label}.${key}`
+  }
+  return null
+}
+
+function budgetDecision(counts, limits) {
+  const problem = validateMapping(counts, 'counts')
+  if (problem) return parkBudget(problem)
+  const merged = Object.assign({}, DEFAULT_LIMITS)
+  if (limits != null) {
+    const limitsProblem = validateMapping(limits, 'limits')
+    if (limitsProblem) return parkBudget(limitsProblem)
+    Object.assign(merged, limits)
+  }
+  for (const [key, max] of Object.entries(merged)) {
+    const value = Object.prototype.hasOwnProperty.call(counts, key) ? counts[key] : 0
+    if (value > max) return parkBudget(`${key} exceeded budget: ${value} > ${max}`)
+  }
+  return withinBudget()
+}
+
+function fixBatch(entry) {
+  return entry && typeof entry === 'object' && (entry.type === 'browser_fix_batch' || entry.type === 'fix_batch')
+}
+
+function fixBatches(history) {
+  return Array.isArray(history) ? history.filter(fixBatch) : []
+}
+
+function passSteps(passResult) {
+  if (!passResult || typeof passResult !== 'object') return []
+  if (Array.isArray(passResult.steps)) return passResult.steps
+  if (Array.isArray(passResult.records)) return passResult.records
+  return []
+}
+
+function stepId(step) {
+  if (!step || typeof step !== 'object') return null
+  const value = step.id || step.stepId || step.step_id
+  return value != null && value !== '' ? String(value) : null
+}
+
+function failedSteps(passResult) {
+  const failed = []
+  for (const step of passSteps(passResult)) {
+    if (!step || typeof step !== 'object') continue
+    const status = step.status || step.result
+    if ((status === 'failed' || status === 'fail') && stepId(step)) failed.push(step)
+  }
+  return failed
+}
+
+function appBug(step) {
+  const kind = step.failureType || step.failure_type || step.kind
+  return kind === undefined || kind === null || ['app_bug', 'app-bug', 'application'].includes(kind)
+}
+
+function failedStepIds(passResult) {
+  return failedSteps(passResult).map(stepId).filter(Boolean)
+}
+
+function summaryForFailures(failed) {
+  return `Fix browser app failures: ${failed.map(stepId).join(', ')}`
+}
+
+function scrubSummary(summary) {
+  return normalizeTitle(String(summary || '').replace(PATHISH, ' ').replace(LINE, ' '))
+}
+
+function statusMap(value) {
+  return value && typeof value === 'object' ? value : {}
+}
+
+function madeProgress(batch) {
+  const before = statusMap(batch.before)
+  const after = statusMap(batch.after)
+  return Object.entries(before).some(([id, beforeStatus]) => (beforeStatus === 'failed' || beforeStatus === 'fail') && (after[id] === 'passed' || after[id] === 'pass'))
+}
+
+function lastTwoSameWithoutProgress(batches) {
+  if (batches.length < 2) return null
+  const prev = batches[batches.length - 2]
+  const latest = batches[batches.length - 1]
+  const prevSummary = scrubSummary(prev.summary)
+  const latestSummary = scrubSummary(latest.summary)
+  if (prevSummary && prevSummary === latestSummary && !madeProgress(prev) && !madeProgress(latest)) {
+    return latestSummary
+  }
+  return null
+}
+
+function affectedStepIds(changedFiles, dependencyMap) {
+  if (!dependencyMap || typeof dependencyMap !== 'object') return null
+  const affected = new Set()
+  for (const path of changedFiles || []) {
+    const mapped = dependencyMap[path]
+    if (!Array.isArray(mapped)) return null
+    for (const id of mapped) {
+      if (id != null && id !== '') affected.add(String(id))
+    }
+  }
+  return [...affected].sort()
+}
+
+function rerunDecision(passResult, changedFiles, dependencyMap) {
+  const failedIds = failedStepIds(passResult)
+  const affectedIds = affectedStepIds(changedFiles, dependencyMap)
+  if (affectedIds == null) return { action: 'rerun_all', failedStepIds: failedIds }
+  return {
+    action: 'rerun_subset',
+    stepIds: [...new Set([...failedIds, ...affectedIds])].sort(),
+    failedStepIds: failedIds,
+    affectedStepIds: affectedIds,
+  }
+}
+
+function retryDecisionFromFacts(passResult, history, changedFiles, dependencyMap) {
+  const batches = fixBatches(history)
+  const failed = failedSteps(passResult)
+
+  if (changedFiles != null && batches.length) {
+    return rerunDecision(passResult, changedFiles, dependencyMap)
+  }
+
+  if (failed.length && batches.length >= MAX_BROWSER_FIX_BATCHES) {
+    return {
+      action: 'park_cap_reached',
+      reason: 'reached 3 browser fix batches with failed browser steps remaining',
+    }
+  }
+
+  const noProgress = lastTwoSameWithoutProgress(batches)
+  if (failed.length && noProgress) {
+    return {
+      action: 'park_no_progress',
+      reason: `two consecutive browser fix batches made no progress: ${noProgress}`,
+    }
+  }
+
+  const appFailures = failed.filter(appBug)
+  if (appFailures.length) {
+    return {
+      action: 'fix_batch',
+      failedStepIds: appFailures.map(stepId),
+      summary: summaryForFailures(appFailures),
+    }
+  }
+
+  if (failed.length) {
+    return {
+      action: 'park_unclassified_failure',
+      reason: 'one or more browser failures are not app-bug failures',
+    }
+  }
+
+  return { action: 'passed' }
+}
+
+module.exports = {
+  applicabilityDecision,
+  aggregateResults,
+  budgetDecision,
+  retryDecisionFromFacts,
+}
+
+};
+
 // ===== test_pilot_phase.js =====
 __modules["test_pilot_phase"] = function (module, exports, require) {
 // plugins/superheroes/lib/test_pilot_phase.js
@@ -637,6 +1216,8 @@ __modules["test_pilot_phase"] = function (module, exports, require) {
 // helpers, each of which returns `{ done: <terminalResult> }` to short-circuit (park or proceed) or
 // the state it produced. Judgment stays in the injected leaves + pure helpers (§10.1); these helpers
 // are control flow only.
+const deciders = require('./test_pilot_deciders.js')
+
 async function testPilotPhase(workItem, generation, deps) {
   deps = deps || {}
 
@@ -674,7 +1255,7 @@ async function resolveApplicabilityAndSetup(deps, workItem, generation) {
 
   let applicability
   try {
-    applicability = await callLeaf(deps.decideApplicability, context)
+    applicability = deciders.applicabilityDecision(context.diff, context.detectors, context.profile, context.planResult)
   } catch (err) {
     return { done: low(`test-pilot applicability failed: ${message(err)}`) }
   }
@@ -715,7 +1296,7 @@ async function preparePlanAndRecords(deps, workItem, context) {
 
   let plan
   try {
-    plan = await callLeaf(deps.derivePlan, context)
+    plan = await callLeaf(deps.planTests || deps.derivePlan, context)
   } catch (err) {
     return { done: low(`test-pilot plan derivation failed: ${message(err)}`) }
   }
@@ -775,6 +1356,32 @@ async function preparePlanAndRecords(deps, workItem, context) {
 // Phase 3: prepare artifacts, resolve the server, seed records — each with its readiness milestone.
 // Returns `{ artifactResult, serverContext, seedResult }` to proceed or `{ done }` for a terminal.
 async function prepareExecutionContext(deps, workItem, context, plan, records, previousStatus) {
+  if (typeof deps.prepareTestRun === 'function') {
+    let folded
+    try {
+      folded = await callLeaf(deps.prepareTestRun, { plan, records, context, previousStatus, workItem })
+    } catch (err) {
+      return { done: low(`test-pilot preparation failed: ${message(err)}`) }
+    }
+    const artifactResult = folded && folded.artifactResult
+    const serverContext = folded && folded.serverContext
+    const seedResult = folded && folded.seedResult
+    const artifactProblem = artifactReadinessProblem(artifactResult)
+    if (artifactProblem) return { done: low(artifactProblem) }
+    const serverProblem = serverContextProblem(serverContext, context)
+    if (serverProblem) return { done: low(serverProblem) }
+    const seedProblem = seedReadinessProblem(seedResult)
+    if (seedProblem) return { done: low(seedProblem) }
+    const wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'seed-ready', {
+      planRecords: records,
+      artifacts: artifactResult.artifacts,
+      server: publicServerContext(serverContext),
+      seed: seedResult.status || seedResult,
+    }))
+    if (!wrote.ok) return { done: low(wrote.reason) }
+    return { artifactResult, serverContext, seedResult }
+  }
+
   let artifactResult
   try {
     artifactResult = await callLeaf(deps.prepareArtifacts, {
@@ -876,7 +1483,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
           rerunScope,
           retryState,
         )
-        return callLeaf(deps.runBrowserPass, browserContext)
+        return callLeaf(deps.browserPass || deps.runBrowserPass, browserContext)
       })
     } catch (err) {
       return { done: low(`test-pilot browser execution failed: ${message(err)}`) }
@@ -887,14 +1494,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     }
 
     try {
-      aggregated = await callLeaf(deps.aggregateResults, rawResults, {
-        context,
-        records: browserRecords,
-        allRecords: records,
-        server: serverContext,
-        rerunScope,
-        fixBatchHistory: retryState.fixBatchHistory,
-      })
+      aggregated = deciders.aggregateResults(rawResults)
     } catch (err) {
       return { done: low(`test-pilot result aggregation failed: ${message(err)}`) }
     }
@@ -1122,6 +1722,7 @@ async function writeStatus(deps, workItem, status) {
       // contract is writeStatus(status) — don't pass a 2nd arg no implementation reads.
       const out = await deps.writeStatus(status)
       if (out && out.ok === false) return { ok: false, reason: out.reason || 'test-pilot status write failed' }
+      if (out && out.read_back === false) return { ok: false, reason: out.reason || 'test-pilot status read-back mismatch' }
       return { ok: true }
     }
   } catch (err) {
@@ -1487,12 +2088,24 @@ function latestFixBatch(history) {
 }
 
 async function budgetCheck(deps, phase, payload) {
-  if (typeof deps.budgetCheck !== 'function') return { ok: true }
+  const counts = payload && payload.counts ? payload.counts : {
+    browserPasses: payload && typeof payload.browserPasses === 'number'
+      ? payload.browserPasses
+      : (payload && payload.rerunScope ? 1 : 0),
+    browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
+  }
   try {
-    const out = await deps.budgetCheck(phase, payload)
-    if (out === false) return { ok: false, reason: `test-pilot budget exhausted before ${phase}` }
-    if (out && out.ok === false) return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
-    if (out && out.action === 'park') return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+    if (typeof deps.budgetCheck === 'function') {
+      const out = await deps.budgetCheck(phase, payload)
+      if (out === false) return { ok: false, reason: `test-pilot budget exhausted before ${phase}` }
+      if (out && out.ok === false) return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+      if (out && out.action === 'park') return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+      return { ok: true }
+    }
+    const out = deciders.budgetDecision(counts)
+    if (out.action !== 'within_budget') {
+      return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+    }
     return { ok: true }
   } catch (err) {
     return { ok: false, reason: `test-pilot budget check failed before ${phase}: ${message(err)}` }
@@ -1504,7 +2117,7 @@ async function retryDecision(deps, passResult, history, changedFiles, dependency
     if (typeof deps.retryDecide === 'function') {
       return await deps.retryDecide(passResult, history, changedFiles, dependencyMap)
     }
-    return { action: 'park_retry_decision_failed', reason: 'test-pilot retry decision unavailable' }
+    return deciders.retryDecisionFromFacts(passResult, history, changedFiles, dependencyMap)
   } catch (err) {
     return { action: 'park_retry_decision_failed', reason: `test-pilot retry decision failed: ${message(err)}` }
   }
@@ -1709,6 +2322,9 @@ async function publishFinalHead(deps, workItem, context, retryState, payload) {
     }, payload))
     if (!out || out.ok === false || out.action === 'park' || out.confidence === 'low') {
       return { ok: false, reason: (out && out.reason) || 'final tested head publish parked' }
+    }
+    if (out.read_back === false) {
+      return { ok: false, reason: (out && out.reason) || 'final tested head read-back mismatch' }
     }
     const remotePr = out.remotePr || out.remotePR || { branch: context.branch, head: out.head || retryState.currentHead }
     if (!coversHead(remotePr, retryState.currentHead)) {
@@ -1952,6 +2568,7 @@ __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
 const modelTierTwin = require('./model_tier.js')
+const courier = require('./courier_exec.js')
 // #115 increment B: the two SMART judgement leaves (worker_recovery, task_review) are now
 // parity-locked in-process twins (no leaf — judgments live in twins, called in-process). Pure
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
@@ -1993,31 +2610,23 @@ function exec(commands) {
 // (one exec, no behavior change); a parseable {"ok":false} (a REAL durable-write failure) is returned
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
 async function execJson(cmd) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([cmd])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) { try { return JSON.parse(s) } catch (_e) { /* garbled -> retry */ } }
-      // empty stdout -> retry (courier likely dropped it)
-    }
-    // exec-level failure or empty/garbled -> retry once, then give up
+  try {
+    return await courier.runCourierJson('exec', cmd)
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) return null
+    throw e
   }
-  return null
 }
 
 // Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
 // Retry once on an empty stdout; returns the trimmed string, or null after the retry.
 async function execText(cmd) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([cmd])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) return s
-    }
+  try {
+    return (await courier.runCourierText('exec', cmd)).trim()
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) return null
+    throw e
   }
-  return null
 }
 
 // build_progress.reconcile via the module (NOT a destructured load-time binding) so reconcileState
@@ -2041,11 +2650,16 @@ function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.
 // stdout (C-I3) so the caller can park with THAT specific reason instead of the generic one.
 // FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
-  // execJson retries the courier ONCE on a dropped/garbled stdout before failing closed; null ->
-  // the caller parks honestly (same fail-closed semantic as today, only a retry added before it).
-  const parsed = await execJson(
-    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
-  )
+  let parsed = null
+  try {
+    parsed = await courier.runCourierJson(
+      'gather build state',
+      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+      {},
+    )
+  } catch (_) {
+    parsed = null
+  }
   if (parsed == null) return null
   // Structured fail-closed signal: the leaf could not resolve --base. Surface the SPECIFIC reason
   // (C-I3) rather than collapsing to the generic "could not gather authoritative git state" park.
@@ -2212,7 +2826,10 @@ async function buildPhase(workItem, generation) {
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
     if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
-    await recordFinalReviewClean(workItem)
+    const coverage = await recordFinalReviewClean(workItem)
+    if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
+      return park('final review coverage stamp failed read-back')
+    }
   }
 
   // Write provenance if absent (FR-9): idempotent, only after final review clean. Same staleness
@@ -2248,12 +2865,15 @@ async function writeProvenance(workItem) {
 
 // Record final-review-clean. Caller does not check .ok today (preserve that), but stay fail-closed-safe.
 async function recordFinalReviewClean(workItem) {
-  // Caller does not branch on .ok today (preserve that), but stay fail-closed-safe + retry the courier.
-  const r = await execJson(
-    `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
-  )
-  if (r == null) return { ok: false }
-  return r
+  try {
+    return await courier.runCourierJson(
+      'stamp build coverage',
+      `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
+      { require: ['ok', 'read_back'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    return { ok: false, read_back: false }
+  }
 }
 
 // fenceOrPark: lease-fence acquire. CRITICAL fail-closed: an exec/parse failure must read as a LOST
@@ -2266,6 +2886,30 @@ async function fenceOrPark(workItem, generation) {
     `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
   )
   return !!(f && f.ok)
+}
+
+async function recordTaskBuilt(workItem, taskId) {
+  try {
+    return await courier.runCourierJson(
+      'record task built',
+      `python3 ${LIB}/build_state_cli.py record-built --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    return null
+  }
+}
+
+async function recordTaskReviewed(workItem, taskId) {
+  try {
+    return await courier.runCourierJson(
+      'record task reviewed',
+      `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    return null
+  }
 }
 
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
@@ -2282,7 +2926,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
       + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
       + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
-      { label: 'worker', schema: { type: 'object', required: ['ok'] } })
+      { label: 'implement-task', schema: { type: 'object', required: ['ok'] } })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
@@ -2307,12 +2951,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       // parked). null after the retry -> jrnl = {ok:false} so the guard parks (a missed journal must
       // NOT advance); a parseable {"ok":false} (a real durable-write failure) is returned without a
       // retry and parks the same.
-      const jrnl = await execJson(
-        `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
-        + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
-      )
-      if (!(jrnl && jrnl.ok)) {
-        return { parked: true, reason: 'task journal write failed (record-before-advance) — park' }
+      const built = await recordTaskBuilt(workItem, task.id)
+      if (!(built && built.ok === true && built.read_back === true)) {
+        return { parked: true, reason: 'task built record write failed (record-before-advance) — park' }
       }
       return reviewLoop(workItem, generation, task, branch, wt)
     }
@@ -2348,7 +2989,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
       + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
       + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
-      { label: 'review',
+      { label: `task-reviewer:r${round}`,
         schema: {
           type: 'object',
           required: ['verdicts'],
@@ -2392,9 +3033,10 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       // record-before-advance: record-reviewed must succeed before the task counts reviewed.
       // (Caller does not branch on .ok today; keep behavior — the exec call still records it. Route
       // through execJson so a dropped/garbled courier stdout is retried once; the record is idempotent.)
-      await execJson(
-        `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(task.id)}`,
-      )
+      const reviewed = await recordTaskReviewed(workItem, task.id)
+      if (!(reviewed && reviewed.ok === true && reviewed.read_back === true)) {
+        return { parked: true, reason: 'task reviewed record write failed (record-before-advance) — park' }
+      }
       return { parked: false }
     }
     // d.action === 'review': fence, fix the blockers + cannot-verify items, then re-review (FR-6/UFR-5).
@@ -2404,24 +3046,43 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     await agent(
       `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
       + `"Task-Id: ${task.id}": ${JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))}`,
-      { label: 'fixer', model: fixerModel })
+      { label: 'fix-task', model: fixerModel })
     history.push({ round, findings: review.findings || [] })
     round += 1
   }
 }
 
 async function runFinalReview(workItem, generation, branch, wt) {
-  // verify command via execJson (retry the courier once on a dropped/garbled stdout); on fail -> 'none'
-  // (verify command unknown -> the verify_gate twin fails closed downstream; a missing verify command
-  // already maps to a safe path).
-  const _verify = await execJson(`python3 ${LIB}/verify_command_cli.py`)
-  const verify = (_verify && _verify.command) || 'none'
+  const script = [
+    'import json, subprocess, sys',
+    'verify = "none"',
+    'minors = []',
+    'v = subprocess.run(["python3", sys.argv[1] + "/verify_command_cli.py"], capture_output=True, text=True)',
+    'if v.returncode == 0:',
+    '    try: verify = json.loads(v.stdout or "{}").get("command", "none")',
+    '    except Exception: verify = "none"',
+    'm = subprocess.run(["python3", sys.argv[1] + "/minor_rollup_cli.py", "--work-item", sys.argv[2]], capture_output=True, text=True)',
+    'if m.returncode == 0:',
+    '    try: minors = json.loads(m.stdout or "{}").get("minors", [])',
+    '    except Exception: minors = []',
+    'if not isinstance(minors, list): minors = []',
+    'print(json.dumps({"ok": True, "verify_command": verify, "minors": minors}))',
+  ].join('\n')
+  let folded = null
+  try {
+    folded = await courier.runCourierJson(
+      'read verify + minors',
+      `python3 -c ${shq(script)} ${shq(LIB)} ${shq(workItem)}`,
+      { require: ['ok', 'verify_command', 'minors'] },
+    )
+  } catch (_) {
+    folded = null
+  }
+  const verify = (folded && folded.verify_command) || 'none'
   // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
   const reviewerModel = modelTierTwin.resolveModel('reviewer-deep', _overrides(), null)
   const fixerModel = modelTierTwin.resolveModel('fixer', _overrides(), 'code')
-  // carried-forward Minors via execJson (retry the courier once on a dropped/garbled stdout); on fail -> [].
-  const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
-  const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
+  const minors = Array.isArray(folded && folded.minors) ? folded.minors : []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
@@ -2431,7 +3092,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const out = await agent(
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`,
-      { label: `reviewer:${round}`, model: reviewerModel,
+      { label: `branch-reviewer:r${round}`, model: reviewerModel,
         schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
@@ -2449,7 +3110,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null
     await agent(`In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
-      { label: 'final-fixer', model: fixerModel })
+      { label: 'fix-branch', model: fixerModel })
     return { fixed: blockers.map((b) => b.id || b.title) }
   }
   const verdict = await reviewPanel({
@@ -2779,6 +3440,7 @@ const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
 const modelTierTwin = require('./model_tier.js')
+const courier = require('./courier_exec.js')
 // #115 Task 16: back-half twins — CI status + PR recover (prAction already via recoverTwin above)
 const ciStatusTwin = require('./ci_status.js')
 
@@ -2837,7 +3499,7 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
       `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
       `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`,
-      withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      withModel(model, { label: `branch-reviewer:r${round}`, schema: FINDINGS_SCHEMA }))
     return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
   }
 
@@ -2861,7 +3523,7 @@ function reviewCodeLeaves(tiers, opts) {
       `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
       `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
       `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
-      withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+      withModel(tiers.fixer, { label: 'fix-code', schema: FIX_REPORT_SCHEMA }))
     return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
   }
 
@@ -2931,7 +3593,28 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
   return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
 }
-async function docRecordDeferred(report, _verdict, runDir) {
+async function saveRoundStateBestEffort(workItem, doc, round, deferred, runDir) {
+  const state = { workItem, doc, round, deferred }
+  const script = [
+    'import json, os, sys',
+    'payload = json.loads(sys.argv[1])',
+    'run_dir = sys.argv[2]',
+    'os.makedirs(run_dir, exist_ok=True)',
+    'path = os.path.join(run_dir, "round-state.json")',
+    'with open(path, "w", encoding="utf-8") as fh:',
+    '    json.dump(payload, fh, sort_keys=True)',
+    'print(json.dumps({"ok": True, "path": path}))',
+  ].join('\n')
+  try {
+    await courier.runCourierJson(
+      'save round state',
+      `python3 -c ${shq(script)} ${shq(JSON.stringify(state))} ${shq(runDir)}`,
+      { require: ['ok'], retryRealFailure: false },
+    )
+  } catch (_) {}
+}
+
+async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferred) {
   // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
   // written first, then front_half.py record-deferred (frozen) appends the deferred identities to
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
@@ -2940,6 +3623,11 @@ async function docRecordDeferred(report, _verdict, runDir) {
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
   ])
+  for (const item of (report && report.deferred) || []) {
+    const id = item && (item.identity || item.id)
+    if (!id) continue
+    runtimeDeferred.set(String(id), item.severity || 'Critical')
+  }
   // A failed deferred-set write under-counts deferrals (a finding could re-block); surface it.
   // No park: an under-count is itself fail-closed (a finding stays blocking; the loop doesn't falsely exit).
   if (!(results && results[0] && results[0].ok)) {
@@ -2956,7 +3644,7 @@ async function docReviser(blockers, runDir, context) {
     `revisions: ${JSON.stringify(blockers)}. Leave a parent-traced or GATE finding unresolved and ` +
     `name it in extras.parentOrigin. Return ONLY the report JSON ` +
     `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
-    { label: 'doc-reviser',
+    { label: 'revise-doc',
       // the doc-reviser path keys deferred items by `identity` (front_half.record_deferred reads
       // d["identity"]), NOT `id` (the code-fixer/record_deferred.py key) — pin the actual on-wire shape.
       schema: { type: 'object', properties: { fixes: { type: 'array' },
@@ -2968,11 +3656,16 @@ async function docReviser(blockers, runDir, context) {
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
-async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
+async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDeferred }) {
   const context = { workItem, docType, docPath }
+  if (runtimeDeferred && runtimeDeferred.size === 0) {
+    const saved = await io().readJson(`${runDir}/deferred-set.json`, {})
+    for (const id of Object.keys(saved || {})) runtimeDeferred.set(id, saved[id])
+  }
   globalThis.reviewerAgent = docReviewerAgent
   globalThis.synthesisLeaf = docSynthesisLeaf
-  globalThis.recordDeferred = docRecordDeferred
+  globalThis.recordDeferred = (report, verdict, rd) =>
+    docRecordDeferred(report, verdict, rd, context, runtimeDeferred || new Map())
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (blockers, rd) => docReviser(blockers, rd, context),
@@ -3041,7 +3734,7 @@ async function producePhase(phase, workItem) {
     // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
     const authored = await agent(
       _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `produce-${doc}`, model,
+      { label: `author-${doc}`, model,
         schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
@@ -3087,7 +3780,21 @@ async function reviewDocPhase(doc, workItem) {
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
-  const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
+  const deferred = new Map()
+  const verdict = await runReviewDocPanel({
+    workItem,
+    docType: doc,
+    docPath: docPathFor(workItem, doc),
+    runDir,
+    runtimeDeferred: deferred,
+  })
+  await saveRoundStateBestEffort(
+    workItem,
+    doc,
+    (verdict && verdict.round) || 1,
+    Array.from(deferred.entries()).map(([id, severity]) => ({ id, severity })),
+    runDir,
+  )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
   try { await io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
   // gateForTerminal is the in-process JS twin (no agent dispatch).
@@ -3098,16 +3805,20 @@ async function reviewDocPhase(doc, workItem) {
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`
   const pr = await persistPhase(workItem, {
     sideEffectCmd,
-    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
+    record: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
     step: -1,   // placeholder: the real step is written by recordCursor in runPhases; -1 signals review-doc context
     phase: `review-${doc}`,
   })
   if (!pr.ok) {
     // a failed durable gate write must NOT advance on un-recorded state (UFR-5) — park low-confidence,
     // mirroring reviewCodePhase's provenance-write guard.
-    return { phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] }, gate }
+    return {
+      phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] },
+      gate,
+      runtimeDeferredIds: Array.from(deferred.keys()),
+    }
   }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, gate, runtimeDeferredIds: Array.from(deferred.keys()) }
 }
 
 // gateForTerminal: pure in-process JS twin. No agent dispatch.
@@ -3332,57 +4043,27 @@ async function exec(commands, opts) {
 async function persistPhase(workItem, opts) {
   opts = opts || {}
   const sideEffectCmd = opts.sideEffectCmd || null
-  const journalPayload = opts.journalPayload || {}
+  const record = opts.record || opts.journalPayload || {}
   const step = opts.step
   const phase = opts.phase
-
-  const journalCmd =
-    'python3 plugins/superheroes/lib/journal_entry.py ' +
-    '--work-item ' + shq(workItem) + ' ' +
-    '--payload ' + shq(JSON.stringify(journalPayload))
-
-  const checkpointCmd =
-    'python3 plugins/superheroes/lib/checkpoint_entry.py ' +
-    '--work-item ' + shq(workItem) + ' ' +
-    '--step ' + shq(String(step)) + ' ' +
-    '--phase ' + shq(phase)
-
-  const commands = sideEffectCmd
-    ? [sideEffectCmd, journalCmd, checkpointCmd]
-    : [journalCmd, checkpointCmd]
-
-  // Classify one batch result. Three outcomes:
-  //   'real_fail' — an exec-level failure (e.g. set-gate sys.exit(1)) OR a parseable {"ok":false}
-  //                 (journal/checkpoint exit 0 and print {"ok":false} on a failed durable write,
-  //                 DurableWriteError / OSError). A REAL durable-write failure — must fail closed, NOT
-  //                 retry (re-running won't fix a genuine failure, and UFR-5 must not advance on it).
-  //   'drop'      — r.ok but the stdout is EMPTY/whitespace OR unparseable JSON where a {"ok":...} was
-  //                 expected (the cheap haiku courier dropped/garbled it though the command ran). The
-  //                 batch writes are idempotent (gate set / journal append [harmless dup] / checkpoint
-  //                 set), so a courier-drop is safe to retry once.
-  //   'ok'        — r.ok and a parseable JSON with no {"ok":false} (incl. set-gate's {"review":...},
-  //                 which has no ok field — covered by exec-ok, not a drop).
-  function classify(r) {
-    if (!r || !r.ok) return 'real_fail'            // exec-level failure (e.g. set-gate sys.exit(1))
-    const s = (r.stdout == null ? '' : String(r.stdout)).trim()
-    if (!s) return 'drop'                          // empty stdout -> courier-drop
-    try {
-      const p = JSON.parse(s)
-      if (p && typeof p === 'object' && p.ok === false) return 'real_fail'  // genuine durable-write failure
-      return 'ok'
-    } catch (_e) { return 'drop' }                 // unparseable stdout -> courier-drop
+  const side = opts.sideEffect || null
+  const sideArg = side ? ` --json ${shq(JSON.stringify(side))}` : ''
+  const saveCmd =
+    `python3 plugins/superheroes/lib/phase_progress_entry.py save --work-item ${shq(workItem)} ` +
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}`
+  const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
+  try {
+    const res = await courier.runCourierJson(
+      'save phase progress',
+      cmd,
+      { require: ['ok', 'journal_confirmed', 'checkpoint_confirmed'], retryRealFailure: false },
+    )
+    return res && res.ok && res.journal_confirmed && res.checkpoint_confirmed
+      ? { ok: true, recovered: false }
+      : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
+  } catch (_e) {
+    return { ok: false, error: 'phase progress read-back mismatch' }
   }
-  // Fail-CLOSE on a durable-write failure; retry the whole batch ONCE on a pure courier-drop (no
-  // real failure present). A real failure short-circuits with NO retry. If a drop persists after the
-  // single retry, fail closed.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const results = await exec(commands)
-    const verdicts = results.map(classify)
-    if (verdicts.indexOf('real_fail') >= 0) return { ok: false }   // real failure -> fail closed, NO retry
-    if (verdicts.indexOf('drop') < 0) return { ok: true }          // all ok -> success
-    // a drop with no real failure -> retry the whole batch once (attempt 0), else fall through to fail closed.
-  }
-  return { ok: false }                             // a courier-drop persisted after the retry -> fail closed
 }
 
 function inWorktree(cmd, worktree) {
@@ -3458,19 +4139,13 @@ async function showrunner({ workItem }) {
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
   // UFR-1: refuse to run if the spec hasn't been approved.
-  const specGate = await readGate(workItem, 'spec')
+  const startupFacts = await readStartupState(workItem)
+  const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
   const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
   if (startup.action !== 'proceed') {
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
-  // Task 17: load model-tier overrides once at startup from the review-crew profile. The Python script
-  // returns a {role:model} JSON map (or {} when the profile is absent/unreadable — the safe degenerate
-  // path). We pass no --profile here (→ load_overrides(None) → {}); a throwaway run has no profile, so
-  // {} is correct there; production uses the session-wide profile read elsewhere. Fail-safe: any exec
-  // error or bad JSON yields {} so resolveModel falls back to DEFAULT_TIERS — startup never crashes.
-  const _ovRes = await exec(['python3 plugins/superheroes/lib/model_tier_overrides.py'])
-  let _ovMap = {}
-  try { const _p = (_ovRes[0] && _ovRes[0].stdout) || ''; _ovMap = JSON.parse(_p) } catch (_) {}
+  const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
   if (typeof globalThis !== 'undefined') {
     globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   }
@@ -3512,6 +4187,60 @@ async function readGate(workItem, doc) {
   } catch (_) {
     return 'unreadable'
   }
+}
+
+async function readStartupState(workItem) {
+  const script = [
+    'import json, os, sys',
+    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    'import definition_doc, model_tier_overrides',
+    'wi = sys.argv[1]',
+    'root = sys.argv[2]',
+    'spec_gate = "unreadable"',
+    'try:',
+    '    d = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
+    '    spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
+    'except Exception:',
+    '    pass',
+    'try:',
+    '    overrides = model_tier_overrides.load_overrides(None) or {}',
+    'except Exception:',
+    '    overrides = {}',
+    'if not isinstance(overrides, dict):',
+    '    overrides = {}',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides}))',
+  ].join('\n')
+  try {
+    return await courier.runCourierJson(
+      'read startup state',
+      `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
+      { require: ['ok', 'spec_gate', 'model_overrides'] },
+    )
+  } catch (_) {
+    return { ok: true, spec_gate: 'unreadable', model_overrides: {} }
+  }
+}
+
+async function readDefinitionDraft(workItem, doc) {
+  const label = doc === 'plan' ? 'read plan draft' : 'read tasks draft'
+  const script = [
+    'import json, os, sys',
+    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    'import definition_doc',
+    'wi = sys.argv[1]',
+    'doc = sys.argv[2]',
+    'root = sys.argv[3]',
+    'd = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
+    'p = os.path.join(d, f"{doc}.md")',
+    'exists = os.path.isfile(p)',
+    'gate = definition_doc.read_gate(p) if exists else "unreadable"',
+    'print(json.dumps({"ok": True, "path": p, "docType": doc, "gate": gate, "exists": exists}))',
+  ].join('\n')
+  return courier.runCourierJson(
+    label,
+    `python3 -c ${shq(script)} ${shq(workItem)} ${shq(doc)} "$(git rev-parse --show-toplevel)"`,
+    { require: ['ok', 'path', 'docType'] },
+  )
 }
 
 const REVIEWED = new Set(['review-plan', 'review-tasks', 'review-code'])
@@ -3584,11 +4313,13 @@ function testPilotDeps(workItem, generation) {
       // FR-8: mirror the __SR_BASE pattern from shipPhase / draftPRPhase.
       const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
       const baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
-      const raw = await cli(
+      const raw = await courier.runCourierJson(
+        'read test context',
         `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
         `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}` +
         `${wtArg}${baseArg}`,
-        { type: 'object' })
+        { require: ['head'] },
+      )
       // FIX A: coerce nested fields the cheap courier may have stringified (same class as verify_gate).
       // Strings, head, branch, workItem stay as-is; only known object/null fields are coerced.
       if (raw && typeof raw === 'object') {
@@ -3599,24 +4330,63 @@ function testPilotDeps(workItem, generation) {
       return raw
     },
 
-    decideApplicability: async (context) => {
-      const diff = await writeJson('applicability-diff', context.diff || {})
-      const detectors = await writeJson('applicability-detectors', context.detectors || {})
-      const profile = await writeJson('applicability-profile', context.profile || {})
-      return cli(
-        `python3 plugins/superheroes/lib/test_pilot_applicability_cli.py decide ` +
-        `--diff-json ${shq(diff)} --detectors-json ${shq(detectors)} --profile-json ${shq(profile)}`,
-        { type: 'object', required: ['verdict'] })
-    },
-
     derivePlan: async (context) => agent(
       `You are the test-pilot plan leaf for work-item ${workItem}. Derive a browser test plan for ` +
       `the current branch head ${context.head}. Return ONLY JSON ` +
       `{"records":[{"branch":${JSON.stringify(context.branch)},"steps":[{"id","instruction","expected","scenarioIds":[]}]}],` +
       `"coverageRationale":"..."}. Use concise stable step ids; include scenarioIds when seed scenarios are needed.`,
-      { label: 'test-pilot-plan', schema: { type: 'object', required: ['records'], properties: { records: { type: 'array' } } } }),
+      { label: 'plan-tests', schema: { type: 'object', required: ['records'], properties: { records: { type: 'array' } } } }),
 
     preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records || [] }),
+
+    prepareTestRun: async ({ plan, records, context }) => {
+      const pr = context.pr && context.pr.number
+      if (!pr) return { action: 'park', reason: 'test-pilot artifacts require a draft PR number' }
+      const planPath = await writeJson('plan-artifact', { key: keyFor(context.branch), records })
+      const resultsPath = await writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
+      const profilePath = await writeJson('server-profile', context.profile || {})
+      const detectionPath = await writeJson('server-detection', context.detectors || {})
+      const recordsPath = await writeJson('seed-records', records)
+      const manifestPath = await writeJson('prepare-run-manifest', {
+        artifacts: [
+          'python3', 'plugins/superheroes/lib/test_pilot_artifacts_cli.py', 'ensure',
+          '--plan-json', planPath, '--results-json', resultsPath, '--pr', String(pr),
+          '--key', keyFor(context.branch),
+        ],
+        server: [
+          'python3', 'plugins/superheroes/lib/test_pilot_server_config_cli.py', 'resolve',
+          '--profile-json', profilePath, '--detection-json', detectionPath,
+          '--work-item', workItem,
+        ],
+        seed: [
+          'python3', 'plugins/superheroes/lib/test_pilot_seed_cli.py', 'prepare',
+          '--records-json', recordsPath,
+        ],
+      })
+      const script = [
+        'import json, subprocess, sys',
+        'manifest = json.load(open(sys.argv[1], encoding="utf-8"))',
+        'def run(argv):',
+        '    proc = subprocess.run(argv, capture_output=True, text=True)',
+        '    if proc.returncode != 0:',
+        '        raise RuntimeError(proc.stderr or proc.stdout or "command failed")',
+        '    return json.loads(proc.stdout or "{}")',
+        'try:',
+        '    artifactResult = run(manifest["artifacts"])',
+        '    serverContext = run(manifest["server"])',
+        '    seedResult = run(manifest["seed"])',
+        '    print(json.dumps({"ok": True, "artifactResult": artifactResult, "serverContext": serverContext, "seedResult": seedResult}))',
+        'except Exception as exc:',
+        '    print(json.dumps({"ok": False, "reason": str(exc)}))',
+      ].join('\\n')
+      const out = await courier.runCourierJson(
+        'prepare test run',
+        `python3 -c ${shq(script)} ${shq(manifestPath)}`,
+        { require: ['ok', 'artifactResult', 'serverContext', 'seedResult'], retryRealFailure: false },
+      )
+      if (!out || !out.ok) return { action: 'park', reason: (out && out.reason) || 'test-pilot preparation failed' }
+      return out
+    },
 
     prepareArtifacts: async ({ plan, records, context }) => {
       const pr = context.pr && context.pr.number
@@ -3677,44 +4447,13 @@ function testPilotDeps(workItem, generation) {
       `Run the test-pilot browser pass for work-item ${workItem}. Stay within baseUrl/allowedOrigins and return ONLY JSON ` +
       `{"source":"browser","baseUrl":${JSON.stringify(browserContext.baseUrl)},"steps":[{"id","status","notes","browserExecuted":true,"failureType"?,"summary"?}]}. ` +
       `Browser context: ${JSON.stringify(browserContext)}`,
-      { label: 'test-pilot-browser', schema: { type: 'object' } }),
-
-    aggregateResults: async (rawResults) => {
-      const raw = await writeJson('browser-raw', rawResults)
-      return cli(
-        `python3 plugins/superheroes/lib/test_pilot_results_cli.py aggregate --raw-json ${shq(raw)}`,
-        { type: 'object' })
-    },
-
-    budgetCheck: async (_phase, payload) => {
-      const counts = await writeJson('budget-counts', payload && payload.counts ? payload.counts : {
-        browserPasses: payload && typeof payload.browserPasses === 'number'
-          ? payload.browserPasses
-          : (payload && payload.rerunScope ? 1 : 0),
-        browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
-      })
-      const out = await cli(
-        `python3 plugins/superheroes/lib/test_pilot_budget_cli.py decide --counts-json ${shq(counts)}`,
-        { type: 'object' })
-      return out.action === 'within_budget' ? { ok: true } : { ok: false, reason: out.reason || 'test-pilot budget exceeded' }
-    },
-
-    retryDecide: async (passResult, history, changedFiles, dependencyMap) => {
-      const passPath = await writeJson('retry-pass', passResult)
-      const histPath = await writeJson('retry-history', history || [])
-      const depPath = dependencyMap ? await writeJson('retry-deps', dependencyMap) : null
-      const changed = (changedFiles || []).map((f) => ` --changed-file ${shq(f)}`).join('')
-      return cli(
-        `python3 plugins/superheroes/lib/test_pilot_retry_cli.py decide --pass-json ${shq(passPath)} ` +
-        `--history-json ${shq(histPath)}${changed}${depPath ? ` --dependency-json ${shq(depPath)}` : ''}`,
-        { type: 'object' })
-    },
+      { label: 'browser-pass', schema: { type: 'object' } }),
 
     dispatchFixBatch: async (failures, details) => agent(
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'test-pilot-fixer', schema: { type: 'object' } }),
+      { label: 'fix-app-bug', schema: { type: 'object' } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -3748,18 +4487,26 @@ function testPilotDeps(workItem, generation) {
       })
       const storeArg = payload.context.store ? ` --store ${shq(payload.context.store)}` : ''
       const generationArg = generation ? ` --generation ${shq(String(generation))}` : ''
-      return cli(
+      return courier.runCourierJson(
+        'publish tested head',
         `python3 plugins/superheroes/lib/test_pilot_publish_cli.py publish --work-item ${shq(workItem)} ` +
         `--head ${shq(head)} --status-json ${shq(statusPath)} --expected-branch ${shq(payload.context.branch)} ` +
         `${storeArg}${generationArg}`,
-        { type: 'object' })
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
     },
 
     writeStatus: async (status) => {
+      if (status.milestone) {
+        await writeJson(`milestone-${status.milestone}`, status)
+        return { ok: true, read_back: true }
+      }
       const statusPath = await writeJson('status-write', status)
-      return cli(
+      return courier.runCourierJson(
+        'write test status',
         `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
-        { type: 'object', required: ['ok'] })
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
     },
   }
 }
@@ -3841,9 +4588,11 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
     selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
     { label: 'readout' })
-  await cmdRunner(
+  await courier.runCourierJson(
+    'post readout',
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
-    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+    { require: ['posted'], retryRealFailure: false },
+  )
 }
 module.exports.renderAndPostReadout = renderAndPostReadout
 
@@ -3925,9 +4674,16 @@ async function reviewCodePhase(workItem, opts) {
     const targetArgs = resolvedWorktree || resolvedHead
       ? ` --worktree ${shq(resolvedWorktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
       : ''
-    const prov = await cmdRunner(
-      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
-      { schema: PROV_SCHEMA })
+    let prov = null
+    try {
+      prov = await courier.runCourierJson(
+        'stamp review coverage',
+        `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
+        { require: ['ok'], retryRealFailure: false },
+      )
+    } catch (_) {
+      prov = { ok: false, error: 'unreadable' }
+    }
     if (!prov.ok) {
       // UFR-2: the covers-stamp write failed -> park (low confidence), do NOT assert ship-ready.
       return { phaseResult: { confidence: 'low', assumptions: ['review covers stamp not recorded: ' + (prov.error || 'unknown')] }, gate: 'changes-requested' }
@@ -3971,36 +4727,41 @@ const buildPhase = (workItem, generation) => require('./build_phase.js').buildPh
 // existing clean worktree; lockGeneration is only set when --generation is passed).
 // Returns {worktree: <path>, expectedHead: <sha>} or null on any failure (caller parks on null).
 async function resolveBuildTarget(workItem) {
-  // Step 1: resolve branch + build-worktree path via build_entry.py (side-effect-safe: no --generation).
+  const script = [
+    'import json, subprocess, sys',
+    'wi = sys.argv[1]',
+    'setup = None',
+    'for _ in range(2):',
+    '    r = subprocess.run(["python3", "plugins/superheroes/lib/build_entry.py", "--work-item", wi], capture_output=True, text=True)',
+    '    if r.returncode != 0: continue',
+    '    try: setup = json.loads((r.stdout or "").strip() or "{}"); break',
+    '    except Exception: continue',
+    'if not setup or setup.get("error") or not setup.get("path"):',
+    '    print(json.dumps({"ok": False, "error": "missing build worktree"})); raise SystemExit(0)',
+    'if str(setup.get("outcome", "")).lower() == "created":',
+    '    print(json.dumps({"ok": False, "error": "fresh worktree created"})); raise SystemExit(0)',
+    'wt = setup["path"]',
+    'head = None',
+    'for _ in range(2):',
+    '    r = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], capture_output=True, text=True)',
+    '    if r.returncode == 0 and (r.stdout or "").strip():',
+    '        head = r.stdout.strip(); break',
+    'if not head:',
+    '    print(json.dumps({"ok": False, "error": "missing target head"})); raise SystemExit(0)',
+    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head}))',
+  ].join('\n')
   let setup = null
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([`python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) { try { setup = JSON.parse(s); break } catch (_) { /* garbled -> retry */ } }
-    }
+  try {
+    setup = await courier.runCourierJson(
+      'resolve review target',
+      `python3 -c ${shq(script)} ${shq(workItem)}`,
+      { require: ['ok'] },
+    )
+  } catch (_) {
+    setup = null
   }
-  if (!setup || setup.error || !setup.path) return null   // fail-closed: no usable worktree
-  // Fail-closed: at review-code / test-pilot time the build worktree MUST already exist (outcome
-  // 'reused'). An explicit 'created' means build_entry.py just forged a FRESH EMPTY worktree off base
-  // (the build artifact vanished) — never certify that empty tree. Only an explicit 'created' parks;
-  // a missing outcome stays permissive (older stubs). resolveBuildTarget runs WITHOUT --generation, so
-  // this never blocks the build phase, which legitimately creates with --generation.
-  if (setup.outcome && String(setup.outcome).toLowerCase() === 'created') return null
-  const wt = setup.path
-  // Step 2: read the build-branch tip HEAD (the head the code-review should certify).
-  let head = null
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([`git -C ${shq(wt)} rev-parse HEAD`])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) { head = s; break }
-    }
-  }
-  if (!head) return null   // fail-closed: can't determine the head to certify
-  return { worktree: wt, expectedHead: head }
+  if (!setup || setup.error || !setup.worktree) return null   // fail-closed: no usable worktree
+  return { worktree: setup.worktree, expectedHead: setup.expectedHead }
 }
 
 module.exports.verdictToGate = verdictToGate
@@ -4028,54 +4789,34 @@ async function loadPr(workItem) {
   return out.pr
 }
 
-// draft-PR: split IO from judgment (#115 Task 16).
-// --emit-world reads the PR world (IO-only); recoverTwin.prAction decides adopt/create/gate in-process.
-// On 'create': the full pr_entry.py path (ship_gate.decide + gh pr create + read-back) stays in Python.
-// The {pr} capture happens before recordCursor persists it (FR-4 exactly-once preserved).
+// draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}.
 async function draftPRPhase(workItem) {
-  const worldResults = await exec([
-    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)} --emit-world`,
-  ])
-  let world = { pr: 'unknown' }  // fail-closed default
-  if (worldResults[0] && worldResults[0].ok) {
-    try {
-      // A dropped top-level `pr` key (valid-JSON {} that summarized the world away) must NOT fall
-      // through to 'create' (a duplicate PR) — treat it as a read failure and keep the gate sentinel.
-      const parsed = JSON.parse(worldResults[0].stdout)
-      world = (parsed && typeof parsed === 'object' && ('pr' in parsed)) ? parsed : { pr: 'unknown' }
-    } catch (_) { /* world stays { pr: 'unknown' } */ }
-  }
-  const act = recoverTwin.prAction(world)
-  if (act === 'gate') {
-    return { phaseResult: { confidence: 'low', assumptions: ['PR read transient/merged — not creating a 2nd PR'] }, sideEffect: null }
-  }
-  if (act === 'adopt') {
-    return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: world.pr } }
-  }
-  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh).
-  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> gh uses remote default.
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
-  const createResults = await exec([
+  const out = await courier.runCourierJson(
+    'open draft PR',
     `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
-  ])
-  let createOut = null
-  if (createResults[0] && createResults[0].ok) {
-    try { createOut = JSON.parse(createResults[0].stdout) } catch (_) {}
+    { require: ['ok', 'read_back'], retryRealFailure: false },
+  )
+  if (!out || !out.ok || !out.pr || !out.read_back) {
+    return {
+      phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'draft-PR gated'] },
+      sideEffect: null,
+    }
   }
-  if (!createOut || !createOut.ok) {
-    return { phaseResult: { confidence: 'low', assumptions: [createOut && createOut.reason || 'draft-PR gated'] }, sideEffect: null }
-  }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: createOut.pr } }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
 }
 
-// mark-ready: pr_entry.py world-reads isDraft (pr_phase.mark_ready_action), flips if needed,
-// returns { ready: true }. Idempotent on resume (an already-ready PR -> skip).
+// mark-ready: one folded courier leaf returning {ok, read_back, reason?}.
 async function markReadyPhase(workItem) {
-  const out = await cmdRunner(
+  const out = await courier.runCourierJson(
+    'mark PR ready',
     `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
-  if (!out.ok) return { phaseResult: { confidence: 'low', assumptions: [out.reason || 'mark-ready gated'] }, sideEffect: null }
+    { require: ['ok', 'read_back'], retryRealFailure: false },
+  )
+  if (!out || !out.ok || !out.read_back) {
+    return { phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'mark-ready gated'] }, sideEffect: null }
+  }
   return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { ready: true } }
 }
 
@@ -4098,6 +4839,55 @@ async function shipFenceOrPark(workItem, generation) {
 }
 module.exports.shipFenceOrPark = shipFenceOrPark
 
+function parseCiChecks(checks) {
+  if (checks == null) return { error: 'CI status could not be read' }
+  if (!Array.isArray(checks) && checks.stale) return { stale: true }
+  if (!Array.isArray(checks) && checks.error) return { error: checks.error || 'CI status could not be read' }
+  return { checks: Array.isArray(checks) ? checks : [] }
+}
+
+async function checkShipReadiness(workItem, worktree, baseName, generation, checksOnly) {
+  const baseArg = baseName ? ` --base ${shq(baseName)}` : ''
+  const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
+  const genArg = generation != null ? ` --generation ${shq(String(generation))}` : ''
+  const checksArg = checksOnly ? ' --checks-only' : ''
+  return courier.runCourierJson(
+    'check ship-readiness',
+    `python3 plugins/superheroes/lib/ship_phase.py --step ship-readiness --work-item ${shq(workItem)}` +
+    `${baseArg}${wtArg}${genArg}${checksArg}`,
+    { require: checksOnly ? ['checks'] : ['ok', 'reconcile', 'freshness', 'checks'] },
+  )
+}
+
+async function prepareCiFix(workItem, failing) {
+  return courier.runCourierJson(
+    'prepare CI fix',
+    `python3 plugins/superheroes/lib/ship_phase.py --step prepare-ci-fix --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(failing || []))}`,
+    { require: ['action', 'read_back'], retryRealFailure: false },
+  )
+}
+
+async function pushCiFixRecheck(workItem, worktree) {
+  const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
+  return courier.runCourierJson(
+    'push CI fix + recheck',
+    `python3 plugins/superheroes/lib/ship_phase.py --step push-ci-fix-recheck --work-item ${shq(workItem)}${wtArg}`,
+    { require: ['read_back', 'checks'], retryRealFailure: false },
+  )
+}
+
+async function postReadout(workItem, pr, args) {
+  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
+  const cmd = args.ctx
+    ? `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}`
+  try {
+    return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
+  } catch (_e) {
+    return { posted: false, recorded: false, error: 'courier transport failed' }
+  }
+}
+
 // ── Native back-half seam map (for #118 courier-surface collapse, which sequences AFTER #120) ──
 // shipPhase orchestrates four SEPARABLE per-stretch seams, each with the same shape:
 //   world-read → renew-then-fence(generation) → mutate (git/gh leaf) → read-back-confirm.
@@ -4112,139 +4902,103 @@ module.exports.shipFenceOrPark = shipFenceOrPark
 //   (read-reality, apply-once). #118 generalizes that primitive to EVERY durable write (its FR-4).
 // #118 may fold/relabel these leaves; #120 deliberately leaves them as clean, un-folded seams.
 async function shipPhase(workItem, pr, generation) {
-  // Resolve the build worktree the back-half git mechanics run in (mirrors review-code/test-pilot).
-  // FAIL-CLOSED: if the build worktree can't be resolved, every git mutation below would otherwise
-  // default to the repo-root checkout (the wrong tree) — park rather than merge/commit/push there.
   const target = await resolveBuildTarget(workItem)
   const worktree = target && target.worktree ? target.worktree : null
   if (!worktree) {
     return park(workItem, pr, 'could not resolve the build worktree for the back-half — park (no mutation against the repo root)')
   }
-  const wtArg = ` --worktree ${shq(worktree)}`
-  // UFR-4: the entry reconcile MAY push (when local HEAD is ahead of the remote PR head), so fence first.
+  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const baseName = _srBase || ''
   if (!(await shipFenceOrPark(workItem, generation))) {
     return park(workItem, pr, 'lease lost before reconciling the PR head — park (UFR-4)')
   }
-  // UFR-6 entry reconcile: bring the remote PR head into agreement with the local HEAD before judging.
-  const rec = await cmdRunner(
-    `python3 plugins/superheroes/lib/ship_phase.py --step reconcile-head --work-item ${shq(workItem)}${wtArg}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, reason: { type: 'string' } } } })
-  if (!rec || !rec.ok) {
-    return park(workItem, pr, `could not reconcile the PR head before judging readiness (${(rec && rec.reason) || 'unreadable'})`)
+  let ready
+  try {
+    ready = await checkShipReadiness(workItem, worktree, baseName, generation, false)
+  } catch (_e) {
+    return park(workItem, pr, 'branch readiness could not be confirmed (unreadable) — park (UFR-2)')
   }
-  // (Tasks 8-9 replace the single freshness+ci block with the bounded catch-up loop + CI twin)
-  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
-  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
-  // FR-1/FR-2/UFR-1: bounded base catch-up. freshness.decide caps at 3 syncs; the attempt is
-  // re-derived from reality each iteration (a merge converges, so no stored counter — FR-2 note).
-  // (_srBase / _baseArg are already declared above by Task 7 — reuse them, don't re-declare.)
-  let integrated = false                                    // FR-7: did a base merge advance HEAD after review?
-  for (let attempt = 1; attempt <= 4; attempt += 1) {       // 4 = max syncs (3) + the terminal read
-    const fresh = await cmdRunner(
-      `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}${wtArg} --attempt ${shq(String(attempt))}`,
-      { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
-    if (!fresh || !fresh.decision) {
-      return park(workItem, pr, 'branch freshness could not be confirmed (unreadable) — park (UFR-2)')
-    }
-    if (fresh.decision === 'up_to_date') break
-    if (fresh.decision === 'give_up_notify') {
+  if (!ready || !ready.ok) {
+    const fresh = ready && ready.freshness
+    if (fresh && fresh.decision === 'give_up_notify') {
       return park(workItem, pr, 'branch is behind its base after the catch-up limit — update it before merge')
     }
-    if (fresh.decision !== 'sync') {                        // 'gate' / unknown -> UFR-2 fail-closed
-      return park(workItem, pr, `branch freshness could not be confirmed (${fresh.decision})`)
-    }
-    if (!(await shipFenceOrPark(workItem, generation))) {
-      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
-    }
-    const fr = await cmdRunner(
-      `python3 plugins/superheroes/lib/ship_phase.py --step freshen --work-item ${shq(workItem)}${_baseArg}${wtArg}`,
-      { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, conflict: {}, reason: { type: 'string' } } } })
-    if (fr && fr.conflict) {
+    if (fresh && fresh.decision === 'conflict') {
       return park(workItem, pr, 'bringing in the base conflicts — undone (branch unchanged); please resolve and re-run')
     }
-    if (!fr || !fr.ok) {
-      return park(workItem, pr, `could not bring the base into the branch (${(fr && fr.reason) || 'unknown'})`)
+    const reconcile = ready && ready.reconcile
+    if (reconcile && !reconcile.ok) {
+      return park(workItem, pr, `could not reconcile the PR head before judging readiness (${reconcile.reason || 'unreadable'})`)
     }
-    integrated = true
+    if (ready && ready.fence && !ready.fence.ok) {
+      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
+    }
+    return park(workItem, pr, `branch freshness could not be confirmed (${(fresh && fresh.decision) || 'unreadable'}) — park (UFR-2)`)
   }
-  // FR-3/FR-4/FR-5/UFR-3/UFR-5: judge checks on the reconciled head; fix + re-check up to the
-  // ci_loop cap (round count replayed from the journal, so a crash never resets it).
-  const MAX_CI_PASSES = 6                                   // re-check budget > ci_loop cap; ends honest
+  const integrated = !!ready.integrated
+  let ciChecks = ready.checks
+  const MAX_CI_PASSES = 6
   for (let pass = 0; pass < MAX_CI_PASSES; pass += 1) {
-    const ciResults = await exec([
-      `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)} --emit-checks${wtArg}`,
-    ])
-    if (!ciResults[0] || !ciResults[0].ok) { return park(workItem, pr, 'CI status could not be read') }
-    let ciChecks = null
-    try { ciChecks = JSON.parse(ciResults[0].stdout) } catch (_) {}
-    if (ciChecks === null) { return park(workItem, pr, 'CI status could not be read') }
-    if (!Array.isArray(ciChecks) && ciChecks.error) { return park(workItem, pr, ciChecks.error || 'CI status could not be read') }
-    if (!Array.isArray(ciChecks) && ciChecks.stale) {
-      // FR-5: the PR head gh reports checks for is not yet the integrated local head — the rollup
-      // belongs to an EARLIER commit. Re-wait (bounded by MAX_CI_PASSES); NEVER adopt an older green.
+    const parsed = parseCiChecks(ciChecks)
+    if (parsed.error) {
+      return park(workItem, pr, typeof parsed.error === 'string' ? parsed.error : 'CI status could not be read')
+    }
+    if (parsed.stale) {
+      try {
+        const recheck = await checkShipReadiness(workItem, worktree, baseName, generation, true)
+        ciChecks = recheck && recheck.checks
+      } catch (_e) {
+        return park(workItem, pr, 'CI status could not be read')
+      }
       continue
     }
-    const ciRes = ciStatusTwin.classify(Array.isArray(ciChecks) ? ciChecks : [])
+    const ciRes = ciStatusTwin.classify(parsed.checks)
     if (ciRes.status === 'green') {
       return shipHandback(workItem, pr, { ready: true, ci: 'green', integrated, reason: 'merge-ready: CI green and branch up to date — awaiting owner merge' })
     }
-    if (ciRes.status === 'none') {                          // UFR-3: provider but no checks on the ready head
+    if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
     }
-    // red: let the parity-locked ci_loop bound decide fix vs revert.
-    const decided = await cmdRunner(
-      `python3 plugins/superheroes/lib/ship_phase.py --step ci-decide --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(ciRes.failing))}`,
-      { schema: { type: 'object', required: ['action'], properties: { action: { type: 'string' }, round: {}, reason: { type: 'string' } } } })
+    const decided = await prepareCiFix(workItem, ciRes.failing)
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await cmdRunner(
         `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`,
         { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
-      // P4: a failed draft-flip leaves a READY PR with broken checks — the hand-back must not lie.
       const reverted = !!(rd && rd.ok)
       return shipHandback(workItem, pr, { ready: false, ci: 'red', integrated, reverted,
         reason: reverted
           ? 'checks could not be made to pass — returned to draft for you'
           : `checks could not be made to pass, and the PR could NOT be returned to draft (${(rd && rd.reason) || 'unknown'}) — please set it to draft before merging` })
-    } else if (decided.action === 'fix') {
-      // fix: write-ahead the round (UFR-5), fence, run the fixer, push the clean tree, re-check.
-      // Record-before-push invariant: a FAILED write-ahead (durable write error -> {ok:false}) must PARK
-      // before the fixer/push, else the round goes unrecorded and UFR-5 under-counts. No back-half leaf
-      // call is fire-and-forget on a durable/mutating step.
-      const recd = await cmdRunner(
-        `python3 plugins/superheroes/lib/ship_phase.py --step ci-record --work-item ${shq(workItem)} --round ${shq(String(decided.round))} --failing ${shq(JSON.stringify(ciRes.failing))}`,
-        { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
-      if (!recd || !recd.ok) {
+    }
+    if (decided.action === 'fix') {
+      if (!decided.ok || decided.read_back === false) {
         return park(workItem, pr, 'could not record the CI-fix round (durable write failed) — park before the fix push (UFR-5)')
       }
       if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before CI fix push — park (UFR-4)') }
       await agent(
         `Fix the failing CI checks for this PR in the build worktree${worktree ? ' at ' + worktree : ''}: ${ciRes.failing.join(', ')}. ` +
         `Make ONLY the code changes needed to make the checks pass; do not write CI-log text into a commit.`,
-        { label: 'fix' })
-      const fp = await cmdRunner(
-        `python3 plugins/superheroes/lib/ship_phase.py --step fix-push --work-item ${shq(workItem)}${wtArg}`,
-        { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, pushed: {}, reason: { type: 'string' } } } })
-      if (!fp || !fp.pushed) {
-        return park(workItem, pr, `could not push the CI fix (${(fp && fp.reason) || 'unknown'}) — park, no false ready`)
+        { label: 'fix-ci' })
+      let pushed
+      try {
+        pushed = await pushCiFixRecheck(workItem, worktree)
+      } catch (_e) {
+        return park(workItem, pr, 'could not push the CI fix (transport failed) — park, no false ready')
       }
-      // loop: re-read checks on the new head (FR-5 stale-pass rejection — a fresh read, never an old green).
-    } else {
-      return park(workItem, pr, 'unexpected ci-decide action (' + (decided && decided.action) + ') — park (fail-closed)')
+      if (!pushed || !pushed.pushed || pushed.read_back === false) {
+        return park(workItem, pr, `could not push the CI fix (${(pushed && pushed.reason) || 'unknown'}) — park, no false ready`)
+      }
+      ciChecks = pushed.checks
+      continue
     }
+    return park(workItem, pr, 'unexpected ci-decide action (' + (decided && decided.action) + ') — park (fail-closed)')
   }
   return park(workItem, pr, 'checks did not complete within the bound — confirm CI before merging')
 }
 
-// park posts the readout (scrubbed) to the PR; on a failed post it records to the store (UFR-4).
 async function park(workItem, pr, reason, mergeReady) {
-  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
-  const rPost = await cmdRunner(
-    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(reason)}${prNum}`,
-    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
-  // UFR-4 detectability: if the readout reached neither the PR nor the store (e.g. a full disk failed
-  // both the journal and the store fallback), the owner gets no 'your turn' signal — surface that in
-  // the returned reason rather than reporting a clean park.
+  const rPost = await postReadout(workItem, pr, { reason })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered
     ? reason
@@ -4252,12 +5006,7 @@ async function park(workItem, pr, reason, mergeReady) {
   return { outcome: mergeReady ? 'ready' : 'parked', phase: 'ship', reason: reasonOut }
 }
 
-// Structured hand-back (FR-6/FR-7, scrubbed, best-effort). Assembles a structured ctx
-// (pr_url, ci_status, built-vs-acceptance, smoke list, FR-7 integration note when info.integrated)
-// and posts via readout_post.py --ctx. The run's outcome does NOT depend on the post landing —
-// an undelivered hand-back is surfaced as a warning, but the outcome is still ready/parked.
 async function shipHandback(workItem, pr, info) {
-  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
   const prUrl = pr && pr.url ? pr.url : ''
   const ctx = {
     pr_url: prUrl,
@@ -4270,9 +5019,7 @@ async function shipHandback(workItem, pr, info) {
   if (info.integrated) {
     ctx.integration_note = 'the final commit carries base integration done after the code review (the merged-in base was check-vetted, not re-reviewed)'
   }
-  const rPost = await cmdRunner(
-    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(ctx))}`,
-    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+  const rPost = await postReadout(workItem, pr, { ctx })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered ? info.reason
     : `${info.reason} [warning: hand-back could not be delivered (${(rPost && rPost.error) || 'unknown'})]`
@@ -4294,6 +5041,8 @@ module.exports.runPhases = runPhases
 module.exports.PHASES = PHASES
 module.exports.exec = exec
 module.exports.persistPhase = persistPhase
+module.exports.readStartupState = readStartupState
+module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained
 module.exports.authorModel = authorModel
