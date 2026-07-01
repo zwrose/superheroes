@@ -65,6 +65,27 @@ def _remote_pr_head(work_item, branch=None, cwd=None):
     return None
 
 
+def _replay_push_onto_remote(work_item, branch, wt):
+    """After a non-fast-forward push rejection, fetch the advanced remote tip, rebase, repush."""
+    remote = _remote_pr_head(work_item, branch, wt)
+    if not remote:
+        return False, _local_head(wt), False, "push rejected and remote PR head unreadable — park"
+    fetch_rc, _ = _git(["fetch", "--quiet", "origin", branch], cwd=wt)
+    if fetch_rc != 0:
+        return False, _local_head(wt), False, "push rejected and could not fetch the advanced remote head — park"
+    rebase_rc, _ = _git(["rebase", "FETCH_HEAD"], cwd=wt)
+    if rebase_rc != 0:
+        _git(["rebase", "--abort"], cwd=wt)
+        return False, _local_head(wt), False, "cannot cleanly replay local-ahead commits onto advanced PR head — park"
+    repush_rc, _ = _git(["push", "origin", branch], cwd=wt)
+    if repush_rc != 0:
+        return False, _local_head(wt), False, "replay push still rejected — park (no force)"
+    head = _local_head(wt)
+    read_back = _remote_pr_head(work_item, branch, wt) == head
+    reason = "fix replayed onto advanced PR head and pushed" if read_back else "push read-back failed"
+    return True, head, read_back, reason
+
+
 def _fence_check(work_item, generation, cwd=None):
     """Inline renew-then-fence; skipped when generation is absent (smoke/test paths)."""
     if generation is None:
@@ -306,36 +327,9 @@ elif a.step == "fix-push":
         print(json.dumps({"ok": True, "head": head, "pushed": True, "read_back": bool(read_back),
                           "reason": "fix pushed"}))
         sys.exit(0)
-    # non-fast-forward: the remote PR head advanced. Replay ALL local-ahead commits onto THAT head
-    # (never base). HEAD~1 would replay only the last commit and silently DROP an un-pushed freshen
-    # merge or an earlier fix commit when the worktree is >1 ahead; rebasing onto the fetched branch
-    # tip replays the whole local-ahead range, dropping nothing.
-    # liveness check: confirm the remote PR head is readable before committing to a fetch+rebase
-    remote = _remote_pr_head(a.work_item, branch, wt)
-    if not remote:
-        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
-                          "reason": "push rejected and remote PR head unreadable — park"}))
-        sys.exit(0)
-    fetch_rc, _ = _git(["fetch", "--quiet", "origin", branch], cwd=wt)
-    if fetch_rc != 0:
-        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
-                          "reason": "push rejected and could not fetch the advanced remote head — park"}))
-        sys.exit(0)
-    rebase_rc, _ = _git(["rebase", "FETCH_HEAD"], cwd=wt)         # replay local-ahead onto the advanced remote
-    if rebase_rc != 0:
-        _git(["rebase", "--abort"], cwd=wt)                      # never force, never drop a commit
-        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
-                          "reason": "cannot cleanly replay local-ahead commits onto advanced PR head — park"}))
-        sys.exit(0)
-    repush_rc, _ = _git(["push", "origin", branch], cwd=wt)
-    if repush_rc != 0:
-        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False, "read_back": False,
-                          "reason": "replay push still rejected — park (no force)"}))
-        sys.exit(0)
-    head = _local_head(wt)
-    read_back = _remote_pr_head(a.work_item, branch, wt) == head
-    print(json.dumps({"ok": True, "head": head, "pushed": True, "read_back": bool(read_back),
-                      "reason": "fix replayed onto advanced PR head and pushed"}))
+    # non-fast-forward: replay local-ahead onto the current remote PR head (never base, never force).
+    _ok, head, read_back, reason = _replay_push_onto_remote(a.work_item, branch, wt)
+    print(json.dumps({"ok": _ok, "head": head, "pushed": _ok, "read_back": bool(read_back), "reason": reason}))
 elif a.step == "prepare-ci-fix":
     try:
         failing = json.loads(a.failing) if a.failing else []
@@ -385,29 +379,18 @@ elif a.step == "push-ci-fix-recheck":
         print(json.dumps(fail)); sys.exit(0)
     push_rc, _ = _git(["push", "origin", branch], cwd=wt)
     if push_rc != 0:
-        remote = _remote_pr_head(a.work_item, branch, wt)
-        if not remote:
-            fail["reason"] = "push rejected and remote PR head unreadable — park"
+        _ok, head, read_back, reason = _replay_push_onto_remote(a.work_item, branch, wt)
+        if not _ok:
+            fail["reason"] = reason
+            fail["head"] = head
             print(json.dumps(fail)); sys.exit(0)
-        fetch_rc, _ = _git(["fetch", "--quiet", "origin", branch], cwd=wt)
-        if fetch_rc != 0:
-            fail["reason"] = "push rejected and could not fetch the advanced remote head — park"
-            print(json.dumps(fail)); sys.exit(0)
-        rebase_rc, _ = _git(["rebase", "FETCH_HEAD"], cwd=wt)
-        if rebase_rc != 0:
-            _git(["rebase", "--abort"], cwd=wt)
-            fail["reason"] = "cannot cleanly replay local-ahead commits onto advanced PR head — park"
-            print(json.dumps(fail)); sys.exit(0)
-        repush_rc, _ = _git(["push", "origin", branch], cwd=wt)
-        if repush_rc != 0:
-            fail["reason"] = "replay push still rejected — park (no force)"
-            print(json.dumps(fail)); sys.exit(0)
-    head = _local_head(wt)
-    read_back = _remote_pr_head(a.work_item, branch, wt) == head
+    else:
+        head = _local_head(wt)
+        read_back = _remote_pr_head(a.work_item, branch, wt) == head
+        reason = "fix pushed and rechecked" if read_back else "push read-back failed"
     checks = _emit_checks_payload(a.work_item, wt)
     print(json.dumps({"ok": bool(read_back), "head": head, "pushed": bool(read_back),
-                      "read_back": bool(read_back), "checks": checks,
-                      "reason": "fix pushed and rechecked" if read_back else "push read-back failed"}))
+                      "read_back": bool(read_back), "checks": checks, "reason": reason}))
 elif a.step == "ship-readiness":
     wt = a.worktree or os.getcwd()
     base_name = a.base if a.base else "main"
