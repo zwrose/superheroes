@@ -27,10 +27,16 @@ function baseContext(extra) {
   }, extra || {})
 }
 
+function applicableContext(extra) {
+  return baseContext(Object.assign({
+    diff: { files: ['src/app.tsx'] },
+    detectors: { browser: true },
+  }, extra || {}))
+}
+
 function applicableDeps(extra) {
   return Object.assign({
-    resolveContext: async () => baseContext(),
-    decideApplicability: async () => ({ verdict: 'applicable' }),
+    resolveContext: async () => applicableContext(),
     derivePlan: async () => ({
       records: [{
         branch: 'codex/example',
@@ -53,11 +59,6 @@ function applicableDeps(extra) {
       baseUrl: 'http://localhost:3000',
       steps: [{ id: 's1', status: 'passed', notes: 'observed page load' }],
     }),
-    aggregateResults: async () => ({
-      action: 'aggregated',
-      records: [{ stepId: 's1', status: 'passed', notes: 'observed page load', browserExecuted: true }],
-      coverageRationale: 'covers branch state',
-    }),
     reviewCode: async (_workItem, opts) => ({
       gate: 'passed',
       head: opts.expectedHead,
@@ -75,8 +76,7 @@ function applicableDeps(extra) {
 async function notApplicableProceeds() {
   const statuses = []
   const out = await testPilotPhase('wi', 3, {
-    resolveContext: async () => baseContext(),
-    decideApplicability: async () => ({ verdict: 'not_applicable', rationale: 'docs-only change' }),
+    resolveContext: async () => baseContext({ diff: { files: ['docs/readme.md'] }, detectors: {} }),
     writeStatus: async (status) => { statuses.push(status); return { ok: true } },
   })
   assert.strictEqual(out.confidence, 'high')
@@ -87,21 +87,15 @@ async function notApplicableProceeds() {
 
 async function productionWrapperHandlesNotApplicableWithoutMissingLeaf() {
   const previousAgent = global.agent
-  global.agent = async (prompt) => {
-    // resolveContext now fail-closes unless resolveBuildTarget resolves a worktree (execs build_entry.py
-    // + `git rev-parse HEAD`), so the real-deps path must stub those before reaching the context CLI.
-    if (prompt.includes('build_entry.py')) {
-      return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'wi', path: '/build/wt-pw', outcome: 'reused' }) }]
+  global.agent = async (prompt, opts) => {
+    if (opts && opts.label === 'resolve review target') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/build/wt-pw', expectedHead: 'pw-head' }) }]
     }
-    if (prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'pw-head\n' }]
     if (prompt.includes('test_pilot_context_cli.py resolve')) {
       return baseContext({ workItem: 'wi', generation: 3, pr: { number: 7 }, diff: { files: ['docs/readme.md'] }, detectors: {} })
     }
-    if (prompt.includes('test_pilot_applicability_cli.py decide')) {
-      return { verdict: 'not_applicable', rationale: 'docs-only change' }
-    }
     if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
-    return previousAgent(prompt)
+    return previousAgent(prompt, opts)
   }
   try {
     const out = await sr.defaultTestPilotPhase('wi', 3)
@@ -152,19 +146,17 @@ async function productionManagedServerUsesLifecycleHelperAroundBrowserRun() {
 
 async function uncertainApplicabilityParks() {
   const out = await testPilotPhase('wi', 3, {
-    resolveContext: async () => baseContext(),
-    decideApplicability: async () => ({ verdict: 'park', reason: 'uncertain signals' }),
+    resolveContext: async () => baseContext({ diff: { files: ['Makefile'] }, detectors: {} }),
     writeStatus: async () => { throw new Error('status should not be written') },
   })
   assert.strictEqual(out.confidence, 'low')
-  assert.match(out.assumptions[0], /uncertain signals/)
+  assert.match(out.assumptions[0], /uncertain applicability/)
 }
 
 async function emptyApplicablePlanParks() {
   let browserRan = false
   const out = await testPilotPhase('wi', 3, {
-    resolveContext: async () => baseContext(),
-    decideApplicability: async () => ({ verdict: 'applicable' }),
+    resolveContext: async () => applicableContext(),
     derivePlan: async () => ({ records: [] }),
     runBrowserPass: async () => { browserRan = true },
   })
@@ -176,8 +168,7 @@ async function emptyApplicablePlanParks() {
 async function missingSetupParksBeforeBrowser() {
   let browserRan = false
   const out = await testPilotPhase('wi', 3, {
-    resolveContext: async () => baseContext({ profile: null }),
-    decideApplicability: async () => ({ verdict: 'applicable' }),
+    resolveContext: async () => applicableContext({ profile: null }),
     runBrowserPass: async () => { browserRan = true },
   })
   assert.strictEqual(out.confidence, 'low')
@@ -188,8 +179,7 @@ async function missingSetupParksBeforeBrowser() {
 async function missingBrowserToolParksBeforeBrowser() {
   let browserRan = false
   const out = await testPilotPhase('wi', 3, {
-    resolveContext: async () => baseContext({ browserTool: null }),
-    decideApplicability: async () => ({ verdict: 'applicable' }),
+    resolveContext: async () => applicableContext({ browserTool: null }),
     runBrowserPass: async () => { browserRan = true },
   })
   assert.strictEqual(out.confidence, 'low')
@@ -215,7 +205,6 @@ async function applicableFlowOrdersDurableMilestones() {
       assert.deepStrictEqual(browserContext.allowedOrigins, ['http://localhost:3000'])
       return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [{ id: 's1', status: 'passed', notes: 'observed page load' }] }
     },
-    aggregateResults: async () => { calls.push('aggregateResults'); return { action: 'aggregated', records: [{ stepId: 's1', status: 'passed', browserExecuted: true }] } },
     writeStatus: async (status) => { calls.push(`writeStatus:${status.milestone || status.verdict}`); statuses.push(status); return { ok: true } },
   }))
   assert.strictEqual(out.confidence, 'high')
@@ -231,7 +220,6 @@ async function applicableFlowOrdersDurableMilestones() {
     'seedRecords',
     'writeStatus:seed-ready',
     'runBrowserPass',
-    'aggregateResults',
     'writeStatus:applicable',
   ])
   assert.strictEqual(statuses[statuses.length - 1].verdict, 'applicable')
@@ -294,13 +282,6 @@ async function resumePreservesHumanStateAndAvoidsDuplicateIds() {
         { id: 's2', status: 'passed', notes: 'observed action' },
       ],
     }),
-    aggregateResults: async () => ({
-      action: 'aggregated',
-      records: [
-        { stepId: 's1', status: 'passed', browserExecuted: true },
-        { stepId: 's2', status: 'passed', browserExecuted: true },
-      ],
-    }),
   }))
   assert.strictEqual(out.confidence, 'high')
   assert.strictEqual(preparedRecords[0].steps[0].checkboxState, 'checked')
@@ -360,10 +341,10 @@ async function offOriginBrowserResultsPark() {
 
 async function nonBrowserEvidenceParksBeforeReadiness() {
   const out = await testPilotPhase('wi', 3, applicableDeps({
-    aggregateResults: async () => ({ action: 'aggregated', records: [{ stepId: 's1', status: 'passed' }] }),
+    runBrowserPass: async () => ({ source: 'api', steps: [{ id: 's1', status: 'passed' }] }),
   }))
   assert.strictEqual(out.confidence, 'low')
-  assert.match(out.assumptions[0], /browser-derived pass\/fail evidence/)
+  assert.match(out.assumptions[0], /browser-derived evidence/)
 }
 
 async function budgetExhaustedParksBeforeBrowser() {
@@ -400,24 +381,23 @@ async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
     },
     runBrowserPass: async (browserContext) => {
       browserScopes.push(browserContext.rerunScope || { action: 'initial' })
-      return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [] }
-    },
-    aggregateResults: async () => {
       pass += 1
       if (pass === 1) {
         return {
-          action: 'aggregated',
-          records: [
-            { stepId: 's1', status: 'failed', failureType: 'app_bug', summary: 'save crashed', browserExecuted: true },
-            { stepId: 's2', status: 'failed', failureType: 'app_bug', summary: 'profile crashed', browserExecuted: true },
+          source: 'browser',
+          baseUrl: 'http://localhost:3000',
+          steps: [
+            { id: 's1', status: 'failed', failureType: 'app_bug', summary: 'save crashed' },
+            { id: 's2', status: 'failed', failureType: 'app_bug', summary: 'profile crashed' },
           ],
         }
       }
       return {
-        action: 'aggregated',
-        records: [
-          { stepId: 's1', status: 'passed', browserExecuted: true },
-          { stepId: 's2', status: 'passed', browserExecuted: true },
+        source: 'browser',
+        baseUrl: 'http://localhost:3000',
+        steps: [
+          { id: 's1', status: 'passed' },
+          { id: 's2', status: 'passed' },
         ],
       }
     },
@@ -468,25 +448,24 @@ async function knownDependencyRerunsFailedAndAffectedSubset() {
     budgetCheck: async () => ({ ok: true }),
     runBrowserPass: async (browserContext) => {
       browserStepSets.push(browserContext.records.flatMap((record) => record.steps.map((step) => step.id)))
-      return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [] }
-    },
-    aggregateResults: async () => {
       pass += 1
       if (pass === 1) {
         return {
-          action: 'aggregated',
-          records: [
-            { stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true },
-            { stepId: 's2', status: 'passed', browserExecuted: true },
-            { stepId: 's3', status: 'passed', browserExecuted: true },
+          source: 'browser',
+          baseUrl: 'http://localhost:3000',
+          steps: [
+            { id: 's1', status: 'failed', failureType: 'app_bug' },
+            { id: 's2', status: 'passed' },
+            { id: 's3', status: 'passed' },
           ],
         }
       }
       return {
-        action: 'aggregated',
-        records: [
-          { stepId: 's1', status: 'passed', browserExecuted: true },
-          { stepId: 's3', status: 'passed', browserExecuted: true },
+        source: 'browser',
+        baseUrl: 'http://localhost:3000',
+        steps: [
+          { id: 's1', status: 'passed' },
+          { id: 's3', status: 'passed' },
         ],
       }
     },
@@ -512,9 +491,10 @@ async function dirtyFixLeftoversParkBehindInjectedWorktreeGuard() {
   let dispatches = 0
   const out = await testPilotPhase('wi', 3, applicableDeps({
     budgetCheck: async () => ({ ok: true }),
-    aggregateResults: async () => ({
-      action: 'aggregated',
-      records: [{ stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true }],
+    runBrowserPass: async () => ({
+      source: 'browser',
+      baseUrl: 'http://localhost:3000',
+      steps: [{ id: 's1', status: 'failed', failureType: 'app_bug' }],
     }),
     retryDecide: async () => ({ action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }),
     dispatchFixBatch: async () => { dispatches += 1; return { ok: true, dirty: true } },
@@ -537,9 +517,10 @@ async function threeFixBatchesParkIfFailuresRemain() {
       }
       return { action: 'fix_batch', failedStepIds: ['s1'], summary: `Fix browser app failures batch ${history.length + 1}` }
     },
-    aggregateResults: async () => ({
-      action: 'aggregated',
-      records: [{ stepId: 's1', status: 'failed', failureType: 'app_bug', browserExecuted: true }],
+    runBrowserPass: async () => ({
+      source: 'browser',
+      baseUrl: 'http://localhost:3000',
+      steps: [{ id: 's1', status: 'failed', failureType: 'app_bug' }],
     }),
     dispatchFixBatch: async () => {
       dispatches += 1
@@ -565,10 +546,6 @@ async function reviewCodeMutationForcesBrowserRevalidationWithoutConsumingBrowse
       browserPasses += 1
       return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [{ id: 's1', status: 'passed' }] }
     },
-    aggregateResults: async () => ({
-      action: 'aggregated',
-      records: [{ stepId: 's1', status: 'passed', browserExecuted: true }],
-    }),
     reviewCode: async (_workItem, opts) => {
       reviewCalls += 1
       assert.strictEqual(opts.browserFixBatchCount, 0)
@@ -616,7 +593,6 @@ async function finalReadinessRestoresBaselinePublishesArtifactsAndRemoteHeadBefo
   const out = await testPilotPhase('wi', 3, applicableDeps({
     budgetCheck: async () => ({ ok: true }),
     runBrowserPass: async () => { calls.push('browser'); return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [{ id: 's1', status: 'passed' }] } },
-    aggregateResults: async () => { calls.push('aggregate'); return { action: 'aggregated', records: [{ stepId: 's1', status: 'passed', browserExecuted: true }] } },
     reviewCode: async (_workItem, opts) => { calls.push('reviewCode'); return { gate: 'passed', head: opts.expectedHead, changed: false, reviewCoverageHead: opts.expectedHead, verifyPassedHead: opts.expectedHead } },
     restoreBaseline: async (_records, details) => { calls.push('restoreBaseline'); return { ok: true, baseline: { head: details.head, restored: true } } },
     ensureFinalArtifacts: async (payload) => {
@@ -676,20 +652,21 @@ async function phaseOrderAndGate() {
 // (an array). Patch global.agent to return all nested fields as JSON strings (simulating the cheap
 // courier's field-extract path), then assert:
 //   (a) resolveContext returns real objects/arrays, not strings
-//   (b) decideApplicability writes applicability-diff.json as a proper object (not a double-encoded string)
+//   (b) in-process applicability consumes coerced objects without a courier leaf
 // This test would FAIL against the pre-I-1 code for allowedOrigins (stays string → Array.isArray false).
 async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArray() {
+  const deciders = require('../test_pilot_deciders.js')
   const previousAgent = global.agent
   const previousIo = global.io
 
   // The stringified context the cheap courier would deliver (every nested field is a JSON string).
-  const rawDiff = { files: ['src/app.js'], additions: 5, deletions: 2 }
-  const rawDetectors = { framework: 'react', hasTests: true }
+  const rawDiff = { files: ['src/app.jsx'], additions: 5, deletions: 2 }
+  const rawDetectors = { frontend: true, hasTests: true }
   const rawProfile = { baseUrl: 'http://localhost:3000', scenarios: ['login'] }
   const rawAllowedOrigins = ['http://localhost:3000', 'http://localhost:8080']
   const rawPr = { number: 42, title: 'fix: test coercion' }
 
-  // Written files captured by the io seam intercept.
+  // Written files captured by the io seam intercept (unused after in-process applicability).
   const writtenFiles = {}
 
   global.io = Object.assign({}, require('../io_seam.js').defaultIo, {
@@ -701,16 +678,9 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
 
   const RESOLVED_WT = '/build/wt-coerce'
   let contextResolvePrompt = null
-  global.agent = async (prompt) => {
-    // resolveBuildTarget execs build_entry.py then `git rev-parse HEAD` (exec shape: [{index,ok,stdout}]).
-    // resolveContext now fail-closes (throws -> low park) if this returns null, so it MUST resolve a
-    // worktree for the coercion path to run; threading --worktree is then asserted below (the dead
-    // build_target_cli.py reference this replaced never matched — resolveBuildTarget uses build_entry.py).
-    if (prompt.includes('build_entry.py')) {
-      return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'codex/example', path: RESOLVED_WT, outcome: 'reused' }) }]
-    }
-    if (prompt.includes('rev-parse HEAD')) {
-      return [{ index: 0, ok: true, stdout: 'wt-head-abc\n' }]
+  global.agent = async (prompt, opts) => {
+    if (opts && opts.label === 'resolve review target') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: RESOLVED_WT, expectedHead: 'wt-head-abc' }) }]
     }
     if (prompt.includes('test_pilot_context_cli.py resolve')) {
       contextResolvePrompt = prompt
@@ -727,11 +697,8 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
         pr: JSON.stringify(rawPr),
       }
     }
-    if (prompt.includes('test_pilot_applicability_cli.py decide')) {
-      return { verdict: 'not_applicable', rationale: 'docs-only' }
-    }
     if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
-    return previousAgent(prompt)
+    return previousAgent(prompt, opts)
   }
 
   try {
@@ -755,14 +722,9 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
     assert.ok(contextResolvePrompt && contextResolvePrompt.includes(`--worktree '${RESOLVED_WT}'`),
       `resolveContext threads --worktree from resolveBuildTarget (got: ${contextResolvePrompt && contextResolvePrompt.slice(0, 220)})`)
 
-    // (b) decideApplicability must write applicability-diff.json as a proper object, not double-encoded.
-    await deps.decideApplicability(context)
-    assert.ok('applicability-diff.json' in writtenFiles, 'applicability-diff.json must be written')
-    const writtenContent = writtenFiles['applicability-diff.json']
-    const parsed = JSON.parse(writtenContent)
-    assert.ok(parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed),
-      'applicability-diff.json must be a JSON object, not a double-encoded string')
-    assert.deepStrictEqual(parsed, rawDiff, 'applicability-diff.json must contain the original diff object')
+    // (b) in-process applicability must consume coerced objects, not stringified JSON blobs.
+    const verdict = deciders.applicabilityDecision(context.diff, context.detectors, context.profile)
+    assert.strictEqual(verdict.verdict, 'applicable')
   } finally {
     global.agent = previousAgent
     global.io = previousIo
@@ -775,13 +737,12 @@ async function unresolvableWorktreeParksNotSkips() {
   // the showrunner's own tree and skip test-pilot via a bogus not_applicable. Drives the real
   // resolveContext (via testPilotDeps) with a failing build_entry.py exec.
   const previousAgent = global.agent
-  global.agent = async (prompt) => {
-    if (prompt.includes('build_entry.py')) return [{ index: 0, ok: false, stdout: '' }]   // resolver fails
-    if (prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: false, stdout: '' }]
-    // These must NOT be reached — the phase parks at setup, before applicability/skip.
+  global.agent = async (prompt, opts) => {
+    if (opts && opts.label === 'resolve review target') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: false, error: 'missing build worktree' }) }]
+    }
     if (prompt.includes('test_pilot_context_cli.py resolve')) throw new Error('context CLI must not run against the showrunner tree')
-    if (prompt.includes('test_pilot_applicability_cli.py decide')) throw new Error('applicability must not run when the worktree is unresolvable')
-    return previousAgent(prompt)
+    return previousAgent(prompt, opts)
   }
   try {
     const deps = sr.testPilotDeps('wi', 3)

@@ -6,6 +6,8 @@
 // helpers, each of which returns `{ done: <terminalResult> }` to short-circuit (park or proceed) or
 // the state it produced. Judgment stays in the injected leaves + pure helpers (§10.1); these helpers
 // are control flow only.
+const deciders = require('./test_pilot_deciders.js')
+
 async function testPilotPhase(workItem, generation, deps) {
   deps = deps || {}
 
@@ -43,7 +45,7 @@ async function resolveApplicabilityAndSetup(deps, workItem, generation) {
 
   let applicability
   try {
-    applicability = await callLeaf(deps.decideApplicability, context)
+    applicability = deciders.applicabilityDecision(context.diff, context.detectors, context.profile, context.planResult)
   } catch (err) {
     return { done: low(`test-pilot applicability failed: ${message(err)}`) }
   }
@@ -256,14 +258,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     }
 
     try {
-      aggregated = await callLeaf(deps.aggregateResults, rawResults, {
-        context,
-        records: browserRecords,
-        allRecords: records,
-        server: serverContext,
-        rerunScope,
-        fixBatchHistory: retryState.fixBatchHistory,
-      })
+      aggregated = deciders.aggregateResults(rawResults)
     } catch (err) {
       return { done: low(`test-pilot result aggregation failed: ${message(err)}`) }
     }
@@ -856,12 +851,24 @@ function latestFixBatch(history) {
 }
 
 async function budgetCheck(deps, phase, payload) {
-  if (typeof deps.budgetCheck !== 'function') return { ok: true }
+  const counts = payload && payload.counts ? payload.counts : {
+    browserPasses: payload && typeof payload.browserPasses === 'number'
+      ? payload.browserPasses
+      : (payload && payload.rerunScope ? 1 : 0),
+    browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
+  }
   try {
-    const out = await deps.budgetCheck(phase, payload)
-    if (out === false) return { ok: false, reason: `test-pilot budget exhausted before ${phase}` }
-    if (out && out.ok === false) return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
-    if (out && out.action === 'park') return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+    if (typeof deps.budgetCheck === 'function') {
+      const out = await deps.budgetCheck(phase, payload)
+      if (out === false) return { ok: false, reason: `test-pilot budget exhausted before ${phase}` }
+      if (out && out.ok === false) return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+      if (out && out.action === 'park') return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+      return { ok: true }
+    }
+    const out = deciders.budgetDecision(counts)
+    if (out.action !== 'within_budget') {
+      return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+    }
     return { ok: true }
   } catch (err) {
     return { ok: false, reason: `test-pilot budget check failed before ${phase}: ${message(err)}` }
@@ -873,7 +880,7 @@ async function retryDecision(deps, passResult, history, changedFiles, dependency
     if (typeof deps.retryDecide === 'function') {
       return await deps.retryDecide(passResult, history, changedFiles, dependencyMap)
     }
-    return { action: 'park_retry_decision_failed', reason: 'test-pilot retry decision unavailable' }
+    return deciders.retryDecisionFromFacts(passResult, history, changedFiles, dependencyMap)
   } catch (err) {
     return { action: 'park_retry_decision_failed', reason: `test-pilot retry decision failed: ${message(err)}` }
   }

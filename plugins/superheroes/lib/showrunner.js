@@ -898,16 +898,6 @@ function testPilotDeps(workItem, generation) {
       return raw
     },
 
-    decideApplicability: async (context) => {
-      const diff = await writeJson('applicability-diff', context.diff || {})
-      const detectors = await writeJson('applicability-detectors', context.detectors || {})
-      const profile = await writeJson('applicability-profile', context.profile || {})
-      return cli(
-        `python3 plugins/superheroes/lib/test_pilot_applicability_cli.py decide ` +
-        `--diff-json ${shq(diff)} --detectors-json ${shq(detectors)} --profile-json ${shq(profile)}`,
-        { type: 'object', required: ['verdict'] })
-    },
-
     derivePlan: async (context) => agent(
       `You are the test-pilot plan leaf for work-item ${workItem}. Derive a browser test plan for ` +
       `the current branch head ${context.head}. Return ONLY JSON ` +
@@ -977,37 +967,6 @@ function testPilotDeps(workItem, generation) {
       `{"source":"browser","baseUrl":${JSON.stringify(browserContext.baseUrl)},"steps":[{"id","status","notes","browserExecuted":true,"failureType"?,"summary"?}]}. ` +
       `Browser context: ${JSON.stringify(browserContext)}`,
       { label: 'test-pilot-browser', schema: { type: 'object' } }),
-
-    aggregateResults: async (rawResults) => {
-      const raw = await writeJson('browser-raw', rawResults)
-      return cli(
-        `python3 plugins/superheroes/lib/test_pilot_results_cli.py aggregate --raw-json ${shq(raw)}`,
-        { type: 'object' })
-    },
-
-    budgetCheck: async (_phase, payload) => {
-      const counts = await writeJson('budget-counts', payload && payload.counts ? payload.counts : {
-        browserPasses: payload && typeof payload.browserPasses === 'number'
-          ? payload.browserPasses
-          : (payload && payload.rerunScope ? 1 : 0),
-        browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
-      })
-      const out = await cli(
-        `python3 plugins/superheroes/lib/test_pilot_budget_cli.py decide --counts-json ${shq(counts)}`,
-        { type: 'object' })
-      return out.action === 'within_budget' ? { ok: true } : { ok: false, reason: out.reason || 'test-pilot budget exceeded' }
-    },
-
-    retryDecide: async (passResult, history, changedFiles, dependencyMap) => {
-      const passPath = await writeJson('retry-pass', passResult)
-      const histPath = await writeJson('retry-history', history || [])
-      const depPath = dependencyMap ? await writeJson('retry-deps', dependencyMap) : null
-      const changed = (changedFiles || []).map((f) => ` --changed-file ${shq(f)}`).join('')
-      return cli(
-        `python3 plugins/superheroes/lib/test_pilot_retry_cli.py decide --pass-json ${shq(passPath)} ` +
-        `--history-json ${shq(histPath)}${changed}${depPath ? ` --dependency-json ${shq(depPath)}` : ''}`,
-        { type: 'object' })
-    },
 
     dispatchFixBatch: async (failures, details) => agent(
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
