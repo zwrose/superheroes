@@ -4615,11 +4615,15 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
     selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
     { label: 'readout' })
-  await courier.runCourierJson(
-    'post readout',
-    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
-    { require: ['posted'], retryRealFailure: false },
-  )
+  try {
+    await courier.runCourierJson(
+      'post readout',
+      `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
+      { require: ['posted'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    // best-effort: a courier transport failure must not abort review-code parking
+  }
 }
 module.exports.renderAndPostReadout = renderAndPostReadout
 
@@ -4986,7 +4990,12 @@ async function shipPhase(workItem, pr, generation) {
     if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
     }
-    const decided = await prepareCiFix(workItem, ciRes.failing)
+    let decided = null
+    try {
+      decided = await prepareCiFix(workItem, ciRes.failing)
+    } catch (_e) {
+      return park(workItem, pr, 'CI fix preparation could not be confirmed (unreadable) — park (UFR-2)')
+    }
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await cmdRunner(
