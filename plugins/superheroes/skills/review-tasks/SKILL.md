@@ -466,7 +466,7 @@ After exit, print a terminal summary in chat:
 
 Nothing else is written to the repo — the revised `$TASKS_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
 
-The shared dispatch/compile/revise learning-loop steps and staleness nudge are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` — read it and apply it where this skill's flow references those steps.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
 ## Tasks-Content Requirements (Opinionated)
 

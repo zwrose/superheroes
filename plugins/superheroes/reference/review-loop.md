@@ -57,3 +57,13 @@ Skip this entirely when the run is **headless/non-interactive**, when `status:` 
 ### Recording a dismissal (shared)
 
 The staleness nudge, the learning-loop proposal, and the provisional-profile confirmation share one dismissal mechanism: **write the relevant `signal_hash` into the profile's `nudge-ack` map** in the resolved profile (`$PROFILE`)'s provenance block, so the same signal does not re-fire until it changes. The map is `nudge-ack: {<hash>: true, ...}` on the provenance line; add the hash as a new key (the staleness nudge uses `DOCTOR_JSON.signal_hash`; the proposal uses `proposal.signal_hash`; the provisional-profile confirmation's **Keep provisional** uses the constant literal `provisional-confirm`). This is the ONLY write any of these nudges makes to the profile, and only on dismissal.
+
+## Convergent Shared Review Loop
+
+Round 1 is always a full `reviewer-deep` panel. Intermediate rounds may skip only dimensions with a high-confidence clean result whose subject area was not touched; unknown subject impact runs all dimensions. Intermediate run dimensions start at `reviewer` and escalate to `reviewer-deep` whenever the result is missing or low-confidence.
+
+Recurring blocking classes are detected from durable round memory and passed only to the reviser/fix step as `generalizeRequired`. Reviewers never receive prior-round finding lists. Any dismissal or class-covering principle is recorded as a visible coverage decision and is passed to every later reviewer as a challengeable claim.
+
+Certification after any fix requires a full `reviewer-deep` confirmation round with high-confidence clean results and valid verification receipts. A blocking `clean-with-skips`, malformed receipt, stale writer, corrupt memory, or failed coverage-decision write does not pass.
+
+Telemetry records rounds, run/skip/tier counts, per-leaf token usage completeness, and benchmark validity. Telemetry failure does not change the review terminal, but incomplete benchmark telemetry cannot satisfy the cost comparison.

@@ -479,7 +479,7 @@ After the loop exits, print a terminal summary in chat:
 
 Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map). **The only gate write review-spec can make is the stale-approval reset to `pending` above — it never writes `passed`.**
 
-The shared dispatch/compile/revise learning-loop steps and staleness nudge are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` — read it and apply it where this skill's flow references those steps.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
 ## Spec-Content Requirements (Opinionated)
 
