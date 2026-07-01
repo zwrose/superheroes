@@ -48,9 +48,47 @@ const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, er
 const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
-const FINDINGS_SCHEMA = { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } }
-// the genuine synthesis leaf RETURNS per-finding keep/drop verdicts (loop_synthesis.consume reads them).
-const SYNTH_VERDICTS_SCHEMA = { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array' } } }
+const FINDINGS_SCHEMA = {
+  type: 'object',
+  required: ['findings', 'confidence'],
+  properties: {
+    findings: { type: 'array' },
+    confidence: { enum: ['high', 'low'] },
+    verificationReceipt: { type: 'object' },
+    usage: { type: 'object' },
+  },
+}
+const SYNTH_VERDICTS_SCHEMA = {
+  type: 'object',
+  required: ['verdicts'],
+  properties: { verdicts: { type: 'array' }, usage: { type: 'object' } },
+}
+const FIX_RESULT_SCHEMA = {
+  type: 'object',
+  required: ['changedSubjects', 'coverageDecisions'],
+  properties: {
+    fixes: { type: 'array' },
+    fixed: { type: 'array' },
+    deferred: { type: 'array' },
+    changedSubjects: { type: 'array' },
+    coverageDecisions: { type: 'array' },
+    extras: { type: 'object' },
+  },
+}
+
+function normalizeFixResult(result) {
+  if (!result || !Array.isArray(result.changedSubjects) || !Array.isArray(result.coverageDecisions)) return null
+  return Object.assign({}, result, {
+    fixes: result.fixes || result.fixed || [],
+    extras: Object.assign({}, result.extras || {}, { changedSubjects: result.changedSubjects, needsConfirmation: true }),
+  })
+}
+
+const REVIEWER_RESULT_INSTRUCTION =
+  'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]},"usage":{"input":0,"output":0,"total":0}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low","usage":{...}} instead of a boilerplate receipt.'
+
+const FIX_RESULT_INSTRUCTION =
+  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
 // Build the four caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
 // (#115: mergeAgent is gone — the merge is the in-process panel_tally.compileFindings twin.)
@@ -62,38 +100,41 @@ function reviewCodeLeaves(tiers, opts) {
     ? `\n\nTarget worktree: ${target.worktree || procCwd()}\nExpected head: ${target.head || 'current HEAD'}`
     : ''
 
-  const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
-    const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
+  const reviewerAgent = async (reviewer, context, rubric, runDir, round, opts = {}) => {
+    const tier = opts.tier || 'reviewer-deep'
+    const model = tier === 'reviewer' ? tiers.reviewer : tiers.reviewerDeep
+    const workItem = (context && context.workItem) || context
+    const promptContext = Object.assign({}, context || {}, {
+      roundKind: opts.roundKind,
+      coverageDecisions: opts.coverageDecisions || [],
+      receiptArtifact: opts.receiptArtifact,
+      receiptCoverageDecisionIds: (opts.coverageDecisions || []).map((d) => d.id).filter(Boolean),
+    })
     const out = await agent(
-      `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
-      `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
-      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`,
+      `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
+      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`,
       withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
-    return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
+    if (!out || !Array.isArray(out.findings)) return null
+    return out
   }
 
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
-      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
+      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} — one ` +
       `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
       withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
-    return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
+    return out || null
   }
 
-  // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
-  const fixStep = async (blockers, runDir) => {
+  const fixStep = async (fixContext, verdict, runDir) => {
     const out = await agent(
-      `You are the code-fixer. For each blocking finding below, attempt a real fix and COMMIT it to ` +
-      `the change under review. If a finding traces to an upstream phase (plan, tasks, or build) rather ` +
-      `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
-      `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
-      `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
-      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
-      withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
-    return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
+      `You are the code-fixer. ${FIX_RESULT_INSTRUCTION} Attempt every blocking finding from priorFindings, commit fixes, tag upstream-traced blockers. ` +
+      `Never edit the review-loop machinery. Fix context:\n${JSON.stringify(fixContext)}${targetSuffix}`,
+      withModel(tiers.fixer, { label: `code-fixer:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+    return normalizeFixResult(out)
   }
 
   const recordDeferred = async (report, _verdict, runDir) => {
@@ -144,23 +185,30 @@ const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-revie
 // #115: the reviewer RETURNS a findings[] array (the panel holds it in memory); the merge is the
 // in-process panel_tally.compileFindings twin (no docMergeAgent / front_half.py merge), and the
 // synthesis leaf RETURNS its keep/drop verdicts (loop_synthesis.consume reads them).
-async function docReviewerAgent(reviewer, context, rubric, runDir, round) {
+async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts = {}) {
+  const promptContext = Object.assign({}, context || {}, {
+    roundKind: opts.roundKind,
+    coverageDecisions: opts.coverageDecisions || [],
+    receiptArtifact: opts.receiptArtifact,
+    receiptCoverageDecisionIds: (opts.coverageDecisions || []).map((d) => d.id).filter(Boolean),
+  })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). Return ONLY a JSON object ` +
-    `{"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if none).`,
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
+    `Prompt context: ${JSON.stringify(promptContext)}`,
     { label: reviewer, schema: FINDINGS_SCHEMA })
-  return (out && Array.isArray(out.findings)) ? out.findings : null
+  if (!out || !Array.isArray(out.findings)) return null
+  return out
 }
 async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
   const out = await agent(
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
-    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
+    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
-  return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
+  return out || null
 }
 async function docRecordDeferred(report, _verdict, runDir) {
   // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
@@ -180,22 +228,13 @@ async function docRecordDeferred(report, _verdict, runDir) {
 
 // the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
 // (with extras.parentOrigin for a parent-traced / GATE finding), or null on failure (#104 -> halted).
-async function docReviser(blockers, runDir, context) {
+async function docReviser(fixContext, verdict, runDir, context) {
   const out = await agent(
     `You are the doc-reviser (fixStep) for the ${context.docType} doc at ${context.docPath}. ` +
-    `Per plugins/superheroes/eval/doc-reviser-leaf.md, resolve these blocking findings with targeted ` +
-    `revisions: ${JSON.stringify(blockers)}. Leave a parent-traced or GATE finding unresolved and ` +
-    `name it in extras.parentOrigin. Return ONLY the report JSON ` +
-    `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
-    { label: 'doc-reviser',
-      // the doc-reviser path keys deferred items by `identity` (front_half.record_deferred reads
-      // d["identity"]), NOT `id` (the code-fixer/record_deferred.py key) — pin the actual on-wire shape.
-      schema: { type: 'object', properties: { fixes: { type: 'array' },
-                deferred: { type: 'array', items: { type: 'object', required: ['identity'],
-                  properties: { identity: { type: 'string' },
-                    severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } } } },
-                extras: { type: 'object' } } } })
-  return out || null
+    `${FIX_RESULT_INSTRUCTION} Per plugins/superheroes/eval/doc-reviser-leaf.md resolve blocking findings. ` +
+    `Fix context:\n${JSON.stringify(fixContext)}`,
+    { label: 'doc-reviser', schema: FIX_RESULT_SCHEMA })
+  return normalizeFixResult(out)
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
@@ -206,7 +245,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
   globalThis.recordDeferred = docRecordDeferred
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
-    fixStep: (blockers, rd) => docReviser(blockers, rd, context),
+    fixStep: (fixContext, verdict, rd) => docReviser(fixContext, verdict, rd, context),
     maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none' })
 }
 
@@ -1124,7 +1163,9 @@ async function reviewCodePhase(workItem, opts) {
     target: { worktree: resolvedWorktree, head: resolvedHead },
   })
   const verdict = await runReviewCodePanel({
-    runDir, context: workItem, rubric: 'review-base',
+    runDir,
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath: joinPath(runDir, 'review-coverage-decisions.json') },
+    rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
@@ -1150,8 +1191,8 @@ async function reviewCodePhase(workItem, opts) {
       return { phaseResult: { confidence: 'low', assumptions: ['review-code fixes landed outside the target worktree (cwd HEAD advanced, target HEAD did not) — refusing to stamp coverage'] }, gate: 'changes-requested', terminal, head: finalHead, changed: false }
     }
   }
-  // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
-  // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
+  // FR-9: stamp covers = X' ONLY on a pure `clean`; every other terminal already parked above.
+  // prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
     const targetArgs = resolvedWorktree || resolvedHead
       ? ` --worktree ${shq(resolvedWorktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`

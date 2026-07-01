@@ -4,58 +4,32 @@
 // fix-failure -> halted decision, the circuit breaker) lives in the parity-locked pure-decider
 // twins (panel_tally / loop_synthesis / circuit_breaker / loop_state); this shell detects events and
 // forwards them IN MEMORY. The shell makes exactly one branch: `if (terminal !== 'continue')`.
-//
-// #115 re-architecture: reviewer leaves now RETURN a `findings[]` array (the panel holds them in
-// memory) instead of writing findings-<name>.json. merge/synthesis-consume/tally are in-process twin
-// calls over those in-memory arrays — no panel_tally.py / merge_findings.py / loop_synthesis.py
-// dispatch and no per-finding disk file. The ONLY durable state is the per-round accumulator (the
-// per-round verdict carrying the skip-excluded blocking finding IDENTITIES) + the deferred-set, each
-// kept on disk via one cheap write so a crash-resume rebuilds the breaker history + deferred
-// accounting. The synthesis leaf stays a genuine LLM agent (it returns verdicts).
-//
-// Runtime contract (native Workflow): `agent()` runs a leaf worker (no Agent tool, §10.1);
-// `parallel()` fans out. The reviewers + synthesis leaf + fixStep are caller-supplied leaf agents.
-// `runDir` names the on-disk scratch dir the accumulator + deferred-set live under.
-//
-// reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep, maxRounds, legKind, verifyCommand })
-// legKind = { panel: bool, code: bool }. The shell is itself in SAFETY_MACHINERY (FR-24).
 const { io } = require('./io_seam.js')
 const panelTally = require('./panel_tally.js')
 const loopSynthesis = require('./loop_synthesis.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
-// #115 Task 16: verify gate split — subprocess run stays a cheap pipe, classification is in-process
 const verifyGateTwin = require('./verify_gate.js')
+const roundPolicy = require('./review_round_policy.js')
+const reviewMemory = require('./review_memory.js')
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
-const _VERIFY_OK = new Set(['pass', 'skipped'])   // none/doc-leg signalled by a null verifyResult
+const _VERIFY_OK = new Set(['pass', 'skipped'])
 
 function _usable(v) { return v && typeof v.terminal === 'string' }
 function _failClosed() {
-  // UFR-9 last-resort: no usable verdict from the tally -> fail closed, never a clean advance.
   return { schemaVersion: SCHEMA_VERSION, terminal: 'halted', recordMissing: true,
            reason: 'tally produced no usable verdict — failing closed' }
 }
 
-// ── durable per-round accumulator (one cheap write per round; rebuilt on resume) ──
-// Each record: { round, findings:[{file,title,severity,...}] } where findings are the round's
-// compiled findings with deferred (skipped) identities removed — so a crash-resume rebuilds the
-// circuit-breaker history + deferred accounting from disk. Stored as a single JSON array.
-function accumulatorPath(runDir) { return `${runDir}/round-records.json` }
 function deferredSetPath(runDir) { return `${runDir}/deferred-set.json` }
 
-async function loadAccumulator(runDir) {
-  const recs = await io().readJson(accumulatorPath(runDir), [])
-  return Array.isArray(recs) ? recs : []
-}
 async function loadDeferredSet(runDir) {
   const set = await io().readJson(deferredSetPath(runDir), {})
   return (set && typeof set === 'object' && !Array.isArray(set)) ? set : {}
 }
 
-// resumeRound: the round to (re)start at = max recorded round + 1, or 1 (panel_tally.resume_round
-// parity — a round is fully saved iff its accumulator record exists).
 function resumeRound(records) {
   let best = 0
   for (const r of records) {
@@ -65,8 +39,6 @@ function resumeRound(records) {
   return best + 1
 }
 
-// assembleRounds: circuit_breaker's [{round, findings}] from the durable accumulator, skip-excluded
-// (panel_tally.assemble_rounds parity — but reads the in-memory accumulator, not per-round files).
 function assembleRounds(records, deferredSet) {
   const skip = new Set(Object.keys(deferredSet || {}))
   const out = []
@@ -79,27 +51,281 @@ function assembleRounds(records, deferredSet) {
   return out
 }
 
+function buildPreviousDimensionState(records) {
+  const previous = {}
+  for (const rec of records || []) {
+    for (const [name, dim] of Object.entries((rec && rec.dimensions) || {})) previous[name] = dim
+  }
+  return previous
+}
+
+function carryForwardDimension(records, name, sched) {
+  for (let i = (records || []).length - 1; i >= 0; i -= 1) {
+    const dim = records[i].dimensions && records[i].dimensions[name]
+    if (dim) return Object.assign({}, dim, { status: 'skipped', carriedFromRound: sched.carriedFromRound })
+  }
+  return { status: 'skipped', findings: [], confidence: 'low', carriedFromRound: sched.carriedFromRound }
+}
+
+function buildFixContext(records, coverageDecisions) {
+  const priorFindings = []
+  const changedSubjects = []
+  for (const rec of records || []) {
+    priorFindings.push(...((rec && rec.findings) || []))
+    if (Array.isArray(rec && rec.changedSubjects)) changedSubjects.push(...rec.changedSubjects)
+  }
+  return {
+    priorFindings,
+    classKeys: priorFindings.map((f) => f.classKey || reviewMemory.classKey(f)),
+    generalizeRequired: reviewMemory.recurrentClasses(records, coverageDecisions),
+    changedSubjects: Array.from(new Set(changedSubjects)),
+    coverageDecisions: coverageDecisions || [],
+  }
+}
+
+function reviewerContext(context, coverageDecisions, receiptContext) {
+  return Object.assign({}, context || {}, { coverageDecisions: coverageDecisions || [], receiptContext })
+}
+
+function wouldOtherwiseCertify(roundFindings, reviewerSet) {
+  for (const name of reviewerSet || []) {
+    const result = roundFindings[name]
+    if (!result || result.confidence !== 'high' || (result.findings || []).length > 0) return false
+  }
+  return true
+}
+
+function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSet) {
+  const known = new Set((coverageDecisions || []).map((d) => d && d.classKey).filter(Boolean))
+  const out = (coverageDecisions || []).map((d) => Object.assign({}, d))
+  const byClass = Object.fromEntries(out.filter((d) => d.classKey).map((d) => [d.classKey, d]))
+  for (const name of reviewerSet || []) {
+    const result = roundFindings[name]
+    if (!result || result.status !== 'run') continue
+    for (const f of result.findings || []) {
+      if (!BLOCKING.has(f.severity)) continue
+      const key = f.classKey || reviewMemory.classKey(f)
+      if (!known.has(key)) continue
+      const decision = byClass[key]
+      if (decision) decision.challengedBy = name
+    }
+  }
+  return out
+}
+
+function confirmationReady(records, round, justMarked) {
+  if (justMarked) return false
+  const marked = (records || []).filter((r) => r && r.confirmationPending)
+  if (!marked.length) return false
+  const markedRound = Math.max(...marked.map((r) => Number(r.round) || 0))
+  const hasIntermediateAfterMarker = (records || []).some((r) => Number(r.round) > markedRound)
+  if (!hasIntermediateAfterMarker) return true
+  return round > markedRound + 1
+}
+
+async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
+  try {
+    const parsed = JSON.parse(out.stdout || '{}')
+    return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
+  } catch (_) {
+    return { ok: false, reason: 'round-memory-helper-failed' }
+  }
+}
+
+async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi) {
+  const args = ['plugins/superheroes/lib/review_memory.py', 'persist', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--record-json', JSON.stringify(record), '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+  if (lease) args.push('--lease', lease)
+  const out = await ioApi.runHelper('python3', args)
+  try {
+    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'helper-failed' }
+  } catch (_) {
+    return { ok: false, reason: 'helper-failed' }
+  }
+}
+
+async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi) {
+  const record = Object.assign({}, (recordsForFix || []).find((r) => r && r.round === round) || {})
+  record.confirmationPending = true
+  record.changedSubjects = fixResult.changedSubjects || []
+  record.coverageDecisions = recordedCoverageDecisions || []
+  record.fix = { fixes: fixResult.fixes || fixResult.fixed || [], deferred: fixResult.deferred || [] }
+  return persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi)
+}
+
+async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
+  if (context && context.docPath) return { mode: 'doc', path: context.docPath }
+  const path = (context && context.coverageDecisionPath) || (legKind && legKind.coverageDecisionPath) || ioApi.join(runDir, 'review-coverage-decisions.json')
+  return { mode: 'code', path }
+}
+
+function parseDocCoverageDecisions(text) {
+  const out = []
+  const lines = String(text || '').split(/\n/)
+  let inSection = false
+  for (const line of lines) {
+    if (/^##\s+/.test(line)) inSection = line.trim() === '## Review coverage decisions'
+    if (!inSection) continue
+    const jsonMatch = line.match(/review-coverage-decision-json:(\{.*\})`?$/)
+    if (jsonMatch) {
+      try { out.push(JSON.parse(jsonMatch[1])); continue } catch (_) {}
+    }
+    const m = line.match(/^- \*\*([^*]+)\*\* .*class `([^`]+)`\): (.*)$/)
+    if (m) out.push({ id: m[1], classKey: m[2], text: m[3] })
+  }
+  return out
+}
+
+async function loadCoverageDecisions(target, ioApi) {
+  const path = target.path
+  let text = ''
+  try { text = await ioApi.readText(path) } catch (err) {
+    if (err && err.code === 'ENOENT' && target.mode === 'code') return { ok: true, decisions: [], contentHash: ioApi.contentHash('') }
+    return { ok: false, state: 'unreadable', reason: err && err.message }
+  }
+  if (target.mode === 'doc') return { ok: true, decisions: parseDocCoverageDecisions(text), contentHash: ioApi.contentHash(text) }
+  try {
+    const decisions = JSON.parse(text || '[]')
+    if (!Array.isArray(decisions)) return { ok: false, state: 'corrupt' }
+    return { ok: true, decisions, contentHash: ioApi.contentHash(text) }
+  } catch (_) {
+    return { ok: false, state: 'corrupt' }
+  }
+}
+
+function collectRoundUsage(roundFindings, round, synthesized) {
+  const usage = {}
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (result && result.usage) usage[`${name}:r${round}`] = result.usage
+  }
+  if (synthesized && synthesized.usage) usage[`synthesis:r${round}`] = synthesized.usage
+  return usage
+}
+
+function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
+  const leaves = (reviewerSet || []).map((name) => `${name}:r${round}`)
+  if (legKind && legKind.panel) leaves.push(`synthesis:r${round}`)
+  if (legKind && legKind.code) leaves.push(`verify:r${round}`)
+  if (fixRan) leaves.push(`fix:r${round}`)
+  return leaves
+}
+
+function telemetryPayload(records, expectedLeaves, usage, benchmark, terminal) {
+  const missing = expectedLeaves.filter((leaf) => !usage[leaf])
+  const total = expectedLeaves.reduce((sum, leaf) => sum + Number((usage[leaf] && usage[leaf].total) || 0), 0)
+  const dimensionCounts = {}
+  for (const rec of records || []) {
+    for (const [name, dim] of Object.entries((rec && rec.dimensions) || {})) {
+      const counts = dimensionCounts[name] || { run: 0, skipped: 0, cheap: 0, deep: 0, escalated: 0 }
+      if (dim.status === 'skipped') counts.skipped += 1
+      if (dim.status === 'run') counts.run += 1
+      if (dim.tier === 'reviewer') counts.cheap += 1
+      if (dim.tier === 'reviewer-deep') counts.deep += 1
+      if (dim.escalated) counts.escalated += 1
+      dimensionCounts[name] = counts
+    }
+  }
+  return {
+    schemaVersion: 1,
+    terminal,
+    roundCount: (records || []).length,
+    rounds: records || [],
+    tokenUsage: { complete: missing.length === 0, expectedLeaves, present: expectedLeaves.filter((leaf) => usage[leaf]), missing, total },
+    dimensionCounts,
+    benchmarkValid: !benchmark || missing.length === 0,
+  }
+}
+
+async function writeTelemetry(runDir, payload, expectedHash, runId, lease, ioApi) {
+  const args = ['plugins/superheroes/lib/review_telemetry.py', 'write', '--path', ioApi.join(runDir, 'review-telemetry.json'), '--payload-json', JSON.stringify(payload), '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+  if (lease) args.push('--lease', lease)
+  const out = await ioApi.runHelper('python3', args)
+  try {
+    return out.ok ? JSON.parse(out.stdout) : { ok: false, benchmarkValid: false, reason: 'telemetry-write-failed' }
+  } catch (_) {
+    return { ok: false, benchmarkValid: false, reason: 'telemetry-write-failed' }
+  }
+}
+
+async function recordCoverageDecision(targetPath, decision, expectedHash, mode, runId, lease, ioApi) {
+  const cmd = mode === 'code' ? 'record-code' : 'record-doc'
+  const args = ['plugins/superheroes/lib/coverage_decisions.py', cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
+  if (lease) args.push('--lease', lease)
+  const out = await ioApi.runHelper('python3', args)
+  try {
+    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'coverage-decision-write-failed' }
+  } catch (_) {
+    return { ok: false, reason: 'coverage-decision-write-failed' }
+  }
+}
+
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep,
-                            maxRounds = 7, legKind = {}, verifyCommand = 'none' }) {
+                            maxRounds = 7, legKind = {}, verifyCommand = 'none',
+                            forceCoverageDecisionExpectedHash }) {
   runDir = runDir || runKey
-  let records = await loadAccumulator(runDir)        // durable accumulator (breaker history + deferral)
-  let round = resumeRound(records)                   // UFR-7: resume at the round boundary from disk
-  let lastExtras = await io().readJson(`${runDir}/last-extras.json`, null)
-  // UFR-7: a mid-loop resume must re-load the latest fix extras (in-memory only otherwise), else the
-  // resumed round's tally drops parentOrigin from the terminal record/readout.
+  const runId = runKey || runDir
+  const lease = legKind && legKind.lease
+  const ioApi = io()
+  let memoryState = await loadRoundRecords(runDir, reviewerSet || [], ioApi)
+  let records = memoryState.ok ? memoryState.records : []
+  let round = resumeRound(records)
+  let lastExtras = await ioApi.readJson(`${runDir}/last-extras.json`, null)
+  let justMarkedForConfirmation = false
+  let fixRanThisRun = false
+  const allUsage = {}
+
   if (!reviewerSet || reviewerSet.length === 0) {
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
-                                 roundFindings: {}, records, legKind, verifyResult: null, extras: lastExtras })
-    await persistRound(runDir, records, v)
-    return _usable(v) ? v : _failClosed()
+                                   roundFindings: {}, records, legKind, verifyResult: null,
+                                   policy: { roundKind: 'baseline' }, coverageDecisions: [],
+                                   runId, extras: lastExtras })
+    return _usable(v) ? await finalizeVerdict(v, records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
   }
+
   while (true) {
-    // 1. Fan out the panel — each reviewer RETURNS its findings[] (held in memory, no disk file).
+    const recoveringCorruptMemory = !memoryState.ok
+    records = memoryState.ok ? memoryState.records : []
+    const enterConfirmation = !recoveringCorruptMemory && confirmationReady(records, round, justMarkedForConfirmation)
+    justMarkedForConfirmation = false
+
+    const coverageTarget = await coverageDecisionTarget(runDir, context, legKind, ioApi)
+    const coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
+    if (!coverageState.ok) {
+      return await finalizeVerdict(
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (coverageState.state || coverageState.reason || 'unreadable'), round },
+        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+    const coverageDecisions = coverageState.decisions
+    let coverageContentHash = coverageState.contentHash
+
+    if (enterConfirmation && records.length) {
+      const latest = records[records.length - 1]
+      const ids = ((latest && latest.coverageDecisions) || []).map((d) => d.id).filter(Boolean)
+      const visible = new Set(coverageDecisions.map((d) => d.id))
+      if (ids.some((id) => !visible.has(id))) {
+        return await finalizeVerdict(
+          { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decision-marker-missing', round },
+          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      }
+    }
+
+    const policy = roundPolicy.planRound({
+      round,
+      dimensions: reviewerSet,
+      changedSubjects: recoveringCorruptMemory ? null : (lastExtras && lastExtras.changedSubjects),
+      previous: buildPreviousDimensionState(records),
+      confirmation: enterConfirmation,
+    })
+    const scheduled = policy.dimensions || {}
     const roundFindings = {}
-    await parallel(reviewerSet.map((r) => () => dispatchReviewer(r, context, rubric, runDir, round, roundFindings)))
-    // 2. Panel-only synthesis (FR-11): mechanical merge (compileFindings twin) -> Opus leaf -> the
-    // deterministic loop_synthesis.consume twin. A throw / null synthesis degrades to the raw compile
-    // (keep-on-uncertain — no finding dropped), logged for detectability.
+    const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: coverageDecisions.map((d) => d.id).filter(Boolean) }
+    await parallel(reviewerSet
+      .filter((r) => (scheduled[r] || {}).action !== 'skip')
+      .map((r) => () => dispatchReviewer(r, reviewerContext(context, coverageDecisions, receiptContext), rubric, runDir, round, roundFindings, Object.assign({}, scheduled[r], { roundKind: policy.roundKind, coverageDecisions, receiptContext, receiptArtifact: receiptContext.artifact }))))
+    for (const [name, sched] of Object.entries(scheduled)) {
+      if (sched.action === 'skip') roundFindings[name] = carryForwardDimension(records, name, sched)
+    }
+
     let synthesized = null
     if (legKind.panel) {
       try {
@@ -112,98 +338,152 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
         try { log(`review-panel r${round}: synthesis produced no result — falling back to raw compile (no findings dropped)`) } catch (_) {}
       }
     }
-    // 3. Code-leg verify gate (FR-17): run the project verify command, classify pass/fail/timeout.
+
     let verifyResult = null
     if (legKind.code) {
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round) }
-      catch (e) { verifyResult = 'fail' }  // fail-closed: a verify that can't run blocks clean
+      catch (e) { verifyResult = 'fail' }
     }
-    // 4. In-process tally — the twins decide gate/terminal (+ internal circuit breaker). A prior
-    // round's fix extras (parentOrigin/escalation) ride forward into the record/readout.
+
+    const tokenUsage = collectRoundUsage(roundFindings, round, synthesized)
+    Object.assign(allUsage, tokenUsage)
+
+    const roundCoverageDecisions = annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSet)
+    const record = reviewMemory.recordFromDimensionResults(round, policy.roundKind, roundFindings, lastExtras && lastExtras.changedSubjects, roundCoverageDecisions, tokenUsage, enterConfirmation && policy.roundKind === 'confirmation')
+    const persisted = await persistRoundRecord(runDir, reviewerSet, record, memoryState.contentHash, runId, lease, ioApi)
+    if (!persisted.ok) {
+      return await finalizeVerdict(
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
+        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+    const recordsForFix = Array.isArray(persisted.records) ? persisted.records : records.concat([record])
+    records = recordsForFix
+    memoryState = { ok: true, records: recordsForFix, contentHash: persisted.contentHash }
+
+    if (recoveringCorruptMemory && wouldOtherwiseCertify(roundFindings, reviewerSet)) {
+      return await finalizeVerdict(
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-corrupt-recovery', round },
+        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
-                                       roundFindings, records, legKind, synthesized, verifyResult, extras: lastExtras })
+      roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions: roundCoverageDecisions,
+      runId, extras: lastExtras, enterConfirmation })
     if (!_usable(verdict)) return _failClosed()
-    await persistRound(runDir, records, verdict)     // one cheap write: append this round's record
-    // 5. The shell's only branch: stop unless the core says continue.
-    if (verdict.terminal !== 'continue') return verdict
-    // 6. Fix step (caller's). Detect failure/timeout; the CORE decides halted next round.
-    const fix = await runFixStep(fixStep, verdict, runDir)
-    if (!fix.ok) {
-      const failVerdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
-                                            roundFindings, records, legKind, synthesized, verifyResult,
-                                            fixStatus: 'failed', extras: fix.extras || lastExtras })
-      await persistRound(runDir, records, failVerdict)
-      return _usable(failVerdict) ? failVerdict : _failClosed()
+
+    if (verdict.terminal !== 'continue') {
+      return await finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
-    lastExtras = fix.extras || lastExtras   // latest fix's extras win; persisted once a blocker is parent-traced
-    // persist to a stable per-run path so a mid-loop resume can re-load it (the reload above).
-    if (lastExtras) { try { await io().writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {} }
+
+    if (verdict.reason === 'awaiting final confirmation round') {
+      round += 1
+      continue
+    }
+
+    fixRanThisRun = true
+    const fixContext = buildFixContext(recordsForFix, coverageDecisions)
+    const fixResult = await runFixStep(fixStep, fixContext, verdict, runDir)
+    if (!fixResult.ok) {
+      const failVerdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
+        roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions,
+        runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation })
+      return await finalizeVerdict(
+        _usable(failVerdict) ? failVerdict : _failClosed(),
+        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+
+    lastExtras = fixResult.extras || { changedSubjects: (fixResult.fixResult && fixResult.fixResult.changedSubjects) || [], needsConfirmation: true }
+    let recordedCoverageDecisions = coverageDecisions
+    let expectedCovHash = forceCoverageDecisionExpectedHash || coverageContentHash
+    for (const decision of ((fixResult.fixResult && fixResult.fixResult.coverageDecisions) || [])) {
+      const target = await coverageDecisionTarget(runDir, context, legKind, ioApi)
+      const res = await recordCoverageDecision(target.path, decision, expectedCovHash, target.mode, runId, lease, ioApi)
+      if (!res.ok) {
+        return await finalizeVerdict(
+          { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decision-write-failed', round },
+          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      }
+      const reloaded = await loadCoverageDecisions(target, ioApi)
+      if (!reloaded.ok) {
+        return await finalizeVerdict(
+          { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (reloaded.state || 'unreadable'), round },
+          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      }
+      recordedCoverageDecisions = reloaded.decisions
+      expectedCovHash = reloaded.contentHash
+      coverageContentHash = reloaded.contentHash
+    }
+
+    const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi)
+    if (!postFix.ok) {
+      return await finalizeVerdict(
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
+        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+    records = postFix.records || recordsForFix
+    memoryState = { ok: true, records, contentHash: postFix.contentHash }
+    justMarkedForConfirmation = true
+    try { await ioApi.writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {}
     round += 1
   }
 }
 
-// One cheap durable write per round: append/replace this round's accumulator record (carrying the
-// compiled findings with their blocking identities) so a crash-resume rebuilds the breaker history.
-// Mutates `records` in place so the live loop's breaker history stays current without a re-read.
-async function persistRound(runDir, records, verdict) {
-  const rnd = Number(verdict && verdict.round)
-  if (!Number.isFinite(rnd)) return
-  const rec = { round: rnd, findings: (verdict.findings || []).map(
-    (f) => ({ file: f.file, title: f.title, severity: f.severity })) }
-  const idx = records.findIndex((r) => Number(r.round) === rnd)
-  if (idx >= 0) records[idx] = rec; else records.push(rec)
-  try { await io().writeFile(accumulatorPath(runDir), JSON.stringify(records)) } catch (_) {}
+async function finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
+  const expectedLeaves = []
+  for (let r = 1; r <= round; r += 1) expectedLeaves.push(...expectedUsageLeaves(reviewerSet, r, legKind, fixRan && r === round))
+  const payload = telemetryPayload(records, expectedLeaves, allUsage, false, verdict.terminal)
+  const telemPath = ioApi.join(runDir, 'review-telemetry.json')
+  let telemHash = ioApi.contentHash('')
+  try { telemHash = ioApi.contentHash(await ioApi.readText(telemPath)) } catch (_) {}
+  const telemWrite = await writeTelemetry(runDir, payload, telemHash, runId, lease, ioApi)
+  let telemetry = { benchmarkValid: false, reason: 'telemetry-write-failed' }
+  if (telemWrite.ok) {
+    try { telemetry = JSON.parse(await ioApi.readText(telemPath)) } catch (_) {}
+  }
+  return Object.assign({}, verdict, { telemetry })
 }
 
-// Dispatch one reviewer leaf agent; UFR-1: one re-dispatch if it does not finish (a non-array return
-// is what the tally reads as "did not complete"). On completion the RETURNED findings[] is held in
-// roundFindings[reviewer]; absence of the key means the reviewer did not complete (coverage gap).
-async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings) {
-  let out = await reviewerAgent(reviewer, context, rubric, runDir, round)
-  if (!Array.isArray(out)) out = await reviewerAgent(reviewer, context, rubric, runDir, round) // single re-dispatch
-  if (Array.isArray(out)) roundFindings[reviewer] = out
+function _validReviewerResult(out) {
+  return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
-// Panel synthesis: mechanical merge (panel_tally.compileFindings twin), then the genuine Opus leaf
-// (returns per-finding keep/drop verdicts), then the deterministic loop_synthesis.consume twin.
+async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
+  const baseOpts = opts || {}
+  let out = await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts)
+  if (Array.isArray(out)) out = { findings: out, confidence: 'low', legacyArray: true }
+  let escalated = false
+  if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
+    escalated = true
+    out = await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' }))
+    if (Array.isArray(out)) out = { findings: out, confidence: 'low', legacyArray: true }
+  }
+  if (!_validReviewerResult(out) || out.confidence !== 'high') {
+    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: _validReviewerResult(out) ? out.findings : [], confidence: _validReviewerResult(out) ? out.confidence : 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }
+    return
+  }
+  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier }, out)
+}
+
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
-  const all = []
-  for (const arr of Object.values(roundFindings)) if (Array.isArray(arr)) all.push(...arr)
-  const merged = panelTally.compileFindings(all, null)            // in-memory mechanical merge
-  const leafVerdicts = await synthesisLeaf(merged, context, rubric, runDir, round) // genuine agent
-  return loopSynthesis.consume(merged, Array.isArray(leafVerdicts) ? leafVerdicts : []) // {findings, drops}
+  const compiled = panelTally.compileDimensionResults(roundFindings)
+  const leaf = await synthesisLeaf(compiled, context, rubric, runDir, round)
+  const consumed = loopSynthesis.consume(compiled, leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : [])
+  return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
-// Code-leg verify gate split (#115 Task 16): agent runs the subprocess (--emit-run, IO-only);
-// verifyGateTwin.classify maps the raw run data to pass/fail/timeout/skipped in-process.
-// Fail-closed: if the agent gives nothing or the result is unparseable -> 'fail'.
 async function verifyAgent(verifyCommand, runDir, round) {
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
     { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
-  if (!out) return 'fail'  // fail-closed if the runner gave nothing
-  // Classify with the command the SPINE knows (verifyCommand), NOT the leaf's echoed out.command.
-  // A garbled leaf that drops `command` would make the twin see !cmd -> 'skipped' (a pass-equivalent
-  // in _VERIFY_OK) — certifying clean without verify passing. Using verifyCommand here means a real
-  // verifyCommand can never be misclassified 'skipped' by a missing echo. (#115 final review FIX 2.)
-  //
-  // Do NOT pre-normalize returncode/timedOut here: the parity-locked twin (verify_gate.js) OWNS the
-  // boundary coercion of the courier-stringified fields and fail-CLOSES on an empty/garbled
-  // returncode. The old pre-normalizer (`Number.isFinite(Number(rc)) ? Number(rc) : rc`) laundered an
-  // empty-string returncode ('' -> Number('') === 0) into a spurious PASS before the twin saw it — a
-  // fail-OPEN. Pass the raw fields through so the single fail-closed coercion site is the twin.
+  if (!out) return 'fail'
   return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }
 
-// In-process tally — the parity-locked twins decide gate/confidence/terminal + the circuit breaker,
-// over the in-memory roundFindings + the durable accumulator. NO panel_tally.py dispatch. Mirrors
-// panel_tally.tally's precedence exactly; fails closed to `halted` on any unforeseen error (UFR-9).
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
                            legKind = {}, synthesized = null, verifyResult = null,
-                           fixStatus = 'completed', extras = null }) {
-  // Only readout-enrichment keys ride in from the caller — never decision/terminal fields, so a
-  // caller's extras can't overwrite a fail-closed `halted` or any gate field (panel_tally parity).
+                           fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
+                           runId, enterConfirmation = false }) {
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
     for (const k of ['fixes', 'deferred', 'parentOrigin']) if (k in extras) safeExtras[k] = extras[k]
@@ -214,36 +494,36 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
         findings: [], missing: [], drops: [], terminal: 'cannot-certify', round,
         reason: 'empty reviewer set — nothing to certify' }, safeExtras)
     }
-    const completed = roster.filter((r) => Array.isArray(roundFindings[r]))
+    const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: (coverageDecisions || []).map((d) => d.id).filter(Boolean) }
+    const gateOut = panelTally.roundGateFromDimensionResults(
+      roundFindings, roster, policy.roundKind === 'confirmation', receiptContext)
+    const gate = gateOut.gate
+    const confidence = gateOut.confidence
+    const missing = gateOut.incomplete
     let compiled, drops
-    if (synthesized && typeof synthesized === 'object') {       // panel leg: judgment already done
+    if (synthesized && typeof synthesized === 'object') {
       compiled = synthesized.findings || []
       drops = synthesized.drops || []
-    } else {                                                    // single-reviewer leg: compile raw
-      const all = []
-      for (const r of completed) all.push(...roundFindings[r])
-      compiled = panelTally.compileFindings(all, null)
+    } else {
+      compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
     }
-    const gateOut = panelTally.roundGate(compiled, roster, completed)
-    const gate = gateOut.gate, confidence = gateOut.confidence, missing = gateOut.incomplete
     const deferredSet = await loadDeferredSet(runDir)
-    const presentBlocking = compiled.filter((f) => BLOCKING.has(f.severity)).length
+    const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     const pdef = panelTally.presentDeferred(compiled, deferredSet)
-    // Internal circuit breaker (UFR-2): prior rounds from the durable accumulator + this round's
-    // findings, skip-set excluded. Exclude THIS round from the disk-read history (it may already be
-    // recorded from a prior idempotent call) and append the current findings exactly once.
     const skip = new Set(Object.keys(deferredSet))
     const prior = assembleRounds(records, deferredSet).filter((r) => r.round !== round)
-    const thisRound = { round, findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))) }
+    const thisRound = {
+      round,
+      findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
+      coverageDecisions: coverageDecisions || [],
+      generalizeRequired: reviewMemory.recurrentClasses(records, coverageDecisions || []),
+    }
     const brk = circuitBreaker.checkCircuitBreaker(prior.concat([thisRound]), maxRounds)
     const breakerHalt = !!brk.halt
     let { terminal, reason } = panelTally.decideTerminal(
       gate, presentBlocking, pdef, fixStatus, round, maxRounds, breakerHalt)
-    // The breaker's own reason (recurring-finding / no-net-progress / max-iterations) is the precise
-    // recurrence detail the readout needs — surface it when the breaker is what forced the halt.
     if (terminal === 'halted' && breakerHalt && brk.detail) reason = brk.detail
-    // Verify gate (FR-17/UFR-4): a code leg's clean terminal requires verify to have passed.
     if ((terminal === 'clean' || terminal === 'clean-with-skips') &&
         verifyResult !== null && !_VERIFY_OK.has(verifyResult)) {
       terminal = 'halted'
@@ -254,28 +534,32 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     if (terminal === 'cannot-certify' && missing.length) {
       reason = 'coverage incomplete — missing review angle(s): ' + missing.join(', ')
     }
+    const markedPending = (records || []).some((r) => r && r.confirmationPending)
+    if (terminal === 'clean' && markedPending && !enterConfirmation) {
+      terminal = 'continue'
+      reason = 'awaiting final confirmation round'
+    }
+    if (terminal === 'clean' && policy.roundKind === 'confirmation') {
+      // confirmation round succeeded — clear marker on persisted record handled next round
+    }
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, terminal, reason, round }, safeExtras)
-  } catch (exc) {   // absolute fail-safe — any unforeseen error halts, never clean (UFR-9)
+  } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
       findings: [], missing: [], drops: [], terminal: 'halted', round,
       reason: 'tally failed: ' + (exc && exc.message ? exc.message : exc) }, safeExtras)
   }
 }
 
-// Invoke the caller-supplied fix step on the round's blocking findings; record its per-finding
-// resolved/deferred report into the deferred-set (the tally reads it next round). Returns false on
-// fix-step failure/timeout (UFR-3) — the shell does NOT decide the outcome, the core does.
-async function runFixStep(fixStep, verdict, runDir) {
+async function runFixStep(fixStep, fixContext, verdict, runDir) {
   try {
-    const blockers = (verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
-    const report = await fixStep(blockers, runDir) // caller's leaf agent; may return null on failure
-    if (!report) return { ok: false, extras: null }
-    await recordDeferred(report, verdict, runDir) // append deferred identities (+severity) to deferred-set
-    return { ok: true, extras: (report && report.extras) || null }
+    const fixResult = await fixStep(fixContext, verdict, runDir)
+    if (!fixResult) return { ok: false, extras: null, fixResult: null }
+    await recordDeferred(fixResult, verdict, runDir)
+    return { ok: true, extras: fixResult.extras || null, fixResult }
   } catch (e) {
     try { log(`review-panel: fix step failed, treating as fix failure -> halted: ${e && e.message ? e.message : e}`) } catch (_) {}
-    return { ok: false, extras: null }
+    return { ok: false, extras: null, fixResult: null }
   }
 }
 
@@ -295,14 +579,9 @@ const VERDICT_SCHEMA = {
 }
 const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
   properties: { findings: { type: 'array' }, drops: { type: 'array' } } }
-// #115 Task 16: VERIFY_SCHEMA now matches the --emit-run output (raw run data, not classified result)
 const VERIFY_SCHEMA = { type: 'object', required: ['command'],
   properties: { command: {}, returncode: {}, timedOut: {} } }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-// reviewerAgent / synthesisLeaf / recordDeferred are caller/runtime-provided leaf wrappers: a
-// consumer (#88/#89/#87) supplies its real reviewer dispatch (which RETURNS a findings[] array), its
-// genuine Opus synthesis leaf (RETURNS per-finding keep/drop verdicts), and its deferred-set writer
-// (writes the deferred identities via its own cheap executor). The harness (Task 8) supplies stubs.
 module.exports = { reviewPanel, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
