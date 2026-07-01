@@ -65,6 +65,7 @@ BUNDLED_NON_TWINS = {
     "build_phase.js",
     "test_pilot_phase.js",
     "courier_exec.js",
+    "pr_comment_scrub.js",
     "test_pilot_deciders.js",
 }
 
