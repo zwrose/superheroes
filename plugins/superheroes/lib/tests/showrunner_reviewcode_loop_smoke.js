@@ -10,6 +10,8 @@ const fs = require('fs'); const os = require('os'); const path = require('path')
 const sr = require('../showrunner.js')
 const { findingIdentity } = require('../circuit_breaker.js')
 
+function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
+
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
@@ -58,13 +60,13 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
       return { fixed: ids, deferred: [] }                        // resolve
     }
     if (label === 'readout') { calls.readout += 1; return '## Review loop — done' }
+    if (label === 'post readout') { calls.readoutPost += 1; return jsonOut({ posted: true, recorded: true }) }
     if (label === 'stamp review coverage') {
       calls.prov += 1
-      return [{ ok: true, stdout: JSON.stringify({ ok: provOk, error: provOk ? undefined : 'disk full' }) }]
+      return jsonOut({ ok: provOk, error: provOk ? undefined : 'disk full' })
     }
     if (label === 'lib') {
       if (prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: { reviewer: 'sonnet', reviewerDeep: 'opus', synthesis: 'opus', fixer: 'sonnet' } }
-      if (prompt.includes('readout_post.py')) { calls.readoutPost += 1; return { posted: false, recorded: true } }
       return { ok: true }
     }
     // every reviewer leg RETURNS {findings:[...]} (the panel holds them in memory).

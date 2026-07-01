@@ -8,6 +8,16 @@ global.log = () => {}
 function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    if (label === 'gather build state') {
+      for (const [needle, resp] of routes) {
+        if (needle === 'exec' && typeof resp === 'function') {
+          const raw = resp('build_state_cli.py gather')
+          const row = Array.isArray(raw) ? raw[0] : raw
+          const stdout = (row && row.stdout != null) ? row.stdout : '{}'
+          return [{ ok: true, stdout }]
+        }
+      }
+    }
     // Exact-label first (labels are unique), so a short needle never shadows a longer script name
     // via substring; then a prompt-substring fallback. A function resp receives the prompt (capture).
     for (const [needle, resp] of routes) {

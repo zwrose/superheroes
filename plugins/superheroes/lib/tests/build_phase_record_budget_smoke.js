@@ -26,22 +26,24 @@ function makeAgent(routes, labels) {
       provenance: 'absent',
     }) }]],
     ['exec', (prompt) => {
-      if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: 'passed' }]
-      if (prompt.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
-      if (prompt.includes('task_list_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
-      if (prompt.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      if (prompt.includes('verify_command_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ command: 'none' }) }]
-      if (prompt.includes('minor_rollup_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ minors: [] }) }]
-      if (prompt.includes('record-final-review')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      if (prompt.includes('prov_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      return [{ index: 0, ok: true, stdout: '{}' }]
+      if (prompt.includes('read-gate')) return [{ ok: true, stdout: 'passed' }]
+      if (prompt.includes('build_entry.py')) return [{ ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
+      if (prompt.includes('task_list_cli.py')) return [{ ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
+      if (prompt.includes('fence_cli.py')) return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('verify_command_cli.py')) return [{ ok: true, stdout: JSON.stringify({ command: 'none' }) }]
+      if (prompt.includes('minor_rollup_cli.py')) return [{ ok: true, stdout: JSON.stringify({ minors: [] }) }]
+      if (prompt.includes('record-final-review')) return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]
+      if (prompt.includes('prov_entry.py')) return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
+      return [{ ok: true, stdout: '{}' }]
     }],
     ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
     ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
     ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
-    ['reviewer:1', { findings: [] }],
-    ['verify_gate.py', { command: 'none', returncode: 0, timedOut: false }],
+    ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] }) }]],
+    ['branch-reviewer:r1', { findings: [] }],
+    ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
+    ['run verify', { command: 'none', returncode: 0, timedOut: false }],
   ], labels)
 
   globalThis.reviewerAgent = async () => []

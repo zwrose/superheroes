@@ -37,7 +37,6 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_workhorse_label_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",
-    "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
     # #115: the two new in-memory review-panel smokes.
     "plugins/superheroes/lib/tests/showrunner_review_crash_resume_smoke.js",
@@ -48,7 +47,6 @@ SHOWRUNNER_SMOKES = [
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).
     "plugins/superheroes/lib/tests/showrunner_draftpr_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ready_pr_readback_smoke.js",
-    "plugins/superheroes/lib/tests/test_pilot_deciders_smoke.js",
     # #115 Task 17: startup overrides read + unconditional cheapest dumb-pipe pin (bundle wrapper).
     "plugins/superheroes/lib/tests/showrunner_task17_smoke.js",
     # #115 Task 18: front_half.renderRunOutcome twin — phase_records embed + stub renderer.
@@ -79,6 +77,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
     # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).
     "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
     # #120: native ship-phase structured hand-back (FR-6/FR-7, scrubbed, best-effort delivery).
     "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",
     # #120: ship-phase guard invariants (UFR-2 unreadable-park, UFR-4 fence fail-closed, FR-8 never-merge).
@@ -93,7 +92,8 @@ def test_showrunner_node_smokes_are_enforced():
     discovered = {
         os.path.join("plugins", "superheroes", "lib", "tests", name)
         for name in os.listdir(smoke_dir)
-        if (name.startswith("showrunner_") or name.startswith("build_phase_") or name.startswith("courier_"))
+        if (name.startswith("showrunner_") or name.startswith("build_phase_") or name.startswith("courier_")
+            or name.startswith("test_pilot_"))
         and name.endswith("_smoke.js")
     }
     assert discovered == set(SHOWRUNNER_SMOKES)

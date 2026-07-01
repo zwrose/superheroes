@@ -86,7 +86,7 @@ async function preparePlanAndRecords(deps, workItem, context) {
 
   let plan
   try {
-    plan = await callLeaf(deps.derivePlan, context)
+    plan = await callLeaf(deps.planTests || deps.derivePlan, context)
   } catch (err) {
     return { done: low(`test-pilot plan derivation failed: ${message(err)}`) }
   }
@@ -273,7 +273,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
           rerunScope,
           retryState,
         )
-        return callLeaf(deps.runBrowserPass, browserContext)
+        return callLeaf(deps.browserPass || deps.runBrowserPass, browserContext)
       })
     } catch (err) {
       return { done: low(`test-pilot browser execution failed: ${message(err)}`) }

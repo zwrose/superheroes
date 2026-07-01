@@ -643,7 +643,8 @@ function setCourierAgent(fn) { injectedAgent = fn }
 
 function currentAgent() {
   if (injectedAgent) return injectedAgent
-  if (typeof global.agent === 'function') return global.agent
+  const root = typeof globalThis !== 'undefined' ? globalThis : undefined
+  if (root && typeof root.agent === 'function') return root.agent
   throw new Error('courier agent unavailable')
 }
 
@@ -4096,7 +4097,7 @@ async function withTargetCommandPrompts(worktree, fn) {
 // FR-5 (cwd-rooting): wrap the command with selfContained() so the courier leaf always runs from
 // the repo root when globalThis.__SR_ROOT is set. selfContained is a no-op when __SR_ROOT is unset
 // (smoke/test backward-compat) and skips commands already starting with `cd ` (no double-cd).
-async function cmdRunner(cmd, { schema }) {
+async function cmdRunner(cmd, { schema, label }) {
   // The command prints ONE JSON object to stdout. The leaf must map each top-level key of that
   // object to the SAME-named StructuredOutput field — NOT stuff the whole JSON text into one field
   // (a live-only derailment: that is schema-valid-but-wrong, e.g. action="{...the whole blob...}",
@@ -4106,7 +4107,7 @@ async function cmdRunner(cmd, { schema }) {
     `object via StructuredOutput by copying each of its top-level keys to the same-named output field, ` +
     `values exactly as printed. Do NOT put the whole JSON into a single field, do NOT stringify or nest ` +
     `it, and do NOT add commentary or extra fields:\n\n${selfContained(cmd)}`,
-    { label: 'lib', schema },
+    { label: label || 'lib', schema },
   )
 }
 

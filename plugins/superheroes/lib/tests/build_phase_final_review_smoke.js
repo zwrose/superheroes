@@ -26,22 +26,13 @@ function makeAgent({ reviewerFindings, verifyResult }) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
-    if (label.startsWith('reviewer:')) return { findings: reviewerFindings }   // RETURNS findings (no file)
-    // The verify GATE leaf carries label 'verify:r<round>'. Match it precisely.
-    if (label.startsWith('verify:r')) {
-      // 'garbled-no-command': a leaf that DROPS its echoed `command` but reports a real failure
-      // (returncode 1). The spine must classify with the command IT knows (the real verifyCommand),
-      // not the leaf's missing echo — otherwise the twin sees !cmd -> 'skipped' (a pass-equivalent).
+    if (label.startsWith('branch-reviewer:')) return { findings: reviewerFindings }
+    if (label === 'run verify') {
       if (verifyResult === 'garbled-no-command') return { returncode: 1, timedOut: false }
-      return runDataFor(verifyResult)  // raw run data; JS twin classifies
+      return runDataFor(verifyResult)
     }
-    // The IO config leaves now route through the single 'exec' label. recordDeferred's cheap pipe
-    // also uses 'exec' (unused on the clean path). Inspect the prompt to choose the stdout.
-    if (label === 'exec') {
-      let stdout = '[]'   // recordDeferred / unmatched -> empty array (the cheap io pipe shape)
-      if (prompt.includes('verify_command_cli.py')) stdout = JSON.stringify({ command: 'pytest -q' })
-      else if (prompt.includes('minor_rollup_cli.py')) stdout = JSON.stringify({ minors: [] })
-      return [{ index: 0, ok: true, stdout }]
+    if (label === 'read verify + minors') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] }) }]
     }
     return ''
   }

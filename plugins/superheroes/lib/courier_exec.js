@@ -12,7 +12,8 @@ function setCourierAgent(fn) { injectedAgent = fn }
 
 function currentAgent() {
   if (injectedAgent) return injectedAgent
-  if (typeof global.agent === 'function') return global.agent
+  const root = typeof globalThis !== 'undefined' ? globalThis : undefined
+  if (root && typeof root.agent === 'function') return root.agent
   throw new Error('courier agent unavailable')
 }
 
