@@ -1197,7 +1197,8 @@ async function reviewCodePhase(workItem, opts) {
   opts = opts || {}
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
-    : `/tmp/showrunner-${workItem}-review-code`)
+  : `/tmp/showrunner-${workItem}-review-code`)
+  await io().mkdirp(runDir)
   // FIX A: when opts.worktree is absent, resolve the build worktree via resolveBuildTarget (the
   // stubbable seam). Explicit opts.worktree always wins (loop-smoke + targeted-smoke pass it). On
   // a production call (runPhases -> reviewCodePhase(workItem) with no opts), resolution runs and

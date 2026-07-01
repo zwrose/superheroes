@@ -63,10 +63,11 @@ const sr = require('../showrunner.js')
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
     return { findings: [] }   // every reviewer leg returns an empty findings array (clean round)
   }
+  const runDir2 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-2-'))
   const changed = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDirSuffix: 'test-pilot-2-head-1',
+    runDir: runDir2,
   })
   assert.strictEqual(changed.gate, 'passed')
   assert.strictEqual(changed.head, 'head-2')
