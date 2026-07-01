@@ -1339,54 +1339,34 @@ async function loadPr(workItem) {
   return out.pr
 }
 
-// draft-PR: split IO from judgment (#115 Task 16).
-// --emit-world reads the PR world (IO-only); recoverTwin.prAction decides adopt/create/gate in-process.
-// On 'create': the full pr_entry.py path (ship_gate.decide + gh pr create + read-back) stays in Python.
-// The {pr} capture happens before recordCursor persists it (FR-4 exactly-once preserved).
+// draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}.
 async function draftPRPhase(workItem) {
-  const worldResults = await exec([
-    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)} --emit-world`,
-  ])
-  let world = { pr: 'unknown' }  // fail-closed default
-  if (worldResults[0] && worldResults[0].ok) {
-    try {
-      // A dropped top-level `pr` key (valid-JSON {} that summarized the world away) must NOT fall
-      // through to 'create' (a duplicate PR) — treat it as a read failure and keep the gate sentinel.
-      const parsed = JSON.parse(worldResults[0].stdout)
-      world = (parsed && typeof parsed === 'object' && ('pr' in parsed)) ? parsed : { pr: 'unknown' }
-    } catch (_) { /* world stays { pr: 'unknown' } */ }
-  }
-  const act = recoverTwin.prAction(world)
-  if (act === 'gate') {
-    return { phaseResult: { confidence: 'low', assumptions: ['PR read transient/merged — not creating a 2nd PR'] }, sideEffect: null }
-  }
-  if (act === 'adopt') {
-    return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: world.pr } }
-  }
-  // 'create': ship_gate.decide + gh pr create + read-back stay in Python (irreducible IO + git/gh).
-  // FR-8: thread configurable base (--base) when __SR_BASE is set; absent -> gh uses remote default.
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
-  const createResults = await exec([
+  const out = await courier.runCourierJson(
+    'open draft PR',
     `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
-  ])
-  let createOut = null
-  if (createResults[0] && createResults[0].ok) {
-    try { createOut = JSON.parse(createResults[0].stdout) } catch (_) {}
+    { require: ['ok', 'read_back'], retryRealFailure: false },
+  )
+  if (!out || !out.ok || !out.pr || !out.read_back) {
+    return {
+      phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'draft-PR gated'] },
+      sideEffect: null,
+    }
   }
-  if (!createOut || !createOut.ok) {
-    return { phaseResult: { confidence: 'low', assumptions: [createOut && createOut.reason || 'draft-PR gated'] }, sideEffect: null }
-  }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: createOut.pr } }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
 }
 
-// mark-ready: pr_entry.py world-reads isDraft (pr_phase.mark_ready_action), flips if needed,
-// returns { ready: true }. Idempotent on resume (an already-ready PR -> skip).
+// mark-ready: one folded courier leaf returning {ok, read_back, reason?}.
 async function markReadyPhase(workItem) {
-  const out = await cmdRunner(
+  const out = await courier.runCourierJson(
+    'mark PR ready',
     `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
-  if (!out.ok) return { phaseResult: { confidence: 'low', assumptions: [out.reason || 'mark-ready gated'] }, sideEffect: null }
+    { require: ['ok', 'read_back'], retryRealFailure: false },
+  )
+  if (!out || !out.ok || !out.read_back) {
+    return { phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'mark-ready gated'] }, sideEffect: null }
+  }
   return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { ready: true } }
 }
 

@@ -42,6 +42,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).
     "plugins/superheroes/lib/tests/showrunner_draftpr_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_ready_pr_readback_smoke.js",
     # #115 Task 17: startup overrides read + unconditional cheapest dumb-pipe pin (bundle wrapper).
     "plugins/superheroes/lib/tests/showrunner_task17_smoke.js",
     # #115 Task 18: front_half.renderRunOutcome twin — phase_records embed + stub renderer.
