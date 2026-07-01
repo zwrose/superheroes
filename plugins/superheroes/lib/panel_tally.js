@@ -60,4 +60,55 @@ function decideTerminal(gate, presentBlocking, presentDeferredCount, fixStatus, 
   const [action, , reason] = loopState.decide(blockingFixed, presentDeferredCount, rnd, maxRounds, !!breakerHalt)
   return { terminal: _ACTION_TO_TERMINAL[action], reason }
 }
-module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }
+function compileDimensionResults(results) {
+  const findings = []
+  for (const [name, result] of Object.entries(results || {})) {
+    for (const f of result.findings || []) {
+      const item = Object.assign({}, f)
+      if (!item.dimension) item.dimension = result.dimension || name
+      if (result.status === 'skipped') {
+        item.carried = true
+        item.sourceRound = result.carriedFromRound
+      }
+      findings.push(item)
+    }
+  }
+  return compileFindings(findings)
+}
+function _validFinalReceipt(result, receiptContext) {
+  const receipt = result && result.verificationReceipt
+  if (!receipt || !receipt.artifact || !Array.isArray(receipt.coverageDecisionIds)) return false
+  receiptContext = receiptContext || {}
+  if (receiptContext.artifact && receipt.artifact !== receiptContext.artifact) return false
+  const needed = new Set(receiptContext.coverageDecisionIds || [])
+  const gotIds = new Set(receipt.coverageDecisionIds || [])
+  for (const id of needed) if (!gotIds.has(id)) return false
+  const chain = Array.isArray(receipt.chain) ? receipt.chain : []
+  const got = new Set()
+  for (const step of chain) {
+    if (!step || typeof step !== 'object' || !step.evidence) return false
+    got.add(step.step)
+  }
+  return ['citation', 'reachability', 'missing-check', 'tooling'].every((x) => got.has(x))
+}
+function roundGateFromDimensionResults(results, expectedRoster, finalConfirmation, receiptContext) {
+  const completed = Object.entries(results || {})
+    .filter(([, result]) => result.status === 'run' || result.status === 'skipped')
+    .map(([name]) => name)
+  const compiled = compileDimensionResults(results)
+  const base = roundGate(compiled, expectedRoster, completed)
+  for (const name of expectedRoster) {
+    const result = (results || {})[name] || {}
+    if (result.confidence !== 'high') return { gate: 'cannot-certify', confidence: 'low', incomplete: base.incomplete }
+  }
+  if (finalConfirmation) {
+    for (const name of expectedRoster) {
+      const result = (results || {})[name] || {}
+      if (!_validFinalReceipt(result, receiptContext)) {
+        return { gate: 'cannot-certify', confidence: 'low', incomplete: base.incomplete }
+      }
+    }
+  }
+  return base
+}
+module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, compileDimensionResults, roundGateFromDimensionResults, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }
