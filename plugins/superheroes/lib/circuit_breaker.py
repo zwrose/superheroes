@@ -51,15 +51,22 @@ def check_circuit_breaker(rounds, max_rounds):
 
     # Criterion 1: recurring finding across the two most recent rounds.
     if n >= 2:
-        prev_ids = {finding_identity(f) for f in _blocking(rounds[n - 2])}
-        recurring = [f for f in latest_blocking if finding_identity(f) in prev_ids]
+        latest_rec = rounds[n - 1]
+        latest_generalize = {g.get("classKey") for g in latest_rec.get("generalizeRequired", []) if isinstance(g, dict)}
+        challenged = {d.get("classKey") for d in latest_rec.get("coverageDecisions", []) if isinstance(d, dict) and d.get("challengedBy")}
+        latest_blocking = _blocking(latest_rec)
+        prev_ids = {f.get("classKey") or finding_identity(f) for f in _blocking(rounds[n - 2])}
+        recurring = [f for f in latest_blocking if (f.get("classKey") or finding_identity(f)) in prev_ids]
+        challenged_recurring = [f for f in recurring if (f.get("classKey") or finding_identity(f)) in challenged]
+        if challenged_recurring:
+            ids = "; ".join((f.get("classKey") or finding_identity(f)) for f in challenged_recurring)
+            return {"halt": True, "reason": "challenged-principle-recurring", "detail": f"{len(challenged_recurring)} challenged coverage decision class recurred after being recorded: {ids}"}
         if recurring:
-            ids = "; ".join(finding_identity(f) for f in recurring)
-            return {
-                "halt": True,
-                "reason": "recurring-finding",
-                "detail": f"{len(recurring)} blocking finding(s) recurred after a fix was committed: {ids}",
-            }
+            keys = {(f.get("classKey") or finding_identity(f)) for f in recurring}
+            if keys & latest_generalize:
+                return {"halt": False, "reason": None, "detail": "recurrence pending coverage decision"}
+            ids = "; ".join(sorted(keys))
+            return {"halt": True, "reason": "recurring-finding", "detail": f"{len(recurring)} blocking finding(s) recurred after a fix was committed: {ids}"}
 
     # Criterion 2: no net progress across two consecutive round-transitions.
     if n >= 3:

@@ -1,0 +1,7 @@
+{
+  "input": [[
+    {"round": 1, "findings": [{"file": "a.py", "title": "Missing acceptance test", "severity": "Important", "classKey": "Test::coverage::missing"}]},
+    {"round": 2, "findings": [{"file": "b.py", "title": "Coverage decision is false", "severity": "Important", "classKey": "Test::coverage::missing"}], "coverageDecisions": [{"classKey": "Test::coverage::missing", "challengedBy": "test-reviewer"}]}
+  ], 7],
+  "expected": {"halt": true, "reason": "challenged-principle-recurring", "detail": "1 challenged coverage decision class recurred after being recorded: Test::coverage::missing"}
+}

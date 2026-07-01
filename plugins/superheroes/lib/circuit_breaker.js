@@ -23,10 +23,26 @@ function checkCircuitBreaker(rounds, maxRounds) {
       detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
   }
   if (n >= 2) {
-    const prevIds = new Set(_blocking(rounds[n - 2]).map(findingIdentity))
-    const recurring = latest.filter((f) => prevIds.has(findingIdentity(f)))
+    const latestRec = rounds[n - 1]
+    const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
+    const challenged = new Set((latestRec.coverageDecisions || []).filter((d) => d && d.classKey && d.challengedBy).map((d) => d.classKey))
+    const latestBlocking = _blocking(latestRec)
+    const prevIds = new Set(_blocking(rounds[n - 2]).map((f) => f.classKey || findingIdentity(f)))
+    const recurring = latestBlocking.filter((f) => prevIds.has(f.classKey || findingIdentity(f)))
+    const challengedRecurring = recurring.filter((f) => challenged.has(f.classKey || findingIdentity(f)))
+    if (challengedRecurring.length) {
+      const ids = challengedRecurring.map((f) => f.classKey || findingIdentity(f)).join('; ')
+      return { halt: true, reason: 'challenged-principle-recurring',
+        detail: `${challengedRecurring.length} challenged coverage decision class recurred after being recorded: ${ids}` }
+    }
     if (recurring.length) {
-      const ids = recurring.map(findingIdentity).join('; ')
+      const keys = new Set(recurring.map((f) => f.classKey || findingIdentity(f)))
+      for (const k of keys) {
+        if (latestGeneralize.has(k)) {
+          return { halt: false, reason: null, detail: 'recurrence pending coverage decision' }
+        }
+      }
+      const ids = Array.from(keys).sort().join('; ')
       return { halt: true, reason: 'recurring-finding',
         detail: `${recurring.length} blocking finding(s) recurred after a fix was committed: ${ids}` }
     }

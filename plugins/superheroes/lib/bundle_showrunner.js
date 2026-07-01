@@ -19,6 +19,7 @@ const LIB = __dirname
 const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
                  'review_round_policy.js',
                  'ci_status.js', 'verify_gate.js',
+                 'review_memory.js',
                  'review_panel_shell.js', 'test_pilot_phase.js', 'build_progress.js',
                  'worker_recovery.js', 'task_review.js', 'build_phase.js',
                  'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'showrunner.js']

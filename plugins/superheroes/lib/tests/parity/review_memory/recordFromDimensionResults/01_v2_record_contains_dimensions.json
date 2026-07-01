@@ -1,0 +1,21 @@
+{
+  "input": [2, "intermediate", {
+    "test-reviewer": {"status": "run", "dimension": "Test", "confidence": "high", "findings": []},
+    "security-reviewer": {"status": "skipped", "dimension": "Security", "confidence": "high", "findings": [], "carriedFromRound": 1}
+  }, ["Test"], [{"id": "RCD-1", "classKey": "Test::coverage::missing"}], {"complete": true}],
+  "expected": {
+    "schemaVersion": 2,
+    "round": 2,
+    "kind": "intermediate",
+    "dimensions": {
+      "test-reviewer": {"status": "run", "dimension": "Test", "confidence": "high", "findings": [], "round": 2, "currentFindings": [], "carriedFindings": [], "hasFindings": false, "subjects": ["Test"]},
+      "security-reviewer": {"status": "skipped", "dimension": "Security", "confidence": "high", "findings": [], "carriedFromRound": 1, "round": 2, "currentFindings": [], "carriedFindings": [], "hasFindings": false, "subjects": ["Security"]}
+    },
+    "findings": [],
+    "carriedFindings": [],
+    "changedSubjects": ["Test"],
+    "coverageDecisions": [{"id": "RCD-1", "classKey": "Test::coverage::missing"}],
+    "tokenUsage": {"complete": true},
+    "confirmationPending": false
+  }
+}
