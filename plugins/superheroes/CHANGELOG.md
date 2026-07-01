@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.3.0...superheroes-v0.4.0) (2026-07-01)
+
+
+### Features
+
+* **superheroes:** wire the native showrunner back-half — CI-fix loop, freshen, fence ([#120](https://github.com/zwrose/superheroes/issues/120)) ([#126](https://github.com/zwrose/superheroes/issues/126)) ([c174c28](https://github.com/zwrose/superheroes/commit/c174c2853c531ab4d8fd664a27513fbf5e3ca857))
+
+
+### Bug Fixes
+
+* **superheroes:** [#121](https://github.com/zwrose/superheroes/issues/121) calibration/storage hardening — confirm path, data-loss guards, store rename, unified-layout reconciliation ([#122](https://github.com/zwrose/superheroes/issues/122)) ([d14961f](https://github.com/zwrose/superheroes/commit/d14961f652aa9699f9a3272a67e925e79e76559f))
+
 ## [0.3.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.2.0...superheroes-v0.3.0) (2026-06-29)
 
 
