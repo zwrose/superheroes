@@ -69,7 +69,7 @@ function reviewCodeLeaves(tiers, opts) {
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
       `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
       `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`,
-      withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      withModel(model, { label: `branch-reviewer:r${round}`, schema: FINDINGS_SCHEMA }))
     return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
   }
 
@@ -93,7 +93,7 @@ function reviewCodeLeaves(tiers, opts) {
       `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
       `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
       `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
-      withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+      withModel(tiers.fixer, { label: 'fix-code', schema: FIX_REPORT_SCHEMA }))
     return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
   }
 
@@ -1224,9 +1224,16 @@ async function reviewCodePhase(workItem, opts) {
     const targetArgs = resolvedWorktree || resolvedHead
       ? ` --worktree ${shq(resolvedWorktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`
       : ''
-    const prov = await cmdRunner(
-      `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
-      { schema: PROV_SCHEMA })
+    let prov = null
+    try {
+      prov = await courier.runCourierJson(
+        'stamp review coverage',
+        `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
+        { require: ['ok'], retryRealFailure: false },
+      )
+    } catch (_) {
+      prov = { ok: false, error: 'unreadable' }
+    }
     if (!prov.ok) {
       // UFR-2: the covers-stamp write failed -> park (low confidence), do NOT assert ship-ready.
       return { phaseResult: { confidence: 'low', assumptions: ['review covers stamp not recorded: ' + (prov.error || 'unknown')] }, gate: 'changes-requested' }
@@ -1270,36 +1277,41 @@ const buildPhase = (workItem, generation) => require('./build_phase.js').buildPh
 // existing clean worktree; lockGeneration is only set when --generation is passed).
 // Returns {worktree: <path>, expectedHead: <sha>} or null on any failure (caller parks on null).
 async function resolveBuildTarget(workItem) {
-  // Step 1: resolve branch + build-worktree path via build_entry.py (side-effect-safe: no --generation).
+  const script = [
+    'import json, subprocess, sys',
+    'wi = sys.argv[1]',
+    'setup = None',
+    'for _ in range(2):',
+    '    r = subprocess.run(["python3", "plugins/superheroes/lib/build_entry.py", "--work-item", wi], capture_output=True, text=True)',
+    '    if r.returncode != 0: continue',
+    '    try: setup = json.loads((r.stdout or "").strip() or "{}"); break',
+    '    except Exception: continue',
+    'if not setup or setup.get("error") or not setup.get("path"):',
+    '    print(json.dumps({"ok": False, "error": "missing build worktree"})); raise SystemExit(0)',
+    'if str(setup.get("outcome", "")).lower() == "created":',
+    '    print(json.dumps({"ok": False, "error": "fresh worktree created"})); raise SystemExit(0)',
+    'wt = setup["path"]',
+    'head = None',
+    'for _ in range(2):',
+    '    r = subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], capture_output=True, text=True)',
+    '    if r.returncode == 0 and (r.stdout or "").strip():',
+    '        head = r.stdout.strip(); break',
+    'if not head:',
+    '    print(json.dumps({"ok": False, "error": "missing target head"})); raise SystemExit(0)',
+    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head}))',
+  ].join('\n')
   let setup = null
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([`python3 plugins/superheroes/lib/build_entry.py --work-item ${shq(workItem)}`])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) { try { setup = JSON.parse(s); break } catch (_) { /* garbled -> retry */ } }
-    }
+  try {
+    setup = await courier.runCourierJson(
+      'resolve review target',
+      `python3 -c ${shq(script)} ${shq(workItem)}`,
+      { require: ['ok'] },
+    )
+  } catch (_) {
+    setup = null
   }
-  if (!setup || setup.error || !setup.path) return null   // fail-closed: no usable worktree
-  // Fail-closed: at review-code / test-pilot time the build worktree MUST already exist (outcome
-  // 'reused'). An explicit 'created' means build_entry.py just forged a FRESH EMPTY worktree off base
-  // (the build artifact vanished) — never certify that empty tree. Only an explicit 'created' parks;
-  // a missing outcome stays permissive (older stubs). resolveBuildTarget runs WITHOUT --generation, so
-  // this never blocks the build phase, which legitimately creates with --generation.
-  if (setup.outcome && String(setup.outcome).toLowerCase() === 'created') return null
-  const wt = setup.path
-  // Step 2: read the build-branch tip HEAD (the head the code-review should certify).
-  let head = null
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([`git -C ${shq(wt)} rev-parse HEAD`])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) { head = s; break }
-    }
-  }
-  if (!head) return null   // fail-closed: can't determine the head to certify
-  return { worktree: wt, expectedHead: head }
+  if (!setup || setup.error || !setup.worktree) return null   // fail-closed: no usable worktree
+  return { worktree: setup.worktree, expectedHead: setup.expectedHead }
 }
 
 module.exports.verdictToGate = verdictToGate

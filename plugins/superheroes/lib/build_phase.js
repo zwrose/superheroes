@@ -267,7 +267,10 @@ async function buildPhase(workItem, generation) {
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
     if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
-    await recordFinalReviewClean(workItem)
+    const coverage = await recordFinalReviewClean(workItem)
+    if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
+      return park('final review coverage stamp failed read-back')
+    }
   }
 
   // Write provenance if absent (FR-9): idempotent, only after final review clean. Same staleness
@@ -303,12 +306,15 @@ async function writeProvenance(workItem) {
 
 // Record final-review-clean. Caller does not check .ok today (preserve that), but stay fail-closed-safe.
 async function recordFinalReviewClean(workItem) {
-  // Caller does not branch on .ok today (preserve that), but stay fail-closed-safe + retry the courier.
-  const r = await execJson(
-    `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
-  )
-  if (r == null) return { ok: false }
-  return r
+  try {
+    return await courier.runCourierJson(
+      'stamp build coverage',
+      `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
+      { require: ['ok', 'read_back'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    return { ok: false, read_back: false }
+  }
 }
 
 // fenceOrPark: lease-fence acquire. CRITICAL fail-closed: an exec/parse failure must read as a LOST
@@ -488,17 +494,36 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
 }
 
 async function runFinalReview(workItem, generation, branch, wt) {
-  // verify command via execJson (retry the courier once on a dropped/garbled stdout); on fail -> 'none'
-  // (verify command unknown -> the verify_gate twin fails closed downstream; a missing verify command
-  // already maps to a safe path).
-  const _verify = await execJson(`python3 ${LIB}/verify_command_cli.py`)
-  const verify = (_verify && _verify.command) || 'none'
+  const script = [
+    'import json, subprocess, sys',
+    'verify = "none"',
+    'minors = []',
+    'v = subprocess.run(["python3", sys.argv[1] + "/verify_command_cli.py"], capture_output=True, text=True)',
+    'if v.returncode == 0:',
+    '    try: verify = json.loads(v.stdout or "{}").get("command", "none")',
+    '    except Exception: verify = "none"',
+    'm = subprocess.run(["python3", sys.argv[1] + "/minor_rollup_cli.py", "--work-item", sys.argv[2]], capture_output=True, text=True)',
+    'if m.returncode == 0:',
+    '    try: minors = json.loads(m.stdout or "{}").get("minors", [])',
+    '    except Exception: minors = []',
+    'if not isinstance(minors, list): minors = []',
+    'print(json.dumps({"ok": True, "verify_command": verify, "minors": minors}))',
+  ].join('\n')
+  let folded = null
+  try {
+    folded = await courier.runCourierJson(
+      'read verify + minors',
+      `python3 -c ${shq(script)} ${shq(LIB)} ${shq(workItem)}`,
+      { require: ['ok', 'verify_command', 'minors'] },
+    )
+  } catch (_) {
+    folded = null
+  }
+  const verify = (folded && folded.verify_command) || 'none'
   // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
   const reviewerModel = modelTierTwin.resolveModel('reviewer-deep', _overrides(), null)
   const fixerModel = modelTierTwin.resolveModel('fixer', _overrides(), 'code')
-  // carried-forward Minors via execJson (retry the courier once on a dropped/garbled stdout); on fail -> [].
-  const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
-  const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
+  const minors = Array.isArray(folded && folded.minors) ? folded.minors : []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
@@ -508,7 +533,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const out = await agent(
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`,
-      { label: `reviewer:${round}`, model: reviewerModel,
+      { label: `branch-reviewer:r${round}`, model: reviewerModel,
         schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
@@ -526,7 +551,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null
     await agent(`In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
-      { label: 'final-fixer', model: fixerModel })
+      { label: 'fix-branch', model: fixerModel })
     return { fixed: blockers.map((b) => b.id || b.title) }
   }
   const verdict = await reviewPanel({

@@ -105,8 +105,29 @@ def main(argv):
     sp = build_state.state_path(root, a.work_item)
     os.makedirs(os.path.dirname(sp), exist_ok=True)
     if a.cmd == "record-final-review":
-        build_state.set_final_review(sp, a.clean == "true")
-        print(json.dumps({"ok": True}))
+        clean = a.clean == "true"
+
+        def _read_final():
+            st = build_state.read_state(sp)
+            fr = st.get("final_review") or {}
+            return fr.get("clean") is clean
+
+        def _apply_final():
+            build_state.set_final_review(sp, clean)
+            return _read_final(), {"read_back": _read_final(), "clean": clean}
+
+        result = idempotent_write.idempotent_apply(
+            f"build-state:{a.work_item}:final-review:{clean}",
+            lambda: (_read_final(), {"read_back": _read_final(), "clean": clean}),
+            _apply_final,
+        )
+        detail = result.get("detail") or {}
+        print(json.dumps({
+            "ok": bool(result.get("ok")),
+            "already": bool(result.get("already")),
+            "read_back": bool(detail.get("read_back")),
+            "clean": bool(detail.get("clean")),
+        }))
         return 0
 
     task = str(a.task)
