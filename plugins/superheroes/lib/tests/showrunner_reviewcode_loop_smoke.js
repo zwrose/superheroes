@@ -70,7 +70,7 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
       return { ok: true }
     }
     // every reviewer leg RETURNS {findings:[...]} (the panel holds them in memory).
-    if (label === 'branch-reviewer:r1') return { findings: nextFindings() || [] }
+    if (label.startsWith('branch-reviewer:')) return { findings: nextFindings() || [] }
     return { findings: [] }
   }
   return calls
@@ -98,7 +98,7 @@ async function main() {
   calls = install({ roundFindings: [BLOCKER], fix: 'defer' })
   r = await sr.reviewCodePhase('wi-skips', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'clean-with-skips advances like clean')
-  assert.ok(calls.prov >= 0, 'clean-with-skips path remains review-complete')
+  assert.strictEqual(calls.prov, 0, 'clean-with-skips must not stamp covers (FR-9)')
 
   // 3. halted -> park (changes-requested) + readout posted (UFR-1). A blocker whose fix step fails.
   calls = install({ roundFindings: [BLOCKER], fix: 'fail' })
@@ -114,7 +114,7 @@ async function main() {
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     // the first reviewer never returns a findings array (and its retry also fails) -> coverage gap.
-    if (label === 'branch-reviewer:r1') { incomplete += 1; return { notFindings: true } }
+    if (label.startsWith('branch-reviewer:')) { incomplete += 1; return { notFindings: true } }
     return realAgent(prompt, opts)
   }
   r = await sr.reviewCodePhase('wi-cc', { runDir: fresh(), resolveTarget: stubResolveTarget })

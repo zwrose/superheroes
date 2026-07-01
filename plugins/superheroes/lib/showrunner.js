@@ -948,7 +948,7 @@ function testPilotDeps(workItem, generation) {
         '    print(json.dumps({"ok": True, "artifactResult": artifactResult, "serverContext": serverContext, "seedResult": seedResult}))',
         'except Exception as exc:',
         '    print(json.dumps({"ok": False, "reason": str(exc)}))',
-      ].join('\\n')
+      ].join('\n')
       const out = await courier.runCourierJson(
         'prepare test run',
         `python3 -c ${shq(script)} ${shq(manifestPath)}`,

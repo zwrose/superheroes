@@ -20,6 +20,14 @@ global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
 function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    if (label.startsWith('branch-reviewer:')) {
+      for (const [needle, resp] of routes) {
+        if (typeof needle === 'string' && needle.startsWith('branch-reviewer')) {
+          return typeof resp === 'function' ? resp(prompt) : resp
+        }
+      }
+      return { findings: [] }
+    }
     if (label === 'gather build state') {
       for (const [needle, resp] of routes) {
         if (needle === 'exec' && typeof resp === 'function') {
@@ -81,10 +89,10 @@ const SMART_STUBS = [
   ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
   ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
-  ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] }) }]],
+  ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
   ['branch-reviewer:r1', { findings: [] }],
   ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
-  ['run verify', { command: 'pytest -q', returncode: 0, timedOut: false }],
+  ['run verify', { command: 'none', returncode: 0, timedOut: false }],
 ]
 
 ;(async () => {

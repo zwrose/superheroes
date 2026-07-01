@@ -7,6 +7,7 @@
 // the state it produced. Judgment stays in the injected leaves + pure helpers (§10.1); these helpers
 // are control flow only.
 const deciders = require('./test_pilot_deciders.js')
+const prCommentScrub = require('./pr_comment_scrub.js')
 
 async function testPilotPhase(workItem, generation, deps) {
   deps = deps || {}
@@ -284,7 +285,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     }
 
     try {
-      aggregated = deciders.aggregateResults(rawResults)
+      aggregated = deciders.aggregateResults(rawResults, { scrubber: prCommentScrub.scrub })
     } catch (err) {
       return { done: low(`test-pilot result aggregation failed: ${message(err)}`) }
     }

@@ -741,11 +741,38 @@ module.exports = {
 
 };
 
+// ===== pr_comment_scrub.js =====
+__modules["pr_comment_scrub"] = function (module, exports, require) {
+// Pure-JS port of pr_comment.scrub — bundle-safe (no child_process).
+const SECRET_KEY_NAMES = 'session[_-]?id|session|sid|token|api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|pwd|client[_-]?secret'
+
+const SCRUB_PATTERNS = [
+  [new RegExp('^(\\s*(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-api[_-]?key)\\s*:\\s*).+$', 'gim'), '$1[REDACTED]'],
+  [new RegExp('(?<!\\w)(x[_-]?api[_-]?key)(?:\\\\?["\'])?\\s*:\\s*(?:\\\\?"[^"\\n]*\\\\?"|\\\\?\'[^\'.\\n]*\\\\?\'|[^\\s}\'",]+)', 'gi'), '$1: [REDACTED]'],
+  [/\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [REDACTED]'],
+  [new RegExp('\\b(' + SECRET_KEY_NAMES + '|x[_-]?api[_-]?key)=([^&\\s;"\']+)', 'gi'), '$1=[REDACTED]'],
+  [new RegExp('(\\\\?["\'](' + SECRET_KEY_NAMES + ')\\\\?["\']\\s*:\\s*)(?:\\\\?"[^"\\n]*\\\\?"|\\\\?\'[^\'.\\n]*\\\\?\')', 'gi'), '$1[REDACTED]'],
+  [/\b([a-z][a-z0-9+.\-]*:\/\/[^/\s:@]+):([^@\s/]+)@/gi, '$1:[REDACTED]@'],
+]
+
+function scrub(text) {
+  let out = String(text || '')
+  for (const [pattern, repl] of SCRUB_PATTERNS) {
+    out = out.replace(pattern, repl)
+  }
+  return out
+}
+
+module.exports = { scrub }
+
+};
+
 // ===== test_pilot_deciders.js =====
 __modules["test_pilot_deciders"] = function (module, exports, require) {
 // plugins/superheroes/lib/test_pilot_deciders.js
 // Pure test-pilot decision helpers — no IO, no agent, no Python.
 const { normalizeTitle } = require('./circuit_breaker.js')
+const prCommentScrub = require('./pr_comment_scrub.js')
 
 const WEB_KEYS = new Set([
   'user_facing', 'userFacing', 'browser', 'route', 'routes', 'page', 'pages', 'frontend',
@@ -971,7 +998,7 @@ function scrubText(text, scrubber, maxBytes) {
 
 function aggregateResults(rawResults, opts) {
   opts = opts || {}
-  const scrubber = typeof opts.scrubber === 'function' ? opts.scrubber : (s) => s
+  const scrubber = typeof opts.scrubber === 'function' ? opts.scrubber : prCommentScrub.scrub
   const byteLimits = opts.byteLimits || {}
   if (!rawResults || typeof rawResults !== 'object') return parkAggregation('browser results must be a JSON object')
   if (!isBrowserSource(browserSource(rawResults))) return parkAggregation('browser-derived evidence/source is required')
@@ -1216,6 +1243,7 @@ __modules["test_pilot_phase"] = function (module, exports, require) {
 // the state it produced. Judgment stays in the injected leaves + pure helpers (§10.1); these helpers
 // are control flow only.
 const deciders = require('./test_pilot_deciders.js')
+const prCommentScrub = require('./pr_comment_scrub.js')
 
 async function testPilotPhase(workItem, generation, deps) {
   deps = deps || {}
@@ -1493,7 +1521,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     }
 
     try {
-      aggregated = deciders.aggregateResults(rawResults)
+      aggregated = deciders.aggregateResults(rawResults, { scrubber: prCommentScrub.scrub })
     } catch (err) {
       return { done: low(`test-pilot result aggregation failed: ${message(err)}`) }
     }
@@ -4377,7 +4405,7 @@ function testPilotDeps(workItem, generation) {
         '    print(json.dumps({"ok": True, "artifactResult": artifactResult, "serverContext": serverContext, "seedResult": seedResult}))',
         'except Exception as exc:',
         '    print(json.dumps({"ok": False, "reason": str(exc)}))',
-      ].join('\\n')
+      ].join('\n')
       const out = await courier.runCourierJson(
         'prepare test run',
         `python3 -c ${shq(script)} ${shq(manifestPath)}`,

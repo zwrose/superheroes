@@ -1,6 +1,7 @@
 // plugins/superheroes/lib/test_pilot_deciders.js
 // Pure test-pilot decision helpers — no IO, no agent, no Python.
 const { normalizeTitle } = require('./circuit_breaker.js')
+const prCommentScrub = require('./pr_comment_scrub.js')
 
 const WEB_KEYS = new Set([
   'user_facing', 'userFacing', 'browser', 'route', 'routes', 'page', 'pages', 'frontend',
@@ -226,7 +227,7 @@ function scrubText(text, scrubber, maxBytes) {
 
 function aggregateResults(rawResults, opts) {
   opts = opts || {}
-  const scrubber = typeof opts.scrubber === 'function' ? opts.scrubber : (s) => s
+  const scrubber = typeof opts.scrubber === 'function' ? opts.scrubber : prCommentScrub.scrub
   const byteLimits = opts.byteLimits || {}
   if (!rawResults || typeof rawResults !== 'object') return parkAggregation('browser results must be a JSON object')
   if (!isBrowserSource(browserSource(rawResults))) return parkAggregation('browser-derived evidence/source is required')

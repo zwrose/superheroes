@@ -2,16 +2,16 @@ const assert = require('assert')
 const bp = require('../build_phase.js')
 const { testPilotPhase } = require('../test_pilot_phase.js')
 
-const required = [
-  'author-plan', 'author-tasks', 'revise-doc', 'implement-task', 'task-reviewer:r1',
-  'fix-task', 'branch-reviewer:r1', 'fix-branch', 'fix-code', 'plan-tests',
-  'browser-pass', 'fix-app-bug', 'fix-ci', 'save phase progress', 'read world-snapshot',
-  'read startup state', 'read plan draft', 'read tasks draft', 'read gate',
-  'save round state', 'gather build state', 'record task built', 'record task reviewed',
-  'read verify + minors', 'stamp build coverage', 'resolve review target', 'run verify',
-  'stamp review coverage', 'open draft PR', 'mark PR ready', 'read test context',
-  'prepare test run', 'write test status', 'publish tested head', 'check ship-readiness',
-  'prepare CI fix', 'push CI fix + recheck', 'post readout',
+const exercised = [
+  'read startup state', 'read plan draft', 'read tasks draft',
+  'author-plan', 'author-tasks',
+  'architecture-reviewer', 'code-reviewer', 'security-reviewer', 'test-reviewer', 'premortem-reviewer',
+  'save round state', 'save phase progress',
+  'gather build state', 'implement-task', 'record task built', 'task-reviewer:r1', 'record task reviewed',
+  'read verify + minors', 'stamp build coverage', 'run verify',
+  'open draft PR', 'mark PR ready',
+  'read test context', 'plan-tests', 'prepare test run',
+  'resolve review target', 'check ship-readiness', 'post readout',
 ]
 const forbidden = ['worker', 'review', 'fixer', 'final-fixer', 'code-fixer', 'fix']
 
@@ -48,22 +48,28 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     if (label.startsWith('synthesis:')) {
       return { verdicts: [{ id: 'docs/x.md::gap', action: 'keep', reason: 'r', severity: 'Critical' }] }
     }
-    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{}' }]
+    if (label === 'exec') {
+      if (p.includes('read-gate')) return [{ index: 0, ok: true, stdout: 'passed' }]
+      if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
+      if (p.includes('task_list_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
+      if (p.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
     if (label === 'lib') return { ok: true }
     if (label === 'gather build state') {
       return jsonOut({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' })
     }
     if (label === 'record task built' || label === 'record task reviewed') return jsonOut({ ok: true, read_back: true, task: '1' })
-    if (label === 'read verify + minors') return jsonOut({ minors: [], verify: { command: 'none' } })
+    if (label === 'read verify + minors') return jsonOut({ ok: true, verify_command: 'none', minors: [] })
     if (label === 'stamp build coverage' || label === 'stamp review coverage') return jsonOut({ ok: true, read_back: true })
     if (label === 'resolve review target') return jsonOut({ ok: true, worktree: '/wt', expectedHead: 'abc' })
-    if (label === 'run verify') return jsonOut({ ok: true, returncode: 0 })
+    if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label === 'open draft PR') return jsonOut({ ok: true, read_back: true, pr: { number: 1, url: 'u', state: 'open' } })
     if (label === 'mark PR ready') return jsonOut({ ok: true, read_back: true })
     if (label === 'plan-tests') return { records: [{ branch: 'b', steps: [{ id: 's1', instruction: 'i', expected: 'e', scenarioIds: ['a'] }] }] }
     if (label === 'browser-pass') return { source: 'browser', steps: [{ id: 's1', status: 'passed' }] }
     if (label === 'read test context') {
-      return jsonOut({ head: 'abc', branch: 'b', profile: { baseUrl: 'http://x' }, browserTool: { kind: 'mcp' }, allowedOrigins: ['http://x'], diff: { files: ['a'] }, detectors: { browser: true } })
+      return jsonOut({ head: 'abc', branch: 'b', pr: { number: 1 }, profile: { baseUrl: 'http://x' }, browserTool: { kind: 'mcp' }, allowedOrigins: ['http://x'], diff: { files: ['a'] }, detectors: { browser: true } })
     }
     if (label === 'prepare test run') {
       return jsonOut({ artifactResult: { ok: true, artifacts: {}, posting: { ok: true } }, serverContext: { verdict: 'ready_external', baseUrl: 'http://x', allowedOrigins: ['http://x'] }, seedResult: { action: 'ready_for_browser' } })
@@ -98,12 +104,8 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
   await testPilotPhase('wi', 1, sr.testPilotDeps('wi', 1))
   await sr.shipPhase('wi', { number: 1 }, 1)
 
-  for (const label of required) {
-    if (!seen.has(label)) await global.agent('probe', { label })
-  }
-
-  for (const label of required) {
-    assert.ok(seen.has(label), 'missing required label: ' + label)
+  for (const label of exercised) {
+    assert.ok(seen.has(label), 'missing exercised label: ' + label)
   }
   for (const label of forbidden) {
     assert.ok(!seen.has(label), 'forbidden label present: ' + label)

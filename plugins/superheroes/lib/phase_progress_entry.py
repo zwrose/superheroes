@@ -44,7 +44,8 @@ def _reflects(paths, step, phase, payload):
 
 
 def _apply(paths, work_item, step, phase, payload, side):
-    journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
+    if not any(record == payload for record in _phase_records(paths["events"])):
+        journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
     cp = checkpoint.read(paths["checkpoint"]) or checkpoint.new(work_item, "")
     cp["lastGoodStep"] = step
     cp["lastGoodPhase"] = phase

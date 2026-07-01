@@ -8,6 +8,7 @@ function makeAgent(routes, labels) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     labels.push(label)
+    if (label.startsWith('branch-reviewer:')) return { findings: [] }
     for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''
@@ -40,8 +41,7 @@ function makeAgent(routes, labels) {
     ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
     ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
-    ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] }) }]],
-    ['branch-reviewer:r1', { findings: [] }],
+    ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
     ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
     ['run verify', { command: 'none', returncode: 0, timedOut: false }],
   ], labels)
