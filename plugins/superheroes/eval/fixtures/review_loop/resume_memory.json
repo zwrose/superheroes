@@ -1,0 +1,22 @@
+{
+  "name": "resume-memory",
+  "reviewerSet": ["test-reviewer"],
+  "seedRoundRecords": [{
+    "schemaVersion": 2,
+    "round": 1,
+    "kind": "baseline",
+    "dimensions": {"test-reviewer": {"status": "run", "confidence": "high", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}], "hasFindings": true, "subjects": ["Test"]}},
+    "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}],
+    "changedSubjects": ["Test"],
+    "coverageDecisions": [{"id": "RCD-resume", "classKey": "Test::coverage::missing acceptance test"}]
+  }],
+  "seedCoverageDecisions": [{"id": "RCD-resume", "classKey": "Test::coverage::missing acceptance test"}],
+  "reviewerEvents": [
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}], "usageTotal": 1000}
+  ],
+  "seededFiles": ["round-records.json", "review-coverage-decisions.json"],
+  "expectedFixContext": ["priorFindings", "classKeys", "changedSubjects", "coverageDecision"],
+  "corruptStateExpectedPolicy": "full reviewer-deep round",
+  "corruptStateMustNotCertify": true,
+  "atomicWriteFailureKeepsOldDoc": true
+}

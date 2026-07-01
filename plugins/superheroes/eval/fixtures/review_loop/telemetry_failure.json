@@ -1,0 +1,12 @@
+{
+  "name": "telemetry-failure-does-not-change-terminal",
+  "reviewerSet": ["test-reviewer"],
+  "reviewerEvents": [
+    {"round": 1, "reviewer": "test-reviewer", "findings": [], "usageTotal": 1000}
+  ],
+  "baselineTerminal": "clean",
+  "telemetryWriteFails": true,
+  "missingUsage": ["synthesis:r1"],
+  "expectedTerminal": "clean",
+  "benchmarkValid": false
+}
