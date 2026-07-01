@@ -1,0 +1,19 @@
+{
+  "input": [{
+    "round": 2,
+    "dimensions": ["test-reviewer", "security-reviewer"],
+    "changedSubjects": ["Test"],
+    "previous": {
+      "test-reviewer": {"dimension": "test-reviewer", "status": "run", "confidence": "high", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important"}], "round": 1},
+      "security-reviewer": {"dimension": "security-reviewer", "status": "run", "confidence": "high", "findings": [], "round": 1}
+    }
+  }],
+  "expected": {
+    "roundKind": "intermediate",
+    "dimensions": {
+      "test-reviewer": {"action": "run", "tier": "reviewer", "reason": "previous finding or changed subject"},
+      "security-reviewer": {"action": "skip", "tier": "reviewer-deep", "reason": "high-confidence clean and untouched", "carriedFromRound": 1}
+    },
+    "escalationPolicy": "cheap-first"
+  }
+}
