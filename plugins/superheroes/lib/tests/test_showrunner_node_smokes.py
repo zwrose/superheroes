@@ -7,6 +7,7 @@ import pytest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 SHOWRUNNER_SMOKES = [
+    "plugins/superheroes/lib/tests/courier_exec_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_bundle_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_entry_await_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_boundary_smoke.js",
@@ -78,7 +79,7 @@ def test_showrunner_node_smokes_are_enforced():
     discovered = {
         os.path.join("plugins", "superheroes", "lib", "tests", name)
         for name in os.listdir(smoke_dir)
-        if (name.startswith("showrunner_") or name.startswith("build_phase_"))
+        if (name.startswith("showrunner_") or name.startswith("build_phase_") or name.startswith("courier_"))
         and name.endswith("_smoke.js")
     }
     assert discovered == set(SHOWRUNNER_SMOKES)
