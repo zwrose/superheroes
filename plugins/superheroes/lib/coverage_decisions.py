@@ -41,6 +41,25 @@ def _entry(decision):
     return f"- **{did}** ({kind}; round {source}; class `{key}`): {text}\n  `review-coverage-decision-json:{payload}`\n"
 
 
+def _insert_section_entry(original, entry):
+    """Append entry inside ## Review coverage decisions, before the next ## heading."""
+    lines = original.split("\n")
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == SECTION)
+    except StopIteration:
+        return original.rstrip() + "\n\n" + SECTION + "\n\n" + entry
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+    body = "\n".join(lines[start + 1:end]).rstrip()
+    if entry.strip() in body:
+        return original
+    new_section = SECTION + "\n\n" + (body + "\n" if body else "") + entry.rstrip("\n")
+    return "\n".join(lines[:start] + [new_section] + lines[end:]).rstrip() + "\n"
+
+
 def _with_fence(decision, run_id, lease=None):
     if not run_id:
         return None
@@ -61,7 +80,7 @@ def record_doc_decision(path, decision, expected_hash=None, run_id=None, lease=N
         return {"ok": False, "reason": "stale"}
     entry = _entry(decision)
     if SECTION in original:
-        updated = original.rstrip() + "\n" if entry in original else original.rstrip() + "\n" + entry
+        updated = _insert_section_entry(original, entry)
     else:
         updated = original.rstrip() + "\n\n" + SECTION + "\n\n" + entry
     result = _atomic_write(path, updated)

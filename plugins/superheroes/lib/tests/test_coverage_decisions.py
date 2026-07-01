@@ -67,3 +67,15 @@ def test_missing_run_id_refuses_write(tmp_path):
     path = tmp_path / "review-coverage-decisions.json"
     result = CD.record_code_decision(str(path), {"id": "RCD-missing", "text": "x"}, expected_hash=CD.content_hash(""))
     assert result == {"ok": False, "reason": "missing-run-id"}
+
+
+def test_second_doc_decision_stays_inside_coverage_section(tmp_path):
+    doc = tmp_path / "plan.md"
+    doc.write_text("# Plan\n\n## Review coverage decisions\n\n- **RCD-1** (coverage; round 1; class `Test::a`): first\n\n## Gates\n\npending\n", encoding="utf-8")
+    before = CD.content_hash(doc.read_text(encoding="utf-8"))
+    result = CD.record_doc_decision(str(doc), {"id": "RCD-2", "text": "second", "classKey": "Test::b", "sourceRound": 2}, expected_hash=before, run_id="run-1")
+    assert result["ok"] is True
+    text = doc.read_text(encoding="utf-8")
+    gates_idx = text.index("## Gates")
+    rcd2_idx = text.index("RCD-2")
+    assert rcd2_idx < gates_idx

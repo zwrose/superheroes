@@ -156,12 +156,38 @@ def round_gate(compiled, expected_roster, completed_roster):
     return gate, confidence, incomplete
 
 
+def _current_blocking_findings(results):
+    out = []
+    for result in (results or {}).values():
+        if not isinstance(result, dict) or result.get("status") != "run":
+            continue
+        for f in result.get("findings") or []:
+            if not isinstance(f, dict) or f.get("carried"):
+                continue
+            if f.get("severity") in BLOCKING:
+                out.append(f)
+    return out
+
+
+def present_blocking_from_dimension_results(results):
+    return len(_current_blocking_findings(results))
+
+
+def blocking_findings_from_dimension_results(results):
+    return [dict(f) for f in _current_blocking_findings(results)]
+
+
 def compile_dimension_results(results):
     findings = []
     for name, result in (results or {}).items():
+        if not isinstance(result, dict):
+            continue
         for f in result.get("findings") or []:
+            if not isinstance(f, dict):
+                continue
             item = dict(f)
-            item.setdefault("dimension", result.get("dimension") or name)
+            if "dimension" not in item:
+                item["dimension"] = result.get("dimension") or name
             if result.get("status") == "skipped":
                 item["carried"] = True
                 item["sourceRound"] = result.get("carriedFromRound")
@@ -206,6 +232,8 @@ def round_gate_from_dimension_results(results, expected_roster, final_confirmati
             result = (results or {}).get(name) or {}
             if not _valid_final_receipt(result, receipt_context):
                 return "cannot-certify", "low", missing
+    if gate == "clean" and _current_blocking_findings(results):
+        return "blocking", confidence, missing
     return gate, confidence, missing
 
 

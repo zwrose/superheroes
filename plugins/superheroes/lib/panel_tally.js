@@ -60,12 +60,31 @@ function decideTerminal(gate, presentBlocking, presentDeferredCount, fixStatus, 
   const [action, , reason] = loopState.decide(blockingFixed, presentDeferredCount, rnd, maxRounds, !!breakerHalt)
   return { terminal: _ACTION_TO_TERMINAL[action], reason }
 }
+function _currentBlockingFindings(results) {
+  const out = []
+  for (const [, result] of Object.entries(results || {})) {
+    if (!result || result.status !== 'run') continue
+    for (const f of Array.isArray(result.findings) ? result.findings : []) {
+      if (!f || f.carried) continue
+      if (BLOCKING.has(f.severity)) out.push(f)
+    }
+  }
+  return out
+}
+function presentBlockingFromDimensionResults(results) {
+  return _currentBlockingFindings(results).length
+}
+function blockingFindingsFromDimensionResults(results) {
+  return _currentBlockingFindings(results).map((f) => Object.assign({}, f))
+}
 function compileDimensionResults(results) {
   const findings = []
   for (const [name, result] of Object.entries(results || {})) {
-    for (const f of result.findings || []) {
+    if (!result || typeof result !== 'object' || Array.isArray(result)) continue
+    for (const f of Array.isArray(result.findings) ? result.findings : []) {
+      if (!f || typeof f !== 'object' || Array.isArray(f)) continue
       const item = Object.assign({}, f)
-      if (!item.dimension) item.dimension = result.dimension || name
+      if (!Object.prototype.hasOwnProperty.call(item, 'dimension')) item.dimension = result.dimension || name
       if (result.status === 'skipped') {
         item.carried = true
         item.sourceRound = result.carriedFromRound
@@ -109,6 +128,9 @@ function roundGateFromDimensionResults(results, expectedRoster, finalConfirmatio
       }
     }
   }
+  if (base.gate === 'clean' && _currentBlockingFindings(results).length > 0) {
+    return { gate: 'blocking', confidence: base.confidence, incomplete: base.incomplete }
+  }
   return base
 }
-module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, compileDimensionResults, roundGateFromDimensionResults, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }
+module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, compileDimensionResults, roundGateFromDimensionResults, presentBlockingFromDimensionResults, blockingFindingsFromDimensionResults, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }

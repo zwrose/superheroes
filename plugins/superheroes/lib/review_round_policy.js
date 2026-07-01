@@ -3,7 +3,9 @@ const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 
 function _dim(prev, name) {
-  return prev && typeof prev === 'object' ? (prev[name] || {}) : {}
+  if (!prev || typeof prev !== 'object' || Array.isArray(prev)) return {}
+  const info = prev[name]
+  return info && typeof info === 'object' && !Array.isArray(info) ? info : {}
 }
 
 function _changedSubjects(value) {
@@ -11,8 +13,11 @@ function _changedSubjects(value) {
 }
 
 function _safeRound(value) {
-  const n = Number(value || 1)
-  return Number.isFinite(n) ? { value: n, malformed: false } : { value: 1, malformed: true }
+  if (value === null || value === undefined || value === '') return { value: 1, malformed: false }
+  if (typeof value === 'string' && value.includes('.')) return { value: 1, malformed: true }
+  const n = Number(value)
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return { value: 1, malformed: true }
+  return { value: n, malformed: false }
 }
 
 function _subjects(name, info) {

@@ -34,7 +34,7 @@ def render(record):
     if record.get("parentOrigin"):
         lines += ["**Traces to an upstream phase:** %s (not re-entered automatically)."
                   % record["parentOrigin"], ""]
-    decisions = record.get("coverageDecisions") if isinstance(record, dict) else None
+    decisions = record.get("coverageDecisions")
     if isinstance(decisions, list) and decisions:
         lines.append("")
         lines.append("Coverage decisions:")
@@ -45,8 +45,9 @@ def render(record):
             if decision.get("challengedBy"):
                 text += f" [challenged by {decision.get('challengedBy')}]"
             lines.append(text)
+        lines.append("")
 
-    telemetry = record.get("telemetry") if isinstance(record, dict) else None
+    telemetry = record.get("telemetry")
     if isinstance(telemetry, dict):
         usage = telemetry.get("tokenUsage") or {}
         if usage.get("complete") is True:
@@ -60,6 +61,7 @@ def render(record):
             missing = usage.get("missing") or []
             if missing:
                 lines.append("Missing token usage: " + ", ".join(str(x) for x in missing))
+        lines.append("")
     fixes = record.get("fixes") or []
     lines += ["### Fixes made"] + (["- %s" % f for f in fixes] if fixes else ["- (none)"]) + [""]
     deferred = record.get("deferred") or []

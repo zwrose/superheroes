@@ -10,7 +10,10 @@ CHEAP = "reviewer"
 
 
 def _dim(prev, name):
-    return prev.get(name, {}) if isinstance(prev, dict) else {}
+    if not isinstance(prev, dict):
+        return {}
+    info = prev.get(name, {})
+    return info if isinstance(info, dict) else {}
 
 
 def _changed_subjects(value):
@@ -20,8 +23,13 @@ def _changed_subjects(value):
 
 
 def _safe_round(value):
+    if value is None or value == "":
+        return 1, False
     try:
-        return int(value or 1), False
+        n = int(value)
+        if isinstance(value, float) or (isinstance(value, str) and "." in str(value).strip()):
+            return 1, True
+        return n, False
     except (TypeError, ValueError):
         return 1, True
 
