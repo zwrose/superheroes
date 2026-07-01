@@ -4,6 +4,7 @@ review / final-review. Git + store IO live here; build_state.py stays pure."""
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_state, control_plane, ship_gate, base_ref
+import idempotent_write
 
 
 def _git(root, *args):
@@ -80,6 +81,8 @@ def main(argv):
     g.add_argument("--branch", required=True); g.add_argument("--valid-ids", default="")
     g.add_argument("--worktree", default=None)   # the build worktree to read git from (else ambient root)
     g.add_argument("--base", default=None)       # configurable base branch; absent -> _base() detection
+    rb = sub.add_parser("record-built"); rb.add_argument("--work-item", required=True)
+    rb.add_argument("--task", required=True)
     rr = sub.add_parser("record-reviewed"); rr.add_argument("--work-item", required=True)
     rr.add_argument("--task", required=True)
     rf = sub.add_parser("record-final-review"); rf.add_argument("--work-item", required=True)
@@ -101,11 +104,75 @@ def main(argv):
         return 0
     sp = build_state.state_path(root, a.work_item)
     os.makedirs(os.path.dirname(sp), exist_ok=True)
-    if a.cmd == "record-reviewed":
-        build_state.set_reviewed(sp, a.task)
+    if a.cmd == "record-final-review":
+        clean = a.clean == "true"
+
+        def _read_final():
+            st = build_state.read_state(sp)
+            fr = st.get("final_review") or {}
+            return fr.get("clean") is clean
+
+        def _apply_final():
+            build_state.set_final_review(sp, clean)
+            return _read_final(), {"read_back": _read_final(), "clean": clean}
+
+        result = idempotent_write.idempotent_apply(
+            f"build-state:{a.work_item}:final-review:{clean}",
+            lambda: (_read_final(), {"read_back": _read_final(), "clean": clean}),
+            _apply_final,
+        )
+        detail = result.get("detail") or {}
+        print(json.dumps({
+            "ok": bool(result.get("ok")),
+            "already": bool(result.get("already")),
+            "read_back": bool(detail.get("read_back")),
+            "clean": bool(detail.get("clean")),
+        }))
+        return 0
+
+    task = str(a.task)
+
+    def _read_state():
+        return build_state.read_state(sp)
+
+    def _read_back(kind):
+        st = _read_state()
+        if kind == "built":
+            return task in (st.get("built") or {})
+        return (st.get("reviewed") or {}).get(task) == "passed"
+
+    def _apply_built():
+        st = _read_state()
+        st.setdefault("built", {})
+        st["built"][task] = "passed"
+        control_plane.atomic_write(sp, json.dumps(st))
+        return _read_back("built"), {"read_back": _read_back("built"), "task": task}
+
+    def _apply_reviewed():
+        build_state.set_reviewed(sp, task)
+        return _read_back("reviewed"), {"read_back": _read_back("reviewed"), "task": task}
+
+    if a.cmd == "record-built":
+        key = f"build-state:{a.work_item}:built:{task}"
+        result = idempotent_write.idempotent_apply(
+            key,
+            lambda: (_read_back("built"), {"read_back": _read_back("built"), "task": task}),
+            _apply_built,
+        )
     else:
-        build_state.set_final_review(sp, a.clean == "true")
-    print(json.dumps({"ok": True}))
+        key = f"build-state:{a.work_item}:reviewed:{task}"
+        result = idempotent_write.idempotent_apply(
+            key,
+            lambda: (_read_back("reviewed"), {"read_back": _read_back("reviewed"), "task": task}),
+            _apply_reviewed,
+        )
+    detail = result.get("detail") or {}
+    print(json.dumps({
+        "ok": bool(result.get("ok")),
+        "already": bool(result.get("already")),
+        "read_back": bool(detail.get("read_back")),
+        "task": detail.get("task") or task,
+    }))
     return 0
 
 

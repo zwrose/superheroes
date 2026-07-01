@@ -1,0 +1,11 @@
+{
+  "input": [
+    "not a dict",
+    {},
+    {}
+  ],
+  "expected": {
+    "verdict": "park",
+    "reason": "malformed inputs"
+  }
+}

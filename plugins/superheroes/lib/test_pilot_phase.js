@@ -6,6 +6,9 @@
 // helpers, each of which returns `{ done: <terminalResult> }` to short-circuit (park or proceed) or
 // the state it produced. Judgment stays in the injected leaves + pure helpers (§10.1); these helpers
 // are control flow only.
+const deciders = require('./test_pilot_deciders.js')
+const prCommentScrub = require('./pr_comment_scrub.js')
+
 async function testPilotPhase(workItem, generation, deps) {
   deps = deps || {}
 
@@ -43,7 +46,7 @@ async function resolveApplicabilityAndSetup(deps, workItem, generation) {
 
   let applicability
   try {
-    applicability = await callLeaf(deps.decideApplicability, context)
+    applicability = deciders.applicabilityDecision(context.diff, context.detectors, context.profile, context.planResult)
   } catch (err) {
     return { done: low(`test-pilot applicability failed: ${message(err)}`) }
   }
@@ -84,7 +87,7 @@ async function preparePlanAndRecords(deps, workItem, context) {
 
   let plan
   try {
-    plan = await callLeaf(deps.derivePlan, context)
+    plan = await callLeaf(deps.planTests || deps.derivePlan, context)
   } catch (err) {
     return { done: low(`test-pilot plan derivation failed: ${message(err)}`) }
   }
@@ -144,6 +147,32 @@ async function preparePlanAndRecords(deps, workItem, context) {
 // Phase 3: prepare artifacts, resolve the server, seed records — each with its readiness milestone.
 // Returns `{ artifactResult, serverContext, seedResult }` to proceed or `{ done }` for a terminal.
 async function prepareExecutionContext(deps, workItem, context, plan, records, previousStatus) {
+  if (typeof deps.prepareTestRun === 'function') {
+    let folded
+    try {
+      folded = await callLeaf(deps.prepareTestRun, { plan, records, context, previousStatus, workItem })
+    } catch (err) {
+      return { done: low(`test-pilot preparation failed: ${message(err)}`) }
+    }
+    const artifactResult = folded && folded.artifactResult
+    const serverContext = folded && folded.serverContext
+    const seedResult = folded && folded.seedResult
+    const artifactProblem = artifactReadinessProblem(artifactResult)
+    if (artifactProblem) return { done: low(artifactProblem) }
+    const serverProblem = serverContextProblem(serverContext, context)
+    if (serverProblem) return { done: low(serverProblem) }
+    const seedProblem = seedReadinessProblem(seedResult)
+    if (seedProblem) return { done: low(seedProblem) }
+    const wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'seed-ready', {
+      planRecords: records,
+      artifacts: artifactResult.artifacts,
+      server: publicServerContext(serverContext),
+      seed: seedResult.status || seedResult,
+    }))
+    if (!wrote.ok) return { done: low(wrote.reason) }
+    return { artifactResult, serverContext, seedResult }
+  }
+
   let artifactResult
   try {
     artifactResult = await callLeaf(deps.prepareArtifacts, {
@@ -245,7 +274,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
           rerunScope,
           retryState,
         )
-        return callLeaf(deps.runBrowserPass, browserContext)
+        return callLeaf(deps.browserPass || deps.runBrowserPass, browserContext)
       })
     } catch (err) {
       return { done: low(`test-pilot browser execution failed: ${message(err)}`) }
@@ -256,14 +285,7 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     }
 
     try {
-      aggregated = await callLeaf(deps.aggregateResults, rawResults, {
-        context,
-        records: browserRecords,
-        allRecords: records,
-        server: serverContext,
-        rerunScope,
-        fixBatchHistory: retryState.fixBatchHistory,
-      })
+      aggregated = deciders.aggregateResults(rawResults, { scrubber: prCommentScrub.scrub })
     } catch (err) {
       return { done: low(`test-pilot result aggregation failed: ${message(err)}`) }
     }
@@ -491,6 +513,7 @@ async function writeStatus(deps, workItem, status) {
       // contract is writeStatus(status) — don't pass a 2nd arg no implementation reads.
       const out = await deps.writeStatus(status)
       if (out && out.ok === false) return { ok: false, reason: out.reason || 'test-pilot status write failed' }
+      if (out && out.read_back === false) return { ok: false, reason: out.reason || 'test-pilot status read-back mismatch' }
       return { ok: true }
     }
   } catch (err) {
@@ -856,12 +879,24 @@ function latestFixBatch(history) {
 }
 
 async function budgetCheck(deps, phase, payload) {
-  if (typeof deps.budgetCheck !== 'function') return { ok: true }
+  const counts = payload && payload.counts ? payload.counts : {
+    browserPasses: payload && typeof payload.browserPasses === 'number'
+      ? payload.browserPasses
+      : (payload && payload.rerunScope ? 1 : 0),
+    browserFixBatches: payload && payload.fixBatchHistory ? payload.fixBatchHistory.length : 0,
+  }
   try {
-    const out = await deps.budgetCheck(phase, payload)
-    if (out === false) return { ok: false, reason: `test-pilot budget exhausted before ${phase}` }
-    if (out && out.ok === false) return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
-    if (out && out.action === 'park') return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+    if (typeof deps.budgetCheck === 'function') {
+      const out = await deps.budgetCheck(phase, payload)
+      if (out === false) return { ok: false, reason: `test-pilot budget exhausted before ${phase}` }
+      if (out && out.ok === false) return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+      if (out && out.action === 'park') return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+      return { ok: true }
+    }
+    const out = deciders.budgetDecision(counts)
+    if (out.action !== 'within_budget') {
+      return { ok: false, reason: out.reason || `test-pilot budget exhausted before ${phase}` }
+    }
     return { ok: true }
   } catch (err) {
     return { ok: false, reason: `test-pilot budget check failed before ${phase}: ${message(err)}` }
@@ -873,7 +908,7 @@ async function retryDecision(deps, passResult, history, changedFiles, dependency
     if (typeof deps.retryDecide === 'function') {
       return await deps.retryDecide(passResult, history, changedFiles, dependencyMap)
     }
-    return { action: 'park_retry_decision_failed', reason: 'test-pilot retry decision unavailable' }
+    return deciders.retryDecisionFromFacts(passResult, history, changedFiles, dependencyMap)
   } catch (err) {
     return { action: 'park_retry_decision_failed', reason: `test-pilot retry decision failed: ${message(err)}` }
   }
@@ -1078,6 +1113,9 @@ async function publishFinalHead(deps, workItem, context, retryState, payload) {
     }, payload))
     if (!out || out.ok === false || out.action === 'park' || out.confidence === 'low') {
       return { ok: false, reason: (out && out.reason) || 'final tested head publish parked' }
+    }
+    if (out.read_back === false) {
+      return { ok: false, reason: (out && out.reason) || 'final tested head read-back mismatch' }
     }
     const remotePr = out.remotePr || out.remotePR || { branch: context.branch, head: out.head || retryState.currentHead }
     if (!coversHead(remotePr, retryState.currentHead)) {

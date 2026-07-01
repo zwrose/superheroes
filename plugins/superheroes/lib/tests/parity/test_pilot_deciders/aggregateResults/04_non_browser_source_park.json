@@ -1,0 +1,18 @@
+{
+  "input": [
+    {
+      "source": "synthetic",
+      "steps": [
+        {
+          "id": "step-1",
+          "status": "pass",
+          "notes": "x"
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "action": "park",
+    "reason": "browser-derived evidence/source is required"
+  }
+}

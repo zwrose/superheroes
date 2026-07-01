@@ -11,6 +11,16 @@ global.log = (m) => logs.push(m)
 function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    if (label === 'gather build state') {
+      for (const [needle, resp] of routes) {
+        if (needle === 'exec' && typeof resp === 'function') {
+          const raw = resp('build_state_cli.py gather')
+          const row = Array.isArray(raw) ? raw[0] : raw
+          const stdout = (row && row.stdout != null) ? row.stdout : '{}'
+          return [{ ok: true, stdout }]
+        }
+      }
+    }
     for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''

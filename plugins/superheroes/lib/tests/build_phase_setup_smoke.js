@@ -19,7 +19,10 @@ const bp = require('../build_phase.js')
 
 // execRoute(map): a single 'exec' route. `map` is a function(prompt) -> raw stdout string.
 function execRoute(map) {
-  return ['exec', (prompt) => [{ index: 0, ok: true, stdout: map(prompt) }]]
+  return ['exec', (prompt) => [{ ok: true, stdout: map(prompt) }]]
+}
+function gatherRoute(map) {
+  return ['gather build state', (prompt) => [{ ok: true, stdout: map(prompt) }]]
 }
 
 ;(async () => {
@@ -45,7 +48,7 @@ function execRoute(map) {
   global.agent = makeAgent([['exec', () => [{ index: 0, ok: false, stdout: 'leaf crashed' }]]])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low')
-  assert.ok(/read the tasks gate/i.test((r.assumptions || [])[0] || ''), 'honest gate fail-closed reason')
+  assert.ok(/tasks gate not passed/i.test((r.assumptions || [])[0] || ''), 'honest gate fail-closed reason')
 
   // Failed setup (no branch) -> park (UFR-2).
   global.agent = makeAgent([
@@ -67,9 +70,9 @@ function execRoute(map) {
       if (p.includes('read-gate')) return 'passed'
       if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
       if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'One' }], raw_task_heading_count: 1 })
-      if (p.includes('build_state_cli.py gather')) return JSON.stringify({ error: baseErr })
       return '{}'
     }),
+    gatherRoute(() => JSON.stringify({ error: baseErr })),
   ])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low')
@@ -77,17 +80,13 @@ function execRoute(map) {
     'buildPhase must park with the SPECIFIC base-resolution reason, not the generic gather park')
 
   // gatherState() surfaces the structured error directly as {__error}.
-  global.agent = makeAgent([
-    execRoute((p) => (p.includes('build_state_cli.py gather') ? JSON.stringify({ error: baseErr }) : '{}')),
-  ])
+  global.agent = makeAgent([gatherRoute(() => JSON.stringify({ error: baseErr }))])
   const gs = await bp.gatherState('wi', 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.deepStrictEqual(gs, { __error: baseErr }, 'gatherState surfaces {__error} from a structured leaf error')
 
   // A normal successful gather (no error key) still returns the full state object unchanged.
   global.agent = makeAgent([
-    execRoute((p) => (p.includes('build_state_cli.py gather')
-      ? JSON.stringify({ committed_task_ids: ['1'], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' })
-      : '{}')),
+    gatherRoute(() => JSON.stringify({ committed_task_ids: ['1'], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' })),
   ])
   const gs2 = await bp.gatherState('wi', 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(gs2.__error, undefined, 'normal gather has no __error')

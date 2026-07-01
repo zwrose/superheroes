@@ -1,0 +1,13 @@
+{
+  "input": [
+    {
+      "browserSteps": 6
+    },
+    {
+      "browserSteps": 6
+    }
+  ],
+  "expected": {
+    "action": "within_budget"
+  }
+}

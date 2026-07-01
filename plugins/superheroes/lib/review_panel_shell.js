@@ -181,7 +181,7 @@ async function verifyAgent(verifyCommand, runDir, round) {
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
+    { label: 'run verify', schema: VERIFY_SCHEMA })
   if (!out) return 'fail'  // fail-closed if the runner gave nothing
   // Classify with the command the SPINE knows (verifyCommand), NOT the leaf's echoed out.command.
   // A garbled leaf that drops `command` would make the twin see !cmd -> 'skipped' (a pass-equivalent

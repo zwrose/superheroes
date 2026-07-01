@@ -92,7 +92,7 @@ async function main() {
     // Override agent to return stringified fields as the courier would.
     const prevAgent = global.agent
     global.agent = async (prompt, opts) => {
-      if (opts && opts.label && opts.label.startsWith('verify:')) {
+      if (opts && opts.label === 'run verify') {
         return { command: 'run-tests', returncode: '0', timedOut: 'false' }  // courier-stringified
       }
       return null

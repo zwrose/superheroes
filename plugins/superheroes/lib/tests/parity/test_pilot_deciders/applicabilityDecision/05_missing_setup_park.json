@@ -1,0 +1,20 @@
+{
+  "input": [
+    {
+      "files": [
+        "web/app.jsx"
+      ]
+    },
+    {
+      "frontend": true,
+      "requires_setup": [
+        "baseUrl"
+      ]
+    },
+    {}
+  ],
+  "expected": {
+    "verdict": "park",
+    "reason": "missing required setup: baseUrl"
+  }
+}

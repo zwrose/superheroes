@@ -1,0 +1,10 @@
+{
+  "input": [
+    {
+      "planRecords": 20
+    }
+  ],
+  "expected": {
+    "action": "within_budget"
+  }
+}

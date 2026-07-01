@@ -18,82 +18,74 @@ global.log = () => {}
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 
 // ---------------------------------------------------------------------------
-// (A) shipPhase: freshness step must thread __SR_BASE into ship_phase.py
+// (A) shipPhase: check ship-readiness must thread __SR_BASE into ship_phase.py
 // ---------------------------------------------------------------------------
+function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
+
+function shipReadinessStub(capturedCmds) {
+  return async (p, opts) => {
+    const label = (opts && opts.label) || ''
+    if (label === 'resolve review target') {
+      return jsonOut({ ok: true, worktree: '/wt', expectedHead: '/wt-head-sha' })
+    }
+    if (label === 'lib' && p.includes('fence_cli')) return { ok: true }
+    if (label === 'check ship-readiness') {
+      capturedCmds.push(p)
+      return jsonOut({
+        ok: true,
+        reconcile: { ok: true, head: '/wt-head-sha', reason: 'in sync' },
+        freshness: { decision: 'up_to_date' },
+        integrated: false,
+        checks: [{ name: 'ci', bucket: 'pass', state: 'success' }],
+      })
+    }
+    if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
+    if (label === 'lib') return { ok: true }
+    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+    return null
+  }
+}
+
 ;(async () => {
-  // (A1) base set -> --base <branch> appears in the freshness command
-  // Note: shipPhase calls ship_phase.py --step freshness via cmdRunner (label: 'lib'), not exec.
+  // (A1) base set -> --base <branch> appears in the ship-readiness command
   {
-    const capturedLibCmds = []
+    const capturedReadinessCmds = []
     delete require.cache[require.resolve('../showrunner.js')]
     const sr = require('../showrunner.js')
     const savedBase = globalThis.__SR_BASE
     globalThis.__SR_BASE = 'live-showrunner-102'
-    global.agent = async (p, opts) => {
-      const label = (opts && opts.label) || ''
-      if (label === 'lib') {
-        capturedLibCmds.push(p)
-        if (p.includes('freshness')) return { decision: 'up_to_date' }
-        if (p.includes('readout_post') || p.includes('readout')) return { posted: true }
-        return { ok: true }
-      }
-      if (label === 'exec') {
-        // resolveBuildTarget: build_entry.py needs path+outcome, rev-parse needs a sha
-        if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ path: '/wt', outcome: 'reused' }) }]
-        if (p.includes('rev-parse')) return [{ index: 0, ok: true, stdout: '/wt-head-sha' }]
-        // ci checks via exec -> return green
-        if (p.includes('emit-checks')) return [{ index: 0, ok: true, stdout: '[{"name":"ci","bucket":"pass","state":"success"}]' }]
-        return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
-      }
-      return null
-    }
+    global.agent = shipReadinessStub(capturedReadinessCmds)
     await sr.shipPhase('wi', { number: 7 }, 5)
     globalThis.__SR_BASE = savedBase
 
-    const freshnessCmd = capturedLibCmds.find((c) => c.includes('freshness'))
-    assert.ok(freshnessCmd, '(A1) shipPhase must call ship_phase.py --step freshness via cmdRunner (lib)')
-    assert.ok(freshnessCmd.includes('--base'), '(A1) __SR_BASE set -> --base must appear in freshness command')
-    assert.ok(freshnessCmd.includes('live-showrunner-102'), '(A1) base branch name must appear in freshness command')
+    const readinessCmd = capturedReadinessCmds[0]
+    assert.ok(readinessCmd, '(A1) shipPhase must call ship-readiness via courier')
+    assert.ok(readinessCmd.includes('--base'), '(A1) __SR_BASE set -> --base must appear in ship-readiness command')
+    assert.ok(readinessCmd.includes('live-showrunner-102'), '(A1) base branch name must appear in ship-readiness command')
   }
 
-  // (A2) base unset -> --base must NOT appear in freshness command
+  // (A2) base unset -> --base must NOT appear in ship-readiness command
   {
-    const capturedLibCmds = []
+    const capturedReadinessCmds = []
     delete require.cache[require.resolve('../showrunner.js')]
     const sr = require('../showrunner.js')
     const savedBase = globalThis.__SR_BASE
     delete globalThis.__SR_BASE
-    global.agent = async (p, opts) => {
-      const label = (opts && opts.label) || ''
-      if (label === 'lib') {
-        capturedLibCmds.push(p)
-        if (p.includes('freshness')) return { decision: 'up_to_date' }
-        if (p.includes('readout_post') || p.includes('readout')) return { posted: true }
-        return { ok: true }
-      }
-      if (label === 'exec') {
-        // resolveBuildTarget: build_entry.py needs path+outcome, rev-parse needs a sha
-        if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ path: '/wt', outcome: 'reused' }) }]
-        if (p.includes('rev-parse')) return [{ index: 0, ok: true, stdout: '/wt-head-sha' }]
-        if (p.includes('emit-checks')) return [{ index: 0, ok: true, stdout: '[{"name":"ci","bucket":"pass","state":"success"}]' }]
-        return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
-      }
-      return null
-    }
+    global.agent = shipReadinessStub(capturedReadinessCmds)
     await sr.shipPhase('wi', { number: 7 }, 5)
     if (savedBase !== undefined) globalThis.__SR_BASE = savedBase
     else delete globalThis.__SR_BASE
 
-    const freshnessCmd = capturedLibCmds.find((c) => c.includes('freshness'))
-    assert.ok(freshnessCmd, '(A2) shipPhase must call freshness via cmdRunner (lib)')
-    assert.ok(!freshnessCmd.includes('--base'), '(A2) __SR_BASE unset -> --base must NOT appear in freshness command (default behavior)')
+    const readinessCmd = capturedReadinessCmds[0]
+    assert.ok(readinessCmd, '(A2) shipPhase must call ship-readiness via courier')
+    assert.ok(!readinessCmd.includes('--base'), '(A2) __SR_BASE unset -> --base must NOT appear in ship-readiness command (default behavior)')
   }
 
   // ---------------------------------------------------------------------------
   // (B) draftPRPhase: --base must thread into pr_entry.py pr create call
   // ---------------------------------------------------------------------------
 
-  // (B1) base set -> --base appears in pr create exec call
+  // (B1) base set -> --base appears in draft PR courier command
   {
     const capturedCmds = []
     delete require.cache[require.resolve('../showrunner.js')]
@@ -102,27 +94,23 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     globalThis.__SR_BASE = 'live-showrunner-102'
     global.agent = async (p, opts) => {
       const label = (opts && opts.label) || ''
-      if (label === 'exec') {
+      if (label === 'open draft PR') {
         capturedCmds.push(p)
-        // emit-world call -> no open PR -> 'create'
-        if (p.includes('emit-world')) return [{ index: 0, ok: true, stdout: '{"pr":null}' }]
-        // pr create call -> ok
-        if (p.includes('pr_entry')) return [{ index: 0, ok: true, stdout: '{"ok":true,"pr":{"number":42,"url":"https://example.test/pr/42","isDraft":true,"state":"OPEN"}}' }]
-        return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+        return jsonOut({
+          ok: true,
+          pr: { number: 42, url: 'https://example.test/pr/42', isDraft: true, state: 'OPEN' },
+          read_back: true,
+        })
       }
-      if (label === 'lib') return { ok: true }
       return null
     }
     await sr.draftPRPhase('wi')
     globalThis.__SR_BASE = savedBase
 
-    const createCmd = capturedCmds.find((c) => c.includes('pr_entry') && !c.includes('emit-world'))
-    if (createCmd) {
-      // A create was attempted: --base must be present.
-      assert.ok(createCmd.includes('--base'), '(B1) __SR_BASE set -> --base must appear in pr create command')
-      assert.ok(createCmd.includes('live-showrunner-102'), '(B1) base branch name must appear in pr create command')
-    }
-    // If no create cmd (adopted), the test passes trivially (no PR was created to check).
+    const createCmd = capturedCmds[0]
+    assert.ok(createCmd, '(B1) draftPRPhase must call open draft PR courier')
+    assert.ok(createCmd.includes('--base'), '(B1) __SR_BASE set -> --base must appear in pr create command')
+    assert.ok(createCmd.includes('live-showrunner-102'), '(B1) base branch name must appear in pr create command')
   }
 
   // (B2) base unset -> --base must NOT appear in pr create
@@ -134,23 +122,23 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     delete globalThis.__SR_BASE
     global.agent = async (p, opts) => {
       const label = (opts && opts.label) || ''
-      if (label === 'exec') {
+      if (label === 'open draft PR') {
         capturedCmds.push(p)
-        if (p.includes('emit-world')) return [{ index: 0, ok: true, stdout: '{"pr":null}' }]
-        if (p.includes('pr_entry')) return [{ index: 0, ok: true, stdout: '{"ok":true,"pr":{"number":42,"url":"https://example.test/pr/42","isDraft":true,"state":"OPEN"}}' }]
-        return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+        return jsonOut({
+          ok: true,
+          pr: { number: 42, url: 'https://example.test/pr/42', isDraft: true, state: 'OPEN' },
+          read_back: true,
+        })
       }
-      if (label === 'lib') return { ok: true }
       return null
     }
     await sr.draftPRPhase('wi')
     if (savedBase !== undefined) globalThis.__SR_BASE = savedBase
     else delete globalThis.__SR_BASE
 
-    const createCmd = capturedCmds.find((c) => c.includes('pr_entry') && !c.includes('emit-world'))
-    if (createCmd) {
-      assert.ok(!createCmd.includes('--base'), '(B2) __SR_BASE unset -> --base must NOT appear in pr create (default behavior)')
-    }
+    const createCmd = capturedCmds[0]
+    assert.ok(createCmd, '(B2) draftPRPhase must call open draft PR courier')
+    assert.ok(!createCmd.includes('--base'), '(B2) __SR_BASE unset -> --base must NOT appear in pr create (default behavior)')
   }
 
   // ---------------------------------------------------------------------------
@@ -168,17 +156,15 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     globalThis.__SR_BASE = 'live-showrunner-102'
     global.agent = async (p, opts) => {
       const label = (opts && opts.label) || 'other'
-      // exec's leaf returns the array shape; capture the prompt (it contains the gather command).
-      if (label === 'exec') { capturedCmds.push(p); return [{ index: 0, ok: true, stdout: '{}' }] }
+      if (label === 'gather build state') { capturedCmds.push(p); return jsonOut({}) }
       return null
     }
-    // Invoke gatherState directly (it is exported).
     await bp.gatherState('wi', 'branch', '1,2', '/wt')
     globalThis.__SR_BASE = savedBase
 
-    assert.ok(capturedCmds.length > 0, '(C1) gatherState must call build_state_cli.py via exec')
+    assert.ok(capturedCmds.length > 0, '(C1) gatherState must call build_state_cli.py via courier')
     const gatherCmd = capturedCmds[0]
-    assert.ok(gatherCmd.includes('build_state_cli.py gather'), '(C1) exec prompt must list the gather command')
+    assert.ok(gatherCmd.includes('build_state_cli.py gather'), '(C1) courier command must list the gather command')
     assert.ok(gatherCmd.includes('--base'), '(C1) __SR_BASE set -> --base must appear in gather command')
     assert.ok(gatherCmd.includes('live-showrunner-102'), '(C1) base branch name must appear in gather command')
   }
@@ -192,16 +178,16 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     delete globalThis.__SR_BASE
     global.agent = async (p, opts) => {
       const label = (opts && opts.label) || 'other'
-      if (label === 'exec') { capturedCmds.push(p); return [{ index: 0, ok: true, stdout: '{}' }] }
+      if (label === 'gather build state') { capturedCmds.push(p); return jsonOut({}) }
       return null
     }
     await bp.gatherState('wi', 'branch', '1,2', '/wt')
     if (savedBase !== undefined) globalThis.__SR_BASE = savedBase
     else delete globalThis.__SR_BASE
 
-    assert.ok(capturedCmds.length > 0, '(C2) gatherState must call build_state_cli.py via exec')
+    assert.ok(capturedCmds.length > 0, '(C2) gatherState must call build_state_cli.py via courier')
     const gatherCmd = capturedCmds[0]
-    assert.ok(gatherCmd.includes('build_state_cli.py gather'), '(C2) exec prompt must list the gather command')
+    assert.ok(gatherCmd.includes('build_state_cli.py gather'), '(C2) courier command must list the gather command')
     assert.ok(!gatherCmd.includes('--base'), '(C2) __SR_BASE unset -> no --base in gather (default behavior)')
   }
 

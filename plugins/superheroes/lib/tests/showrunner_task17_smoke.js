@@ -34,6 +34,9 @@ async function partA() {
   globalThis.agent = async function(prompt, opts) {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
+    if (label === 'read startup state') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' } }) }]
+    }
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         // reconcile: return empty snapshot -> world_derive -> proceed
@@ -64,11 +67,10 @@ async function partA() {
     // park or exception is fine; we just want to verify the overrides exec was issued
   }
 
-  // (a1) There must be an exec call that contains 'model_tier_overrides.py'
-  const ovCall = calls.find(
-    (c) => c.label === 'exec' && c.prompt.includes('model_tier_overrides.py'),
-  )
-  assert.ok(ovCall, 'FAIL (a1): startup did not issue an exec containing model_tier_overrides.py')
+  // (a1) Startup reads overrides via the folded read startup state courier leaf.
+  const ovCall = calls.find((c) => c.label === 'read startup state')
+  assert.ok(ovCall, 'FAIL (a1): startup did not issue read startup state courier')
+  assert.ok(ovCall.prompt.includes('model_tier_overrides'), 'FAIL (a1): startup state script loads model_tier_overrides')
 
   // (a2) globalThis.__SR_OVERRIDES must be set to the parsed {role:model} map
   assert.ok(
@@ -91,10 +93,10 @@ async function partA() {
   let savedAgent = globalThis.agent
   globalThis.agent = async function(prompt, opts) {
     const label = (opts && opts.label) || ''
+    if (label === 'read startup state') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: 'bad' }) }]
+    }
     if (label === 'exec') {
-      if (typeof prompt === 'string' && prompt.includes('model_tier_overrides.py')) {
-        return [{ index: 0, ok: false, stdout: 'not-json' }]
-      }
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: '{}' }]
       }
