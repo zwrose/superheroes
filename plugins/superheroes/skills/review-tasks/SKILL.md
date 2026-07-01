@@ -166,6 +166,11 @@ cp "$TASKS_PATH" "$SESSION_DIR/tasks.md"
 [ -f "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" ] && cp "$ROOT/docs/superheroes/$WORK_ITEM/plan.md" "$SESSION_DIR/plan.md"
 [ -f "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" ] && cp "$ROOT/docs/superheroes/$WORK_ITEM/spec.md" "$SESSION_DIR/spec.md"
 
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUN_ID="review-${WORK_ITEM}-${SESSION_DIR##*/}"
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SESSION_DIR/tasks.md")
+LEASE="${SESSION_DIR##*/}"
+
 TOUCHES=()
 grep -Eqi 'route|endpoint|api|handler'                  "$SESSION_DIR/tasks.md" && TOUCHES+=("API")
 grep -Eqi 'component|view|page|screen|UI'               "$SESSION_DIR/tasks.md" && TOUCHES+=("UI")
@@ -444,7 +449,8 @@ ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
 GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc tasks \
   --work-item "$WORK_ITEM" --reviewed-path "$TASKS_PATH" --review "$REVIEW" \
-  --parent-doc plan --root "$ROOT")
+  --parent-doc plan --root "$ROOT" \
+  --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 ```
 
 `$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /

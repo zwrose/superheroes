@@ -22,7 +22,7 @@ const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'pa
                  'review_memory.js',
                  'review_panel_shell.js', 'test_pilot_phase.js', 'build_progress.js',
                  'worker_recovery.js', 'task_review.js', 'build_phase.js',
-                 'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'showrunner.js']
+                 'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'fenced_json.js', 'showrunner.js']
 
 // Registry keys are the bare module name (no './' prefix, no '.js' suffix). `norm` MUST match the
 // runtime `__require`'s key derivation exactly, or every lookup throws "unknown module".

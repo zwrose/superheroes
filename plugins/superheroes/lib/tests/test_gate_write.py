@@ -71,14 +71,28 @@ def _run(capsys, *args):
     return rc, capsys.readouterr().out.strip()
 
 
+def _file_hash(path):
+    with open(path, encoding="utf-8") as fh:
+        return DD.content_hash(fh.read())
+
+
+def _set_gate(path, review, run_id="test-run"):
+    return DD.set_gate(path, review, expected_hash=_file_hash(path), run_id=run_id)
+
+
+def _fence_for(path, run_id="test-run"):
+    return ["--expected-hash", _file_hash(path), "--run-id", run_id]
+
+
 # --- certify (review-plan / review-tasks) ---------------------------------
 
 def test_certify_records_passed_when_parent_approved(tmp_path, capsys):
     root = _docs_root(tmp_path)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
     plan = _write(root, "plan")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
+                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root,
+                   *_fence_for(plan))
     assert rc == 0 and out == "recorded:passed"
     assert _gate(root, "plan") == "passed"
 
@@ -88,7 +102,8 @@ def test_certify_downgrades_when_parent_not_approved(tmp_path, capsys):
     _write(root, "spec")  # parent spec left pending
     plan = _write(root, "plan")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
+                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root,
+                   *_fence_for(plan))
     assert rc == 0 and out == "recorded:changes-requested"
     assert _gate(root, "plan") == "changes-requested"  # never passed with an unapproved parent
 
@@ -100,18 +115,20 @@ def test_certify_changes_requested_writes_through(tmp_path, capsys):
     _write(root, "plan")  # tasks parent (plan) irrelevant — review isn't 'passed'
     tasks = _write(root, "tasks")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "tasks", "--work-item", WI,
-                   "--reviewed-path", tasks, "--review", "changes-requested", "--parent-doc", "plan", "--root", root)
+                   "--reviewed-path", tasks, "--review", "changes-requested", "--parent-doc", "plan", "--root", root,
+                   *_fence_for(tasks))
     assert rc == 0 and out == "recorded:changes-requested"
     assert _gate(root, "tasks") == "changes-requested"
 
 
 def test_certify_noncanonical_skips_and_leaves_canonical_untouched(tmp_path, capsys):
     root = _docs_root(tmp_path)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
-    plan = _write(root, "plan"); DD.set_gate(plan, "changes-requested")  # marker on the canonical doc
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
+    plan = _write(root, "plan"); _set_gate(plan, "changes-requested")  # marker on the canonical doc
     external = _write(root, "plan", where=str(tmp_path / "elsewhere" / WI))  # same WI, different file
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", external, "--review", "passed", "--parent-doc", "spec", "--root", root)
+                   "--reviewed-path", external, "--review", "passed", "--parent-doc", "spec", "--root", root,
+                   *_fence_for(external))
     assert rc == 3 and out == "skipped:noncanonical"  # certify produced a verdict but did NOT record it → non-zero
     assert _gate(root, "plan") == "changes-requested"  # the wrong-file hole: canonical doc untouched
 
@@ -125,7 +142,8 @@ def test_certify_downgrades_when_parent_gate_unreadable(tmp_path, capsys):
         fh.write("# malformed spec — no frontmatter\n")
     plan = _write(root, "plan")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
+                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root,
+                   *_fence_for(plan))
     assert rc == 0 and out == "recorded:changes-requested"
     assert _gate(root, "plan") == "changes-requested"
 
@@ -138,7 +156,8 @@ def test_certify_set_gate_failure_reports(tmp_path, capsys):
     with open(canon, "w", encoding="utf-8") as fh:
         fh.write("# malformed — no frontmatter\n")  # passes the -ef guard, fails set-gate
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", canon, "--review", "changes-requested", "--parent-doc", "plan", "--root", root)
+                   "--reviewed-path", canon, "--review", "changes-requested", "--parent-doc", "plan", "--root", root,
+                   *_fence_for(canon))
     assert rc == 3 and out == "failed:set-gate"  # certify could not record the verdict → non-zero
 
 
@@ -155,12 +174,13 @@ def test_certify_set_gate_raises_fails_closed(tmp_path, capsys, monkeypatch):
     # 'passed' (a green gate with no real review) and must exit NON-ZERO (failed:set-gate) so
     # the failure isn't silently swallowed. The gate stays at its prior 'pending'.
     root = _docs_root(tmp_path)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
     plan = _write(root, "plan")  # canonical, pending
     monkeypatch.setattr(GW.definition_doc, "set_gate",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("induced write failure")))
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root)
+                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root,
+                   *_fence_for(plan))
     assert rc == 3 and out == "failed:set-gate"
     assert _gate(root, "plan") == "pending"  # NOT advanced to passed — the floor holds
 
@@ -169,9 +189,9 @@ def test_certify_set_gate_raises_fails_closed(tmp_path, capsys, monkeypatch):
 
 def test_reset_revokes_stale_approval(tmp_path, capsys):
     root = _docs_root(tmp_path)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
     rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
-                   "--reviewed-path", spec, "--root", root)
+                   "--reviewed-path", spec, "--root", root, *_fence_for(spec))
     assert rc == 0 and out == "reset:pending"
     assert _gate(root, "spec") == "pending"  # stale approval revoked; never re-granted
 
@@ -180,17 +200,17 @@ def test_reset_noop_when_not_approved(tmp_path, capsys):
     root = _docs_root(tmp_path)
     spec = _write(root, "spec")  # pending
     rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
-                   "--reviewed-path", spec, "--root", root)
+                   "--reviewed-path", spec, "--root", root, *_fence_for(spec))
     assert rc == 0 and out == "noop:not-approved"
     assert _gate(root, "spec") == "pending"
 
 
 def test_reset_noncanonical_skips_and_leaves_canonical(tmp_path, capsys):
     root = _docs_root(tmp_path)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
     external = _write(root, "spec", where=str(tmp_path / "elsewhere" / WI))
     rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
-                   "--reviewed-path", external, "--root", root)
+                   "--reviewed-path", external, "--root", root, *_fence_for(external))
     assert rc == 0 and out == "skipped:noncanonical"
     assert _gate(root, "spec") == "passed"  # canonical approval untouched
 
@@ -203,7 +223,7 @@ def test_reset_skipped_when_gate_unreadable(tmp_path, capsys):
     with open(canon, "w", encoding="utf-8") as fh:
         fh.write("# malformed — no frontmatter\n")
     rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
-                   "--reviewed-path", canon, "--root", root)
+                   "--reviewed-path", canon, "--root", root, *_fence_for(canon))
     assert rc == 0 and out == "skipped:unreadable"
 
 
@@ -218,10 +238,10 @@ def test_reset_set_gate_failure_reports(tmp_path, capsys, monkeypatch):
     # _set_gate to fail after a clean read. The stale 'passed' must remain on disk (the hazard the
     # helper warns the owner about), and the outcome token must be failed:set-gate.
     root = _docs_root(tmp_path)
-    spec = _write(root, "spec"); DD.set_gate(spec, "passed")
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
     monkeypatch.setattr(GW, "_set_gate", lambda *a, **k: (False, "induced write failure"))
     rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
-                   "--reviewed-path", spec, "--root", root)
+                   "--reviewed-path", spec, "--root", root, *_fence_for(spec))
     assert rc == 0 and out == "failed:set-gate"
     assert _gate(root, "spec") == "passed"  # stale approval still on disk — the warned-about state
 
@@ -230,7 +250,8 @@ def test_certify_requires_review(tmp_path, capsys):
     root = _docs_root(tmp_path)
     plan = _write(root, "plan")
     rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
-                   "--reviewed-path", plan, "--parent-doc", "spec", "--root", root)
+                   "--reviewed-path", plan, "--parent-doc", "spec", "--root", root,
+                   *_fence_for(plan))
     assert rc == 2 and out == "error:bad-args"
 
 
@@ -257,8 +278,8 @@ def test_set_gate_targets_resolved_path(tmp_path, monkeypatch):
                         lambda work_item, *, root, cwd: store_dir)
     captured = {}
     monkeypatch.setattr(definition_doc, "set_gate",
-                        lambda path, review: captured.update(path=path))
-    gate_write._set_gate("plan", wi, "passed", str(tmp_path))
+                        lambda path, review, **kw: captured.update(path=path) or {"ok": True})
+    gate_write._set_gate("plan", wi, "passed", str(tmp_path), expected_hash="hash", run_id="test-run")
     assert captured["path"] == os.path.join(store_dir, "plan.md")
 
 

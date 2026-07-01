@@ -169,6 +169,11 @@ cp "$PLAN_PATH" "$SESSION_DIR/plan.md"
 SPEC_PATH="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
 [ -f "$SPEC_PATH" ] && cp "$SPEC_PATH" "$SESSION_DIR/spec.md"   # context; absent → reviewers note the spec couldn't be cross-checked
 
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUN_ID="review-${WORK_ITEM}-${SESSION_DIR##*/}"
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SESSION_DIR/plan.md")
+LEASE="${SESSION_DIR##*/}"
+
 TOUCHES=()
 grep -Eqi 'route|endpoint|api|handler'                  "$SESSION_DIR/plan.md" && TOUCHES+=("API")
 grep -Eqi 'component|view|page|screen|UI'               "$SESSION_DIR/plan.md" && TOUCHES+=("UI")
@@ -449,7 +454,8 @@ ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
 GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
   --work-item "$WORK_ITEM" --reviewed-path "$PLAN_PATH" --review "$REVIEW" \
-  --parent-doc spec --root "$ROOT")
+  --parent-doc spec --root "$ROOT" \
+  --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 ```
 
 `$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /

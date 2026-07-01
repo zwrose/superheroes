@@ -167,6 +167,11 @@ Copy the spec to a stable artifact path and classify what it touches (over the r
 ```bash
 cp "$SPEC_PATH" "$SESSION_DIR/spec.md"
 
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUN_ID="review-${WORK_ITEM}-${SESSION_DIR##*/}"
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SESSION_DIR/spec.md")
+LEASE="${SESSION_DIR##*/}"
+
 TOUCHES=()
 grep -Eqi 'sign|login|account|permission|owner|private|personal' "$SESSION_DIR/spec.md" && TOUCHES+=("access")
 grep -Eqi 'screen|page|view|button|form|display|show'             "$SESSION_DIR/spec.md" && TOUCHES+=("UI")
@@ -449,7 +454,8 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$REVISED" = yes ]; then
   ROOT=$(git rev-parse --show-toplevel)
   GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
-    --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT")
+    --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT" \
+    --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 fi
 ```
 

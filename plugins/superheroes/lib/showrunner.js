@@ -6,6 +6,7 @@
 const { reviewPanel } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
+const { fencedJsonWrite } = require('./fenced_json.js')
 const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
@@ -346,10 +347,22 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
+async function readContentHashForFence(path) {
+  try {
+    return io().contentHash(await io().readText(path))
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return io().contentHash('')
+    return null
+  }
+}
+
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin; the gate write goes through
 // persistPhase (one exec: set-gate + journal + checkpoint) — not a cmdRunner agent dispatch.
-async function reviewDocPhase(doc, workItem) {
+async function reviewDocPhase(doc, workItem, opts) {
+  opts = opts || {}
+  const runId = opts.runId || `review-${doc}-${workItem}`
+  const lease = opts.lease || undefined
   const existing = await readGate(workItem, doc)
   if (existing === 'passed') {
     // cursor-lost re-entry guard (gate written, recordCursor failed): never re-run the panel and
@@ -357,18 +370,38 @@ async function reviewDocPhase(doc, workItem) {
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
+  await io().mkdirp(runDir)
+  let reviewedHash = opts.reviewedHash
+  if (!reviewedHash) {
+    try {
+      reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
+    } catch (_) {
+      reviewedHash = io().contentHash('')
+    }
+  }
   const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  try { await io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
+  const recPath = `${runDir}/terminal-record.json`
+  const recExpected = await readContentHashForFence(recPath)
+  if (recExpected == null) {
+    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json unreadable for ${doc}`] }, gate: gateForTerminal(verdict && verdict.terminal) }
+  }
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+  if (!recWrite.ok) {
+    const gate = gateForTerminal(verdict && verdict.terminal)
+    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
+  }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
   // Record gate + journal + checkpoint in one exec call (persistPhase, FR-4 persist order).
+  const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
-    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`
+    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
+    `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
   const pr = await persistPhase(workItem, {
     sideEffectCmd,
-    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
+    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
     step: -1,   // placeholder: the real step is written by recordCursor in runPhases; -1 signals review-doc context
     phase: `review-${doc}`,
   })
@@ -457,8 +490,13 @@ async function frontHalfBoundary(workItem) {
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
-  let recordOk = true
-  try { await io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
+  const outcomeExpected = await readContentHashForFence(outPath)
+  const runId = `fronthalf-${workItem}`
+  let recordOk = outcomeExpected != null
+  if (recordOk) {
+    const outcomeWrite = await fencedJsonWrite(outPath, outcome, { expectedHash: outcomeExpected, runId })
+    recordOk = !!outcomeWrite.ok
+  }
 
   // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
   // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
@@ -1102,9 +1140,18 @@ function verdictToGate(verdict) {
 
 // Render the loop's uniform readout (from its own verdict record, which carries parentOrigin via the
 // extras channel) and post it at the park (no PR yet -> readout_post records to the store). FR-6/UFR-1.
-async function renderAndPostReadout(workItem, runDir, verdict) {
+async function renderAndPostReadout(workItem, runDir, verdict, opts) {
+  opts = opts || {}
   const recPath = `${runDir}/terminal-record.json`
-  try { await io().writeFile(recPath, JSON.stringify(verdict || {})) } catch (_) {}
+  const recExpected = await readContentHashForFence(recPath)
+  const runId = opts.runId || `review-code-${workItem}`
+  const lease = opts.lease || undefined
+  if (recExpected != null) {
+    const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+    if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
+  } else {
+    return { ok: false, reason: 'terminal-record-unreadable' }
+  }
   // FR-5 (cwd-rooting): selfContained() pins the loop_readout.py call to the repo root when
   // __SR_ROOT is set — same as renderReadout in frontHalfBoundary (line ~431). No-op without __SR_ROOT.
   const text = await agent(
@@ -1114,6 +1161,7 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
   await cmdRunner(
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
     { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+  return { ok: true }
 }
 module.exports.renderAndPostReadout = renderAndPostReadout
 
