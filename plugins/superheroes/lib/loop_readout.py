@@ -34,6 +34,32 @@ def render(record):
     if record.get("parentOrigin"):
         lines += ["**Traces to an upstream phase:** %s (not re-entered automatically)."
                   % record["parentOrigin"], ""]
+    decisions = record.get("coverageDecisions") if isinstance(record, dict) else None
+    if isinstance(decisions, list) and decisions:
+        lines.append("")
+        lines.append("Coverage decisions:")
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                continue
+            text = f"- {decision.get('id', 'unknown')} ({decision.get('classKey', 'unknown')}): {decision.get('text', '')}"
+            if decision.get("challengedBy"):
+                text += f" [challenged by {decision.get('challengedBy')}]"
+            lines.append(text)
+
+    telemetry = record.get("telemetry") if isinstance(record, dict) else None
+    if isinstance(telemetry, dict):
+        usage = telemetry.get("tokenUsage") or {}
+        if usage.get("complete") is True:
+            lines.append("")
+            lines.append(f"Telemetry: {telemetry.get('roundCount', 0)} rounds, tokens {usage.get('total', 0)}")
+            for name, counts in sorted((telemetry.get("dimensionCounts") or {}).items()):
+                lines.append(f"{name}: run {counts.get('run', 0)}, skipped {counts.get('skipped', 0)}, cheap {counts.get('cheap', 0)}, deep {counts.get('deep', 0)}, escalated {counts.get('escalated', 0)}")
+        if telemetry.get("benchmarkValid") is False:
+            lines.append("")
+            lines.append("Telemetry: partial / not benchmark-valid")
+            missing = usage.get("missing") or []
+            if missing:
+                lines.append("Missing token usage: " + ", ".join(str(x) for x in missing))
     fixes = record.get("fixes") or []
     lines += ["### Fixes made"] + (["- %s" % f for f in fixes] if fixes else ["- (none)"]) + [""]
     deferred = record.get("deferred") or []
