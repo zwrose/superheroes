@@ -9,6 +9,7 @@
 const { reviewPanel } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
 const modelTierTwin = require('./model_tier.js')
+const courier = require('./courier_exec.js')
 // #115 increment B: the two SMART judgement leaves (worker_recovery, task_review) are now
 // parity-locked in-process twins (no leaf — judgments live in twins, called in-process). Pure
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
@@ -50,31 +51,23 @@ function exec(commands) {
 // (one exec, no behavior change); a parseable {"ok":false} (a REAL durable-write failure) is returned
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
 async function execJson(cmd) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([cmd])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) { try { return JSON.parse(s) } catch (_e) { /* garbled -> retry */ } }
-      // empty stdout -> retry (courier likely dropped it)
-    }
-    // exec-level failure or empty/garbled -> retry once, then give up
+  try {
+    return await courier.runCourierJson('exec', cmd)
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) return null
+    throw e
   }
-  return null
 }
 
 // Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
 // Retry once on an empty stdout; returns the trimmed string, or null after the retry.
 async function execText(cmd) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await exec([cmd])
-    const r0 = res && res[0]
-    if (r0 && r0.ok) {
-      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
-      if (s) return s
-    }
+  try {
+    return (await courier.runCourierText('exec', cmd)).trim()
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) return null
+    throw e
   }
-  return null
 }
 
 // build_progress.reconcile via the module (NOT a destructured load-time binding) so reconcileState

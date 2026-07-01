@@ -52,7 +52,10 @@ async function runCourierText(label, command) {
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
-    if (!commandOk(raw)) return stdoutOf(raw)
+    if (!commandOk(raw)) {
+      last = stdoutOf(raw).trim() || 'command failed'
+      continue
+    }
     const out = stdoutOf(raw)
     if (out.trim() !== '') return out
     last = 'empty stdout'
@@ -66,7 +69,10 @@ async function runCourierJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
     const out = stdoutOf(raw)
-    if (!commandOk(raw)) return { ok: false, error: out || 'command failed' }
+    if (!commandOk(raw)) {
+      last = out.trim() || 'command failed'
+      continue
+    }
     if (out.trim() === '') {
       last = 'empty stdout'
       continue

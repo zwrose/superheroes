@@ -46,6 +46,25 @@ const TASK = { id: '1', title: 'A' }
   assert.strictEqual(r.parked, false, 'a dropped journal stdout must be recovered by the courier retry (not park)')
   assert.strictEqual(journalCalls, 2, 'the journal exec is retried exactly once on an empty stdout (2 calls total)')
 
+  let malformedCalls = 0
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      if (prompt.includes('build_state_cli.py gather')) return [{ index: 0, ok: true, stdout: JSON.stringify({ unmapped_commits: 0 }) }]
+      if (prompt.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('journal_entry.py')) {
+        malformedCalls += 1
+        return [{ index: 0, ok: true, stdout: malformedCalls === 1 ? '{' : JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('record-reviewed')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+    ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+    ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+  ])
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  assert.strictEqual(r.parked, false, 'a malformed journal stdout must be recovered by the shared courier retry')
+  assert.strictEqual(malformedCalls, 2, 'malformed JSON is retried exactly once')
+
   // ---- (2) journal courier-drop on BOTH attempts -> park (fail-closed AFTER the retry) ----
   let journalCalls2 = 0
   global.agent = makeAgent([
