@@ -1,0 +1,39 @@
+{
+  "input": [
+    {
+      "steps": [
+        {
+          "id": "login-submit",
+          "status": "failed",
+          "failureType": "app_bug"
+        }
+      ]
+    },
+    [
+      {
+        "type": "browser_fix_batch",
+        "summary": "Fix login button at /tmp/worktree-123/web/app.js:41",
+        "before": {
+          "login-submit": "failed"
+        },
+        "after": {
+          "login-submit": "failed"
+        }
+      },
+      {
+        "type": "browser_fix_batch",
+        "summary": "fix login button at /private/tmp/worktree-999/web/app.js:88",
+        "before": {
+          "login-submit": "failed"
+        },
+        "after": {
+          "login-submit": "failed"
+        }
+      }
+    ]
+  ],
+  "expected": {
+    "action": "park_no_progress",
+    "reason": "two consecutive browser fix batches made no progress: fix login button at"
+  }
+}

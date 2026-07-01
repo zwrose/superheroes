@@ -1,0 +1,11 @@
+{
+  "input": [
+    {
+      "browserSteps": 81
+    }
+  ],
+  "expected": {
+    "action": "park_budget_exceeded",
+    "reason": "browserSteps exceeded budget: 81 > 80"
+  }
+}

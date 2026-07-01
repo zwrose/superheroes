@@ -1,0 +1,16 @@
+{
+  "input": [
+    {
+      "steps": [
+        {
+          "id": "s1",
+          "status": "passed"
+        }
+      ]
+    },
+    []
+  ],
+  "expected": {
+    "action": "passed"
+  }
+}
