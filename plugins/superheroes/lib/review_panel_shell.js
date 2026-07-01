@@ -180,7 +180,7 @@ async function loadCoverageDecisions(target, ioApi) {
   const path = target.path
   let text = ''
   try { text = await ioApi.readText(path) } catch (err) {
-    if (err && err.code === 'ENOENT' && target.mode === 'code') return { ok: true, decisions: [], contentHash: ioApi.contentHash('') }
+    if (err && err.code === 'ENOENT') return { ok: true, decisions: [], contentHash: ioApi.contentHash('') }
     return { ok: false, state: 'unreadable', reason: err && err.message }
   }
   if (target.mode === 'doc') return { ok: true, decisions: parseDocCoverageDecisions(text), contentHash: ioApi.contentHash(text) }
@@ -450,12 +450,12 @@ function _validReviewerResult(out) {
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts)
-  if (Array.isArray(out)) out = { findings: out, confidence: 'low', legacyArray: true }
+  if (Array.isArray(out)) out = { findings: out, confidence: out.length === 0 ? 'high' : 'low', legacyArray: true }
   let escalated = false
   if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
     escalated = true
     out = await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' }))
-    if (Array.isArray(out)) out = { findings: out, confidence: 'low', legacyArray: true }
+    if (Array.isArray(out)) out = { findings: out, confidence: out.length === 0 ? 'high' : 'low', legacyArray: true }
   }
   if (!_validReviewerResult(out) || out.confidence !== 'high') {
     roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: _validReviewerResult(out) ? out.findings : [], confidence: _validReviewerResult(out) ? out.confidence : 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }

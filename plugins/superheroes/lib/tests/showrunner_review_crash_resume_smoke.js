@@ -18,6 +18,12 @@ global.agent = async () => null
 // so a round that re-flags only it exits clean-with-skips.
 const BLOCKER = { file: 'a.py', line: 3, title: 'bug', severity: 'Critical', evidence: 'e' }
 const IDENT = findingIdentity(BLOCKER)          // 'a.py::bug'
+function receipt(runDir, round) {
+  return { artifact: `${runDir}:round-${round}`, chain: [{ step: 'citation', evidence: 'e' }, { step: 'reachability', evidence: 'e' }, { step: 'missing-check', evidence: 'e' }, { step: 'tooling', evidence: 'e' }], coverageDecisionIds: [] }
+}
+function blockerResult(runDir, round) {
+  return { findings: [{ ...BLOCKER }], confidence: 'high', verificationReceipt: receipt(runDir, round), usage: { total: 1 } }
+}
 
 // A recordDeferred that writes the deferred-set to disk exactly as the real consumer leg does (the
 // channel the in-process tally reads). Defers every fixed identity at its severity.
@@ -35,10 +41,10 @@ async function main() {
   // --- Reference run (uninterrupted): the deferred blocker -> clean-with-skips at round 2. ---
   realRecordDeferred()
   const refDir = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-ref-'))
-  global.reviewerAgent = async () => [{ ...BLOCKER }]
+  global.reviewerAgent = async (_r, _c, _rub, runDir, round) => blockerResult(runDir, round)
   const ref = await reviewPanel({
     reviewerSet: ['code'], context: {}, rubric: 'r', runKey: refDir, runDir: refDir,
-    fixStep: async () => ({ fixed: [IDENT], deferred: [{ id: IDENT, severity: 'Critical' }] }),
+    fixStep: async () => ({ fixed: [IDENT], deferred: [{ id: IDENT, severity: 'Critical' }], changedSubjects: ['Code'], coverageDecisions: [] }),
     maxRounds: 7, legKind: { panel: true, code: false },
   })
   assert.strictEqual(ref.terminal, 'clean-with-skips',
@@ -56,10 +62,10 @@ async function main() {
   fs.writeFileSync(path.join(dir, 'deferred-set.json'), JSON.stringify({ [IDENT]: 'Critical' }))
 
   realRecordDeferred()
-  global.reviewerAgent = async () => [{ ...BLOCKER }]    // round 2 re-flags the (now deferred) blocker
+  global.reviewerAgent = async (_r, _c, _rub, runDir, round) => blockerResult(runDir, round)
   const resumed = await reviewPanel({
     reviewerSet: ['code'], context: {}, rubric: 'r', runKey: dir, runDir: dir,
-    fixStep: async () => ({ fixed: [IDENT], deferred: [{ id: IDENT, severity: 'Critical' }] }),
+    fixStep: async () => ({ fixed: [IDENT], deferred: [{ id: IDENT, severity: 'Critical' }], changedSubjects: ['Code'], coverageDecisions: [] }),
     maxRounds: 7, legKind: { panel: true, code: false },
   })
   assert.strictEqual(resumed.terminal, ref.terminal,

@@ -20,12 +20,16 @@ global.agent = async () => null
 
 // Round 1 flags a blocker (continue); round 2 returns [] (clean). The reviewer RETURNS findings[].
 const BLOCKER = [{ file: 'a.py', line: 1, title: 'bug', severity: 'Critical', evidence: 'e' }]
+function receipt(runDir, round) {
+  return { artifact: `${runDir}:round-${round}`, chain: [{ step: 'citation', evidence: 'e' }, { step: 'reachability', evidence: 'e' }, { step: 'missing-check', evidence: 'e' }, { step: 'tooling', evidence: 'e' }], coverageDecisionIds: [] }
+}
 
 async function main() {
-  let round = 0
-  global.reviewerAgent = async () => { round += 1; return round === 1 ? BLOCKER.map((f) => ({ ...f })) : [] }
-  // fixStep returns a report carrying extras.parentOrigin (a blocker traced to a parent doc).
-  const fixStep = async () => ({ fixes: [], deferred: [], extras: { parentOrigin: 'plan' } })
+  global.reviewerAgent = async (_r, _c, _rub, runDir, round) => {
+    if (round === 1) return { findings: BLOCKER, confidence: 'high', verificationReceipt: receipt(runDir, round), usage: { total: 1 } }
+    return { findings: [], confidence: 'high', verificationReceipt: receipt(runDir, round), usage: { total: 1 } }
+  }
+  const fixStep = async () => ({ fixes: [], deferred: [], changedSubjects: ['Code'], coverageDecisions: [], extras: { parentOrigin: 'plan' } })
   const v = await reviewPanel({ reviewerSet: ['code'], context: {}, rubric: 'r',
     runKey: runDir, runDir, fixStep, maxRounds: 7, legKind: { panel: true, code: false } })
   assert.strictEqual(v.terminal, 'clean', 'continue then clean must exit clean')
