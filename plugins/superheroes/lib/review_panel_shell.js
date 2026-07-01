@@ -513,11 +513,12 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const pdef = panelTally.presentDeferred(compiled, deferredSet)
     const skip = new Set(Object.keys(deferredSet))
     const prior = assembleRounds(records, deferredSet).filter((r) => r.round !== round)
+    const priorRecords = (records || []).filter((r) => r && Number(r.round) !== round)
     const thisRound = {
       round,
       findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
       coverageDecisions: coverageDecisions || [],
-      generalizeRequired: reviewMemory.recurrentClasses(records, coverageDecisions || []),
+      generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions || []),
     }
     const brk = circuitBreaker.checkCircuitBreaker(prior.concat([thisRound]), maxRounds)
     const breakerHalt = !!brk.halt

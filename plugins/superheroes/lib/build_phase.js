@@ -17,6 +17,7 @@ const taskReviewTwin = require('./task_review.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
+let _finalReviewSeq = 0              // monotonic per-process final-review runDir suffix (bundle-safe)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function park(reason) { return { confidence: 'low', assumptions: [reason] } }
@@ -479,7 +480,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // carried-forward Minors via execJson (retry the courier once on a dropped/garbled stdout); on fail -> [].
   const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
   const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
-  const runDir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), `wh-fr-${workItem}-`))
+  _finalReviewSeq += 1
+  const pid = (typeof process !== 'undefined' && process.pid) ? process.pid : 0
+  const runDir = `/tmp/wh-fr-${workItem}-g${generation}-p${pid}-${_finalReviewSeq}`
+  await io().mkdirp(runDir)
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
   // findings-generalist.json. This is the single-reviewer code leg (legKind.panel:false), so the

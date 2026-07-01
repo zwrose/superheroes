@@ -11,6 +11,8 @@ import os
 import re
 import sys
 
+from review_memory import class_key
+
 BLOCKING = {"Critical", "Important"}
 
 _NON_WORD = re.compile(r"[^\w\s]", re.ASCII)   # JS \w is ASCII-only — match it
@@ -26,6 +28,15 @@ def normalize_title(title):
 
 def finding_identity(finding):
     return f"{finding.get('file') or ''}::{normalize_title(finding.get('title') or '')}"
+
+
+def recurrence_key(finding):
+    if finding.get("classKey"):
+        return finding["classKey"]
+    key = class_key(finding)
+    if finding.get("dimension") or finding.get("taxonomy"):
+        return key
+    return finding_identity(finding)
 
 
 def _blocking(round_findings):
@@ -55,14 +66,14 @@ def check_circuit_breaker(rounds, max_rounds):
         latest_generalize = {g.get("classKey") for g in latest_rec.get("generalizeRequired", []) if isinstance(g, dict)}
         challenged = {d.get("classKey") for d in latest_rec.get("coverageDecisions", []) if isinstance(d, dict) and d.get("challengedBy")}
         latest_blocking = _blocking(latest_rec)
-        prev_ids = {f.get("classKey") or finding_identity(f) for f in _blocking(rounds[n - 2])}
-        recurring = [f for f in latest_blocking if (f.get("classKey") or finding_identity(f)) in prev_ids]
-        challenged_recurring = [f for f in recurring if (f.get("classKey") or finding_identity(f)) in challenged]
+        prev_ids = {recurrence_key(f) for f in _blocking(rounds[n - 2])}
+        recurring = [f for f in latest_blocking if recurrence_key(f) in prev_ids]
+        challenged_recurring = [f for f in recurring if recurrence_key(f) in challenged]
         if challenged_recurring:
-            ids = "; ".join((f.get("classKey") or finding_identity(f)) for f in challenged_recurring)
+            ids = "; ".join(recurrence_key(f) for f in challenged_recurring)
             return {"halt": True, "reason": "challenged-principle-recurring", "detail": f"{len(challenged_recurring)} challenged coverage decision class recurred after being recorded: {ids}"}
         if recurring:
-            keys = {(f.get("classKey") or finding_identity(f)) for f in recurring}
+            keys = {recurrence_key(f) for f in recurring}
             if keys & latest_generalize:
                 return {"halt": False, "reason": None, "detail": "recurrence pending coverage decision"}
             ids = "; ".join(sorted(keys))
