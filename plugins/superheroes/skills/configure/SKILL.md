@@ -56,6 +56,9 @@ A run that only views an up-to-date project changes nothing (FR-12). Viewing nev
 provisional calibration (FR-18) — that only happens when the owner explicitly confirms it on the
 fix path.
 
+Engine onboarding (Codex/Cursor per role — availability, preference, show-authorization,
+test-dispatch) lives in `set-up.md` §4.5 and is tunable via `view-and-tune.md` §2.
+
 ## Common mistakes
 
 | Mistake | Fix |

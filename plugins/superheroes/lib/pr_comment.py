@@ -112,6 +112,36 @@ _SCRUB_PATTERNS = [
     # URI userinfo credentials: scheme://user:pass@host -> scheme://[REDACTED]@host
     (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^/\s:@]+):([^@\s/]+)@"),
      r"\1:[REDACTED]@"),
+    # Patterns 6-10 (#38): BARE vendor-prefixed tokens in free prose (no key:/key=/
+    # Bearer framing needed — e.g. an external review engine quoting a hardcoded
+    # secret straight into a finding's body/suggestion text). Distinctive,
+    # well-known prefixes only, `\b`-anchored, bounded quantifiers (no catastrophic
+    # backtracking) — deliberately NOT a broad "any long alphanumeric run" rule,
+    # which would false-positive on git SHAs / UUIDs / base64 blobs. None of these
+    # match the literal "[REDACTED]" marker, so re-scrubbing stays a no-op
+    # (idempotent), matching the guarantee the framed patterns above already give.
+    # GitHub tokens: classic (ghp_/gho_/ghu_/ghs_/ghr_) + fine-grained (github_pat_).
+    (re.compile(r"\bgh[oprsu]_[A-Za-z0-9]{16,}\b"), "[REDACTED]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"), "[REDACTED]"),
+    # OpenAI / Anthropic API keys. Two real shapes only, to discriminate from
+    # hyphenated dictionary slugs that happen to start with "sk-" (this repo is
+    # full of them: sk-skeleton-outline-builder, sk-list-item-component, ...):
+    # (a) a known vendor sub-prefix (ant-/proj-/live-/test-) followed by a long
+    #     token that may itself contain hyphens (real keys often do), or
+    # (b) the legacy OpenAI shape: "sk-" + a long UNBROKEN alnum run (>=32,
+    #     no hyphens) — a hyphenated slug never has a 32-char unbroken run.
+    (re.compile(r"\bsk-(?:(?:ant|proj|live|test)-[A-Za-z0-9-]{16,}"
+                r"|[A-Za-z0-9]{32,})\b"), "[REDACTED]"),
+    # AWS access key id.
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[REDACTED]"),
+    # Slack tokens (bot/app/user/refresh/... xox<b|a|p|r|s>-...). Real Slack
+    # tokens are "xox<b|a|p|r|s>-" + digits (e.g. xoxb-123456789012-...);
+    # requiring a leading digit after the prefix discriminates them from
+    # hyphenated slugs that happen to start with "xoxp-" etc. (which start
+    # with a letter, e.g. xoxp-not-a-real-token-just-a-slug).
+    (re.compile(r"\bxox[baprs]-\d[A-Za-z0-9-]{9,}\b"), "[REDACTED]"),
+    # Google API key.
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "[REDACTED]"),
 ]
 
 

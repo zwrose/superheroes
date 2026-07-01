@@ -158,6 +158,152 @@ def test_scrub_is_idempotent_dict_dump_x_api_key():
     assert once == twice
 
 
+# #38: bare vendor-prefixed tokens in free prose (no key:/key=/Bearer framing) — the
+# realistic shape an external review engine (codex/cursor) emits when quoting a
+# hardcoded secret straight into a finding's body/suggestion text.
+def test_scrub_strips_bare_github_token_in_prose():
+    s = pc.scrub
+    secret = "ghp_EXAMPLEfakenotarealtoken000000000"
+    out = s(f"token found: {secret}")
+    assert secret not in out
+    assert "[REDACTED]" in out
+    # other classic GitHub token prefixes
+    for prefix in ("gho_", "ghu_", "ghs_", "ghr_"):
+        tok = f"{prefix}EXAMPLEfakenotarealtoken0"
+        out = s(f"leaked: {tok}")
+        assert tok not in out
+        assert "[REDACTED]" in out
+
+
+def test_scrub_strips_bare_github_fine_grained_pat_in_prose():
+    s = pc.scrub
+    secret = "github_pat_EXAMPLEfakenotarealtoken000000000000000000000000000"
+    out = s(f"rotate {secret} immediately")
+    assert secret not in out
+    assert "[REDACTED]" in out
+
+
+def test_scrub_strips_bare_openai_anthropic_key_in_prose():
+    s = pc.scrub
+    for secret in (
+        "sk-ant-api03-EXAMPLEfakenotarealkey00000000000",
+        "sk-proj-EXAMPLEfakenotarealkey0000000000000000",
+        "sk-live-EXAMPLEfakenotarealkey0000000000000000",
+        "sk-EXAMPLEfakenotarealopenaikeyplaceholder000000",
+    ):
+        out = s(f"found hardcoded key: {secret}")
+        assert secret not in out
+        assert "[REDACTED]" in out
+
+
+def test_scrub_strips_bare_aws_access_key_in_prose():
+    s = pc.scrub
+    secret = "AKIAEXAMPLEFAKEKEY00"
+    out = s(f"AWS key committed: {secret}")
+    assert secret not in out
+    assert "[REDACTED]" in out
+
+
+def test_scrub_strips_bare_slack_token_in_prose():
+    s = pc.scrub
+    secret = "xoxb-0EXAMPLEfakenotrealslacktoken"
+    out = s(f"slack bot token: {secret}")
+    assert secret not in out
+    assert "[REDACTED]" in out
+
+
+def test_scrub_strips_bare_google_api_key_in_prose():
+    s = pc.scrub
+    secret = "AIza" + "Sy" + "A" * 33
+    assert len(secret) == 39
+    out = s(f"google api key exposed: {secret}")
+    assert secret not in out
+    assert "[REDACTED]" in out
+
+
+def test_scrub_bare_vendor_tokens_idempotent():
+    s = pc.scrub
+    secrets = (
+        "ghp_EXAMPLEfakenotarealtoken000000000",
+        "github_pat_EXAMPLEfakenotarealtoken000000000000000000000000000",
+        "sk-ant-api03-EXAMPLEfakenotarealkey00000000000",
+        "AKIAEXAMPLEFAKEKEY00",
+        "xoxb-0EXAMPLEfakenotrealslacktoken",
+        "AIza" + "Sy" + "A" * 33,
+    )
+    for secret in secrets:
+        raw = f"token: {secret} end"
+        once = s(raw)
+        twice = s(once)
+        assert once == twice, secret
+        assert "[REDACTED]" in once
+
+
+def test_scrub_bare_vendor_tokens_no_false_positive_on_benign_content():
+    s = pc.scrub
+    # 40-hex git SHA
+    sha = "a" * 40
+    assert s(f"see commit {sha} for details") == f"see commit {sha} for details"
+    # UUID
+    uuid = "550e8400-e29b-41d4-a716-446655440000"
+    assert s(f"request id {uuid}") == f"request id {uuid}"
+    # base64 blob (no vendor prefix)
+    b64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoxMjM0NTY3ODkw"
+    assert s(f"payload: {b64}") == f"payload: {b64}"
+    # normal prose mentioning "token"/"key" without a secret shape
+    prose = "The token bucket algorithm limits requests using an access key rotation policy."
+    assert s(prose) == prose
+    # a file path (must not be mistaken for a token)
+    path = "/Users/zwrose/.superheroes-worktrees/594f446fe509879b/plugins/superheroes/lib/pr_comment.py"
+    assert s(f"see {path}") == f"see {path}"
+
+
+# #38 review finding: the sk-/xox- bare-token patterns were too greedy and
+# over-redacted legitimate hyphenated slugs (this repo is full of sk-/skill-/
+# skeleton- names). Tightened to discriminate real token shapes from
+# hyphenated dictionary slugs; these are the adversarial regression cases.
+def test_scrub_does_not_redact_hyphenated_slugs_resembling_sk_or_xox_tokens():
+    s = pc.scrub
+    unchanged = (
+        "sk-skeleton-outline-builder",
+        "sk-list-item-component",
+        "sk-onboarding-flow-v2-final",
+        "sk-transformers-model-config",
+        "xoxp-not-a-real-token-just-a-slug",
+        "ask-user-question",
+        "task-list-skeleton",
+    )
+    for slug in unchanged:
+        text = f"see {slug} for details"
+        assert s(text) == text, slug
+    # a 40-hex git SHA and a UUID must also remain untouched (already covered
+    # above for the vendor-token class generally, repeated here for the
+    # specific sk-/xox- adversarial context)
+    sha = "b" * 40
+    assert s(f"commit {sha}") == f"commit {sha}"
+    uuid = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+    assert s(f"id {uuid}") == f"id {uuid}"
+
+
+def test_scrub_still_redacts_real_sk_and_xox_tokens():
+    s = pc.scrub
+    # Real Anthropic-shaped key (sub-prefix + hyphenated token).
+    secret = "sk-ant-api03-EXAMPLEfakeNOTrealKEY0"
+    out = s(f"leaked: {secret}")
+    assert secret not in out
+    assert "[REDACTED]" in out
+    # Legacy OpenAI-shaped key: "sk-" + 40 unbroken alnum chars, no hyphens.
+    legacy = "sk-EXAMPLEfakeNOTrealKEY0000000000000000"
+    out = s(f"leaked: {legacy}")
+    assert legacy not in out
+    assert "[REDACTED]" in out
+    # Real Slack bot token: xoxb- followed by a digit.
+    slack = "xoxb-0EXAMPLEfakeNOTrealSLACKtoken"
+    out = s(f"slack token: {slack}")
+    assert slack not in out
+    assert "[REDACTED]" in out
+
+
 # test-001: upsert unit tests via monkeypatched seams
 def _extract_body_from_gh_args(args):
     """Extract the body value from -f body=<value> in gh call args."""

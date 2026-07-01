@@ -1,3 +1,13 @@
+## Contents
+
+- §1 — Decide the storage mode (FR-2), with disclosure
+- §2 — Seed the core + the light hero layers (FR-16)
+- §3 — Verify command first (UFR-5)
+- §4 — Offer the heavier heroes (FR-3), decline still completes
+- §4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
+- §5 — Secrets stay out of shared calibration (NFR)
+- Recovering an interrupted set-up (UFR-7)
+
 # configure — set-up path
 
 Reached from `configure` when a project has nothing configured yet (FR-1). Sets the project up
@@ -45,6 +55,53 @@ Where a heavier or optional hero applies (test-pilot, or any hero needing extra 
 connected browser), **offer** to set it up now or leave it for later. If the owner declines, set-up
 still **completes** and the project is usable without it. If they opt into test-pilot but no browser
 tool is connected, guide them to connect one (or set it aside) rather than fail (UFR-4).
+
+## 4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
+
+After the verify command (§3) is set — external implementers are verify-gated, so this must follow it —
+offer to bring **Codex** and/or **Cursor** into the loop, per role (reviewer engine, implementation
+engine), each independent, default **Claude**. A decline leaves both roles on Claude and set-up still
+completes.
+
+1. **Availability (FR-11).** Probe both engines and show a readiness matrix — installed + signed in, or
+   what to fix:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   python3 "$ROOT_DIR/lib/engine_detect.py"   # JSON verdict per engine: installed/authed + remediation
+   ```
+   A not-ready engine is shown with its next-command remediation; it is never offered as ready.
+
+2. **Per-role preference (FR-12).** Ask, one at a time, which engine to use for the reviewer role and
+   for the implementation role (only ready engines are selectable). Record the pick into `core.md`'s
+   machine block `enginePreferences: {reviewer, implementation}` via `core_md` (schemaVersion 2). An
+   absent block reads as both `claude`.
+
+3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine
+   is chosen, an external autonomous write needs a one-time owner grant. Show the exact snippet and where
+   it goes; do **not** write it:
+
+   ```bash
+   python3 "$ROOT_DIR/lib/engine_authz.py" snippet --host claude --engine <codex|cursor>
+   # prints the autoMode.allow block + its location (.claude/settings.local.json). SHOW it; never write it.
+   ```
+
+4. **Test dispatch (FR-14), bounded by the stall limit (UFR-5).** After the owner grants the
+   authorization, run one throwaway external write and report success / failure / no-response — the
+   no-response case is bounded by the same finite limit as UFR-5 (`engine_pref.resolve_timeout`):
+
+   ```bash
+   python3 "$ROOT_DIR/lib/engine_authz.py" test-dispatch --engine <codex|cursor> --cwd .
+   # -> {"engine":E,"ok":true}  (ready)
+   # -> {"engine":E,"ok":false} (denied or no-response bounded by the UFR-5 limit -> falls open to
+   #    Claude; tell the owner how to enable, leave the engine not-ready with a retry instruction)
+   ```
+   A failed or timed-out test dispatch leaves the engine **not-ready** — builds and mechanical fixes fall
+   open to Claude until it works. Never present a not-working engine as ready.
+
+**Headless (`INTERACTIVE=false`).** Take the strict/provisional posture: probe and record what is
+detectable, but never block and never apply the authorization — leave any external implementation engine
+not-ready until an interactive run can grant + test it.
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 

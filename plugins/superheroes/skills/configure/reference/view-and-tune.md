@@ -31,6 +31,9 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
 - **Set up a hero skipped at set-up** (FR-6) → run that hero's set-up from here.
 - **Switch the storage mode** → the confirmed switch below.
+- **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
+  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing
+  `enginePreferences` through `core_md`. Set a role back to `claude` (or clear it) to fall fully open.
 
 ## 3 — Switch the storage mode (FR-10), always showing what will move
 

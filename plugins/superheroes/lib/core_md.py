@@ -17,7 +17,7 @@ if _LIB_DIR not in sys.path:
 import mode_registry  # noqa: E402  (sibling)
 import store_core      # noqa: E402  (sibling)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _PROV = re.compile(
     r"<!--\s*superheroes-core:\s*schemaVersion=(\d+)\s+status=(\w+)\s+"
@@ -31,6 +31,7 @@ def render_core(facts, status, created, updated):
         "schemaVersion": SCHEMA_VERSION,
         "verifyCommand": facts.get("verifyCommand"),
         "stackTags": list(facts.get("stackTags") or []),
+        "enginePreferences": dict(facts.get("enginePreferences") or {}),
     }
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
@@ -87,11 +88,13 @@ def parse_core(text):
     else:
         status, created, updated = "provisional", "", ""
     tags = block.get("stackTags")
+    prefs = block.get("enginePreferences")
     return {
         "schemaVersion": int(block["schemaVersion"]),
         "status": status,
         "verifyCommand": block.get("verifyCommand"),
         "stackTags": list(tags) if isinstance(tags, list) else [],
+        "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
         "created": created,
@@ -145,6 +148,7 @@ def read(cwd, root=None):
         "status": facts["status"],
         "verifyCommand": facts["verifyCommand"],
         "stackTags": facts["stackTags"],
+        "enginePreferences": facts["enginePreferences"],
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
         "behind": behind,
@@ -188,7 +192,7 @@ def _diff_proposals(detected, recorded):
     """Per-field proposals where the detected value DIFFERS from the recorded one.
     A detected value equal to or absent (None / empty) is a reuse, not a proposal (FR-6)."""
     proposals = []
-    for field in ("verifyCommand", "stackTags", "threatModel", "patterns"):
+    for field in ("verifyCommand", "stackTags", "threatModel", "patterns", "enginePreferences"):
         det = detected.get(field)
         if det is None or det == "" or det == []:
             continue  # detection yielded nothing → reuse, propose nothing

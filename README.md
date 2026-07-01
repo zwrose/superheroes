@@ -44,7 +44,9 @@ plain-language pros/cons.
 
 Once Discovery approves the spec, it offers a **post-approval path choice** — run the
 showrunner (recommended) to take the work-item all the way to a ready-for-review PR, or take
-the manual bridged path and drive `plan`/`tasks`/build yourself.
+the manual bridged path and drive `plan`/`tasks`/build yourself. Engine selection is set per
+role in `configure` (Claude by default); the-architect's front-half authoring stays on Claude
+— the engine axis applies to the review and build roles.
 
 ### Commands
 
@@ -83,7 +85,11 @@ Two things make it more than a clever prompt:
   `.claude/review-profile.md` — your threat model, verify command, scope, and
   canonical patterns — so reviews match *your* codebase instead of generic best
   practices. Severity rules, diff-scope discipline, and "cite `file:line` or drop
-  the finding" are enforced when findings are compiled, not left to hope.
+  the finding" are enforced when findings are compiled, not left to hope. You can
+  also run the panel on a **different model family** — set the reviewer engine to
+  Codex or Cursor in `configure` — for a cross-family safety net; findings flow
+  through the same auto-fix loop unchanged, and the fix is written by the
+  implementation engine.
 - **Measured, not vibes.** The reviewer agents ship with a frozen eval harness
   (planted findings + decoy traps, a deterministic scorer) and a non-regression
   gate: a change has to prove it catches real issues without inflating false
@@ -151,7 +157,11 @@ opens a draft PR, exercises it through the native showrunner `test-pilot` phase,
 seeded data fresh for spot-checking, then **flips the PR to ready-for-review** only after
 the tested head is review-covered, verified, published to the PR branch, and CI-green on a
 branch brought up to date with its base. It hands you a live dev server + a
-plain-language readout. It **never merges** — that's always yours.
+plain-language readout. It **never merges** — that's always yours. The build and its
+mechanical fixes can run on an external **implementation engine** (Codex or Cursor,
+chosen in `configure`); every external result is verify-gated and audited, and the
+producer's owner-authority boundary is unchanged — it still never merges, force-pushes,
+or pushes to the default branch.
 
 > **GitHub access:** workhorse needs `gh` signed in with **write** access to the repo (it never merges). A fail-closed preflight checks this at startup — see [GitHub access](plugins/superheroes/skills/workhorse/reference/github-access.md).
 

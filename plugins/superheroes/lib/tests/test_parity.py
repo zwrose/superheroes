@@ -23,6 +23,9 @@ PARITY_TWINS = [
     ("phase_step", "decide", "phase_step", "decide"),
     ("ci_status", "classify", "ci_status", "classify"),
     ("model_tier", "resolveModel", "model_tier", "resolve_model"),
+    ("engine_pref", "resolveEngine", "engine_pref", "resolve_engine"),
+    ("engine_pref", "resolveEffort", "engine_pref", "resolve_effort"),
+    ("engine_pref", "resolveTimeout", "engine_pref", "resolve_timeout"),
     ("circuit_breaker", "normalizeTitle", "circuit_breaker", "normalize_title"),
     ("circuit_breaker", "findingIdentity", "circuit_breaker", "finding_identity"),
     ("circuit_breaker", "checkCircuitBreaker", "circuit_breaker", "check_circuit_breaker"),
@@ -49,7 +52,7 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half", "build_progress", "worker_recovery", "task_review"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half", "build_progress", "worker_recovery", "task_review", "engine_pref"]
 
 # Python fns that return a tuple whose JS twin returns an object — map (py_mod, py_fn) to field names.
 # Used by test_python_oracle to normalize the result before comparison with an object fixture.
@@ -64,6 +67,7 @@ BUNDLED_NON_TWINS = {
     "review_panel_shell.js",
     "build_phase.js",
     "test_pilot_phase.js",
+    "engine_dispatch.js",
 }
 
 # ---------------------------------------------------------------------------
