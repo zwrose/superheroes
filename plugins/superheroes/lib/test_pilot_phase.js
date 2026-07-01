@@ -146,6 +146,32 @@ async function preparePlanAndRecords(deps, workItem, context) {
 // Phase 3: prepare artifacts, resolve the server, seed records — each with its readiness milestone.
 // Returns `{ artifactResult, serverContext, seedResult }` to proceed or `{ done }` for a terminal.
 async function prepareExecutionContext(deps, workItem, context, plan, records, previousStatus) {
+  if (typeof deps.prepareTestRun === 'function') {
+    let folded
+    try {
+      folded = await callLeaf(deps.prepareTestRun, { plan, records, context, previousStatus, workItem })
+    } catch (err) {
+      return { done: low(`test-pilot preparation failed: ${message(err)}`) }
+    }
+    const artifactResult = folded && folded.artifactResult
+    const serverContext = folded && folded.serverContext
+    const seedResult = folded && folded.seedResult
+    const artifactProblem = artifactReadinessProblem(artifactResult)
+    if (artifactProblem) return { done: low(artifactProblem) }
+    const serverProblem = serverContextProblem(serverContext, context)
+    if (serverProblem) return { done: low(serverProblem) }
+    const seedProblem = seedReadinessProblem(seedResult)
+    if (seedProblem) return { done: low(seedProblem) }
+    const wrote = await writeStatus(deps, workItem, milestoneStatus(context, workItem, 'seed-ready', {
+      planRecords: records,
+      artifacts: artifactResult.artifacts,
+      server: publicServerContext(serverContext),
+      seed: seedResult.status || seedResult,
+    }))
+    if (!wrote.ok) return { done: low(wrote.reason) }
+    return { artifactResult, serverContext, seedResult }
+  }
+
   let artifactResult
   try {
     artifactResult = await callLeaf(deps.prepareArtifacts, {
@@ -486,6 +512,7 @@ async function writeStatus(deps, workItem, status) {
       // contract is writeStatus(status) — don't pass a 2nd arg no implementation reads.
       const out = await deps.writeStatus(status)
       if (out && out.ok === false) return { ok: false, reason: out.reason || 'test-pilot status write failed' }
+      if (out && out.read_back === false) return { ok: false, reason: out.reason || 'test-pilot status read-back mismatch' }
       return { ok: true }
     }
   } catch (err) {
@@ -1085,6 +1112,9 @@ async function publishFinalHead(deps, workItem, context, retryState, payload) {
     }, payload))
     if (!out || out.ok === false || out.action === 'park' || out.confidence === 'low') {
       return { ok: false, reason: (out && out.reason) || 'final tested head publish parked' }
+    }
+    if (out.read_back === false) {
+      return { ok: false, reason: (out && out.reason) || 'final tested head read-back mismatch' }
     }
     const remotePr = out.remotePr || out.remotePR || { branch: context.branch, head: out.head || retryState.currentHead }
     if (!coversHead(remotePr, retryState.currentHead)) {

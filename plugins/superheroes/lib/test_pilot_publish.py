@@ -131,4 +131,15 @@ def publish(work_item, head, status_json, *, renew=None, fence_ok=None, push=Non
     ready_status["ready"] = True
     ready_status["remotePr"] = {"branch": branch, "head": head}
     write_status(status_json, ready_status)
-    return {"ok": True, "verdict": "published", "branch": branch, "head": head}
+    try:
+        reread = _read_status(status_json)
+    except (OSError, ValueError):
+        return _park("published head but status read-back failed")
+    read_back = (
+        reread.get("ready") is True
+        and isinstance(reread.get("remotePr"), dict)
+        and reread["remotePr"].get("head") == head
+        and reread["remotePr"].get("branch") == branch
+        and read_pr_head(branch) == head
+    )
+    return {"ok": True, "verdict": "published", "branch": branch, "head": head, "read_back": bool(read_back)}

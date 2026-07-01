@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import test_pilot_publish as publish
 
@@ -22,6 +23,11 @@ def test_publish_renews_fences_pushes_non_force_and_writes_ready_status(tmp_path
     calls = []
     written = []
 
+    def _write_status(path, status):
+        written.append((path, status))
+        Path(path).write_text(json.dumps(status))
+        return status
+
     result = publish.publish(
         "issue-90",
         "abc123",
@@ -34,15 +40,16 @@ def test_publish_renews_fences_pushes_non_force_and_writes_ready_status(tmp_path
         generation=4,
         push=lambda branch, force=False, head=None: calls.append(("push", branch, force, head)) or True,
         read_pr_head=lambda branch: calls.append(("read_pr_head", branch)) or "abc123",
-        write_status=lambda path, status: written.append((path, status)) or status,
+        write_status=_write_status,
     )
 
-    assert result == {"ok": True, "verdict": "published", "branch": "codex/issue-90", "head": "abc123"}
+    assert result == {"ok": True, "verdict": "published", "branch": "codex/issue-90", "head": "abc123", "read_back": True}
     assert calls == [
         ("renew", data["store"], "issue-90", 4),
         ("fence", data["store"], "issue-90", 4),
         ("read_pr_head", "codex/issue-90"),
         ("push", "codex/issue-90", False, "abc123"),
+        ("read_pr_head", "codex/issue-90"),
         ("read_pr_head", "codex/issue-90"),
     ]
     assert written == [

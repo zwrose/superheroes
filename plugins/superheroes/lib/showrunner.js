@@ -883,11 +883,13 @@ function testPilotDeps(workItem, generation) {
       // FR-8: mirror the __SR_BASE pattern from shipPhase / draftPRPhase.
       const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
       const baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
-      const raw = await cli(
+      const raw = await courier.runCourierJson(
+        'read test context',
         `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
         `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}` +
         `${wtArg}${baseArg}`,
-        { type: 'object' })
+        { require: ['head'] },
+      )
       // FIX A: coerce nested fields the cheap courier may have stringified (same class as verify_gate).
       // Strings, head, branch, workItem stay as-is; only known object/null fields are coerced.
       if (raw && typeof raw === 'object') {
@@ -903,9 +905,58 @@ function testPilotDeps(workItem, generation) {
       `the current branch head ${context.head}. Return ONLY JSON ` +
       `{"records":[{"branch":${JSON.stringify(context.branch)},"steps":[{"id","instruction","expected","scenarioIds":[]}]}],` +
       `"coverageRationale":"..."}. Use concise stable step ids; include scenarioIds when seed scenarios are needed.`,
-      { label: 'test-pilot-plan', schema: { type: 'object', required: ['records'], properties: { records: { type: 'array' } } } }),
+      { label: 'plan-tests', schema: { type: 'object', required: ['records'], properties: { records: { type: 'array' } } } }),
 
     preparePlanRecords: async (plan) => ({ action: 'ready', records: plan.records || [] }),
+
+    prepareTestRun: async ({ plan, records, context }) => {
+      const pr = context.pr && context.pr.number
+      if (!pr) return { action: 'park', reason: 'test-pilot artifacts require a draft PR number' }
+      const planPath = await writeJson('plan-artifact', { key: keyFor(context.branch), records })
+      const resultsPath = await writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
+      const profilePath = await writeJson('server-profile', context.profile || {})
+      const detectionPath = await writeJson('server-detection', context.detectors || {})
+      const recordsPath = await writeJson('seed-records', records)
+      const manifestPath = await writeJson('prepare-run-manifest', {
+        artifacts: [
+          'python3', 'plugins/superheroes/lib/test_pilot_artifacts_cli.py', 'ensure',
+          '--plan-json', planPath, '--results-json', resultsPath, '--pr', String(pr),
+          '--key', keyFor(context.branch),
+        ],
+        server: [
+          'python3', 'plugins/superheroes/lib/test_pilot_server_config_cli.py', 'resolve',
+          '--profile-json', profilePath, '--detection-json', detectionPath,
+          '--work-item', workItem,
+        ],
+        seed: [
+          'python3', 'plugins/superheroes/lib/test_pilot_seed_cli.py', 'prepare',
+          '--records-json', recordsPath,
+        ],
+      })
+      const script = [
+        'import json, subprocess, sys',
+        'manifest = json.load(open(sys.argv[1], encoding="utf-8"))',
+        'def run(argv):',
+        '    proc = subprocess.run(argv, capture_output=True, text=True)',
+        '    if proc.returncode != 0:',
+        '        raise RuntimeError(proc.stderr or proc.stdout or "command failed")',
+        '    return json.loads(proc.stdout or "{}")',
+        'try:',
+        '    artifactResult = run(manifest["artifacts"])',
+        '    serverContext = run(manifest["server"])',
+        '    seedResult = run(manifest["seed"])',
+        '    print(json.dumps({"ok": True, "artifactResult": artifactResult, "serverContext": serverContext, "seedResult": seedResult}))',
+        'except Exception as exc:',
+        '    print(json.dumps({"ok": False, "reason": str(exc)}))',
+      ].join('\\n')
+      const out = await courier.runCourierJson(
+        'prepare test run',
+        `python3 -c ${shq(script)} ${shq(manifestPath)}`,
+        { require: ['ok', 'artifactResult', 'serverContext', 'seedResult'], retryRealFailure: false },
+      )
+      if (!out || !out.ok) return { action: 'park', reason: (out && out.reason) || 'test-pilot preparation failed' }
+      return out
+    },
 
     prepareArtifacts: async ({ plan, records, context }) => {
       const pr = context.pr && context.pr.number
@@ -966,13 +1017,13 @@ function testPilotDeps(workItem, generation) {
       `Run the test-pilot browser pass for work-item ${workItem}. Stay within baseUrl/allowedOrigins and return ONLY JSON ` +
       `{"source":"browser","baseUrl":${JSON.stringify(browserContext.baseUrl)},"steps":[{"id","status","notes","browserExecuted":true,"failureType"?,"summary"?}]}. ` +
       `Browser context: ${JSON.stringify(browserContext)}`,
-      { label: 'test-pilot-browser', schema: { type: 'object' } }),
+      { label: 'browser-pass', schema: { type: 'object' } }),
 
     dispatchFixBatch: async (failures, details) => agent(
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'test-pilot-fixer', schema: { type: 'object' } }),
+      { label: 'fix-app-bug', schema: { type: 'object' } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -1006,18 +1057,26 @@ function testPilotDeps(workItem, generation) {
       })
       const storeArg = payload.context.store ? ` --store ${shq(payload.context.store)}` : ''
       const generationArg = generation ? ` --generation ${shq(String(generation))}` : ''
-      return cli(
+      return courier.runCourierJson(
+        'publish tested head',
         `python3 plugins/superheroes/lib/test_pilot_publish_cli.py publish --work-item ${shq(workItem)} ` +
         `--head ${shq(head)} --status-json ${shq(statusPath)} --expected-branch ${shq(payload.context.branch)} ` +
         `${storeArg}${generationArg}`,
-        { type: 'object' })
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
     },
 
     writeStatus: async (status) => {
+      if (status.milestone) {
+        await writeJson(`milestone-${status.milestone}`, status)
+        return { ok: true, read_back: true }
+      }
       const statusPath = await writeJson('status-write', status)
-      return cli(
+      return courier.runCourierJson(
+        'write test status',
         `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
-        { type: 'object', required: ['ok'] })
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
     },
   }
 }

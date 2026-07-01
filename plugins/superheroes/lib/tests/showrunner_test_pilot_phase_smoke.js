@@ -34,6 +34,10 @@ function applicableContext(extra) {
   }, extra || {}))
 }
 
+function courierStdout(value) {
+  return { ok: true, stdout: JSON.stringify(value) }
+}
+
 function applicableDeps(extra) {
   return Object.assign({
     resolveContext: async () => applicableContext(),
@@ -68,8 +72,8 @@ function applicableDeps(extra) {
     }),
     restoreBaseline: async (_records, details) => ({ ok: true, baseline: { head: details.head, restored: true } }),
     ensureFinalArtifacts: async (payload) => ({ ok: true, artifacts: Object.assign({}, payload.artifacts, { results: 'final-results.md' }), posting: { ok: true } }),
-    publishReady: async (_workItem, head) => ({ ok: true, remotePr: { branch: 'codex/example', head } }),
-    writeStatus: async () => ({ ok: true }),
+    publishReady: async (_workItem, head) => ({ ok: true, read_back: true, remotePr: { branch: 'codex/example', head } }),
+    writeStatus: async () => ({ ok: true, read_back: true }),
   }, extra || {})
 }
 
@@ -77,7 +81,7 @@ async function notApplicableProceeds() {
   const statuses = []
   const out = await testPilotPhase('wi', 3, {
     resolveContext: async () => baseContext({ diff: { files: ['docs/readme.md'] }, detectors: {} }),
-    writeStatus: async (status) => { statuses.push(status); return { ok: true } },
+    writeStatus: async (status) => { statuses.push(status); return { ok: true, read_back: true } },
   })
   assert.strictEqual(out.confidence, 'high')
   assert.strictEqual(statuses.length, 1)
@@ -92,9 +96,17 @@ async function productionWrapperHandlesNotApplicableWithoutMissingLeaf() {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/build/wt-pw', expectedHead: 'pw-head' }) }]
     }
     if (prompt.includes('test_pilot_context_cli.py resolve')) {
-      return baseContext({ workItem: 'wi', generation: 3, pr: { number: 7 }, diff: { files: ['docs/readme.md'] }, detectors: {} })
+      return courierStdout(baseContext({
+        workItem: 'wi',
+        generation: 3,
+        pr: { number: 7 },
+        diff: { files: ['docs/readme.md'] },
+        detectors: {},
+      }))
     }
-    if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
+    if (prompt.includes('test_pilot_status_cli.py write')) {
+      return courierStdout({ ok: true, read_back: true })
+    }
     return previousAgent(prompt, opts)
   }
   try {
@@ -205,7 +217,7 @@ async function applicableFlowOrdersDurableMilestones() {
       assert.deepStrictEqual(browserContext.allowedOrigins, ['http://localhost:3000'])
       return { source: 'browser', baseUrl: 'http://localhost:3000', steps: [{ id: 's1', status: 'passed', notes: 'observed page load' }] }
     },
-    writeStatus: async (status) => { calls.push(`writeStatus:${status.milestone || status.verdict}`); statuses.push(status); return { ok: true } },
+    writeStatus: async (status) => { calls.push(`writeStatus:${status.milestone || status.verdict}`); statuses.push(status); return { ok: true, read_back: true } },
   }))
   assert.strictEqual(out.confidence, 'high')
   assert.deepStrictEqual(calls, [
@@ -411,7 +423,7 @@ async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
     },
     ensureCleanWorktreeAfterFix: async () => ({ ok: true }),
     reconcileCommittedMutations: async () => ({ ok: true, commitShas: ['fix111'], head: 'fix111' }),
-    writeStatus: async (status) => { statuses.push(status); return { ok: true } },
+    writeStatus: async (status) => { statuses.push(status); return { ok: true, read_back: true } },
   }))
 
   assert.strictEqual(out.confidence, 'high')
@@ -604,9 +616,9 @@ async function finalReadinessRestoresBaselinePublishesArtifactsAndRemoteHeadBefo
       calls.push('publishReady')
       assert.strictEqual(payload.baseline.head, head)
       assert.strictEqual(payload.artifacts.results, 'final-results.md')
-      return { ok: true, remotePr: { branch: 'codex/example', head } }
+      return { ok: true, read_back: true, remotePr: { branch: 'codex/example', head } }
     },
-    writeStatus: async (status) => { calls.push(`writeStatus:${status.milestone || status.verdict}`); statuses.push(status); return { ok: true } },
+    writeStatus: async (status) => { calls.push(`writeStatus:${status.milestone || status.verdict}`); statuses.push(status); return { ok: true, read_back: true } },
   }))
 
   assert.strictEqual(out.confidence, 'high')
@@ -625,7 +637,7 @@ async function finalPublishFailureParksBeforeApplicableReadyStatus() {
   const out = await testPilotPhase('wi', 3, applicableDeps({
     budgetCheck: async () => ({ ok: true }),
     publishReady: async () => ({ ok: false, reason: 'remote PR head does not equal final tested head' }),
-    writeStatus: async (status) => { statuses.push(status); return { ok: true } },
+    writeStatus: async (status) => { statuses.push(status); return { ok: true, read_back: true } },
   }))
 
   assert.strictEqual(out.confidence, 'low')
@@ -685,7 +697,7 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
     if (prompt.includes('test_pilot_context_cli.py resolve')) {
       contextResolvePrompt = prompt
       // Simulate courier stringification: every nested object/array field arrives as a string.
-      return {
+      return courierStdout({
         workItem: 'wi',
         generation: 3,
         branch: 'codex/example',
@@ -695,9 +707,11 @@ async function resolveContextCoercesStringifiedFieldsIncludingAllowedOriginsArra
         profile: JSON.stringify(rawProfile),
         allowedOrigins: JSON.stringify(rawAllowedOrigins),
         pr: JSON.stringify(rawPr),
-      }
+      })
     }
-    if (prompt.includes('test_pilot_status_cli.py write')) return { ok: true }
+    if (prompt.includes('test_pilot_status_cli.py write')) {
+      return courierStdout({ ok: true, read_back: true })
+    }
     return previousAgent(prompt, opts)
   }
 
