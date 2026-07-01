@@ -91,11 +91,16 @@ function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.
 // stdout (C-I3) so the caller can park with THAT specific reason instead of the generic one.
 // FR-8: thread configurable base (--base) when globalThis.__SR_BASE is set; absent -> _base() detection.
 async function gatherState(workItem, branch, validIds, wt) {
-  // execJson retries the courier ONCE on a dropped/garbled stdout before failing closed; null ->
-  // the caller parks honestly (same fail-closed semantic as today, only a retry added before it).
-  const parsed = await execJson(
-    `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
-  )
+  let parsed = null
+  try {
+    parsed = await courier.runCourierJson(
+      'gather build state',
+      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+      {},
+    )
+  } catch (_) {
+    parsed = null
+  }
   if (parsed == null) return null
   // Structured fail-closed signal: the leaf could not resolve --base. Surface the SPECIFIC reason
   // (C-I3) rather than collapsing to the generic "could not gather authoritative git state" park.
@@ -318,6 +323,30 @@ async function fenceOrPark(workItem, generation) {
   return !!(f && f.ok)
 }
 
+async function recordTaskBuilt(workItem, taskId) {
+  try {
+    return await courier.runCourierJson(
+      'record task built',
+      `python3 ${LIB}/build_state_cli.py record-built --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    return null
+  }
+}
+
+async function recordTaskReviewed(workItem, taskId) {
+  try {
+    return await courier.runCourierJson(
+      'record task reviewed',
+      `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    return null
+  }
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
@@ -332,7 +361,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
       + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
       + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
-      { label: 'worker', schema: { type: 'object', required: ['ok'] } })
+      { label: 'implement-task', schema: { type: 'object', required: ['ok'] } })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
@@ -357,12 +386,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       // parked). null after the retry -> jrnl = {ok:false} so the guard parks (a missed journal must
       // NOT advance); a parseable {"ok":false} (a real durable-write failure) is returned without a
       // retry and parks the same.
-      const jrnl = await execJson(
-        `python3 ${LIB}/journal_entry.py --work-item ${shq(workItem)} --payload `
-        + `${shq(JSON.stringify({ phase: 'workhorse', event: 'task_built', task: task.id, evidence: worker.evidence }))}`,
-      )
-      if (!(jrnl && jrnl.ok)) {
-        return { parked: true, reason: 'task journal write failed (record-before-advance) — park' }
+      const built = await recordTaskBuilt(workItem, task.id)
+      if (!(built && built.ok === true && built.read_back === true)) {
+        return { parked: true, reason: 'task built record write failed (record-before-advance) — park' }
       }
       return reviewLoop(workItem, generation, task, branch, wt)
     }
@@ -398,7 +424,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
       + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
       + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
-      { label: 'review',
+      { label: `task-reviewer:r${round}`,
         schema: {
           type: 'object',
           required: ['verdicts'],
@@ -442,9 +468,10 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       // record-before-advance: record-reviewed must succeed before the task counts reviewed.
       // (Caller does not branch on .ok today; keep behavior — the exec call still records it. Route
       // through execJson so a dropped/garbled courier stdout is retried once; the record is idempotent.)
-      await execJson(
-        `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(task.id)}`,
-      )
+      const reviewed = await recordTaskReviewed(workItem, task.id)
+      if (!(reviewed && reviewed.ok === true && reviewed.read_back === true)) {
+        return { parked: true, reason: 'task reviewed record write failed (record-before-advance) — park' }
+      }
       return { parked: false }
     }
     // d.action === 'review': fence, fix the blockers + cannot-verify items, then re-review (FR-6/UFR-5).
@@ -454,7 +481,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     await agent(
       `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
       + `"Task-Id: ${task.id}": ${JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))}`,
-      { label: 'fixer', model: fixerModel })
+      { label: 'fix-task', model: fixerModel })
     history.push({ round, findings: review.findings || [] })
     round += 1
   }
