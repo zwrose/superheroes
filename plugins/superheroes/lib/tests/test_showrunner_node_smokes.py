@@ -35,6 +35,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
     # #115: the two new in-memory review-panel smokes.
     "plugins/superheroes/lib/tests/showrunner_review_crash_resume_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_review_round_state_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_review_breaker_halt_smoke.js",
     # #115 Task 13a: args-based front-half selector (globalThis flags + bundle ENTRY text assertion).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",

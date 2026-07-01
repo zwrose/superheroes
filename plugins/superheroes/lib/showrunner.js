@@ -163,7 +163,28 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
   return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
 }
-async function docRecordDeferred(report, _verdict, runDir) {
+async function saveRoundStateBestEffort(workItem, doc, round, deferred, runDir) {
+  const state = { workItem, doc, round, deferred }
+  const script = [
+    'import json, os, sys',
+    'payload = json.loads(sys.argv[1])',
+    'run_dir = sys.argv[2]',
+    'os.makedirs(run_dir, exist_ok=True)',
+    'path = os.path.join(run_dir, "round-state.json")',
+    'with open(path, "w", encoding="utf-8") as fh:',
+    '    json.dump(payload, fh, sort_keys=True)',
+    'print(json.dumps({"ok": True, "path": path}))',
+  ].join('\n')
+  try {
+    await courier.runCourierJson(
+      'save round state',
+      `python3 -c ${shq(script)} ${shq(JSON.stringify(state))} ${shq(runDir)}`,
+      { require: ['ok'], retryRealFailure: false },
+    )
+  } catch (_) {}
+}
+
+async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferred) {
   // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
   // written first, then front_half.py record-deferred (frozen) appends the deferred identities to
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
@@ -172,6 +193,11 @@ async function docRecordDeferred(report, _verdict, runDir) {
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
   ])
+  for (const item of (report && report.deferred) || []) {
+    const id = item && (item.identity || item.id)
+    if (!id) continue
+    runtimeDeferred.set(String(id), item.severity || 'Critical')
+  }
   // A failed deferred-set write under-counts deferrals (a finding could re-block); surface it.
   // No park: an under-count is itself fail-closed (a finding stays blocking; the loop doesn't falsely exit).
   if (!(results && results[0] && results[0].ok)) {
@@ -200,11 +226,16 @@ async function docReviser(blockers, runDir, context) {
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
-async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
+async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDeferred }) {
   const context = { workItem, docType, docPath }
+  if (runtimeDeferred && runtimeDeferred.size === 0) {
+    const saved = await io().readJson(`${runDir}/deferred-set.json`, {})
+    for (const id of Object.keys(saved || {})) runtimeDeferred.set(id, saved[id])
+  }
   globalThis.reviewerAgent = docReviewerAgent
   globalThis.synthesisLeaf = docSynthesisLeaf
-  globalThis.recordDeferred = docRecordDeferred
+  globalThis.recordDeferred = (report, verdict, rd) =>
+    docRecordDeferred(report, verdict, rd, context, runtimeDeferred || new Map())
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (blockers, rd) => docReviser(blockers, rd, context),
@@ -319,7 +350,21 @@ async function reviewDocPhase(doc, workItem) {
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
-  const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
+  const deferred = new Map()
+  const verdict = await runReviewDocPanel({
+    workItem,
+    docType: doc,
+    docPath: docPathFor(workItem, doc),
+    runDir,
+    runtimeDeferred: deferred,
+  })
+  await saveRoundStateBestEffort(
+    workItem,
+    doc,
+    (verdict && verdict.round) || 1,
+    Array.from(deferred.entries()).map(([id, severity]) => ({ id, severity })),
+    runDir,
+  )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
   try { await io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
   // gateForTerminal is the in-process JS twin (no agent dispatch).
@@ -337,9 +382,13 @@ async function reviewDocPhase(doc, workItem) {
   if (!pr.ok) {
     // a failed durable gate write must NOT advance on un-recorded state (UFR-5) — park low-confidence,
     // mirroring reviewCodePhase's provenance-write guard.
-    return { phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] }, gate }
+    return {
+      phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] },
+      gate,
+      runtimeDeferredIds: Array.from(deferred.keys()),
+    }
   }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, gate }
+  return { phaseResult: { confidence: 'high', assumptions: [] }, gate, runtimeDeferredIds: Array.from(deferred.keys()) }
 }
 
 // gateForTerminal: pure in-process JS twin. No agent dispatch.
