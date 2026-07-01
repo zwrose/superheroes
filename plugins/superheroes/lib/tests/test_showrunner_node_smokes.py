@@ -27,6 +27,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_front_half_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_label_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",

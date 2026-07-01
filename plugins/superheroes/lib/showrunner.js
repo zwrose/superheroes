@@ -660,19 +660,13 @@ async function showrunner({ workItem }) {
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
   // UFR-1: refuse to run if the spec hasn't been approved.
-  const specGate = await readGate(workItem, 'spec')
+  const startupFacts = await readStartupState(workItem)
+  const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
   const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
   if (startup.action !== 'proceed') {
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
-  // Task 17: load model-tier overrides once at startup from the review-crew profile. The Python script
-  // returns a {role:model} JSON map (or {} when the profile is absent/unreadable — the safe degenerate
-  // path). We pass no --profile here (→ load_overrides(None) → {}); a throwaway run has no profile, so
-  // {} is correct there; production uses the session-wide profile read elsewhere. Fail-safe: any exec
-  // error or bad JSON yields {} so resolveModel falls back to DEFAULT_TIERS — startup never crashes.
-  const _ovRes = await exec(['python3 plugins/superheroes/lib/model_tier_overrides.py'])
-  let _ovMap = {}
-  try { const _p = (_ovRes[0] && _ovRes[0].stdout) || ''; _ovMap = JSON.parse(_p) } catch (_) {}
+  const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
   if (typeof globalThis !== 'undefined') {
     globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   }
@@ -714,6 +708,60 @@ async function readGate(workItem, doc) {
   } catch (_) {
     return 'unreadable'
   }
+}
+
+async function readStartupState(workItem) {
+  const script = [
+    'import json, os, sys',
+    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    'import definition_doc, model_tier_overrides',
+    'wi = sys.argv[1]',
+    'root = sys.argv[2]',
+    'spec_gate = "unreadable"',
+    'try:',
+    '    d = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
+    '    spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
+    'except Exception:',
+    '    pass',
+    'try:',
+    '    overrides = model_tier_overrides.load_overrides(None) or {}',
+    'except Exception:',
+    '    overrides = {}',
+    'if not isinstance(overrides, dict):',
+    '    overrides = {}',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides}))',
+  ].join('\n')
+  try {
+    return await courier.runCourierJson(
+      'read startup state',
+      `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
+      { require: ['ok', 'spec_gate', 'model_overrides'] },
+    )
+  } catch (_) {
+    return { ok: true, spec_gate: 'unreadable', model_overrides: {} }
+  }
+}
+
+async function readDefinitionDraft(workItem, doc) {
+  const label = doc === 'plan' ? 'read plan draft' : 'read tasks draft'
+  const script = [
+    'import json, os, sys',
+    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    'import definition_doc',
+    'wi = sys.argv[1]',
+    'doc = sys.argv[2]',
+    'root = sys.argv[3]',
+    'd = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
+    'p = os.path.join(d, f"{doc}.md")',
+    'exists = os.path.isfile(p)',
+    'gate = definition_doc.read_gate(p) if exists else "unreadable"',
+    'print(json.dumps({"ok": True, "path": p, "docType": doc, "gate": gate, "exists": exists}))',
+  ].join('\n')
+  return courier.runCourierJson(
+    label,
+    `python3 -c ${shq(script)} ${shq(workItem)} ${shq(doc)} "$(git rev-parse --show-toplevel)"`,
+    { require: ['ok', 'path', 'docType'] },
+  )
 }
 
 const REVIEWED = new Set(['review-plan', 'review-tasks', 'review-code'])
@@ -1496,6 +1544,8 @@ module.exports.runPhases = runPhases
 module.exports.PHASES = PHASES
 module.exports.exec = exec
 module.exports.persistPhase = persistPhase
+module.exports.readStartupState = readStartupState
+module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained
 module.exports.authorModel = authorModel
