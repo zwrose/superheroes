@@ -10,8 +10,8 @@ def test_clean_terminal_maps_to_passed():
     assert fh.gate_for_terminal("clean") == "passed"
 
 
-def test_clean_with_skips_maps_to_passed():
-    assert fh.gate_for_terminal("clean-with-skips") == "passed"
+def test_clean_with_skips_maps_to_changes_requested():
+    assert fh.gate_for_terminal("clean-with-skips") == "changes-requested"
 
 
 def test_cannot_certify_maps_to_changes_requested():

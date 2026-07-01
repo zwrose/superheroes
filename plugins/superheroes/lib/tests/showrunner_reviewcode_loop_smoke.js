@@ -92,7 +92,7 @@ async function main() {
   //    blocker is flagged every round but the fixer DEFERS it -> round 2 is present-∩-deferred.
   calls = install({ roundFindings: [BLOCKER], fix: 'defer' })
   r = await sr.reviewCodePhase('wi-skips', { runDir: fresh(), resolveTarget: stubResolveTarget })
-  assert.strictEqual(r.gate, 'passed', 'clean-with-skips advances like clean')
+  assert.strictEqual(r.gate, 'changes-requested', 'clean-with-skips parks while a blocking tail exists')
   assert.strictEqual(calls.prov, 0, 'clean-with-skips records NO covers stamp')
 
   // 3. halted -> park (changes-requested) + readout posted (UFR-1). A blocker whose fix step fails.

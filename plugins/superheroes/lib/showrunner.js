@@ -26,7 +26,7 @@ const REVIEW_CODE_REVIEWERS = [
 ]
 
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
-const ADVANCE_TERMINALS = new Set(['clean', 'clean-with-skips'])
+const ADVANCE_TERMINALS = new Set(['clean'])
 
 // the canonical severity tiers (panel_tally.SEV_RANK): Critical > Important > Minor > Nit.
 const DEFERRED_ITEMS = {

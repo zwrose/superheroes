@@ -110,10 +110,26 @@ function checkCircuitBreaker(rounds, maxRounds) {
       detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
   }
   if (n >= 2) {
-    const prevIds = new Set(_blocking(rounds[n - 2]).map(findingIdentity))
-    const recurring = latest.filter((f) => prevIds.has(findingIdentity(f)))
+    const latestRec = rounds[n - 1]
+    const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
+    const challenged = new Set((latestRec.coverageDecisions || []).filter((d) => d && d.classKey && d.challengedBy).map((d) => d.classKey))
+    const latestBlocking = _blocking(latestRec)
+    const prevIds = new Set(_blocking(rounds[n - 2]).map((f) => f.classKey || findingIdentity(f)))
+    const recurring = latestBlocking.filter((f) => prevIds.has(f.classKey || findingIdentity(f)))
+    const challengedRecurring = recurring.filter((f) => challenged.has(f.classKey || findingIdentity(f)))
+    if (challengedRecurring.length) {
+      const ids = challengedRecurring.map((f) => f.classKey || findingIdentity(f)).join('; ')
+      return { halt: true, reason: 'challenged-principle-recurring',
+        detail: `${challengedRecurring.length} challenged coverage decision class recurred after being recorded: ${ids}` }
+    }
     if (recurring.length) {
-      const ids = recurring.map(findingIdentity).join('; ')
+      const keys = new Set(recurring.map((f) => f.classKey || findingIdentity(f)))
+      for (const k of keys) {
+        if (latestGeneralize.has(k)) {
+          return { halt: false, reason: null, detail: 'recurrence pending coverage decision' }
+        }
+      }
+      const ids = Array.from(keys).sort().join('; ')
       return { halt: true, reason: 'recurring-finding',
         detail: `${recurring.length} blocking finding(s) recurred after a fix was committed: ${ids}` }
     }
@@ -258,6 +274,101 @@ module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, 
 
 };
 
+// ===== review_round_policy.js =====
+__modules["review_round_policy"] = function (module, exports, require) {
+// plugins/superheroes/lib/review_round_policy.js
+const DEEP = 'reviewer-deep'
+const CHEAP = 'reviewer'
+
+function _dim(prev, name) {
+  return prev && typeof prev === 'object' ? (prev[name] || {}) : {}
+}
+
+function _changedSubjects(value) {
+  return Array.isArray(value) && value.every((x) => typeof x === 'string') ? value : null
+}
+
+function _safeRound(value) {
+  const n = Number(value || 1)
+  return Number.isFinite(n) ? { value: n, malformed: false } : { value: 1, malformed: true }
+}
+
+function _subjects(name, info) {
+  if (Array.isArray(info.subjects)) return info.subjects.filter((s) => typeof s === 'string')
+  const subjects = []
+  for (const finding of Array.isArray(info.findings) ? info.findings : []) {
+    if (finding && typeof finding.dimension === 'string') subjects.push(finding.dimension)
+  }
+  const fallback = { test: 'Test', security: 'Security', code: 'Code', architecture: 'Architecture', failure: 'Failure-Mode' }[String(name || '').split('-')[0].toLowerCase()]
+  if (fallback) subjects.push(fallback)
+  return Array.from(new Set(subjects))
+}
+
+function _hasFindings(info) {
+  for (const value of [info.findings, info.currentFindings, info.carriedFindings]) {
+    if (Array.isArray(value) && value.length > 0) return true
+  }
+  if (typeof info.hasFindings === 'boolean') return info.hasFindings
+  if (Array.isArray(info.findings)) return info.findings.length > 0
+  return null
+}
+
+function _subjectTouched(name, info, changedSubjects) {
+  if (changedSubjects === null || changedSubjects === undefined) return null
+  const subjects = _subjects(name, info)
+  return subjects.some((s) => changedSubjects.includes(s))
+}
+
+function planRound(state) {
+  state = state || {}
+  const dimensions = Array.isArray(state.dimensions) ? state.dimensions : []
+  const previous = state.previous && typeof state.previous === 'object' && !Array.isArray(state.previous) ? state.previous : {}
+  const changedSubjects = _changedSubjects(state.changedSubjects)
+  const parsedRound = _safeRound(state.round)
+  const roundNo = parsedRound.value
+
+  if (parsedRound.malformed) {
+    const out = {}
+    for (const d of dimensions) out[d] = { action: 'run', tier: DEEP, reason: 'malformed round state' }
+    return { roundKind: 'intermediate', dimensions: out, escalationPolicy: 'deep-only' }
+  }
+
+  if (state.confirmation) {
+    const out = {}
+    for (const d of dimensions) out[d] = { action: 'run', tier: DEEP, reason: 'confirmation full-panel' }
+    return { roundKind: 'confirmation', dimensions: out, escalationPolicy: 'deep-only' }
+  }
+  if (roundNo <= 1) {
+    const out = {}
+    for (const d of dimensions) out[d] = { action: 'run', tier: DEEP, reason: 'baseline full-panel' }
+    return { roundKind: 'baseline', dimensions: out, escalationPolicy: 'deep-only' }
+  }
+  if (changedSubjects === null || changedSubjects === undefined) {
+    const out = {}
+    for (const d of dimensions) out[d] = { action: 'run', tier: DEEP, reason: 'unknown changed subjects' }
+    return { roundKind: 'intermediate', dimensions: out, escalationPolicy: 'deep-only' }
+  }
+
+  const out = {}
+  for (const name of dimensions) {
+    const info = _dim(previous, name)
+    const touched = _subjectTouched(name, info, changedSubjects)
+    const hasFindings = _hasFindings(info)
+    if (hasFindings === true || touched) {
+      out[name] = { action: 'run', tier: CHEAP, reason: 'previous finding or changed subject' }
+    } else if (info.confidence === 'high' && hasFindings === false) {
+      out[name] = { action: 'skip', tier: DEEP, reason: 'high-confidence clean and untouched', carriedFromRound: info.round }
+    } else {
+      out[name] = { action: 'run', tier: DEEP, reason: 'not skip eligible' }
+    }
+  }
+  return { roundKind: 'intermediate', dimensions: out, escalationPolicy: 'cheap-first' }
+}
+
+module.exports = { planRound }
+
+};
+
 // ===== ci_status.js =====
 __modules["ci_status"] = function (module, exports, require) {
 // plugins/superheroes/lib/ci_status.js
@@ -311,6 +422,106 @@ function classify(runResult) {
   return Number(rcStr) === 0 ? 'pass' : 'fail'
 }
 module.exports = { classify }
+
+};
+
+// ===== review_memory.js =====
+__modules["review_memory"] = function (module, exports, require) {
+// plugins/superheroes/lib/review_memory.js
+const BLOCKING = new Set(['Critical', 'Important'])
+
+function _norm(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function classKey(finding) {
+  finding = finding || {}
+  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(finding.title)}`
+}
+
+function recurrentClasses(records, coverageDecisions) {
+  const covered = new Set((coverageDecisions || []).map((d) => d && d.classKey).filter(Boolean))
+  const seen = Object.create(null)
+  for (const rec of records || []) {
+    for (const finding of (rec && rec.findings) || []) {
+      if (finding.carried) continue
+      if (!BLOCKING.has(finding.severity)) continue
+      const key = finding.classKey || classKey(finding)
+      if (covered.has(key)) continue
+      if (!seen[key]) seen[key] = new Set()
+      seen[key].add(rec.round)
+    }
+  }
+  return Object.keys(seen).sort()
+    .filter((k) => seen[k].size >= 2)
+    .map((k) => ({ classKey: k, rounds: Array.from(seen[k]).sort((a, b) => a - b) }))
+}
+
+function promoteRecord(record, dimensions) {
+  record = record || {}
+  if (record.schemaVersion === 2) return record
+  const dims = {}
+  for (const d of dimensions || []) dims[d] = { dimension: d, status: 'unknown' }
+  return {
+    schemaVersion: 2,
+    round: record.round,
+    kind: 'unknown',
+    dimensions: dims,
+    findings: Array.isArray(record.findings) ? record.findings : [],
+    changedSubjects: null,
+    coverageDecisions: [],
+    tokenUsage: { available: false, reason: 'promoted from schema v1' },
+    confirmationPending: false,
+  }
+}
+
+function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, coverageDecisions, tokenUsage, confirmationPending) {
+  const findings = []
+  const carriedFindings = []
+  const dimensionRecords = {}
+  const subjectFallback = { test: 'Test', security: 'Security', code: 'Code', architecture: 'Architecture', failure: 'Failure-Mode' }
+  for (const [name, result] of Object.entries(dimensions || {})) {
+    const out = Object.assign({ dimension: name, round: roundNo }, result || {})
+    const current = []
+    const carried = []
+    const isCarried = out.status === 'skipped' || out.carriedFromRound !== undefined
+    for (const raw of Array.isArray(out.findings) ? out.findings : []) {
+      const item = Object.assign({ dimension: out.dimension || name }, raw)
+      if (isCarried) {
+        item.carried = true
+        item.sourceRound = out.carriedFromRound || item.sourceRound || roundNo
+        carried.push(item)
+      } else {
+        current.push(item)
+      }
+    }
+    const subjects = new Set([...current, ...carried].map((f) => f.dimension).filter(Boolean))
+    const fallback = subjectFallback[String(name || '').split('-')[0].toLowerCase()]
+    if (fallback) subjects.add(fallback)
+    out.findings = current.concat(carried)
+    out.currentFindings = current
+    out.carriedFindings = carried
+    out.hasFindings = current.length + carried.length > 0
+    out.subjects = Array.from(subjects).sort()
+    dimensionRecords[name] = out
+    findings.push(...current)
+    carriedFindings.push(...carried)
+  }
+  return {
+    schemaVersion: 2,
+    round: roundNo,
+    kind,
+    dimensions: dimensionRecords,
+    findings,
+    carriedFindings,
+    changedSubjects,
+    coverageDecisions: coverageDecisions || [],
+    tokenUsage: tokenUsage || { available: false, reason: 'missing' },
+    confirmationPending: !!confirmationPending,
+  }
+}
+
+module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults }
 
 };
 
@@ -2614,7 +2825,7 @@ __modules["front_half"] = function (module, exports, require) {
 // record_deferred / append_notify) stay Python executors (Task 11).
 
 function gateForTerminal(terminal) {
-  return (terminal === 'clean' || terminal === 'clean-with-skips') ? 'passed' : 'changes-requested'
+  return terminal === 'clean' ? 'passed' : 'changes-requested'
 }
 
 // Faithful port of front_half.py _PLACEHOLDER (same four alternatives, same IGNORECASE flag).
@@ -2795,7 +3006,7 @@ const REVIEW_CODE_REVIEWERS = [
 ]
 
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
-const ADVANCE_TERMINALS = new Set(['clean', 'clean-with-skips'])
+const ADVANCE_TERMINALS = new Set(['clean'])
 
 // the canonical severity tiers (panel_tally.SEV_RANK): Critical > Important > Minor > Nit.
 const DEFERRED_ITEMS = {
