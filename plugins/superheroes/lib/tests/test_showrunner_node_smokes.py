@@ -11,6 +11,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/test_pilot_deciders_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_leaf_budget_labels_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_bundle_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_entry_await_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_boundary_smoke.js",
@@ -36,6 +37,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_workhorse_label_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
     # #115: the two new in-memory review-panel smokes.
     "plugins/superheroes/lib/tests/showrunner_review_crash_resume_smoke.js",
@@ -77,7 +79,6 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
     # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).
     "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
-    "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
     # #120: native ship-phase structured hand-back (FR-6/FR-7, scrubbed, best-effort delivery).
     "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",
     # #120: ship-phase guard invariants (UFR-2 unreadable-park, UFR-4 fence fail-closed, FR-8 never-merge).

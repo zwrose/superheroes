@@ -32,7 +32,7 @@ function clean(wi) {
       return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
     }
     if (label === 'save round state') return [{ ok: true, stdout: JSON.stringify({ ok: false }) }]
-    if (label === 'doc-reviser') return { fixes: [], deferred: [{ identity: 'A-1', severity: 'Critical' }] }
+    if (label === 'revise-doc') return { fixes: [], deferred: [{ identity: 'A-1', severity: 'Critical' }] }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
     if (label.endsWith('-reviewer')) {
       reviewRound += 1

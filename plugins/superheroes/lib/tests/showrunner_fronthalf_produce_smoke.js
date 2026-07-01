@@ -5,7 +5,7 @@
 // signal). The spine reads signals.usable directly — no JS twin call on the live doc text.
 // The agent stub must:
 //   - intercept exec (label='exec') for: front_half_usable --emit-signals, appendNotify (append-notify).
-//   - intercept produce-* label for authoring.
+//   - intercept author-* label for authoring.
 //   - NOT intercept model_tier_resolve, front_half_usable --write-marker, or append-notify via 'lib'.
 const assert = require('assert')
 const sr = require('../showrunner.js')
@@ -33,7 +33,7 @@ function agentWith({ usableSeq, authored, notifyOk = true }) {
       if (prompt.includes('front_half_usable') && prompt.includes('--write-marker')) throw new Error('write-marker dispatched as cmdRunner — must be folded into author agent')
       return { ok: true }
     }
-    if (label.startsWith('produce-')) { produceCalls += 1; return authored }
+    if (label.startsWith('author-')) { produceCalls += 1; return authored }
     return null
   }
   fn.produceCalls = () => produceCalls
@@ -58,8 +58,8 @@ const GAP_SIGNAL = JSON.stringify({
 
 // Helper: builds an agent stub for repair-loop scenarios.
 // emitSeq: array of JSON strings for successive --emit-signals calls.
-// authorResults: array of return values for successive produce-* calls.
-// capturedPrompts: array that receives captured produce-* prompts.
+// authorResults: array of return values for successive author-* calls.
+// capturedPrompts: array that receives captured author-* prompts.
 function repairAgent({ emitSeq, authorResults, capturedPrompts = [], notifyOk = true }) {
   const eSeq = emitSeq.slice()
   const aSeq = authorResults.slice()
@@ -74,7 +74,7 @@ function repairAgent({ emitSeq, authorResults, capturedPrompts = [], notifyOk = 
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     if (label === 'lib') return { ok: true }
-    if (label.startsWith('produce-')) {
+    if (label.startsWith('author-')) {
       capturedPrompts.push(prompt)
       const r = aSeq.shift()
       return r !== undefined ? r : null
@@ -154,7 +154,7 @@ async function repairLoopSmokes() {
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     if (label === 'lib') return { ok: true }
-    if (label.startsWith('produce-')) {
+    if (label.startsWith('author-')) {
       prompts_l.push(prompt)
       // 1st attempt: returns a NOTIFY; 2nd attempt: clean
       return prompts_l.length === 1
@@ -225,7 +225,7 @@ async function main() {
         return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
       }
       if (label === 'exec2') return [{ index: 0, ok: true, stdout: USABLE_SIGNAL }]
-      if (label.startsWith('produce-')) {
+      if (label.startsWith('author-')) {
         capturedPrompt = prompt
         return { status: 'ok' }
       }
@@ -243,7 +243,7 @@ async function main() {
         if (prompt.includes('append-notify')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
         return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
       }
-      if (label.startsWith('produce-')) { capturedPrompt = prompt; return { status: 'ok' } }
+      if (label.startsWith('author-')) { capturedPrompt = prompt; return { status: 'ok' } }
       return null
     }
     emitCount = 0

@@ -214,7 +214,7 @@ async function docReviser(blockers, runDir, context) {
     `revisions: ${JSON.stringify(blockers)}. Leave a parent-traced or GATE finding unresolved and ` +
     `name it in extras.parentOrigin. Return ONLY the report JSON ` +
     `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
-    { label: 'doc-reviser',
+    { label: 'revise-doc',
       // the doc-reviser path keys deferred items by `identity` (front_half.record_deferred reads
       // d["identity"]), NOT `id` (the code-fixer/record_deferred.py key) — pin the actual on-wire shape.
       schema: { type: 'object', properties: { fixes: { type: 'array' },
@@ -304,7 +304,7 @@ async function producePhase(phase, workItem) {
     // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
     const authored = await agent(
       _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `produce-${doc}`, model,
+      { label: `author-${doc}`, model,
         schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
@@ -1158,9 +1158,11 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
     `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
     selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
     { label: 'readout' })
-  await cmdRunner(
+  await courier.runCourierJson(
+    'post readout',
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
-    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+    { require: ['posted'], retryRealFailure: false },
+  )
 }
 module.exports.renderAndPostReadout = renderAndPostReadout
 
