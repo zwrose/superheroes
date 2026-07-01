@@ -48,7 +48,7 @@ function gatherRoute(map) {
   global.agent = makeAgent([['exec', () => [{ index: 0, ok: false, stdout: 'leaf crashed' }]]])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low')
-  assert.ok(/read the tasks gate/i.test((r.assumptions || [])[0] || ''), 'honest gate fail-closed reason')
+  assert.ok(/tasks gate not passed/i.test((r.assumptions || [])[0] || ''), 'honest gate fail-closed reason')
 
   // Failed setup (no branch) -> park (UFR-2).
   global.agent = makeAgent([

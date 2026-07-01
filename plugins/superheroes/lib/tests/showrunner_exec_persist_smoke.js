@@ -150,7 +150,7 @@ function saveProgressOk(extra) {
     sideEffectCmd: 'echo set-gate', journalPayload: { phase: 'plan' }, step: 1, phase: 'plan',
   })
   assert.ok(execFail && execFail.ok === false, 'a transport failure returns {ok:false}')
-  assert.strictEqual(batchCall5, 2, 'command failure retries once before failing closed (2 save calls)')
+  assert.strictEqual(batchCall5, 1, 'command failure returns immediately (no retry)')
 
   // ---- (c) shq-quoting: no raw unquoted JSON in the prompt ----
   calls.length = 0

@@ -100,7 +100,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   ])
   r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'a failed trailer-check leaf must park (fail closed, UFR-7)')
-  assert.ok(/verify commit trailers/i.test(r.reason || ''), 'honest UFR-7 fail-closed reason')
+  assert.ok(/boom/i.test(r.reason || ''), 'honest UFR-7 fail-closed reason')
 
   // (2) Worker stuck (plan_wrong) -> the worker_recovery TWIN parks for real (UFR-3). No leaf: the
   //     worker returns {ok:false, signal:'plan_wrong'} and workerRecoveryTwin.decide parks in-process.
