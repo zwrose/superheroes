@@ -5,6 +5,7 @@ a gh isDraft read -> flip if needed. Fail-closed: any 'gate' decision returns ok
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import checkpoint as ckpt_lib, control_plane, pr_phase, recover, ship_gate, test_pilot_status
+import idempotent_write
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True, choices=["draft", "mark-ready"])
@@ -114,10 +115,28 @@ else:  # mark-ready
     if status_decision["action"] == "gate":
         print(json.dumps({"ok": False, "reason": status_decision["reason"]})); sys.exit(0)
     if decision == "flip":
-        try:                                             # capture: gh's success line must not pollute our stdout
-            rc = subprocess.run(["gh", "pr", "ready", str(pr["number"])], capture_output=True, timeout=60).returncode
-        except subprocess.TimeoutExpired:
-            print(json.dumps({"ok": False, "reason": "gh pr ready timed out — PR still draft"})); sys.exit(0)
-        if rc != 0:
-            print(json.dumps({"ok": False, "reason": "gh pr ready failed — PR still draft"})); sys.exit(0)
+        n = str(pr["number"])
+
+        def _reader():
+            cur = _gh_pr(branch)
+            if not isinstance(cur, dict):
+                return (None, "PR isDraft unreadable")
+            d = cur.get("isDraft")
+            if d is False:
+                return (True, "already ready")
+            if d is True:
+                return (False, "draft")
+            return (None, "isDraft ambiguous")
+
+        def _apply():
+            try:
+                rc = subprocess.run(["gh", "pr", "ready", n], capture_output=True, timeout=60).returncode
+            except subprocess.TimeoutExpired:
+                return (False, "gh pr ready timed out — PR still draft")
+            return (rc == 0, "flipped to ready")
+
+        res = idempotent_write.idempotent_apply("ready:pr=%s" % n, _reader, _apply)
+        if not res["ok"]:
+            print(json.dumps({"ok": False, "reason": res["reason"] or "gh pr ready failed — PR still draft"}))
+            sys.exit(0)
     print(json.dumps({"ok": True}))

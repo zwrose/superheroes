@@ -16,6 +16,9 @@ global.agent = async (p, opts) => {
     if (p.includes('emit-checks')) {
       return [{ index: 0, ok: true, stdout: JSON.stringify([{ name: 'ci', bucket: 'pass', state: 'success' }]) }]
     }
+    // resolveBuildTarget (Task 7): build_entry.py needs path+outcome; rev-parse needs a sha.
+    if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ path: '/wt', outcome: 'reused' }) }]
+    if (p.includes('rev-parse')) return [{ index: 0, ok: true, stdout: '/wt-head-sha' }]
     // other exec batches (journal, checkpoint, set-gate, etc.); stdout unused.
     return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
   }
@@ -25,6 +28,10 @@ global.agent = async (p, opts) => {
     if (p.includes('journal_entry')) return { ok: true }
     if (p.includes('checkpoint_entry') && p.includes('--read-pr')) return { pr: PR }
     if (p.includes('checkpoint_entry')) return { ok: true }
+    // Task 7: fence_cli and reconcile-head must be checked before the generic ship_phase+ci guard
+    // below ('reconcile' contains the substring 'ci', which would otherwise match the wrong branch).
+    if (p.includes('fence_cli')) return { ok: true }
+    if (p.includes('reconcile-head')) return { ok: true, head: '/wt-head-sha', reason: 'in sync' }
     if (p.includes('ship_phase') && p.includes('freshness')) return { decision: 'up_to_date' }
     if (p.includes('ship_phase') && p.includes('ci')) return { decision: 'green' }
     if (p.includes('readout_post')) return { posted: true }
@@ -44,6 +51,7 @@ const sr = require('../showrunner.js')
     testPilot: async () => ok,                                         // test-pilot
     markReady: async () => ({ phaseResult: ok, sideEffect: { ready: true } }), // mark-ready
     gateRead: async () => null,
+    generation: 5, // Task 7: shipPhase is fail-closed on null generation (UFR-4); must supply one.
     // NO frontHalfBoundary -> the loop runs the full pipeline into ship (the real shipPhase)
   }
   const out = await sr.runPhases('wi', 0, deps)

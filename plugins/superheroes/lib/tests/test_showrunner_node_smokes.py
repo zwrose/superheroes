@@ -60,6 +60,16 @@ SHOWRUNNER_SMOKES = [
     # FR-5 cwd-rooting for cmdRunner: selfContained() in cmdRunner pins cwd to repo root when
     # __SR_ROOT is set (RED->GREEN after the fix); no-op when unset; no double-cd guard.
     "plugins/superheroes/lib/tests/showrunner_cmdrunner_cwd_smoke.js",
+    # #120: native ship-phase catch-up stretch (freshen loop, conflict-abort, fence, FR-2 give-up).
+    "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
+    # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).
+    "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
+    # #120: native ship-phase structured hand-back (FR-6/FR-7, scrubbed, best-effort delivery).
+    "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",
+    # #120: ship-phase guard invariants (UFR-2 unreadable-park, UFR-4 fence fail-closed, FR-8 never-merge).
+    "plugins/superheroes/lib/tests/showrunner_ship_guard_smoke.js",
+    # #120: forged-ship DoD walkthrough — catch-up + fix-loop + return-to-draft + hand-back end-to-end.
+    "plugins/superheroes/lib/tests/showrunner_ship_walkthrough_smoke.js",
 ]
 
 
