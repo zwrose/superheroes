@@ -1407,6 +1407,55 @@ async function shipFenceOrPark(workItem, generation) {
 }
 module.exports.shipFenceOrPark = shipFenceOrPark
 
+function parseCiChecks(checks) {
+  if (checks == null) return { error: 'CI status could not be read' }
+  if (!Array.isArray(checks) && checks.stale) return { stale: true }
+  if (!Array.isArray(checks) && checks.error) return { error: checks.error || 'CI status could not be read' }
+  return { checks: Array.isArray(checks) ? checks : [] }
+}
+
+async function checkShipReadiness(workItem, worktree, baseName, generation, checksOnly) {
+  const baseArg = baseName ? ` --base ${shq(baseName)}` : ''
+  const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
+  const genArg = generation != null ? ` --generation ${shq(String(generation))}` : ''
+  const checksArg = checksOnly ? ' --checks-only' : ''
+  return courier.runCourierJson(
+    'check ship-readiness',
+    `python3 plugins/superheroes/lib/ship_phase.py --step ship-readiness --work-item ${shq(workItem)}` +
+    `${baseArg}${wtArg}${genArg}${checksArg}`,
+    { require: checksOnly ? ['checks'] : ['ok', 'reconcile', 'freshness', 'checks'] },
+  )
+}
+
+async function prepareCiFix(workItem, failing) {
+  return courier.runCourierJson(
+    'prepare CI fix',
+    `python3 plugins/superheroes/lib/ship_phase.py --step prepare-ci-fix --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(failing || []))}`,
+    { require: ['action', 'read_back'], retryRealFailure: false },
+  )
+}
+
+async function pushCiFixRecheck(workItem, worktree) {
+  const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
+  return courier.runCourierJson(
+    'push CI fix + recheck',
+    `python3 plugins/superheroes/lib/ship_phase.py --step push-ci-fix-recheck --work-item ${shq(workItem)}${wtArg}`,
+    { require: ['read_back', 'checks'], retryRealFailure: false },
+  )
+}
+
+async function postReadout(workItem, pr, args) {
+  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
+  const cmd = args.ctx
+    ? `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}`
+  try {
+    return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
+  } catch (_e) {
+    return { posted: false, recorded: false, error: 'courier transport failed' }
+  }
+}
+
 // ── Native back-half seam map (for #118 courier-surface collapse, which sequences AFTER #120) ──
 // shipPhase orchestrates four SEPARABLE per-stretch seams, each with the same shape:
 //   world-read → renew-then-fence(generation) → mutate (git/gh leaf) → read-back-confirm.
@@ -1421,139 +1470,103 @@ module.exports.shipFenceOrPark = shipFenceOrPark
 //   (read-reality, apply-once). #118 generalizes that primitive to EVERY durable write (its FR-4).
 // #118 may fold/relabel these leaves; #120 deliberately leaves them as clean, un-folded seams.
 async function shipPhase(workItem, pr, generation) {
-  // Resolve the build worktree the back-half git mechanics run in (mirrors review-code/test-pilot).
-  // FAIL-CLOSED: if the build worktree can't be resolved, every git mutation below would otherwise
-  // default to the repo-root checkout (the wrong tree) — park rather than merge/commit/push there.
   const target = await resolveBuildTarget(workItem)
   const worktree = target && target.worktree ? target.worktree : null
   if (!worktree) {
     return park(workItem, pr, 'could not resolve the build worktree for the back-half — park (no mutation against the repo root)')
   }
-  const wtArg = ` --worktree ${shq(worktree)}`
-  // UFR-4: the entry reconcile MAY push (when local HEAD is ahead of the remote PR head), so fence first.
+  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const baseName = _srBase || ''
   if (!(await shipFenceOrPark(workItem, generation))) {
     return park(workItem, pr, 'lease lost before reconciling the PR head — park (UFR-4)')
   }
-  // UFR-6 entry reconcile: bring the remote PR head into agreement with the local HEAD before judging.
-  const rec = await cmdRunner(
-    `python3 plugins/superheroes/lib/ship_phase.py --step reconcile-head --work-item ${shq(workItem)}${wtArg}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, reason: { type: 'string' } } } })
-  if (!rec || !rec.ok) {
-    return park(workItem, pr, `could not reconcile the PR head before judging readiness (${(rec && rec.reason) || 'unreadable'})`)
+  let ready
+  try {
+    ready = await checkShipReadiness(workItem, worktree, baseName, generation, false)
+  } catch (_e) {
+    return park(workItem, pr, 'branch readiness could not be confirmed (unreadable) — park (UFR-2)')
   }
-  // (Tasks 8-9 replace the single freshness+ci block with the bounded catch-up loop + CI twin)
-  const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
-  const _baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
-  // FR-1/FR-2/UFR-1: bounded base catch-up. freshness.decide caps at 3 syncs; the attempt is
-  // re-derived from reality each iteration (a merge converges, so no stored counter — FR-2 note).
-  // (_srBase / _baseArg are already declared above by Task 7 — reuse them, don't re-declare.)
-  let integrated = false                                    // FR-7: did a base merge advance HEAD after review?
-  for (let attempt = 1; attempt <= 4; attempt += 1) {       // 4 = max syncs (3) + the terminal read
-    const fresh = await cmdRunner(
-      `python3 plugins/superheroes/lib/ship_phase.py --step freshness --work-item ${shq(workItem)}${_baseArg}${wtArg} --attempt ${shq(String(attempt))}`,
-      { schema: { type: 'object', required: ['decision'], properties: { decision: { type: 'string' } } } })
-    if (!fresh || !fresh.decision) {
-      return park(workItem, pr, 'branch freshness could not be confirmed (unreadable) — park (UFR-2)')
-    }
-    if (fresh.decision === 'up_to_date') break
-    if (fresh.decision === 'give_up_notify') {
+  if (!ready || !ready.ok) {
+    const fresh = ready && ready.freshness
+    if (fresh && fresh.decision === 'give_up_notify') {
       return park(workItem, pr, 'branch is behind its base after the catch-up limit — update it before merge')
     }
-    if (fresh.decision !== 'sync') {                        // 'gate' / unknown -> UFR-2 fail-closed
-      return park(workItem, pr, `branch freshness could not be confirmed (${fresh.decision})`)
-    }
-    if (!(await shipFenceOrPark(workItem, generation))) {
-      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
-    }
-    const fr = await cmdRunner(
-      `python3 plugins/superheroes/lib/ship_phase.py --step freshen --work-item ${shq(workItem)}${_baseArg}${wtArg}`,
-      { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, conflict: {}, reason: { type: 'string' } } } })
-    if (fr && fr.conflict) {
+    if (fresh && fresh.decision === 'conflict') {
       return park(workItem, pr, 'bringing in the base conflicts — undone (branch unchanged); please resolve and re-run')
     }
-    if (!fr || !fr.ok) {
-      return park(workItem, pr, `could not bring the base into the branch (${(fr && fr.reason) || 'unknown'})`)
+    const reconcile = ready && ready.reconcile
+    if (reconcile && !reconcile.ok) {
+      return park(workItem, pr, `could not reconcile the PR head before judging readiness (${reconcile.reason || 'unreadable'})`)
     }
-    integrated = true
+    if (ready && ready.fence && !ready.fence.ok) {
+      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
+    }
+    return park(workItem, pr, `branch freshness could not be confirmed (${(fresh && fresh.decision) || 'unreadable'}) — park (UFR-2)`)
   }
-  // FR-3/FR-4/FR-5/UFR-3/UFR-5: judge checks on the reconciled head; fix + re-check up to the
-  // ci_loop cap (round count replayed from the journal, so a crash never resets it).
-  const MAX_CI_PASSES = 6                                   // re-check budget > ci_loop cap; ends honest
+  const integrated = !!ready.integrated
+  let ciChecks = ready.checks
+  const MAX_CI_PASSES = 6
   for (let pass = 0; pass < MAX_CI_PASSES; pass += 1) {
-    const ciResults = await exec([
-      `python3 plugins/superheroes/lib/ship_phase.py --step ci --work-item ${shq(workItem)} --emit-checks${wtArg}`,
-    ])
-    if (!ciResults[0] || !ciResults[0].ok) { return park(workItem, pr, 'CI status could not be read') }
-    let ciChecks = null
-    try { ciChecks = JSON.parse(ciResults[0].stdout) } catch (_) {}
-    if (ciChecks === null) { return park(workItem, pr, 'CI status could not be read') }
-    if (!Array.isArray(ciChecks) && ciChecks.error) { return park(workItem, pr, ciChecks.error || 'CI status could not be read') }
-    if (!Array.isArray(ciChecks) && ciChecks.stale) {
-      // FR-5: the PR head gh reports checks for is not yet the integrated local head — the rollup
-      // belongs to an EARLIER commit. Re-wait (bounded by MAX_CI_PASSES); NEVER adopt an older green.
+    const parsed = parseCiChecks(ciChecks)
+    if (parsed.error) {
+      return park(workItem, pr, typeof parsed.error === 'string' ? parsed.error : 'CI status could not be read')
+    }
+    if (parsed.stale) {
+      try {
+        const recheck = await checkShipReadiness(workItem, worktree, baseName, generation, true)
+        ciChecks = recheck && recheck.checks
+      } catch (_e) {
+        return park(workItem, pr, 'CI status could not be read')
+      }
       continue
     }
-    const ciRes = ciStatusTwin.classify(Array.isArray(ciChecks) ? ciChecks : [])
+    const ciRes = ciStatusTwin.classify(parsed.checks)
     if (ciRes.status === 'green') {
       return shipHandback(workItem, pr, { ready: true, ci: 'green', integrated, reason: 'merge-ready: CI green and branch up to date — awaiting owner merge' })
     }
-    if (ciRes.status === 'none') {                          // UFR-3: provider but no checks on the ready head
+    if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
     }
-    // red: let the parity-locked ci_loop bound decide fix vs revert.
-    const decided = await cmdRunner(
-      `python3 plugins/superheroes/lib/ship_phase.py --step ci-decide --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(ciRes.failing))}`,
-      { schema: { type: 'object', required: ['action'], properties: { action: { type: 'string' }, round: {}, reason: { type: 'string' } } } })
+    const decided = await prepareCiFix(workItem, ciRes.failing)
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await cmdRunner(
         `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`,
         { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
-      // P4: a failed draft-flip leaves a READY PR with broken checks — the hand-back must not lie.
       const reverted = !!(rd && rd.ok)
       return shipHandback(workItem, pr, { ready: false, ci: 'red', integrated, reverted,
         reason: reverted
           ? 'checks could not be made to pass — returned to draft for you'
           : `checks could not be made to pass, and the PR could NOT be returned to draft (${(rd && rd.reason) || 'unknown'}) — please set it to draft before merging` })
-    } else if (decided.action === 'fix') {
-      // fix: write-ahead the round (UFR-5), fence, run the fixer, push the clean tree, re-check.
-      // Record-before-push invariant: a FAILED write-ahead (durable write error -> {ok:false}) must PARK
-      // before the fixer/push, else the round goes unrecorded and UFR-5 under-counts. No back-half leaf
-      // call is fire-and-forget on a durable/mutating step.
-      const recd = await cmdRunner(
-        `python3 plugins/superheroes/lib/ship_phase.py --step ci-record --work-item ${shq(workItem)} --round ${shq(String(decided.round))} --failing ${shq(JSON.stringify(ciRes.failing))}`,
-        { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
-      if (!recd || !recd.ok) {
+    }
+    if (decided.action === 'fix') {
+      if (!decided.ok || decided.read_back === false) {
         return park(workItem, pr, 'could not record the CI-fix round (durable write failed) — park before the fix push (UFR-5)')
       }
       if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before CI fix push — park (UFR-4)') }
       await agent(
         `Fix the failing CI checks for this PR in the build worktree${worktree ? ' at ' + worktree : ''}: ${ciRes.failing.join(', ')}. ` +
         `Make ONLY the code changes needed to make the checks pass; do not write CI-log text into a commit.`,
-        { label: 'fix' })
-      const fp = await cmdRunner(
-        `python3 plugins/superheroes/lib/ship_phase.py --step fix-push --work-item ${shq(workItem)}${wtArg}`,
-        { schema: { type: 'object', required: ['ok'], properties: { ok: {}, head: {}, pushed: {}, reason: { type: 'string' } } } })
-      if (!fp || !fp.pushed) {
-        return park(workItem, pr, `could not push the CI fix (${(fp && fp.reason) || 'unknown'}) — park, no false ready`)
+        { label: 'fix-ci' })
+      let pushed
+      try {
+        pushed = await pushCiFixRecheck(workItem, worktree)
+      } catch (_e) {
+        return park(workItem, pr, 'could not push the CI fix (transport failed) — park, no false ready')
       }
-      // loop: re-read checks on the new head (FR-5 stale-pass rejection — a fresh read, never an old green).
-    } else {
-      return park(workItem, pr, 'unexpected ci-decide action (' + (decided && decided.action) + ') — park (fail-closed)')
+      if (!pushed || !pushed.pushed || pushed.read_back === false) {
+        return park(workItem, pr, `could not push the CI fix (${(pushed && pushed.reason) || 'unknown'}) — park, no false ready`)
+      }
+      ciChecks = pushed.checks
+      continue
     }
+    return park(workItem, pr, 'unexpected ci-decide action (' + (decided && decided.action) + ') — park (fail-closed)')
   }
   return park(workItem, pr, 'checks did not complete within the bound — confirm CI before merging')
 }
 
-// park posts the readout (scrubbed) to the PR; on a failed post it records to the store (UFR-4).
 async function park(workItem, pr, reason, mergeReady) {
-  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
-  const rPost = await cmdRunner(
-    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(reason)}${prNum}`,
-    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
-  // UFR-4 detectability: if the readout reached neither the PR nor the store (e.g. a full disk failed
-  // both the journal and the store fallback), the owner gets no 'your turn' signal — surface that in
-  // the returned reason rather than reporting a clean park.
+  const rPost = await postReadout(workItem, pr, { reason })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered
     ? reason
@@ -1561,12 +1574,7 @@ async function park(workItem, pr, reason, mergeReady) {
   return { outcome: mergeReady ? 'ready' : 'parked', phase: 'ship', reason: reasonOut }
 }
 
-// Structured hand-back (FR-6/FR-7, scrubbed, best-effort). Assembles a structured ctx
-// (pr_url, ci_status, built-vs-acceptance, smoke list, FR-7 integration note when info.integrated)
-// and posts via readout_post.py --ctx. The run's outcome does NOT depend on the post landing —
-// an undelivered hand-back is surfaced as a warning, but the outcome is still ready/parked.
 async function shipHandback(workItem, pr, info) {
-  const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
   const prUrl = pr && pr.url ? pr.url : ''
   const ctx = {
     pr_url: prUrl,
@@ -1579,9 +1587,7 @@ async function shipHandback(workItem, pr, info) {
   if (info.integrated) {
     ctx.integration_note = 'the final commit carries base integration done after the code review (the merged-in base was check-vetted, not re-reviewed)'
   }
-  const rPost = await cmdRunner(
-    `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(ctx))}`,
-    { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+  const rPost = await postReadout(workItem, pr, { ctx })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered ? info.reason
     : `${info.reason} [warning: hand-back could not be delivered (${(rPost && rPost.error) || 'unknown'})]`

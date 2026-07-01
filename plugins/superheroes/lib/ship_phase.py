@@ -65,6 +65,47 @@ def _remote_pr_head(work_item, branch=None, cwd=None):
     return None
 
 
+def _fence_check(work_item, generation, cwd=None):
+    """Inline renew-then-fence; skipped when generation is absent (smoke/test paths)."""
+    if generation is None:
+        return {"ok": True, "reason": "no generation — fence skipped"}
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        r = subprocess.run([sys.executable, os.path.join(script_dir, "fence_cli.py"),
+                            "--work-item", work_item, "--generation", str(generation)],
+                           capture_output=True, text=True, timeout=30, cwd=cwd or os.getcwd())
+    except Exception:
+        return {"ok": False, "reason": "fence unreadable"}
+    try:
+        return json.loads((r.stdout or "").strip() or "{}")
+    except Exception:
+        return {"ok": False, "reason": "fence unreadable"}
+
+
+def _emit_checks_payload(work_item, worktree):
+    """Raw checks array, {stale:...}, or {error:...} for the integrated head."""
+    wt = worktree or os.getcwd()
+    local = _local_head(wt)
+    remote = _remote_pr_head(work_item, cwd=wt)
+    if ship_ci.is_stale(local, remote):
+        return {"stale": True, "local": local, "remote": remote}
+    pr = _resolve_pr_number(work_item)
+    if not pr:
+        return {"error": "CI status could not be read"}
+    try:
+        out = subprocess.run(["gh", "pr", "checks", pr, "--json", "name,bucket,state"],
+                             capture_output=True, text=True, timeout=30)
+    except Exception:
+        return {"error": "CI status could not be read"}
+    raw = out.stdout.strip()
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except Exception:
+        return {"error": "CI status could not be read"}
+
+
 def _read_ci(work_item):
     """Real CI read -> {"decision": green|red|none, "reason": text, "failing": [...]}. Fail-CLOSED:
     any read error -> red (never green)."""
@@ -94,7 +135,12 @@ def _read_ci(work_item):
 ap = argparse.ArgumentParser()
 ap.add_argument("--step", required=True,
                 choices=["freshness", "ci", "reconcile-head", "freshen", "ci-decide",
-                         "ci-record", "fix-push", "revert-draft"])
+                         "ci-record", "fix-push", "revert-draft",
+                         "ship-readiness", "prepare-ci-fix", "push-ci-fix-recheck"])
+ap.add_argument("--generation", type=int, default=None,
+                help="lease generation for inline fence before mutations inside ship-readiness")
+ap.add_argument("--checks-only", action="store_true",
+                help="ship-readiness: emit checks only (stale re-wait), skip reconcile/catch-up")
 ap.add_argument("--work-item", required=True)
 ap.add_argument("--emit-checks", action="store_true",
                 help="IO-only mode: emit raw checks array (or {error:...}) without classifying")
@@ -149,8 +195,13 @@ elif a.step == "reconcile-head":
         return _remote_pr_head(a.work_item, branch, wt) == local  # read-back-confirm the push landed
 
     res = ship_reconcile.reconcile_head(local, _remote_pr_head(a.work_item, branch, wt), branch, _push)
+    read_back = bool(res.get("ok")) and (
+        res.get("already") is True
+        or (_remote_pr_head(a.work_item, branch, wt) == local)
+    )
     print(json.dumps({"ok": bool(res["ok"]),
                       "head": local if res["ok"] else None,
+                      "read_back": bool(read_back),
                       "reason": res["reason"]}))
 elif a.step == "freshen":
     # FR-1/UFR-1/FR-9: bring the base into the branch. git's own auto-merge of non-overlapping
@@ -207,9 +258,12 @@ elif a.step == "ci-record":
     try:
         journal.append(paths["events"], "ci_fix_attempt",
                        payload={"round": a.round, "failing": failing}, root=os.getcwd())
-        print(json.dumps({"ok": True}))
     except journal.DurableWriteError as e:
-        print(json.dumps({"ok": False, "reason": "durable write failed: %s" % e}))
+        print(json.dumps({"ok": False, "read_back": False, "reason": "durable write failed: %s" % e}))
+        sys.exit(0)
+    rounds, hist = journal.ci_attempts(paths["events"])
+    read_back = rounds >= int(a.round or 0) and bool(hist) and list(hist[-1]) == list(failing)
+    print(json.dumps({"ok": True, "read_back": bool(read_back)}))
 elif a.step == "fix-push":
     # The fixer agent (in the orchestrator) edited the worktree to fix failing checks. This step
     # commits + non-force pushes ONLY a clean worktree carrying exactly that change. A crashed fixer's
@@ -247,7 +301,10 @@ elif a.step == "fix-push":
         sys.exit(0)
     push_rc, _ = _git(["push", "origin", branch], cwd=wt)         # ordinary non-force push (FR-9)
     if push_rc == 0:
-        print(json.dumps({"ok": True, "head": _local_head(wt), "pushed": True, "reason": "fix pushed"}))
+        head = _local_head(wt)
+        read_back = _remote_pr_head(a.work_item, branch, wt) == head
+        print(json.dumps({"ok": True, "head": head, "pushed": True, "read_back": bool(read_back),
+                          "reason": "fix pushed"}))
         sys.exit(0)
     # non-fast-forward: the remote PR head advanced. Replay ALL local-ahead commits onto THAT head
     # (never base). HEAD~1 would replay only the last commit and silently DROP an un-pushed freshen
@@ -272,11 +329,185 @@ elif a.step == "fix-push":
         sys.exit(0)
     repush_rc, _ = _git(["push", "origin", branch], cwd=wt)
     if repush_rc != 0:
-        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False, "read_back": False,
                           "reason": "replay push still rejected — park (no force)"}))
         sys.exit(0)
-    print(json.dumps({"ok": True, "head": _local_head(wt), "pushed": True,
+    head = _local_head(wt)
+    read_back = _remote_pr_head(a.work_item, branch, wt) == head
+    print(json.dumps({"ok": True, "head": head, "pushed": True, "read_back": bool(read_back),
                       "reason": "fix replayed onto advanced PR head and pushed"}))
+elif a.step == "prepare-ci-fix":
+    try:
+        failing = json.loads(a.failing) if a.failing else []
+    except ValueError:
+        failing = []
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    prior_rounds, history = journal.ci_attempts(paths["events"])
+    rnd = prior_rounds + 1
+    action, reason = ci_loop.decide(failing, history, rnd)
+    read_back = True
+    ok = True
+    if action == "fix":
+        try:
+            journal.append(paths["events"], "ci_fix_attempt",
+                           payload={"round": rnd, "failing": failing}, root=os.getcwd())
+            after_rounds, hist = journal.ci_attempts(paths["events"])
+            read_back = after_rounds >= rnd and bool(hist) and list(hist[-1]) == list(failing)
+            ok = read_back
+        except journal.DurableWriteError as e:
+            ok = False
+            read_back = False
+            reason = "durable write failed: %s" % e
+    print(json.dumps({"action": action, "round": rnd, "reason": reason,
+                      "ok": ok, "read_back": read_back}))
+elif a.step == "push-ci-fix-recheck":
+    wt = a.worktree or os.getcwd()
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    cp = ckpt_lib.read(paths["checkpoint"]) or {}
+    branch = cp.get("branch") or ""
+    fail = {"ok": False, "head": _local_head(wt), "pushed": False, "read_back": False,
+            "checks": {"error": "CI status could not be read"}}
+    if not branch:
+        fail["reason"] = "no branch recorded — cannot push"
+        print(json.dumps(fail)); sys.exit(0)
+    marker_rc, _ = _git(["diff", "--check"], cwd=wt)
+    if marker_rc != 0:
+        fail["reason"] = "worktree carries conflict markers — crashed fixer, park (no push)"
+        print(json.dumps(fail)); sys.exit(0)
+    _git(["add", "-A"], cwd=wt)
+    staged_rc, staged = _git(["diff", "--cached", "--name-only"], cwd=wt)
+    if staged_rc != 0 or not staged:
+        fail["reason"] = "no change to push — nothing the fixer produced"
+        print(json.dumps(fail)); sys.exit(0)
+    commit_rc, _ = _git(["commit", "-m", "fix(superheroes): repair failing checks [showrunner]"], cwd=wt)
+    if commit_rc != 0:
+        fail["reason"] = "commit failed"
+        print(json.dumps(fail)); sys.exit(0)
+    push_rc, _ = _git(["push", "origin", branch], cwd=wt)
+    if push_rc != 0:
+        remote = _remote_pr_head(a.work_item, branch, wt)
+        if not remote:
+            fail["reason"] = "push rejected and remote PR head unreadable — park"
+            print(json.dumps(fail)); sys.exit(0)
+        fetch_rc, _ = _git(["fetch", "--quiet", "origin", branch], cwd=wt)
+        if fetch_rc != 0:
+            fail["reason"] = "push rejected and could not fetch the advanced remote head — park"
+            print(json.dumps(fail)); sys.exit(0)
+        rebase_rc, _ = _git(["rebase", "FETCH_HEAD"], cwd=wt)
+        if rebase_rc != 0:
+            _git(["rebase", "--abort"], cwd=wt)
+            fail["reason"] = "cannot cleanly replay local-ahead commits onto advanced PR head — park"
+            print(json.dumps(fail)); sys.exit(0)
+        repush_rc, _ = _git(["push", "origin", branch], cwd=wt)
+        if repush_rc != 0:
+            fail["reason"] = "replay push still rejected — park (no force)"
+            print(json.dumps(fail)); sys.exit(0)
+    head = _local_head(wt)
+    read_back = _remote_pr_head(a.work_item, branch, wt) == head
+    checks = _emit_checks_payload(a.work_item, wt)
+    print(json.dumps({"ok": bool(read_back), "head": head, "pushed": bool(read_back),
+                      "read_back": bool(read_back), "checks": checks,
+                      "reason": "fix pushed and rechecked" if read_back else "push read-back failed"}))
+elif a.step == "ship-readiness":
+    wt = a.worktree or os.getcwd()
+    base_name = a.base if a.base else "main"
+    fence = {"ok": True, "reason": "skipped"}
+    reconcile = {"ok": False, "head": None, "reason": "unread"}
+    freshness_out = {"decision": "gate"}
+    integrated = False
+    if a.checks_only:
+        checks = _emit_checks_payload(a.work_item, wt)
+        print(json.dumps({"ok": True, "fence": fence, "reconcile": {"ok": True, "skipped": True},
+                          "freshness": {"decision": "skipped"}, "integrated": False, "checks": checks}))
+        sys.exit(0)
+    fence = _fence_check(a.work_item, a.generation, wt)
+    if not fence.get("ok"):
+        print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                          "freshness": freshness_out, "integrated": False,
+                          "checks": {"error": "CI status could not be read"}}))
+        sys.exit(0)
+    local = _local_head(wt)
+    if not local:
+        reconcile = {"ok": False, "head": None, "reason": "local HEAD unreadable — fail closed"}
+        print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                          "freshness": freshness_out, "integrated": False,
+                          "checks": {"error": "CI status could not be read"}}))
+        sys.exit(0)
+    paths = control_plane.paths(os.getcwd(), a.work_item)
+    cp = ckpt_lib.read(paths["checkpoint"]) or {}
+    branch = cp.get("branch") or ""
+
+    def _push():
+        rc, _ = _git(["push", "origin", branch], cwd=wt)
+        if rc != 0:
+            return False
+        return _remote_pr_head(a.work_item, branch, wt) == local
+
+    res = ship_reconcile.reconcile_head(local, _remote_pr_head(a.work_item, branch, wt), branch, _push)
+    reconcile = {"ok": bool(res["ok"]), "head": local if res["ok"] else None, "reason": res["reason"]}
+    if not reconcile["ok"]:
+        print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                          "freshness": freshness_out, "integrated": False,
+                          "checks": {"error": "CI status could not be read"}}))
+        sys.exit(0)
+    for attempt in range(1, 5):
+        resolved = base_ref.resolve_configured_base(wt, base_name)
+        if resolved is None:
+            freshness_out = {"decision": "gate", "reason": base_ref.unresolvable_reason(base_name, wt)}
+            print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                              "freshness": freshness_out, "integrated": integrated,
+                              "checks": {"error": "CI status could not be read"}}))
+            sys.exit(0)
+        try:
+            rc = subprocess.run(["git", "merge-base", "--is-ancestor", resolved, "HEAD"],
+                                capture_output=True, timeout=10, cwd=wt).returncode
+        except subprocess.TimeoutExpired:
+            rc = 2
+        is_anc = True if rc == 0 else (False if rc == 1 else None)
+        decision, _reason = freshness.decide(is_anc, attempt)
+        freshness_out = {"decision": decision}
+        if decision == "up_to_date":
+            break
+        if decision == "give_up_notify":
+            print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                              "freshness": freshness_out, "integrated": integrated,
+                              "checks": {"error": "CI status could not be read"}}))
+            sys.exit(0)
+        if decision != "sync":
+            print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                              "freshness": freshness_out, "integrated": integrated,
+                              "checks": {"error": "CI status could not be read"}}))
+            sys.exit(0)
+        fence = _fence_check(a.work_item, a.generation, wt)
+        if not fence.get("ok"):
+            print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                              "freshness": freshness_out, "integrated": integrated,
+                              "checks": {"error": "CI status could not be read"}}))
+            sys.exit(0)
+        resolved = base_ref.resolve_configured_base(wt, base_name)
+        _git(["fetch", "--quiet", "origin"], cwd=wt)
+        before_head = _local_head(wt)
+        rc, _ = _git(["merge", "--no-edit", resolved], cwd=wt)
+        if rc != 0:
+            _git(["merge", "--abort"], cwd=wt)
+            freshness_out = {"decision": "conflict", "reason": "base integration conflicts — aborted"}
+            print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                              "freshness": freshness_out, "integrated": integrated,
+                              "checks": {"error": "CI status could not be read"}}))
+            sys.exit(0)
+        after_head = _local_head(wt)
+        if after_head and after_head != before_head and branch:
+            push_rc, _ = _git(["push", "origin", branch], cwd=wt)
+            if push_rc != 0:
+                print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
+                                  "freshness": {"decision": "sync", "reason": "merged base but push failed"},
+                                  "integrated": integrated,
+                                  "checks": {"error": "CI status could not be read"}}))
+                sys.exit(0)
+            integrated = True
+    checks = _emit_checks_payload(a.work_item, wt)
+    print(json.dumps({"ok": True, "fence": fence, "reconcile": reconcile,
+                      "freshness": freshness_out, "integrated": integrated, "checks": checks}))
 elif a.step == "revert-draft":
     # FR-4: return the PR to draft on terminal CI failure. Idempotent via the primitive: a no-op
     # when the PR is already draft. Draft-flip is call-site 2 of the generic idempotency guard.
@@ -310,43 +541,9 @@ elif a.step == "revert-draft":
     res = idempotent_write.idempotent_apply("draft:pr=%s" % pr, _reader, _apply)
     print(json.dumps({"ok": bool(res["ok"]), "reason": res["reason"]}))
 elif a.emit_checks:
-    # FR-5 stale-pass rejection: only judge checks on the INTEGRATED head. If the remote PR head gh
-    # reports the rollup for differs from the worktree's local HEAD, the rollup belongs to an EARLIER
-    # commit -> emit {stale:true} so the orchestrator re-waits, never adopting an older green.
-    if a.worktree:
-        _local = _local_head(a.worktree)
-        _remote = _remote_pr_head(a.work_item)
-        if ship_ci.is_stale(_local, _remote):
-            print(json.dumps({"stale": True, "local": _local, "remote": _remote}))
-            sys.exit(0)
-    # IO-only emit mode: resolve PR + run gh pr checks, emit raw checks array for the JS twin to
-    # classify in-process. Emits {error:...} when the PR cannot be resolved (fail-closed signal).
-    pr = _resolve_pr_number(a.work_item)
-    if not pr:
-        print(json.dumps({"error": "CI status could not be read"}))
-    else:
-        # Mirror _read_ci's fail-closed posture: a read that genuinely FAILS (the gh subprocess
-        # raised/errored, OR stdout was non-empty-but-unparseable) emits the {error:...} sentinel
-        # the JS twin parks on. Emit [] ONLY for a genuinely-successful read with no checks (an
-        # empty stdout from a successful gh call). Never coerce a failed/garbled read to [] — that
-        # would classify 'none' downstream and post a false "merge-ready: no required checks".
-        try:
-            out = subprocess.run(["gh", "pr", "checks", pr, "--json", "name,bucket,state"],
-                                 capture_output=True, text=True, timeout=30)
-        except Exception:
-            print(json.dumps({"error": "CI status could not be read"}))
-        else:
-            # gh pr checks exits non-zero when checks are failing/pending; JSON is still on stdout.
-            raw = out.stdout.strip()
-            if not raw:
-                print(json.dumps([]))            # successful read, no checks gate this PR
-            else:
-                try:
-                    checks = json.loads(raw)
-                except Exception:
-                    print(json.dumps({"error": "CI status could not be read"}))  # unparseable -> fail-closed
-                else:
-                    print(json.dumps(checks))
+    # FR-5 stale-pass rejection: only judge checks on the INTEGRATED head.
+    checks = _emit_checks_payload(a.work_item, a.worktree)
+    print(json.dumps(checks))
 else:
     # Real CI read: classify the PR's checks (green / red / none) via ci_status. Fail-CLOSED — any
     # read error returns 'red' (never 'green'), so ship never posts a false "merge-ready: CI green".
