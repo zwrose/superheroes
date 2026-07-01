@@ -22,7 +22,12 @@ function makeAgent(routes) {
     const label = (opts && opts.label) || ''
     // Exact-label first (labels are unique), so a short needle never shadows a longer script name
     // via substring; then a prompt-substring fallback. A function resp receives the prompt (capture).
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    // Needles ending with ':' match label prefixes (e.g. reviewer:1).
+    for (const [needle, resp] of routes) {
+      if (label === needle || (String(needle).endsWith(':') && label.startsWith(needle))) {
+        return typeof resp === 'function' ? resp(prompt) : resp
+      }
+    }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''
   }
@@ -69,6 +74,8 @@ const SMART_STUBS = [
   // #115 increment B: task_review is now an in-process TWIN (no leaf). The reviewer returns clean
   // verdicts + no findings, so the real twin decides 'complete' in-process — no stub route needed.
   ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+  // Whole-branch final review: runFinalReview's reviewer leaf (label reviewer:rN).
+  ['reviewer:', { findings: [] }],
   // verify_gate.py is called by the panel's verify leaf (label 'verify:r<round>'). Raw run data -> twin -> 'pass'.
   ['verify_gate.py', { command: 'pytest -q', returncode: 0, timedOut: false }],
 ]

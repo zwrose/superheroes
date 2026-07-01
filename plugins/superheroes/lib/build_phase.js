@@ -479,7 +479,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // carried-forward Minors via execJson (retry the courier once on a dropped/garbled stdout); on fail -> [].
   const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
   const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
-  const runDir = `/tmp/workhorse-${workItem}-final-review`
+  const runDir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), `wh-fr-${workItem}-`))
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
   // findings-generalist.json. This is the single-reviewer code leg (legKind.panel:false), so the
