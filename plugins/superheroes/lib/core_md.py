@@ -362,9 +362,11 @@ def _layer_path(cwd, hero, root=None):
 
 
 def _render_layer(layer_text, hero, status, stamp):
-    """Wrap the split hero sections in the §2.2 provenance line for a layer file."""
-    return ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
-            % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+    """Wrap the split hero sections in the §2.2 provenance line for a layer file. Always ends in a
+    single trailing newline (#121 Part I — never write a "No newline at end of file" layer)."""
+    rendered = ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
+                % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+    return rendered if rendered.endswith("\n") else rendered + "\n"
 
 
 def _in_repo_mode(cwd, root):
@@ -373,6 +375,50 @@ def _in_repo_mode(cwd, root):
     if mode_registry.resolve(cwd, root)["mode"] != mode_registry.IN_REPO:
         return False
     return store_core.run_git(cwd, "rev-parse", "--show-toplevel") is not None
+
+
+def _legacy_in_repo(repo_root, legacy):
+    """True when the legacy profile lives INSIDE the repo work tree — i.e. its retirement is a
+    git-trackable DELETION. A global-mode (out-of-repo) legacy is retired by a plain unlink, so it
+    must NOT be handed to `git commit` as a pathspec — an out-of-repo pathspec fails the whole
+    commit and leaves core/layer staged-but-uncommitted (#121 Part E)."""
+    if not legacy:
+        return False
+    return os.path.realpath(legacy).startswith(os.path.realpath(repo_root) + os.sep)
+
+
+def _commit_pathspec(repo_root, core_p, layer_p, legacy):
+    """The paths `git commit --only` records for a migration: always core + layer, plus the legacy
+    DELETION only when the legacy is in-repo (#121 Part E)."""
+    paths = [core_p, layer_p]
+    if _legacy_in_repo(repo_root, legacy):
+        paths.append(legacy)
+    return paths
+
+
+def _facts_are_empty(rec):
+    """An EMPTY PLACEHOLDER core: it parses, but carries no real shared facts (no verify command,
+    threat model, patterns, or stack). Presence of such a record must never be mistaken for a
+    populated calibration when deciding whether a legacy profile is safe to retire (#121 Part D)."""
+    if rec is None:
+        return True
+    return not ((rec.get("verifyCommand") or "").strip()
+                or (rec.get("threatModel") or "").strip()
+                or (rec.get("patterns") or "").strip()
+                or rec.get("stackTags"))
+
+
+def _layer_is_empty(layer_p):
+    """True when the layer file is absent or carries only its provenance line (no body sections)."""
+    try:
+        with open(layer_p, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return True
+    lines = text.splitlines()
+    if lines and lines[0].lstrip().startswith("<!--"):
+        lines = lines[1:]  # drop the §2.2 provenance comment line
+    return "\n".join(lines).strip() == ""
 
 
 def migrate_on_read(cwd, hero, *, root=None, now=None):
@@ -420,6 +466,44 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
             # Remove a still-present legacy file (a prior run wrote both new files but did not
             # finish retiring the legacy).
             if legacy_present:
+                # DATA-LOSS GUARD (#121 Part D): "present" is not "populated". A prior interrupted
+                # set-up can leave the new core/layer as EMPTY PLACEHOLDERS while the legacy still
+                # holds the only copy of the real threat model + patterns — retiring it here would
+                # lose that content. Before unlinking, RESCUE any empty placeholder from the legacy
+                # (lossless populate-then-retire); a non-empty / hand-edited piece is left untouched
+                # (FR-11). A rich legacy that cannot be safely re-derived (ambiguous) is NOT retired
+                # over a placeholder — surfaced for hand-reconcile instead of silently destroyed.
+                core_rec_now = read(cwd, root)
+                core_empty = _facts_are_empty(core_rec_now)
+                layer_empty = _layer_is_empty(layer_p)
+                if core_empty or layer_empty:
+                    try:
+                        with open(legacy, encoding="utf-8") as fh:
+                            legacy_text = fh.read()
+                    except OSError:
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "legacy-unreadable"})
+                        return {"action": "deferred"}
+                    if classify(legacy_text, hero) != "standard":
+                        # never destroy an un-derivable legacy over a placeholder; surface it as a
+                        # calibration-not-saved marker so the owner can hand-reconcile (/code-review #9).
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "ambiguous-legacy"})
+                        return {"action": "ambiguous"}
+                    core_facts, layer_text = split_profile(legacy_text, hero)
+                    # Preserve the placeholder's own status + created: rescuing content must never
+                    # downgrade a confirmed core or reset its creation date (/code-review #10).
+                    prev_status = (core_rec_now or {}).get("status") or "provisional"
+                    prev_created = (core_rec_now or {}).get("created") or stamp
+                    try:
+                        if core_empty:
+                            store_core.atomic_write(
+                                core_p, render_core(core_facts, prev_status, prev_created, stamp))
+                        if layer_empty:
+                            store_core.atomic_write(
+                                layer_p, _render_layer(layer_text, hero, prev_status, stamp))
+                    except OSError:
+                        mark_pending(cwd, root, detail={"hero": hero, "reason": "write-failed"})
+                        return {"action": "deferred"}
+                    did_work = True
                 try:
                     os.unlink(legacy)
                 except OSError:
@@ -436,7 +520,7 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
                     # stage the (possibly untracked) new files so `commit --only` knows them
                     store_core.run_git(repo, "add", "--", core_p, layer_p)
                     store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
-                                       core_p, layer_p, legacy)
+                                       *_commit_pathspec(repo, core_p, layer_p, legacy))
                     if not _migration_recorded(repo, core_p, legacy):
                         mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
                         return {"action": "deferred"}
@@ -467,10 +551,12 @@ def migrate_on_read(cwd, hero, *, root=None, now=None):
         if _in_repo_mode(cwd, root):
             repo = _repo_root(cwd)
             msg = "chore(superheroes): migrate %s profile to core.md + layer" % hero
-            # stage the (untracked) new files first so `commit --only` knows them; the legacy
-            # is NOT re-added (its working-tree DELETION is what --only records).
+            # stage the (untracked) new files first so `commit --only` knows them; an in-repo
+            # legacy is included so its working-tree DELETION is what --only records (an
+            # out-of-repo legacy is excluded — Part E — and was already removed by os.unlink).
             store_core.run_git(repo, "add", "--", core_p, layer_p)
-            store_core.run_git(repo, "commit", "--only", "-m", msg, "--", core_p, layer_p, legacy)
+            store_core.run_git(repo, "commit", "--only", "-m", msg, "--",
+                               *_commit_pathspec(repo, core_p, layer_p, legacy))
             if not _migration_recorded(repo, core_p, legacy):
                 mark_pending(cwd, root, detail={"hero": hero, "reason": "migrate-commit-failed"})
                 return {"action": "deferred"}
@@ -484,10 +570,19 @@ def _migration_recorded(repo_root, core_p, legacy):
     path when tracked, "" otherwise — distinguishing a real commit landing from run_git's
     ambiguous None (any nonzero exit), so a failed/outstanding commit is RETRIED on the next
     read rather than silently dropped (FR-8). Defined after migrate_on_read; Python late-binds
-    the module-level name, so the call order is fine."""
+    the module-level name, so the call order is fine.
+
+    An OUT-OF-REPO legacy (global-mode profile) has no git deletion to record — and `ls-files`
+    on a path outside the repo always errors (run_git → None → falsey), which the old
+    `not legacy_tracked` leg misread as 'deletion committed'. So for an out-of-repo legacy the
+    split is recorded iff core.md is tracked, full stop (#121 Part E)."""
     core_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", core_p))
+    if not core_tracked:
+        return False
+    if not _legacy_in_repo(repo_root, legacy):
+        return True  # out-of-repo legacy: nothing for git to record beyond core.md
     legacy_tracked = bool(store_core.run_git(repo_root, "ls-files", "--", legacy))
-    return core_tracked and not legacy_tracked
+    return not legacy_tracked
 
 
 import argparse
@@ -525,6 +620,112 @@ def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
         return {"action": "written", "path": layer_p}
 
 
+def confirm(cwd, *, root=None, now=None):
+    """FR-18 owner-confirm for the shared core: flip an existing PROVISIONAL core.md to confirmed
+    IN PLACE. write() (reuse-not-clobber, FR-6) cannot do this on an existing file — it returns
+    `reused`/`proposed` and never re-renders — so confirmation needs its own path. Preserves
+    `created`, bumps `updated`, re-renders through render_core under the config lock. Fail-open
+    like write(). Returns one of:
+      - {action: "confirmed"}  flipped provisional → confirmed
+      - {action: "noop"}       already confirmed (idempotent)
+      - {action: "absent"}     no core.md to confirm
+      - {action: "behind"}     core.md is a NEWER schema — refuse to rewrite (UFR-3)
+      - {action: "deferred"}   lock contended / store unwritable (UFR-4)"""
+    stamp = now or _today()
+    existing = read(cwd, root)
+    if existing is None:
+        return {"action": "absent", "record": None}
+    if existing.get("behind"):
+        return {"action": "behind", "record": existing}
+    if existing.get("status") == "confirmed":
+        return {"action": "noop", "record": existing}
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+        return {"action": "deferred", "record": None}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": "lock-contended"})
+            return {"action": "deferred", "record": None}
+        existing = read(cwd, root)  # re-read under the lock
+        if existing is None:
+            return {"action": "absent", "record": None}
+        # UFR-3: never rewrite a forward-schema core — render_core would downgrade it to
+        # SCHEMA_VERSION and drop fields this version doesn't understand. Surface, don't write.
+        if existing.get("behind"):
+            return {"action": "behind", "record": existing}
+        if existing.get("status") == "confirmed":
+            return {"action": "noop", "record": existing}
+        facts = {k: existing[k] for k in ("verifyCommand", "stackTags", "threatModel", "patterns")}
+        created = existing.get("created") or stamp
+        try:
+            store_core.atomic_write(core_path(cwd, root),
+                                    render_core(facts, "confirmed", created, stamp))
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": "store-unwritable"})
+            return {"action": "deferred", "record": None}
+        record = read(cwd, root)
+        clear_pending(cwd, root)
+        return {"action": "confirmed", "record": record}
+
+
+def confirm_layer(cwd, hero, *, root=None, now=None):
+    """FR-18 owner-confirm for a hero LAYER: flip a PROVISIONAL layer to confirmed via a surgical
+    provenance edit — only `status` and `updated` change; `created`, `nudge-ack`, and the body are
+    preserved byte-for-byte (never rewrite a hand-edited layer, FR-11). Fail-open like write_layer.
+    Returns {action: "confirmed"|"noop"|"absent"|"deferred"}."""
+    stamp = now or _today()
+    layer_p = _layer_path(cwd, hero, root)
+    if not os.path.isfile(layer_p):
+        return {"action": "absent"}
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        return {"action": "deferred"}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            return {"action": "deferred"}
+        # Read UNDER the lock (never from a stale pre-lock read) so a concurrent write_layer that
+        # landed while we waited for the lock is not clobbered (/code-review #1).
+        try:
+            with open(layer_p, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            return {"action": "absent"}
+        # DOTALL so a hand-wrapped multi-line provenance comment still matches.
+        m = re.match(r"^<!--\s*%s:.*?-->" % re.escape(hero), text, re.DOTALL)
+        if not m:
+            return {"action": "absent"}  # no §2.2 provenance line — not a managed layer
+        if "status=confirmed" in m.group(0):
+            return {"action": "noop", "path": layer_p}
+        # Surgical, anchored to the FIRST status=/updated= field only (count=1) so a status=/
+        # updated= substring inside the nudge-ack map is never rewritten (/code-review #3).
+        prov = re.sub(r"status=\S+", "status=confirmed", m.group(0), count=1)
+        prov = re.sub(r"updated=\S+", "updated=%s" % stamp, prov, count=1)
+        if "status=confirmed" not in prov:
+            # the provenance carried no status= field to flip — not a flippable managed layer;
+            # never report a false 'confirmed' for a no-op edit (/code-review #3).
+            return {"action": "absent"}
+        try:
+            store_core.atomic_write(layer_p, prov + text[m.end(0):])
+        except OSError:
+            return {"action": "deferred"}
+        return {"action": "confirmed", "path": layer_p}
+
+
+def confirm_all(cwd, *, root=None, now=None):
+    """FR-18 owner-confirm for the WHOLE calibration: the shared core + every present hero layer.
+    The entry point the configure fix-path calls once the owner confirms. Returns
+    {core: <confirm result>, layers: {hero: <confirm_layer result>}}."""
+    core_res = confirm(cwd, root=root, now=now)
+    layers = {}
+    # Only flip layers when the shared core is (now) confirmed — a deferred/behind/absent core must
+    # not leave layers advertising 'confirmed' over an unconfirmed core, a split state (/code-review
+    # #5). `noop` means the core was already confirmed, so layers may still flip.
+    if core_res.get("action") in ("confirmed", "noop"):
+        for hero in _HEROES:
+            if os.path.isfile(_layer_path(cwd, hero, root)):
+                layers[hero] = confirm_layer(cwd, hero, root=root, now=now)
+    return {"core": core_res, "layers": layers}
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="core_md")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -544,6 +745,9 @@ def main(argv):
     lp.add_argument("--root", default=None)
     lp.add_argument("--hero", choices=_HEROES, required=True)
     lp.add_argument("--status", choices=("provisional", "confirmed"), default="provisional")
+    cp = sub.add_parser("confirm")  # FR-18 owner-confirm: core + every present hero layer
+    cp.add_argument("--cwd", default=".")
+    cp.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -567,11 +771,16 @@ def main(argv):
             out = write(args.cwd, facts, args.status, root=args.root)
         except Exception:
             out = {"action": "deferred", "record": None, "proposals": []}
-    else:  # write-layer
+    elif args.cmd == "write-layer":
         try:
             out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status, root=args.root)
         except Exception:
             out = {"action": "deferred"}
+    else:  # confirm
+        try:
+            out = confirm_all(args.cwd, root=args.root)
+        except Exception:
+            out = {"core": {"action": "deferred"}, "layers": {}}
     sys.stdout.write(json.dumps(out, indent=2) + "\n")
     return 0
 

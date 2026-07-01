@@ -313,6 +313,131 @@ chrome-devtools
 """
 
 
+_CORE_FACTS = {"verifyCommand": "npm test", "stackTags": ["node"],
+               "threatModel": "single-user", "patterns": "- x: a.ts:1"}
+
+
+def test_confirm_flips_provisional_core_preserving_created(tmp_path):
+    # #121 Part A: write() (reuse-not-clobber) cannot flip an existing provisional core; confirm()
+    # does — preserving `created`, bumping `updated`, leaving the facts untouched.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    got = CM.read(repo, root=store)
+    assert got["status"] == "confirmed"
+    assert got["created"] == "2026-06-26"            # preserved
+    assert got["updated"] == "2026-06-28"            # bumped
+    assert got["verifyCommand"] == "npm test"        # facts untouched
+    assert got["patterns"] == "- x: a.ts:1"
+    assert got["threatModel"] == "single-user"
+
+
+def test_confirm_idempotent_on_already_confirmed(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "noop"
+    assert CM.read(repo, root=store)["updated"] == "2026-06-26"  # untouched
+
+
+def test_confirm_absent_core_is_absent(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.confirm(repo, root=store)["action"] == "absent"
+
+
+def test_confirm_deferred_when_lock_contended_leaves_provisional(tmp_path, monkeypatch):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _contended(cwd, root=None):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _contended)
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "deferred"
+    assert CM.read(repo, root=store)["status"] == "provisional"  # unchanged
+
+
+def test_confirm_layer_flips_status_preserving_body_created_nudge_ack(tmp_path):
+    # #121 Part A (layers): a surgical provenance flip — status + updated change; created,
+    # nudge-ack, and the body are preserved verbatim (FR-11; never rewrite a hand-edited layer).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    prov = ('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+            'updated=2026-06-20 nudge-ack={"rubric-v1":true} -->')
+    body = "\n\n## Scope exclusions\n- hand-edited note\n"
+    open(layer_p, "w").write(prov + body)
+    res = CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    out = open(layer_p).read()
+    assert "status=confirmed" in out
+    assert "created=2026-06-20" in out                  # preserved
+    assert "updated=2026-06-28" in out                  # bumped
+    assert 'nudge-ack={"rubric-v1":true}' in out        # preserved verbatim
+    assert "## Scope exclusions\n- hand-edited note" in out  # body untouched
+
+
+def test_confirm_layer_idempotent_and_absent(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    assert CM.confirm_layer(repo, "review-crew", root=store)["action"] == "absent"
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    open(layer_p, "w").write(
+        '<!-- review-crew: schemaVersion=1 status=confirmed created=2026-06-20 '
+        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    assert CM.confirm_layer(repo, "review-crew", root=store)["action"] == "noop"
+
+
+def test_confirm_all_confirms_core_and_present_layers(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    open(layer_p, "w").write(
+        '<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    res = CM.confirm_all(repo, root=store, now="2026-06-28")
+    assert res["core"]["action"] == "confirmed"
+    assert res["layers"]["review-crew"]["action"] == "confirmed"
+    assert CM.read(repo, root=store)["status"] == "confirmed"
+    assert "status=confirmed" in open(layer_p).read()
+
+
+def test_cli_confirm_flips_core(tmp_path, capsys):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    CM.main(["confirm", "--cwd", repo, "--root", store])
+    out = json.loads(capsys.readouterr().out)
+    assert out["core"]["action"] == "confirmed"
+    assert CM.read(repo, root=store)["status"] == "confirmed"
+
+
+def test_confirm_does_not_downgrade_a_newer_schema_core(tmp_path):
+    # #121 Part A / UFR-3: confirm() must NEVER rewrite a forward-schema (behind) core — that
+    # would downgrade schemaVersion and drop fields the running version doesn't understand. write()
+    # and migrate_on_read() both refuse to rewrite a behind record; confirm() must too.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, CM.SCHEMA_VERSION + 1, status="provisional")  # newer schema, provisional
+    core_p = os.path.join(repo, ".claude", "superheroes", "core.md")
+    before = open(core_p).read()
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "behind"
+    assert open(core_p).read() == before  # file untouched — not downgraded, not re-rendered
+
+
 def test_classify_standard_review_profile():
     assert CM.classify(_REVIEW_PROFILE, "review-crew") == "standard"
 
@@ -522,6 +647,85 @@ def test_resume_both_files_present_completes_retirement(tmp_path):
     assert not os.path.exists(legacy)  # retired
     # and a subsequent read is a plain noop
     assert CM.migrate_on_read(repo, "review-crew", root=store)["action"] == "noop"
+
+
+def test_migrate_in_repo_with_out_of_repo_legacy_commits_and_records(tmp_path, monkeypatch):
+    # #121 Part E: IN_REPO registry but the legacy lives in review-crew's GLOBAL store (out-of-repo,
+    # a realistic mixed state). The commit must land core+layer (not fail on an out-of-repo
+    # pathspec) and report `migrated` HONESTLY — never a false `migrated` with calibration left
+    # staged-but-uncommitted in the developer's index.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    open(os.path.join(repo, "README"), "w").write("x\n")  # give the repo a HEAD
+    _git(repo, "add", "README")
+    _git(repo, "commit", "-q", "-m", "init")
+    hero_root = str(tmp_path / "review_store")
+    import review_store
+    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
+    prof_path = review_store.create(repo, "profile", "global", hero_root)
+    open(prof_path, "w").write(_REVIEW_PROFILE)
+    legacy = CM._legacy_path(repo, "review-crew")
+    assert legacy == prof_path  # out-of-repo (global hero store)
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "migrated"
+    # the migration commit actually landed core+layer in HEAD
+    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
+    assert ".claude/superheroes/core.md" in names
+    assert ".claude/superheroes/review-crew.md" in names
+    # out-of-repo legacy retired (plain unlink, not a git pathspec)
+    assert not os.path.exists(prof_path)
+    # NO false success: nothing left staged-but-uncommitted
+    staged = _git(repo, "diff", "--cached", "--name-only").stdout
+    assert ".claude/superheroes" not in staged
+
+
+def test_resume_empty_placeholder_rescues_rich_legacy(tmp_path):
+    # Part D / #121 (DATA LOSS): the destination core + layer exist only as EMPTY placeholders
+    # (a botched/interrupted set-up) while a RICH legacy still holds the only copy of the real
+    # threat model + patterns. The RESUME branch must NOT retire the legacy and keep the empty
+    # core — it re-derives losslessly from the legacy, THEN retires it.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)  # rich: verify npm test, threat multi-tenant, patterns
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))  # empty body
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    # the rich content was rescued into the destination — not lost
+    got = CM.read(repo, root=store)
+    assert got is not None
+    assert got["verifyCommand"] == "npm test"
+    assert "multi-tenant" in got["threatModel"]
+    layer = open(_hero_layer_path(repo, "review-crew")).read()
+    assert "## Scope exclusions" in layer
+    # legacy retired only AFTER its content was secured
+    assert not os.path.exists(legacy)
+    assert res["action"] in ("migrated", "completed")
+
+
+def test_resume_empty_placeholder_refuses_to_destroy_ambiguous_legacy(tmp_path):
+    # Part D / #121: an ambiguous (non-auto-derivable) legacy must NEVER be silently deleted over
+    # an empty placeholder — surface it for hand-reconcile, legacy preserved.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))  # ambiguous
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "ambiguous"
+    assert os.path.exists(legacy)  # NOT destroyed
 
 
 def test_resume_core_present_layer_absent_rederives(tmp_path):
@@ -822,3 +1026,159 @@ def test_relocate_file_copies_then_unlinks_atomically(tmp_path):
     dst = tmp_path / "sub" / "b.txt"
     CM.relocate_file(str(src), str(dst))
     assert dst.read_text() == "hello" and not src.exists()
+
+
+def test_resume_placeholder_with_out_of_repo_legacy_rescues_and_commits(tmp_path, monkeypatch):
+    # #121 Part F: IN_REPO registry, EMPTY placeholder core+layer, and a RICH legacy in the GLOBAL
+    # (out-of-repo) store. The RESUME branch must rescue the content (Part D) AND commit it without
+    # passing the out-of-repo legacy to git (Part E) — the rich global profile is never destroyed
+    # over a placeholder, and the migration is recorded, not left dirty.
+    repo = _git_repo(tmp_path)
+    store = str(tmp_path / "store")
+    _force_in_repo(repo, store)
+    open(os.path.join(repo, "README"), "w").write("x\n")
+    _git(repo, "add", "README")
+    _git(repo, "commit", "-q", "-m", "init")
+    hero_root = str(tmp_path / "review_store")
+    import review_store
+    monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
+    prof_path = review_store.create(repo, "profile", "global", hero_root)
+    open(prof_path, "w").write(_REVIEW_PROFILE)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
+    CM.migrate_on_read(repo, "review-crew", root=store)
+    got = CM.read(repo, root=store)
+    assert got["verifyCommand"] == "npm test"          # rescued, not lost
+    assert "multi-tenant" in got["threatModel"]
+    assert "## Scope exclusions" in open(_hero_layer_path(repo, "review-crew")).read()
+    assert not os.path.exists(prof_path)               # rich global legacy retired safely
+    names = set(_git(repo, "show", "--name-status", "--format=", "HEAD").stdout.split())
+    assert ".claude/superheroes/core.md" in names      # committed, not left dirty
+    assert ".claude/superheroes" not in _git(repo, "diff", "--cached", "--name-only").stdout
+
+
+def test_render_layer_always_ends_with_one_newline(tmp_path):
+    # #121 Part I: a body without a trailing newline must still yield a file ending in exactly one
+    # \n (no "No newline at end of file"); a \n-terminated body is unchanged.
+    out = CM._render_layer("## App launch\n- x", "test-pilot", "provisional", "2026-06-26")
+    assert out.endswith("- x\n") and not out.endswith("\n\n")
+    out2 = CM._render_layer("## Scope exclusions\n- none\n", "review-crew", "provisional", "2026-06-26")
+    assert out2.endswith("- none\n")
+
+
+def test_confirm_layer_rejects_provenance_without_status_field(tmp_path):
+    # /code-review #3: a provenance with no status= token must NOT report 'confirmed' (the surgical
+    # re.sub would be a no-op) — that was a silent false-success.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").write("<!-- review-crew: schemaVersion=1 created=2026-06-20 nudge-ack={} -->"
+                        "\n\n## Scope exclusions\n- none\n")
+    res = CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    assert res["action"] != "confirmed"
+    assert "status=confirmed" not in open(lp).read()
+
+
+def test_confirm_layer_does_not_corrupt_nudge_ack_with_status_token(tmp_path):
+    # /code-review #3: the surgical sub must touch only the leading status=/updated= fields, never a
+    # status=/updated= substring inside the nudge-ack map.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").write('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+                        'updated=2026-06-20 nudge-ack={"k":"status=x"} -->\n\n## Scope exclusions\n- none\n')
+    res = CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    out = open(lp).read()
+    assert res["action"] == "confirmed"
+    assert 'nudge-ack={"k":"status=x"}' in out  # ack preserved verbatim
+    assert "status=confirmed" in out
+
+
+def test_confirm_layer_reads_under_lock_not_stale(tmp_path, monkeypatch):
+    # /code-review #1: confirm_layer must re-read the layer UNDER the lock, so a concurrent write
+    # that lands while it waits for the lock is not clobbered by a stale pre-lock read.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    prov = ('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+            'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- %s\n')
+    open(lp, "w").write(prov % "OLD")
+    from contextlib import contextmanager
+    real_lock = CM.mode_registry.config_lock
+
+    @contextmanager
+    def _lock_then_mutate(cwd, root=None):
+        open(lp, "w").write(prov % "NEW BODY")  # a concurrent write_layer landed first
+        with real_lock(cwd, root) as got:
+            yield got
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _lock_then_mutate)
+    CM.confirm_layer(repo, "review-crew", root=store, now="2026-06-28")
+    out = open(lp).read()
+    assert "NEW BODY" in out and "OLD" not in out  # concurrent body survived
+    assert "status=confirmed" in out
+
+
+def test_confirm_all_does_not_flip_layers_when_core_not_confirmed(tmp_path):
+    # /code-review #5: a behind/deferred/absent core must NOT leave layers advertising 'confirmed'
+    # over an unconfirmed shared core (no split state).
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    _write_core(repo, CM.SCHEMA_VERSION + 1, status="provisional")  # behind core → confirm -> 'behind'
+    lp = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(lp), exist_ok=True)
+    open(lp, "w").write('<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+                        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    res = CM.confirm_all(repo, root=store, now="2026-06-28")
+    assert res["core"]["action"] == "behind"
+    assert all(v["action"] != "confirmed" for v in res["layers"].values())
+    assert "status=confirmed" not in open(lp).read()
+
+
+def test_resume_ambiguous_over_placeholder_marks_pending(tmp_path):
+    # /code-review #9: refusing to retire an ambiguous legacy over a placeholder must drop a
+    # calibration-pending marker so mode_reconcile surfaces it for hand-reconcile.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE.replace("## Verify", "## How we check"))  # ambiguous
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "provisional", "2026-06-26", "2026-06-26"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "provisional", "2026-06-26"))
+    res = CM.migrate_on_read(repo, "review-crew", root=store)
+    assert res["action"] == "ambiguous"
+    assert os.path.exists(legacy)                       # preserved
+    assert os.path.isfile(CM._pending_path(repo, store))  # surfaced as calibration-not-saved
+
+
+def test_resume_rescue_preserves_confirmed_status_and_created(tmp_path):
+    # /code-review #10: rescuing an empty placeholder must NOT downgrade a confirmed status or
+    # reset the created date.
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    legacy = _legacy_review_path(repo)
+    open(legacy, "w").write(_REVIEW_PROFILE)
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    empty = {"verifyCommand": "", "stackTags": [], "threatModel": "", "patterns": ""}
+    open(os.path.join(d, "core.md"), "w").write(
+        CM.render_core(empty, "confirmed", "2026-06-01", "2026-06-01"))
+    open(os.path.join(d, "review-crew.md"), "w").write(
+        CM._render_layer("", "review-crew", "confirmed", "2026-06-01"))
+    CM.migrate_on_read(repo, "review-crew", root=store)
+    got = CM.read(repo, root=store)
+    assert got["verifyCommand"] == "npm test"   # rescued
+    assert got["status"] == "confirmed"          # NOT downgraded
+    assert got["created"] == "2026-06-01"        # preserved

@@ -253,3 +253,17 @@ def test_cli_recover_noop_outputs_json(tmp_path, capsys):
     rc = mm.main(["recover", "--cwd", str(tmp_path), "--root", str(tmp_path / "store")])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["status"] == "noop"
+
+
+def test_recover_triggers_store_root_migration_only_on_a_real_run(monkeypatch, tmp_path):
+    # #121 Part B: the one-time store-root rename auto-fires on a real run (root is None), never
+    # when an explicit root override is in play (tests / pinned roots) — so the suite never moves
+    # the real ~/.claude store.
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))  # hermetic store reads
+    calls = []
+    monkeypatch.setattr(mm.control_plane, "migrate_store_root",
+                        lambda: calls.append(1) or {"migrated": False})
+    mm.recover(str(tmp_path), root=str(tmp_path / "store2"))  # explicit root → skip
+    assert calls == []
+    mm.recover(str(tmp_path), root=None)                      # real run → trigger once
+    assert calls == [1]
