@@ -10,6 +10,7 @@ const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
 const modelTierTwin = require('./model_tier.js')
+const courier = require('./courier_exec.js')
 // #115 Task 16: back-half twins — CI status + PR recover (prAction already via recoverTwin above)
 const ciStatusTwin = require('./ci_status.js')
 
@@ -329,7 +330,7 @@ async function reviewDocPhase(doc, workItem) {
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`
   const pr = await persistPhase(workItem, {
     sideEffectCmd,
-    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
+    record: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
     step: -1,   // placeholder: the real step is written by recordCursor in runPhases; -1 signals review-doc context
     phase: `review-${doc}`,
   })
@@ -563,57 +564,27 @@ async function exec(commands, opts) {
 async function persistPhase(workItem, opts) {
   opts = opts || {}
   const sideEffectCmd = opts.sideEffectCmd || null
-  const journalPayload = opts.journalPayload || {}
+  const record = opts.record || opts.journalPayload || {}
   const step = opts.step
   const phase = opts.phase
-
-  const journalCmd =
-    'python3 plugins/superheroes/lib/journal_entry.py ' +
-    '--work-item ' + shq(workItem) + ' ' +
-    '--payload ' + shq(JSON.stringify(journalPayload))
-
-  const checkpointCmd =
-    'python3 plugins/superheroes/lib/checkpoint_entry.py ' +
-    '--work-item ' + shq(workItem) + ' ' +
-    '--step ' + shq(String(step)) + ' ' +
-    '--phase ' + shq(phase)
-
-  const commands = sideEffectCmd
-    ? [sideEffectCmd, journalCmd, checkpointCmd]
-    : [journalCmd, checkpointCmd]
-
-  // Classify one batch result. Three outcomes:
-  //   'real_fail' — an exec-level failure (e.g. set-gate sys.exit(1)) OR a parseable {"ok":false}
-  //                 (journal/checkpoint exit 0 and print {"ok":false} on a failed durable write,
-  //                 DurableWriteError / OSError). A REAL durable-write failure — must fail closed, NOT
-  //                 retry (re-running won't fix a genuine failure, and UFR-5 must not advance on it).
-  //   'drop'      — r.ok but the stdout is EMPTY/whitespace OR unparseable JSON where a {"ok":...} was
-  //                 expected (the cheap haiku courier dropped/garbled it though the command ran). The
-  //                 batch writes are idempotent (gate set / journal append [harmless dup] / checkpoint
-  //                 set), so a courier-drop is safe to retry once.
-  //   'ok'        — r.ok and a parseable JSON with no {"ok":false} (incl. set-gate's {"review":...},
-  //                 which has no ok field — covered by exec-ok, not a drop).
-  function classify(r) {
-    if (!r || !r.ok) return 'real_fail'            // exec-level failure (e.g. set-gate sys.exit(1))
-    const s = (r.stdout == null ? '' : String(r.stdout)).trim()
-    if (!s) return 'drop'                          // empty stdout -> courier-drop
-    try {
-      const p = JSON.parse(s)
-      if (p && typeof p === 'object' && p.ok === false) return 'real_fail'  // genuine durable-write failure
-      return 'ok'
-    } catch (_e) { return 'drop' }                 // unparseable stdout -> courier-drop
+  const side = opts.sideEffect || null
+  const sideArg = side ? ` --json ${shq(JSON.stringify(side))}` : ''
+  const saveCmd =
+    `python3 plugins/superheroes/lib/phase_progress_entry.py save --work-item ${shq(workItem)} ` +
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}`
+  const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
+  try {
+    const res = await courier.runCourierJson(
+      'save phase progress',
+      cmd,
+      { require: ['ok', 'journal_confirmed', 'checkpoint_confirmed'], retryRealFailure: false },
+    )
+    return res && res.ok && res.journal_confirmed && res.checkpoint_confirmed
+      ? { ok: true, recovered: false }
+      : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
+  } catch (_e) {
+    return { ok: false, error: 'phase progress read-back mismatch' }
   }
-  // Fail-CLOSE on a durable-write failure; retry the whole batch ONCE on a pure courier-drop (no
-  // real failure present). A real failure short-circuits with NO retry. If a drop persists after the
-  // single retry, fail closed.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const results = await exec(commands)
-    const verdicts = results.map(classify)
-    if (verdicts.indexOf('real_fail') >= 0) return { ok: false }   // real failure -> fail closed, NO retry
-    if (verdicts.indexOf('drop') < 0) return { ok: true }          // all ok -> success
-    // a drop with no real failure -> retry the whole batch once (attempt 0), else fall through to fail closed.
-  }
-  return { ok: false }                             // a courier-drop persisted after the retry -> fail closed
 }
 
 function inWorktree(cmd, worktree) {
