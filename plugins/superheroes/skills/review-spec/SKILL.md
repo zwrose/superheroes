@@ -450,7 +450,6 @@ skill only gates it on `REVISED` (a loop concern the helper can't know); the hel
 rest and **never grants `passed`** (it can only reset `passed`→`pending` or no-op):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$REVISED" = yes ]; then
   ROOT=$(git rev-parse --show-toplevel)
   GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
@@ -459,15 +458,7 @@ if [ "$REVISED" = yes ]; then
 fi
 ```
 
-`$GATE` is `reset:pending` (a stale approval was revoked), `noop:not-approved` (gate wasn't
-`passed` — nothing to revoke), `skipped:noncanonical`,
-`skipped:unreadable` (the gate could **not** be read — if it was approved, the approval may be
-stale and the owner must re-approve), or `failed:set-gate` (the stale `passed` could **not** be
-revoked — surface it: the approval is stale and the owner must re-approve); the helper prints
-the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
-(§3.1), so a programmatic consumer sees the spec is no longer approved. (The fuller "any
-content change invalidates approval" contract is the §7 owner-approval-contract's; this
-closes the in-repo programmatic hole.)
+`$GATE` is `reset:pending`, `noop:not-approved`, `skipped:*`, or `failed:set-gate` — surface stderr on failure; the helper never grants `passed`.
 
 After the loop exits, print a terminal summary in chat:
 

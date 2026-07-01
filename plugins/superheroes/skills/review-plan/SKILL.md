@@ -438,18 +438,9 @@ gate to set; say so and stop at the terminal summary).
   still open, or the user **skipped** a blocking finding → record `changes-requested` (the
   plan is not cleared to advance; report what remains).
 
-The gate write — and its guards — live in **one tested place**, `lib/gate_write.py` (the
-same handshake review-tasks and review-spec use, so a fix can't miss a copy). It owns the
-whole sequence and **degrades, it does not crash**: resolve the-architect's lib (the single
-§3.1 frontmatter writer) cross-plugin → a **canonical-path guard** (refuse to stamp a doc
-other than the one reviewed — `set-gate` reconstructs `docs/superheroes/<work-item>/plan.md`
-from `--work-item`, so an out-of-layout `<path>` would otherwise hit a *different* doc) → the
-**parent-gate precondition** (a plan is never certified `passed` while its `spec` isn't
-approved — it downgrades to `changes-requested`) → a guarded `set-gate`. It prints a
-human-readable detail to stderr and a one-word outcome to stdout:
+The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
 GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
