@@ -147,6 +147,36 @@ def test_allow_overwrite_replaces_without_expected_hash(tmp_path):
     assert written["terminal"] == "clean" and written["runId"] == "run-2"
 
 
+def test_payload_hash_tolerates_one_heredoc_newline(tmp_path):
+    """The bundle's leaf-bash writeFile is a heredoc: it puts body+'\\n' on disk, one byte the
+    sender's hash never covered. The staged check tolerates exactly that one newline; a second
+    one (or any other alteration) still fails."""
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    text = '{"terminal": "clean"}'
+    staged.write_text(text + "\n", encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", FJ.content_hash(text), "--allow-overwrite", "--run-id", "run-1")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stdout + r.stderr
+    staged.write_text(text + "\n\n", encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", FJ.content_hash(text), "--allow-overwrite", "--run-id", "run-2")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "payload-corrupt"}
+
+
+def test_allow_overwrite_requires_payload_hash(tmp_path):
+    """Overwrite mode skips the CAS fence, so the payload self-check is its ONLY integrity
+    guard — a courier that drops the --payload-hash pair must fail closed, not fail open."""
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    staged.write_text('{"terminal": "clean"}', encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--allow-overwrite", "--run-id", "run-1")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "payload-hash-required"}
+    assert not path.exists()
+
+
 def test_no_expected_hash_and_no_allow_overwrite_still_refused(tmp_path):
     # the CAS default is unchanged: omitting the fence is an error unless overwrite is explicit
     path = tmp_path / "terminal-record.json"

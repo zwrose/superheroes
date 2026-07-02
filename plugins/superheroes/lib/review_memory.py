@@ -240,16 +240,41 @@ def persist_record(path, records, record, expected_hash=None, run_id=None, lease
         return {"ok": False, "reason": "write-failed", "detail": str(exc)}
 
 
+def _sent_hash_ok(raw, want, staged=False):
+    """True when the transported text matches the sender's sha256. For a STAGED file,
+    tolerate exactly one trailing newline: the bundle's leaf-bash writeFile is a heredoc
+    (`cat > p <<EOF`), which puts body+'\\n' on disk — one byte the sender's hash never
+    covered. Inline args get no tolerance; any other alteration still fails."""
+    if not want:
+        return False
+    if content_hash(raw) == want:
+        return True
+    return bool(staged) and raw.endswith("\n") and content_hash(raw[:-1]) == want
+
+
+def _with_write_stamp(record, run_id, lease):
+    out = dict(record)
+    if run_id:
+        out["runId"] = run_id
+    if lease:
+        out["lease"] = lease
+    return out
+
+
 def persist_skeleton_record(path, record_json, record_hash, expected_hash=None,
-                            run_id=None, lease=None):
+                            run_id=None, lease=None, dimensions=None, round_no=None,
+                            staged=False):
     """Persist a round record whose DURABLE form is the bounded skeleton (D3). The record
-    rides the courier pipe INLINE — safe because (a) it is the summarize_record skeleton
-    (title<=300, identity/class/severity fields only), and (b) it self-verifies: the caller
-    ships sha256(record_json) alongside, and a courier that mangles the JSON cannot also
-    recompute its hash, so any transport corruption fails closed here instead of persisting
-    silently altered content. summarize_record is re-applied Python-side so the on-disk
-    contract (skeletons only, never evidence bodies) holds even if the JS twin drifts."""
-    if content_hash(record_json) != (record_hash or ""):
+    rides the courier pipe inline (or as a staged file past the safe inline size) and
+    self-verifies: the caller ships sha256 of the exact text alongside, and a courier that
+    mangles the JSON cannot also recompute its hash, so transport corruption fails closed
+    here instead of persisting silently altered content. --round cross-checks freshness (a
+    replayed earlier arg pair carries the wrong round). summarize_record is re-applied
+    Python-side so the on-disk contract (skeletons only, never evidence bodies) holds even
+    if the JS twin drifts. A stale expected-hash re-probes for the record itself: when a
+    prior attempt PERSISTED and only its answer was lost in transport, the retry answers
+    ok idempotently instead of killing the run as write-failed."""
+    if not _sent_hash_ok(record_json, record_hash or "", staged=staged):
         return {"ok": False, "reason": "record-corrupt"}
     try:
         record = json.loads(record_json)
@@ -257,12 +282,21 @@ def persist_skeleton_record(path, record_json, record_hash, expected_hash=None,
         return {"ok": False, "reason": "record-corrupt", "detail": str(exc)}
     if not isinstance(record, dict):
         return {"ok": False, "reason": "record-corrupt", "detail": "not a dict"}
-    state = load_records_state(path, [])
+    if round_no is not None and record.get("round") != round_no:
+        return {"ok": False, "reason": "record-corrupt", "detail": "round mismatch"}
+    skeleton = summarize_record(record)
+    state = load_records_state(path, dimensions or [])
     if expected_hash and state.get("contentHash") != expected_hash:
+        if state.get("ok"):
+            stamped = _with_write_stamp(skeleton, run_id, lease)
+            target = next((r for r in state.get("records") or []
+                           if r.get("round") == skeleton.get("round")), None)
+            if target == stamped:
+                return {"ok": True, "contentHash": state.get("contentHash"), "idempotent": True}
         return {"ok": False, "reason": "stale"}
     if not state.get("ok"):
         return {"ok": False, "reason": state.get("state") or "unreadable"}
-    return persist_record(path, state.get("records") or [], summarize_record(record),
+    return persist_record(path, state.get("records") or [], skeleton,
                           expected_hash=expected_hash, run_id=run_id, lease=lease)
 
 
@@ -303,9 +337,19 @@ def update_round_record(path, round_no, updates, expected_hash=None, run_id=None
     """Apply a SMALL delta (confirmationPending / changedSubjects / coverageDecisions / fix)
     to an already-persisted round's record — the post-fix update never re-ships the round
     body through the pipe, and its deferred entries are re-slimmed here so bodies can't
-    smuggle back in. Same fenced-persist semantics as persist_record."""
+    smuggle back in. Same fenced-persist semantics as persist_record, with the same
+    idempotent stale-probe as persist-skeleton (a prior applied delta whose answer was
+    lost in transport answers ok on the retry)."""
     state = load_records_state(path, [])
     if expected_hash and state.get("contentHash") != expected_hash:
+        if state.get("ok"):
+            target = next((r for r in state.get("records") or []
+                           if r.get("round") == round_no), None)
+            if target is not None:
+                merged = _with_write_stamp(dict(target), run_id, lease)
+                merged.update(_sanitize_updates(updates))
+                if merged == target:
+                    return {"ok": True, "contentHash": state.get("contentHash"), "idempotent": True}
         return {"ok": False, "reason": "stale"}
     if not state.get("ok"):
         return {"ok": False, "reason": state.get("state") or "unreadable"}
@@ -347,13 +391,24 @@ def main(argv=None):
     skel_p.add_argument("--record-hash", required=True,
                         help="sha256 of the record text exactly as sent/staged — the transport "
                              "self-check that lets the write verify itself in one leaf")
+    skel_p.add_argument("--round", type=int,
+                        help="freshness cross-check: refuse when the verified record's round "
+                             "differs (a replayed earlier arg pair passes the hash but not this)")
+    skel_p.add_argument("--dimensions", default="[]",
+                        help="reviewer set for schema-v1 promotion on load")
     skel_p.add_argument("--expected-hash")
     skel_p.add_argument("--run-id", required=True)
     skel_p.add_argument("--lease")
     update_p = sub.add_parser("update-round")
     update_p.add_argument("--path", required=True)
     update_p.add_argument("--round", required=True, type=int)
-    update_p.add_argument("--updates-json", required=True)
+    update_p.add_argument("--updates-json")
+    update_p.add_argument("--updates-path",
+                          help="read the delta from this staged FILE instead — used when the "
+                               "delta outgrows a safe inline courier arg")
+    update_p.add_argument("--updates-hash",
+                          help="sha256 of the updates text exactly as sent/staged; verified "
+                               "when present (pre-D3 bundles omit it)")
     update_p.add_argument("--expected-hash")
     update_p.add_argument("--run-id", required=True)
     update_p.add_argument("--lease")
@@ -372,6 +427,7 @@ def main(argv=None):
         print(json.dumps({"ok": True, "contentHash": content_hash(text)}))
         return 0
     if args.cmd == "persist-skeleton":
+        staged = bool(args.record_path)
         if args.record_path:
             try:
                 with open(args.record_path, encoding="utf-8") as fh:
@@ -386,13 +442,46 @@ def main(argv=None):
             return 1
         result = persist_skeleton_record(args.path, record_json, args.record_hash,
                                          expected_hash=args.expected_hash,
-                                         run_id=args.run_id, lease=args.lease)
+                                         run_id=args.run_id, lease=args.lease,
+                                         dimensions=json.loads(args.dimensions),
+                                         round_no=args.round, staged=staged)
+        if result.get("ok") and args.record_path:
+            try:
+                os.unlink(args.record_path)
+            except OSError:
+                pass
         print(json.dumps(_strip_records(result)))
         return 0 if result.get("ok") else 1
     if args.cmd == "update-round":
-        result = update_round_record(args.path, args.round, json.loads(args.updates_json),
+        staged = bool(args.updates_path)
+        if args.updates_path:
+            try:
+                with open(args.updates_path, encoding="utf-8") as fh:
+                    updates_json = fh.read()
+            except OSError as exc:
+                print(json.dumps({"ok": False, "reason": "updates-corrupt", "detail": str(exc)}))
+                return 1
+        elif args.updates_json is not None:
+            updates_json = args.updates_json
+        else:
+            print(json.dumps({"ok": False, "reason": "missing-updates"}))
+            return 1
+        if args.updates_hash and not _sent_hash_ok(updates_json, args.updates_hash, staged=staged):
+            print(json.dumps({"ok": False, "reason": "updates-corrupt"}))
+            return 1
+        try:
+            updates = json.loads(updates_json)
+        except ValueError as exc:
+            print(json.dumps({"ok": False, "reason": "updates-corrupt", "detail": str(exc)}))
+            return 1
+        result = update_round_record(args.path, args.round, updates,
                                      expected_hash=args.expected_hash, run_id=args.run_id,
                                      lease=args.lease)
+        if result.get("ok") and args.updates_path:
+            try:
+                os.unlink(args.updates_path)
+            except OSError:
+                pass
         print(json.dumps(_strip_records(result)))
         return 0 if result.get("ok") else 1
     dimensions = json.loads(args.dimensions)

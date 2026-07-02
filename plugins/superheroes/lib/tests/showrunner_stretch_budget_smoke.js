@@ -162,17 +162,28 @@ function runHelperResponse(cmdline) {
     if (args[0] === 'compose-persist') {
       throw new Error('compose-persist rode a leaf — the D3 skeleton persist replaced the staging ceremony')
     }
-    if (args[0] === 'update-round') return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
+    if (args[0] === 'update-round') {
+      const updatesJson = args[args.indexOf('--updates-json') + 1]
+      if (sha256(updatesJson) !== args[args.indexOf('--updates-hash') + 1]) {
+        throw new Error('update-round --updates-hash does not match --updates-json')
+      }
+      return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
+    }
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
     const p = args[args.indexOf('--path') + 1]
     const staged = args[args.indexOf('--payload-path') + 1]
     const stagedText = files[staged] != null ? files[staged] : '{}'
-    // D3: the 2-leaf fenced write — the helper verifies the staged text's hash itself.
+    // D3: the 2-leaf fenced write — the helper verifies the staged text's hash itself,
+    // tolerating exactly the ONE trailing newline the heredoc write appends (mirrors
+    // fenced_json.py staged_hash_ok; the shim's heredoc emulation appends it faithfully).
     const hashIdx = args.indexOf('--payload-hash')
-    if (hashIdx >= 0 && sha256(stagedText) !== args[hashIdx + 1]) {
-      return JSON.stringify({ ok: false, reason: 'payload-corrupt' })
+    if (hashIdx >= 0) {
+      const want = args[hashIdx + 1]
+      const ok = sha256(stagedText) === want ||
+        (stagedText.endsWith('\n') && sha256(stagedText.slice(0, -1)) === want)
+      if (!ok) return JSON.stringify({ ok: false, reason: 'payload-corrupt' })
     }
     files[p] = stagedText
     return JSON.stringify({ ok: true, contentHash: sha256(files[p]) })
@@ -186,8 +197,11 @@ function shellResponse(cmd) {
   // withTargetCommandPrompts prefixes review-code commands with `cd '<worktree>' && ` — strip it
   // so the path/command routing below still matches.
   cmd = cmd.replace(/^cd '[^']*' && /, '')
+  // Heredoc semantics put body+'\n' on disk — model that faithfully: the staged-write hash
+  // checks must tolerate exactly the one transport-appended trailing newline (a shim that
+  // strips it would hide the deterministic bundle-runtime mismatch this run red-checked).
   const w = cmd.match(/cat > '([^']+)' <<'__SR_EOF__'\n([\s\S]*)\n__SR_EOF__$/)
-  if (w) { files[w[1]] = w[2]; return '' }
+  if (w) { files[w[1]] = w[2] + '\n'; return '' }
   if (cmd.startsWith('mkdir -p')) return ''
   const r = cmd.match(/^cat '([^']+)'/)
   if (r) return files[r[1]] != null ? files[r[1]] : ''

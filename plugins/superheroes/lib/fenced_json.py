@@ -14,6 +14,18 @@ def content_hash(text):
     return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
+def staged_hash_ok(raw, want):
+    """True when the staged file's text matches the sender's hash. Tolerates EXACTLY one
+    trailing newline the transport appended: the bundle's leaf-bash writeFile is a heredoc
+    (`cat > p <<EOF`), which puts body+'\\n' on disk — one byte the sender's hash never
+    covered. Any other alteration (including a second newline) still fails."""
+    if not want:
+        return False
+    if content_hash(raw) == want:
+        return True
+    return raw.endswith("\n") and content_hash(raw[:-1]) == want
+
+
 def _current(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -87,6 +99,13 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--lease")
     args = parser.parse_args(argv)
+    # The overwrite mode skips the CAS fence, so the payload self-check is its ONLY integrity
+    # guard — a courier that drops the optional --payload-hash pair must fail closed, not fail
+    # open. (In CAS mode the hash stays verify-when-present: pre-D3 bundles call --payload-path
+    # without it, and their expected-hash fence still holds.)
+    if args.allow_overwrite and args.payload_path and not args.payload_hash:
+        print(json.dumps({"ok": False, "reason": "payload-hash-required"}))
+        return 1
     if args.payload_path:
         try:
             with open(args.payload_path, encoding="utf-8") as fh:
@@ -94,7 +113,7 @@ def main(argv=None):
         except OSError as exc:
             print(json.dumps({"ok": False, "reason": "payload-unreadable", "detail": str(exc)}))
             return 1
-        if args.payload_hash and content_hash(raw) != args.payload_hash:
+        if args.payload_hash and not staged_hash_ok(raw, args.payload_hash):
             print(json.dumps({"ok": False, "reason": "payload-corrupt"}))
             return 1
         try:

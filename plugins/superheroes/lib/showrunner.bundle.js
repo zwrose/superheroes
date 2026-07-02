@@ -904,29 +904,39 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
 // (dropped/deferred findings) ride the separate BEST-EFFORT round-bodies dump; the final
 // round's bodies live in terminal-record.json.
 const _INLINE_RECORD_BOUND = 6000
-async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi) {
-  const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
-  const inline = recordJson.length <= _INLINE_RECORD_BOUND
-  const stagedPath = ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
-    '--path', ioApi.join(runDir, 'round-records.json')]
-  args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
-  args.push('--record-hash', ioApi.contentHash(recordJson),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId)
-  if (lease) args.push('--lease', lease)
+
+// _selfVerifiedHelper: run a review_memory.py write verb whose payload self-verifies in
+// transport (--…-hash = sha256 of the exact text). Retries ONCE on a transport-corrupt
+// payload or an unparseable answer; a real refusal (stale/unreadable/round-missing) is
+// final. The helper side answers ok-idempotently when a prior attempt already persisted
+// this exact write and only its ANSWER was lost — so the retry-after-mangled-answer path
+// converges instead of dying 'stale'.
+async function _selfVerifiedHelper(ioApi, args, stagedPath, stagedText, corruptReason) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (!inline) {
-      try { await ioApi.writeFile(stagedPath, recordJson) } catch (_) { continue }
+    if (stagedPath) {
+      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) { continue }
     }
     const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
     if (parsed && parsed.ok) return parsed
-    // a real refusal (stale/unreadable) is final; only a transport-corrupt record (or an
-    // unparseable answer) earns the one retry.
-    if (parsed && parsed.reason && parsed.reason !== 'record-corrupt') return { ok: false, reason: parsed.reason }
+    if (parsed && parsed.reason && parsed.reason !== corruptReason) return { ok: false, reason: parsed.reason }
   }
   return { ok: false, reason: 'helper-failed' }
+}
+
+async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi) {
+  const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
+  const inline = recordJson.length <= _INLINE_RECORD_BOUND
+  const stagedPath = inline ? null : ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
+  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
+    '--path', ioApi.join(runDir, 'round-records.json')]
+  args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
+  args.push('--record-hash', ioApi.contentHash(recordJson),
+    '--round', String(record.round), '--dimensions', JSON.stringify(reviewerSet || []),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId)
+  if (lease) args.push('--lease', lease)
+  return _selfVerifiedHelper(ioApi, args, stagedPath, recordJson, 'record-corrupt')
 }
 
 // D3 best-effort forensics: the FULL bodies of this round's dropped + deferred findings — the
@@ -956,7 +966,9 @@ function mergeRoundRecords(records, record) {
 }
 
 // The post-fix update ships only the SMALL delta (confirmation marker, changed subjects,
-// coverage decisions, fix summary) — never the round body — via review_memory.py update-round.
+// coverage decisions, fix summary) — never the round body — via review_memory.py update-round,
+// self-verified in transport like persist-skeleton (--updates-hash; staged-file fallback past
+// the safe inline size — the delta is usually small but coverageDecisions/fixes are unbounded).
 // Deferred entries ride slimmed (identity/severity/reason + skeleton finding): their full
 // bodies go to the round-bodies dump, not through this pipe or into round-records.json.
 async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
@@ -966,15 +978,17 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
     fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []) },
   }
   if (legKind && legKind.panel) updates.confirmationPending = true
+  const updatesJson = JSON.stringify(updates)
+  const inline = updatesJson.length <= _INLINE_RECORD_BOUND
+  const stagedPath = inline ? null : ioApi.join(runDir, `round-updates-r${round}.json`)
   const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
-    '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round),
-    '--updates-json', JSON.stringify(updates),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+    '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round)]
+  args.push(...(inline ? ['--updates-json', updatesJson] : ['--updates-path', stagedPath]))
+  args.push('--updates-hash', ioApi.contentHash(updatesJson),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId)
   if (lease) args.push('--lease', lease)
-  const out = await ioApi.runHelper('python3', args)
-  let parsed = null
-  try { parsed = out.ok ? JSON.parse(out.stdout) : null } catch (_) { parsed = null }
-  if (!parsed || !parsed.ok) return { ok: false, reason: (parsed && parsed.reason) || 'helper-failed' }
+  const parsed = await _selfVerifiedHelper(ioApi, args, stagedPath, updatesJson, 'updates-corrupt')
+  if (!parsed.ok) return { ok: false, reason: parsed.reason || 'helper-failed' }
   const records = (recordsForFix || []).map((r) => (r && r.round === round) ? Object.assign({}, r, updates) : r)
   return { ok: true, contentHash: parsed.contentHash, records }
 }
@@ -1226,6 +1240,10 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       coverageContentHash = reloaded.contentHash
     }
 
+    // body dump BEFORE the post-fix persist: both must happen, the dump is best-effort
+    // anyway, and this ordering shrinks the crash window in which the audit bodies are
+    // lost while the delta survives (or vice versa) at zero protocol cost.
+    await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
     const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi, legKind)
     if (!postFix.ok) {
       return await finalizeVerdict(
@@ -1234,7 +1252,6 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
     records = postFix.records || recordsForFix
     memoryState = { ok: true, records, contentHash: postFix.contentHash }
-    await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
     justMarkedForConfirmation = true
     try { await ioApi.writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {}
     round += 1
@@ -4712,9 +4729,13 @@ const { io } = require('./io_seam.js')
 // into stage + verify-write.
 //
 // opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
-// against the hash the caller last observed) or overwrite:true (single-writer, lease-guarded
-// run artifacts like terminal-record.json, where the runtime unconditionally replaces and the
-// old read-then-CAS pair protected nothing the lease doesn't already).
+// against the hash the caller last observed) or overwrite:true. Overwrite is LAST-WRITER-WINS,
+// accepted deliberately for run artifacts the runtime composes fresh and unconditionally
+// replaces (terminal-record.json, the front-half outcome): the cooperative lease serializes
+// live sessions, the lease is stamped into the record (not verified at write time), and the
+// old read-hash-then-CAS pair detected only a competitor writing inside its own read→write
+// window — a zombie that pre-read defeated it too. In overwrite mode --payload-hash is the
+// ONLY integrity guard, so fenced_json.py refuses overwrite writes that arrive without it.
 async function fencedJsonWrite(path, payload, opts) {
   const ioApi = io()
   if (!opts || !opts.runId) return { ok: false, reason: 'missing-run-id' }
@@ -4728,8 +4749,9 @@ async function fencedJsonWrite(path, payload, opts) {
   if (opts.overwrite) args.push('--allow-overwrite')
   else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
+  let lastReason = null
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(stagedPath, text) } catch (_) { continue }
+    try { await ioApi.writeFile(stagedPath, text) } catch (_) { lastReason = 'payload-stage-failed'; continue }
     const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
@@ -4739,8 +4761,9 @@ async function fencedJsonWrite(path, payload, opts) {
     if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
       return { ok: false, reason: parsed.reason }
     }
+    lastReason = (parsed && parsed.reason) || lastReason
   }
-  return { ok: false, reason: 'payload-stage-failed' }
+  return { ok: false, reason: lastReason || 'payload-stage-failed' }
 }
 
 module.exports = { fencedJsonWrite }
@@ -5251,8 +5274,9 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  // D3 fold: overwrite mode — a single-writer, lease-guarded run artifact; the old
-  // read-current-hash-then-CAS pair cost two extra leaves and protected nothing the lease doesn't.
+  // D3 fold: overwrite mode — accepted last-writer-wins on a run artifact the loop composes
+  // fresh (the lease serializes live sessions; the old read-hash-then-CAS pair cost two extra
+  // leaves and detected only same-window interleavings — see fenced_json.js).
   const recPath = `${runDir}/terminal-record.json`
   const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
   if (!recWrite.ok) {
@@ -5381,6 +5405,9 @@ async function frontHalfBoundary(workItem) {
   // recordOk guards UFR-6: if we cannot write the durable readout records, flag it in the reason.
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
+  // Overwrite mode with NO lease: this envelope is composed fresh from the durable per-phase
+  // records on every boundary pass, so last-writer-wins between duplicate runs is accepted —
+  // both writers derive near-identical content from the same records (see fenced_json.js).
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
   const runId = `fronthalf-${workItem}`
   const outcomeWrite = await fencedJsonWrite(outPath, outcome, { overwrite: true, runId })

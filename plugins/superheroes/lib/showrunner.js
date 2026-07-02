@@ -500,8 +500,9 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  // D3 fold: overwrite mode — a single-writer, lease-guarded run artifact; the old
-  // read-current-hash-then-CAS pair cost two extra leaves and protected nothing the lease doesn't.
+  // D3 fold: overwrite mode — accepted last-writer-wins on a run artifact the loop composes
+  // fresh (the lease serializes live sessions; the old read-hash-then-CAS pair cost two extra
+  // leaves and detected only same-window interleavings — see fenced_json.js).
   const recPath = `${runDir}/terminal-record.json`
   const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
   if (!recWrite.ok) {
@@ -630,6 +631,9 @@ async function frontHalfBoundary(workItem) {
   // recordOk guards UFR-6: if we cannot write the durable readout records, flag it in the reason.
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
+  // Overwrite mode with NO lease: this envelope is composed fresh from the durable per-phase
+  // records on every boundary pass, so last-writer-wins between duplicate runs is accepted —
+  // both writers derive near-identical content from the same records (see fenced_json.js).
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
   const runId = `fronthalf-${workItem}`
   const outcomeWrite = await fencedJsonWrite(outPath, outcome, { overwrite: true, runId })

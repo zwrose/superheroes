@@ -9,9 +9,13 @@ const { io } = require('./io_seam.js')
 // into stage + verify-write.
 //
 // opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
-// against the hash the caller last observed) or overwrite:true (single-writer, lease-guarded
-// run artifacts like terminal-record.json, where the runtime unconditionally replaces and the
-// old read-then-CAS pair protected nothing the lease doesn't already).
+// against the hash the caller last observed) or overwrite:true. Overwrite is LAST-WRITER-WINS,
+// accepted deliberately for run artifacts the runtime composes fresh and unconditionally
+// replaces (terminal-record.json, the front-half outcome): the cooperative lease serializes
+// live sessions, the lease is stamped into the record (not verified at write time), and the
+// old read-hash-then-CAS pair detected only a competitor writing inside its own read→write
+// window — a zombie that pre-read defeated it too. In overwrite mode --payload-hash is the
+// ONLY integrity guard, so fenced_json.py refuses overwrite writes that arrive without it.
 async function fencedJsonWrite(path, payload, opts) {
   const ioApi = io()
   if (!opts || !opts.runId) return { ok: false, reason: 'missing-run-id' }
@@ -25,8 +29,9 @@ async function fencedJsonWrite(path, payload, opts) {
   if (opts.overwrite) args.push('--allow-overwrite')
   else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
+  let lastReason = null
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(stagedPath, text) } catch (_) { continue }
+    try { await ioApi.writeFile(stagedPath, text) } catch (_) { lastReason = 'payload-stage-failed'; continue }
     const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
@@ -36,8 +41,9 @@ async function fencedJsonWrite(path, payload, opts) {
     if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
       return { ok: false, reason: parsed.reason }
     }
+    lastReason = (parsed && parsed.reason) || lastReason
   }
-  return { ok: false, reason: 'payload-stage-failed' }
+  return { ok: false, reason: lastReason || 'payload-stage-failed' }
 }
 
 module.exports = { fencedJsonWrite }

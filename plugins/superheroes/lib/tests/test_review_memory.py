@@ -113,7 +113,7 @@ def test_persist_skeleton_record_hash_mismatch_fails_closed(tmp_path):
 
 def test_persist_skeleton_record_path_variant(tmp_path):
     """A many-finding skeleton that outgrows a safe inline arg rides a staged file; the same
-    --record-hash self-check covers the staged text."""
+    --record-hash self-check covers the staged text, and the consumed stage is unlinked."""
     rm = load_memory()
     records_path = str(tmp_path / "round-records.json")
     staged = tmp_path / "round-skeleton-r1.json"
@@ -127,12 +127,98 @@ def test_persist_skeleton_record_path_variant(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is True, r.stderr
     assert len(json.loads(open(records_path, encoding="utf-8").read())[0]["findings"]) == 200
+    assert not staged.exists(), "the staged skeleton file is consumed (unlinked) on success"
     # a corrupted staged file fails the same self-check
     staged.write_text(record_json + " ", encoding="utf-8")
     r = _cli("persist-skeleton", "--path", records_path, "--record-path", str(staged),
              "--record-hash", rm.content_hash(record_json),
              "--expected-hash", out["contentHash"], "--run-id", "run-2")
     assert json.loads(r.stdout) == {"ok": False, "reason": "record-corrupt"}
+
+
+def test_persist_skeleton_staged_tolerates_heredoc_newline(tmp_path):
+    """The bundle's leaf-bash writeFile is a heredoc: it puts body+'\\n' on disk, one byte the
+    sender's hash never covered. The STAGED check tolerates exactly that one newline (a second
+    one still fails); the INLINE check stays exact."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    staged = tmp_path / "round-skeleton-r1.json"
+    record_json = json.dumps({"schemaVersion": 2, "round": 1, "kind": "baseline"})
+    staged.write_text(record_json + "\n", encoding="utf-8")
+    r = _cli("persist-skeleton", "--path", records_path, "--record-path", str(staged),
+             "--record-hash", rm.content_hash(record_json),
+             "--expected-hash", rm.content_hash(""), "--run-id", "run-1")
+    assert json.loads(r.stdout)["ok"] is True, r.stdout + r.stderr
+    staged.write_text(record_json + "\n\n", encoding="utf-8")
+    r = _cli("persist-skeleton", "--path", records_path, "--record-path", str(staged),
+             "--record-hash", rm.content_hash(record_json),
+             "--expected-hash", "whatever", "--run-id", "run-2")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "record-corrupt"}
+
+
+def test_persist_skeleton_round_cross_check(tmp_path):
+    """--round binds the invocation to the intended round: a replayed earlier (record-json,
+    record-hash) pair passes the hash but fails this freshness check."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    record_json = json.dumps({"schemaVersion": 2, "round": 1, "kind": "baseline"})
+    r = _cli("persist-skeleton", "--path", records_path,
+             "--record-json", record_json, "--record-hash", rm.content_hash(record_json),
+             "--round", "2", "--expected-hash", rm.content_hash(""), "--run-id", "run-1")
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["reason"] == "record-corrupt"
+    assert not os.path.exists(records_path)
+
+
+def test_persist_skeleton_stale_probe_answers_idempotently(tmp_path):
+    """When a prior attempt PERSISTED and only its stdout answer was lost in transport, the
+    retry (same args, now-stale expected-hash) answers ok idempotently instead of 'stale' —
+    a transport blip on the answer path must not kill the run as write-failed."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    record_json = json.dumps({"schemaVersion": 2, "round": 1, "kind": "baseline"})
+    args = ("persist-skeleton", "--path", records_path,
+            "--record-json", record_json, "--record-hash", rm.content_hash(record_json),
+            "--round", "1", "--expected-hash", rm.content_hash(""), "--run-id", "run-1")
+    first = json.loads(_cli(*args).stdout)
+    assert first["ok"] is True
+    replay = json.loads(_cli(*args).stdout)   # identical retry with the now-stale hash
+    assert replay["ok"] is True and replay.get("idempotent") is True
+    assert replay["contentHash"] == first["contentHash"]
+    # a DIFFERENT record for the same round with a stale hash still refuses
+    other = json.dumps({"schemaVersion": 2, "round": 1, "kind": "targeted"})
+    r = _cli("persist-skeleton", "--path", records_path,
+             "--record-json", other, "--record-hash", rm.content_hash(other),
+             "--round", "1", "--expected-hash", rm.content_hash(""), "--run-id", "run-1")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "stale"}
+
+
+def test_update_round_hash_and_idempotent_replay(tmp_path):
+    """update-round self-verifies its delta when --updates-hash is present (pre-D3 bundles
+    omit it), answers updates-corrupt (not a traceback) on mangled JSON, and answers ok
+    idempotently when the delta was already applied and only the answer was lost."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    base = rm.persist_record(records_path, [], {"schemaVersion": 2, "round": 1, "kind": "baseline"},
+                             expected_hash=rm.content_hash(""), run_id="run-1")
+    updates_json = json.dumps({"confirmationPending": True, "changedSubjects": ["Code"]})
+    r = _cli("update-round", "--path", records_path, "--round", "1",
+             "--updates-json", updates_json, "--updates-hash", "0" * 64,
+             "--expected-hash", base["contentHash"], "--run-id", "run-2")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "updates-corrupt"}
+    r = _cli("update-round", "--path", records_path, "--round", "1",
+             "--updates-json", "{not json", "--updates-hash", rm.content_hash("{not json"),
+             "--expected-hash", base["contentHash"], "--run-id", "run-2")
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["reason"] == "updates-corrupt"
+    args = ("update-round", "--path", records_path, "--round", "1",
+            "--updates-json", updates_json, "--updates-hash", rm.content_hash(updates_json),
+            "--expected-hash", base["contentHash"], "--run-id", "run-2")
+    first = json.loads(_cli(*args).stdout)
+    assert first["ok"] is True
+    replay = json.loads(_cli(*args).stdout)   # identical retry with the now-stale hash
+    assert replay["ok"] is True and replay.get("idempotent") is True
+    assert replay["contentHash"] == first["contentHash"]
 
 
 def test_update_round_slims_deferred_bodies(tmp_path):
