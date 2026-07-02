@@ -1,12 +1,15 @@
 const { io } = require('./io_seam.js')
 
-// fencedJsonWrite: put a JSON artifact on disk through the courier in TWO leaves — one
-// unverified stage-write of the payload file, then one fenced_json.py write that verifies the
-// staged text's sha256 ITSELF before applying (--payload-hash). A courier that mangles the
-// staged body in transit (live 2026-07-02) fails the Python-side hash check as payload-corrupt
-// and the stage is retried once, then fail-closed — never silently altered content. This folds
-// the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash read-back + write)
-// into stage + verify-write.
+// fencedJsonWrite: put a JSON artifact on disk through the courier in ONE leaf (fold 1, #141) —
+// io.stageAndRunHelper chains the opaque base64 stage-write AND the fenced_json.py verify-write
+// into a single leaf-bash command (mkdir -p <dir> && stage && helper). fenced_json.py still
+// verifies the staged text's sha256 ITSELF before applying (--payload-hash), so a courier that
+// mangles the staged body in transit (live 2026-07-02) fails the Python-side hash check as
+// payload-corrupt and the write is retried once, then fail-closed — never silently altered
+// content. This folds the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash
+// read-back + write) all the way down to ONE staged+verified leaf. D3 durability byte-identical:
+// the staged-hash contract, the fence, and the overwrite/CAS semantics are unchanged — only the
+// two transport leaves (stage, verify-write) collapse into one.
 //
 // opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
 // against the hash the caller last observed) or overwrite:true. Overwrite is LAST-WRITER-WINS,
@@ -29,17 +32,21 @@ async function fencedJsonWrite(path, payload, opts) {
   if (opts.overwrite) args.push('--allow-overwrite')
   else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
-  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
+  // stageAndRunHelper folds the parent-dir create into the same op, so the missing-dir first-attempt
+  // failure the old two-leaf path retried through is gone. The one retry now covers only a
+  // transport-corrupt stage (payload-corrupt), an unparseable helper answer, or a THROWING transport
+  // (bundle: a courier reject after courier_exec's retries; defaultIo: an fs error). The old two-leaf
+  // path caught the io.writeFile throw and retried -> fail-closed; keep that contract here so a
+  // transport throw parks {ok:false} for the callers' !recWrite.ok branch instead of crashing the run.
   let lastReason = null
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(stagedPath, text) } catch (_) {
-      // a missing parent dir is the common first-attempt failure (fresh run dir); create it
-      // and let the retry re-stage — the leaf cost lands on the failure path only.
-      if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
+    let out
+    try {
+      out = await ioApi.stageAndRunHelper(stagedPath, text, 'python3', args)
+    } catch (_) {
       lastReason = 'payload-stage-failed'
       continue
     }
-    const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
     if (parsed && parsed.ok) return parsed
@@ -47,11 +54,6 @@ async function fencedJsonWrite(path, payload, opts) {
     // stage (or an unparseable answer) earns the one retry.
     if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
       return { ok: false, reason: parsed.reason }
-    }
-    // payload-unreadable can also mean the silent leaf-bash stage failed on a missing dir
-    // (that writeFile reports no error) — same recovery.
-    if (parsed && parsed.reason === 'payload-unreadable' && dir) {
-      try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ }
     }
     lastReason = (parsed && parsed.reason) || lastReason
   }

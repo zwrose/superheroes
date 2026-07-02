@@ -28,6 +28,20 @@ const { io, defaultIo, joinPath } = require('../io_seam.js')
 
   // join normalizes duplicate separators.
   assert.strictEqual(joinPath('/tmp/', '/a', 'b'), '/tmp/a/b')
+
+  // stageAndRunHelper: ONE call that (1) ensures the staged path's parent dir, (2) writes the
+  // payload verbatim, (3) runs the helper — the single-leaf twin of writeFile+runHelper (fold 1,
+  // #141). Result shape matches runHelper ({ ok, status, stdout }). Staging into a not-yet-created
+  // subdir must still succeed (the parent-dir create is folded into the same op).
+  const nested = joinPath(dir, 'sub', 'staged.txt')
+  const res = await defaultIo.stageAndRunHelper(nested, 'payload-bytes\n', 'cat', [nested])
+  assert.strictEqual(res.ok, true, 'stageAndRunHelper reports ok on a clean helper exit')
+  assert.strictEqual(res.stdout, 'payload-bytes\n', 'the helper sees the exact staged bytes')
+  assert.strictEqual(fs.readFileSync(nested, 'utf8'), 'payload-bytes\n', 'the payload lands on disk')
+  // a non-zero helper is reported ok:false (fail-closed), stage still happened.
+  const bad = await defaultIo.stageAndRunHelper(joinPath(dir, 's2.txt'), 'x', 'false', [])
+  assert.strictEqual(bad.ok, false, 'a non-zero helper exit is ok:false')
+
   fs.rmSync(dir, { recursive: true, force: true })
-  console.log('OK: io_seam defaultIo round-trips + global.io injection + join')
+  console.log('OK: io_seam defaultIo round-trips + global.io injection + join + stageAndRunHelper')
 })().catch((e) => { console.error(e); process.exit(1) })

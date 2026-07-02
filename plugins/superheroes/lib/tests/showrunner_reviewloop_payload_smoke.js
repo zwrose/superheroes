@@ -39,13 +39,23 @@ function receipt(runId, round) {
     coverageDecisionIds: [] }
 }
 
-// Wrap the disk io: real behavior, but capture every runHelper invocation's args + stdout size.
+// Wrap the disk io: real behavior, but capture every helper invocation's args + stdout size. The
+// stageAndRunHelper fold (fold 1, #141) routes the fenced write's stage+verify through ONE op, so
+// it is captured the same way as runHelper (its (cmd,args) appended to helperCalls).
 const helperCalls = []
 const helperResults = []
+const stageRuns = []
 globalThis.io = Object.assign({}, defaultIo, {
   async runHelper(cmd, args) {
     helperCalls.push([cmd].concat(args || []))
     const out = await defaultIo.runHelper(cmd, args)
+    helperResults.push({ args: args || [], stdout: out.stdout || '' })
+    return out
+  },
+  async stageAndRunHelper(stagedPath, text, cmd, args) {
+    stageRuns.push({ stagedPath, textLen: String(text).length })
+    helperCalls.push([cmd].concat(args || []))
+    const out = await defaultIo.stageAndRunHelper(stagedPath, text, cmd, args)
     helperResults.push({ args: args || [], stdout: out.stdout || '' })
     return out
   },
@@ -112,16 +122,20 @@ async function main() {
   assert.ok(!('rounds' in telem), 'D3: on-disk telemetry must not duplicate the round records')
   assert.ok(telem.roundCount >= 1, 'telemetry keeps the round scalars')
 
-  // (c) fencedJsonWrite stages the payload as a verified file, never inline
+  // (c) fencedJsonWrite stages the payload as a verified file, never inline — and stage+verify
+  // ride ONE leaf (fold 1, #141): exactly one stageAndRunHelper op, no separate writeFile leaf.
   helperCalls.length = 0
+  stageRuns.length = 0
   const recPath = path.join(dir, 'terminal-record.json')
   const bigVerdict = { schemaVersion: 1, terminal: 'clean', findings: BIG_FINDINGS }
   const w = await fencedJsonWrite(recPath, bigVerdict, { expectedHash: defaultIo.contentHash(''), runId: 'run-x' })
   assert.strictEqual(w.ok, true, `fencedJsonWrite failed: ${JSON.stringify(w)}`)
   const written = JSON.parse(fs.readFileSync(recPath, 'utf8'))
   assert.strictEqual(written.findings.length, BIG_FINDINGS.length)
+  assert.strictEqual(stageRuns.length, 1, 'fencedJsonWrite stages+verifies in exactly ONE leaf (stageAndRunHelper)')
+  assert.strictEqual(stageRuns[0].stagedPath, recPath + '.payload', 'the payload is staged as a file, not inline')
   const fjCall = helperCalls.find((c) => String(c[1]).includes('fenced_json.py'))
-  assert.ok(fjCall, 'fencedJsonWrite went through the helper')
+  assert.ok(fjCall, 'fencedJsonWrite went through the fenced_json.py helper')
   assert.ok(fjCall.includes('--payload-path'), 'fencedJsonWrite must pass --payload-path')
   assert.ok(fjCall.includes('--payload-hash'), 'fencedJsonWrite must self-verify the staged payload (--payload-hash)')
   assert.ok(!fjCall.includes('--payload-json'), 'fencedJsonWrite must not pass --payload-json')

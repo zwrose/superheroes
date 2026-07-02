@@ -72,6 +72,16 @@ function runHelperResponse(cmdline) {
     if (args[0] === 'compose-persist') throw new Error('compose-persist rode a leaf (D3 replaced it)')
     if (args[0] === 'update-round') return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
   }
+  if (script.endsWith('review_setup_gather.py')) {
+    // fold 2 (#141): the ONE pre-round gather leaf (mkdir + load-summary + deferred seed + coverage).
+    // A misbehaving courier fences this read helper too (mode 5, below) — the bundle must still parse it.
+    return JSON.stringify({
+      ok: true,
+      memory: { ok: true, state: 'missing', records: [], contentHash: sha256(''), extras: null },
+      deferredSet: {},
+      coverage: { ok: true, decisions: [], contentHash: sha256('') },
+    })
+  }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
     const p = args[args.indexOf('--path') + 1]
@@ -96,8 +106,26 @@ function runHelperResponse(cmdline) {
 
 function shellResponse(cmd) {
   cmd = cmd.replace(/^cd '[^']*' && /, '')
-  // The OPAQUE write transport (base64 python heredoc) — with sabotage: the review phase's
-  // terminal-record staged payload is written WRONG on its first attempt (content-mangle class).
+  // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] opaque base64 stage-write (stdout to
+  // /dev/null) && fenced_json.py, all ONE leaf. Decode the payload into the in-memory FS (applying the
+  // SAME content-mangle sabotage on the review-plan terminal-record's first attempt), then answer the
+  // helper — so the Python-side --payload-hash refuses the sabotaged bytes and the retry recovers.
+  const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
+  if (cw) {
+    const helper = cw[1]
+    const staged = JSON.parse(cw[2])
+    const honest = Buffer.from(cw[3], 'base64').toString('utf8')
+    if (staged.endsWith('review-plan/terminal-record.json.payload') && counters.sabotagedWrites === 0) {
+      counters.sabotagedWrites += 1
+      files[staged] = '{"terminal": "halted", "note": "this is the WRONG content a mangling leaf wrote"}'
+    } else {
+      files[staged] = honest
+    }
+    const out = runHelperResponse(helper)
+    return (out != null ? out : '{}') + '\n__SR_EXIT:0'
+  }
+  // The OPAQUE write transport (base64 python heredoc) — for the remaining standalone io.writeFile
+  // leaves (test-pilot artifacts, last-extras). The write's answer is a conversational ack (mode 2).
   const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
   if (bw) {
     const target = JSON.parse(bw[1])
@@ -125,7 +153,7 @@ function shellResponse(cmd) {
     // write, round-memory load-summary). io.runHelper must locate the marker despite the trailing
     // fence; on the pre-fix bundle the end-anchored match misses -> status 1 -> the helper reads as
     // failed -> cannot-certify at review-plan.
-    if (/review_memory\.py' 'load-summary'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
+    if (/review_setup_gather\.py|review_memory\.py' 'load-summary'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
       counters.fencedHelpers += 1
       return '```\n' + body + '\n```'
     }

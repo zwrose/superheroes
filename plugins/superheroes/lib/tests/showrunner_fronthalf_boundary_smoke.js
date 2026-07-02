@@ -39,17 +39,19 @@ async function main() {
   // (no readout seam without a successful record write). A mutant that ignores the write error
   // (keeps recordOk=true) would still emit the envelope + call loop_readout — and FAIL here.
   agentCalls.length = 0
-  // Stub the io seam so writeFile THROWS (the fenced write cannot stage its payload);
+  // Stub the io seam so the fenced write cannot stage its payload: stageAndRunHelper (the fold-1
+  // stage+verify op, #141) fails, so fencedJsonWrite exhausts its retry and returns not-ok.
   // readJson returns the caller's default (no notify/records).
   global.io = {
     async writeFile() { throw new Error('disk full') },
+    async stageAndRunHelper() { return { ok: false, status: 1, stdout: '', stderr: 'stage write failed' } },
     async readText() { return '' },
     async readJson(_p, dflt) { return dflt },
     async mkdirp() {},
     tmpdir() { return '/tmp' },
     join() { return Array.prototype.slice.call(arguments).join('/') },
     contentHash(text) { return require('crypto').createHash('sha256').update(String(text || ''), 'utf8').digest('hex') },
-    async runHelper() { return { ok: false, status: 1, stdout: '', stderr: 'unreachable: stage write threw' } },
+    async runHelper() { return { ok: false, status: 1, stdout: '', stderr: 'unreachable: stage write failed' } },
   }
   try {
     const rf = await sr.frontHalfBoundary('wi-writefail')
