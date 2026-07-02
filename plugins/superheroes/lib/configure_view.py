@@ -14,6 +14,7 @@ if _LIB_DIR not in sys.path:
 import core_md         # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
+import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
 
@@ -47,7 +48,21 @@ def collect(cwd, root=None):
         drift = mode_reconcile.coalesce(cwd, root)
     except Exception:
         drift = None
-    return {"core": core, "layers": layers, "patterns": patterns, "mode": mode, "drift": drift}
+    try:
+        health = store_sweep.report(root=root)["counts"]  # read-only scan
+    except Exception:
+        health = None
+    return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
+            "drift": drift, "storeHealth": health}
+
+
+def _health_line(counts):
+    total = sum(counts.values())
+    stale = counts["orphan"] + counts["unknown"]
+    if not stale:
+        return f"storage health: ok ({total} per-project store{'s' if total != 1 else ''})"
+    return (f"storage health: {total} per-project stores — {counts['orphan']} orphaned, "
+            f"{counts['unknown']} unknown provenance (sweep available from the tune menu)")
 
 
 def render(cwd, *, root=None):
@@ -56,6 +71,8 @@ def render(cwd, *, root=None):
     data = collect(cwd, root)
     out = ["# superheroes — project calibration", ""]
     out.append(f"storage mode: {data['mode'] or 'not set'}")
+    if data["storeHealth"]:
+        out.append(_health_line(data["storeHealth"]))
     core = data["core"]
     out.append("")
     out.append("## Core")
