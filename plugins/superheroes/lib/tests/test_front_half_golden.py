@@ -164,6 +164,8 @@ def test_emit_signals_new_format_emits_gap_fields(tmp_path):
     import subprocess, sys
     d = tmp_path / "docs" / "superheroes" / "wi"
     d.mkdir(parents=True)
+    # spec.md anchors the mode-aware resolver in-repo (a live run always has an approved spec).
+    (d / "spec.md").write_text("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n")
     (d / "tasks.md").write_text(_TASKS_NEW_FORMAT)
     # Write the marker so the signal matches.
     r = subprocess.run(
@@ -187,6 +189,8 @@ def test_emit_signals_old_format_emits_specific_gaps(tmp_path):
     import subprocess, sys
     d = tmp_path / "docs" / "superheroes" / "wi"
     d.mkdir(parents=True)
+    # spec.md anchors the mode-aware resolver in-repo (a live run always has an approved spec).
+    (d / "spec.md").write_text("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n")
     (d / "tasks.md").write_text(_TASKS_OLD_FORMAT)
 
     r = subprocess.run(

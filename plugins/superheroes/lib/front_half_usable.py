@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """IO entry for the content-bound completion signal (front-half #88).
 
-Two modes over the doc at docs/superheroes/<work-item>/<doc>.md and its sidecar marker
-.<doc>.complete:
+Two modes over the doc at the work-item's MODE-AWARE docs dir (CONVENTIONS §2.3/§3.3 — the
+storage-mode resolver decides between the in-repo location and the out-of-repo project store)
+and its sidecar marker .<doc>.complete:
   * default (check): expected = the doc's BODY hash; recorded = the marker's contents; usable =
     front_half.is_usable_draft(text, recorded, expected, required_sections). The BODY hash (not
     the whole file) is used so a later set-gate frontmatter write does not invalidate the marker.
   * --write-marker: stamp the marker = the doc's current BODY hash (the engine calls this AFTER a
     successful produce leaf, deterministically — not the LLM).
-The marker (.<doc>.complete) and the NOTIFY ledger (.notify.json) live under docs/superheroes/<wi>/,
-which is gitignored (CLAUDE.md), so they are run-local state and are never committed.
-Fail-closed: any IO problem -> {"usable": false} (re-produce). stdlib only.
+The marker (.<doc>.complete) and the NOTIFY ledger (.notify.json) sit next to the doc — run-local
+state that is never committed (the in-repo location is gitignored; the store is out-of-repo).
+Fail-closed: any IO problem -> {"usable": false} (re-produce).
 """
 import argparse
 import hashlib
@@ -20,6 +21,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import front_half
+
+
+def _work_item_dir(work_item, root):
+    """The work-item's mode-aware docs dir (same handshake as gate_write._doc): resolve via
+    definition_doc; an undeterminable mode (a newer registry schema -> UnknownSchemaVersion)
+    degrades to the pure in-repo default rather than crashing the completion check."""
+    import definition_doc
+    import mode_registry
+    try:
+        return definition_doc.resolve_work_item_dir(work_item, root=root, cwd=root)
+    except mode_registry.UnknownSchemaVersion:
+        return definition_doc.work_item_dir(work_item, root)
 
 # the required body sections per docType (template headings, minus the conditional UI/UX).
 _SECTIONS = {
@@ -54,7 +67,7 @@ def main(argv):
                          "IO boundary so the large doc text never crosses the cheapest-model pipe.")
     args = ap.parse_args(argv[1:])
     root = args.root or os.getcwd()
-    base = os.path.join(root, "docs", "superheroes", args.work_item)
+    base = _work_item_dir(args.work_item, root)
     doc_path = os.path.join(base, "%s.md" % args.doc)
     marker_path = os.path.join(base, ".%s.complete" % args.doc)
     try:

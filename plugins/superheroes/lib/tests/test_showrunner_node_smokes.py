@@ -19,6 +19,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_panel_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_produce_smoke.js",
+    # storage-mode-aware front-half doc/marker/ledger paths (out-of-repo project regression).
+    "plugins/superheroes/lib/tests/showrunner_fronthalf_docdir_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
