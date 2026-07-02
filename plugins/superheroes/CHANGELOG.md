@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.3.0...superheroes-v0.4.0) (2026-07-02)
+
+
+### Features
+
+* **superheroes:** collapse showrunner haiku-courier surface to one leaf per stretch ([#127](https://github.com/zwrose/superheroes/issues/127)) ([e0fd8b0](https://github.com/zwrose/superheroes/commit/e0fd8b0654d7d29854f00a3c5326d97f9d49d3bd))
+* **superheroes:** make the shared review-and-fix loop converge faster ([#125](https://github.com/zwrose/superheroes/issues/125)) ([#129](https://github.com/zwrose/superheroes/issues/129)) ([e3e7b0b](https://github.com/zwrose/superheroes/commit/e3e7b0bbe25ddf045462bb5f66bd211d9fb3a4c7))
+* **superheroes:** onboard Codex and Cursor as per-role review and build engines ([#38](https://github.com/zwrose/superheroes/issues/38)) ([#128](https://github.com/zwrose/superheroes/issues/128)) ([10e7134](https://github.com/zwrose/superheroes/commit/10e7134e309514e16af1e740d6c7eb66d42891ce))
+* **superheroes:** wire the native showrunner back-half — CI-fix loop, freshen, fence ([#120](https://github.com/zwrose/superheroes/issues/120)) ([#126](https://github.com/zwrose/superheroes/issues/126)) ([c174c28](https://github.com/zwrose/superheroes/commit/c174c2853c531ab4d8fd664a27513fbf5e3ca857))
+
+
+### Bug Fixes
+
+* **superheroes:** [#121](https://github.com/zwrose/superheroes/issues/121) calibration/storage hardening — confirm path, data-loss guards, store rename, unified-layout reconciliation ([#122](https://github.com/zwrose/superheroes/issues/122)) ([d14961f](https://github.com/zwrose/superheroes/commit/d14961f652aa9699f9a3272a67e925e79e76559f))
+
 ## [0.3.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.2.0...superheroes-v0.3.0) (2026-06-29)
 
 
