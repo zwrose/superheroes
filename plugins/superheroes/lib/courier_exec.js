@@ -56,12 +56,45 @@ function missingRequired(value, required) {
   return null
 }
 
+// extractJson: fence-tolerant JSON extraction — the courier twin of the exec path's
+// _parseExecResult (showrunner.js). A haiku courier sometimes wraps correct output in ```json
+// fences or prose (observed live 2026-07-02 on 'read startup state'; both attempts failed the
+// bare JSON.parse and the run parked 'unreadable'). Candidates, in order: (a) the FIRST fenced
+// block anywhere (prose-prefixed fences included), (b) the whole trimmed string. Each candidate:
+// direct JSON.parse, then a brace-slice from first '{' to last '}' (prose around a bare object).
+// First candidate yielding an object/array wins; otherwise null (the caller retries fail-closed).
+function extractJson(text) {
+  const trimmed = String(text == null ? '' : text).trim()
+  const candidates = []
+  const fenceMatch = trimmed.match(/```(?:[a-zA-Z0-9]+)?\s*([\s\S]*?)```/)
+  if (fenceMatch) candidates.push(fenceMatch[1].trim())
+  candidates.push(trimmed)
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed !== null && typeof parsed === 'object') return parsed
+    } catch (_e1) { /* try the brace-slice fallback */ }
+    const first = candidate.indexOf('{')
+    const last = candidate.lastIndexOf('}')
+    if (first >= 0 && last > first) {
+      try {
+        const sliced = JSON.parse(candidate.slice(first, last + 1))
+        if (sliced !== null && typeof sliced === 'object') return sliced
+      } catch (_e2) { /* try the next candidate */ }
+    }
+  }
+  return null
+}
+
 async function callOnce(label, command) {
   // `courier: true` marks this a dumb pipe for the bundle preamble's unconditional cheapest-model
   // pinning (same treatment as label 'exec'/'io'); the preamble strips it before the real agent().
   return currentAgent()(promptFor(command), { label, courier: true })
 }
 
+// runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
+// legitimate content may itself contain ``` fences — unfencing here would corrupt it. JSON
+// couriers get the fence-tolerant treatment in runCourierJson (extractJson) instead.
 async function runCourierText(label, command) {
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -89,10 +122,8 @@ async function runCourierJson(label, command, opts) {
       last = 'empty stdout'
       continue
     }
-    let parsed
-    try {
-      parsed = JSON.parse(out)
-    } catch (e) {
+    const parsed = extractJson(out)   // fence-tolerant (see extractJson) — bare parse alone parked live runs
+    if (parsed == null) {
       last = 'unparseable JSON'
       continue
     }
@@ -115,6 +146,7 @@ async function runCourierBatchJson(label, commands, opts) {
 
 module.exports = {
   CourierTransportError,
+  extractJson,
   runCourierJson,
   runCourierText,
   runCourierBatchJson,
