@@ -57,7 +57,8 @@ provisional calibration (FR-18) — that only happens when the owner explicitly 
 fix path.
 
 Engine onboarding (Codex/Cursor per role — availability, preference, show-authorization,
-test-dispatch) lives in `set-up.md` §4.5 and is tunable via `view-and-tune.md` §2.
+test-dispatch) lives in `set-up.md` §4.5 and is tunable via `view-and-tune.md` §2. Model-tier
+overrides (including explicit `fable`) are also a `view-and-tune.md` §2 tune item.
 
 ## Common mistakes
 

@@ -6,7 +6,8 @@ export const meta = {
 // inlined spine (which reads globals) sees them. agent is WRAPPED so EVERY leaf gets, centrally:
 //  (1) model pinning — dumb pipes (exec/io) are UNCONDITIONALLY pinned to the cheapest model
 //      (DEFAULT_TIERS.mechanical) regardless of __SR_LEAF_MODEL or any session default; genuine-LLM
-//      (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test runs) or the session default.
+//      (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test runs), preserve explicit
+//      opts.model otherwise, or fall back to Opus. No leaf inherits the session model.
 //  (2) the current phase as its progress group — globalThis.__SR_PHASE, set by runPhases — so the
 //      Workflow UI shows named phases instead of a flat undifferentiated list.
 // Display label: turn a generic 'lib'/'io' leaf into the lib script (+ subcommand) or io op it runs,
@@ -27,6 +28,14 @@ function __cheapest() {
   if (__cheapestCache === null) __cheapestCache = __require('model_tier').DEFAULT_TIERS.mechanical
   return __cheapestCache
 }
+// __safeSmartDefault: final fallback for any genuine leaf whose caller forgot opts.model. Resolving
+// the synthesis tier through the bundled model_tier module gives the explicit Opus safety floor and
+// keeps this lazy like __cheapest().
+var __safeSmartDefaultCache = null
+function __safeSmartDefault() {
+  if (__safeSmartDefaultCache === null) __safeSmartDefaultCache = __require('model_tier').resolveModel('synthesis', null, null)
+  return __safeSmartDefaultCache
+}
 const __realAgent = agent
 globalThis.agent = function (prompt, opts) {
   var o = Object.assign({}, opts || {})
@@ -41,6 +50,7 @@ globalThis.agent = function (prompt, opts) {
   } else if (globalThis.__SR_LEAF_MODEL) {
     o.model = globalThis.__SR_LEAF_MODEL
   }
+  if (!o.model) o.model = __safeSmartDefault()
   if (!o.phase && globalThis.__SR_PHASE) o.phase = globalThis.__SR_PHASE
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
   return __realAgent(prompt, o)
@@ -468,6 +478,11 @@ function roundGateFromDimensionResults(results, expectedRoster, finalConfirmatio
   if (finalConfirmation) {
     for (const name of expectedRoster) {
       const result = (results || {})[name] || {}
+      // externalReview (#38/receipt-fabrication fix): an external-engine reviewer has no native
+      // chain-of-verification receipt to offer, but it IS a real independent review — accept it as
+      // an alternate, honestly-labeled confirmation path instead of demanding a receipt shape it
+      // structurally can't produce.
+      if (result.externalReview) continue
       if (!_validFinalReceipt(result, receiptContext)) {
         return { gate: 'cannot-certify', confidence: 'low', incomplete: base.incomplete }
       }
@@ -5002,21 +5017,22 @@ function ensureReviewerShape(out, opts = {}) {
     out = Object.assign({}, out, { confidence: 'high' })
   }
   if (out.confidence === 'high' && !out.verificationReceipt) {
-    const artifact = opts.receiptArtifact || `smoke:round-${opts.round || 0}`
-    const ids = ((opts.coverageDecisions || []).map((d) => d.id).filter(Boolean))
-    out = Object.assign({}, out, {
-      verificationReceipt: {
-        artifact,
-        chain: [
-          { step: 'citation', evidence: 'reviewed citations' },
-          { step: 'reachability', evidence: 'validated call path' },
-          { step: 'missing-check', evidence: 'checked missing FRs' },
-          { step: 'tooling', evidence: 'smoke passed' },
-        ],
-        coverageDecisionIds: ids,
-      },
-      usage: out.usage || { total: 1 },
-    })
+    if (opts.external) {
+      // External-engine reviews (#38) have no native chain-of-verification receipt to offer — the
+      // adapter returns findings, not a citation/reachability/missing-check/tooling evidence chain.
+      // Mark the result as externally reviewed (real evidence: an independent engine actually ran)
+      // instead of fabricating a receipt shape it never produced. panel_tally's final-confirmation
+      // check treats externalReview as an alternate, honestly-labeled confirmation path.
+      out = Object.assign({}, out, { externalReview: opts.externalEngine || true, usage: out.usage || { total: 1 } })
+    } else {
+      // A genuine reviewer leaf claimed high confidence but supplied no verification receipt.
+      // REVIEWER_RESULT_INSTRUCTION already tells leaves that "no evidence" means confidence:low —
+      // trust that contract instead of fabricating canned evidence to paper over a leaf that
+      // skipped it. Downstream, low confidence forces cannot-certify (an honest "not verified"),
+      // never a silently-passed round. usage still defaults (as the old fabrication path did) so a
+      // receipt-less leaf isn't also invisible to telemetry.
+      out = Object.assign({}, out, { confidence: 'low', usage: out.usage || { total: 1 } })
+    }
   }
   return out
 }
@@ -5058,7 +5074,8 @@ function reviewCodeLeaves(tiers, opts) {
         schema: FINDINGS_SCHEMA,
       })
       if (res && Array.isArray(res.findings)) {
-        const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' }, Object.assign({}, opts, { round }))
+        const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
+          Object.assign({}, opts, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
       const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
@@ -5156,6 +5173,8 @@ const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-revie
 // in-process panel_tally.compileFindings twin (no docMergeAgent / front_half.py merge), and the
 // synthesis leaf RETURNS its keep/drop verdicts (loop_synthesis.consume reads them).
 async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts = {}) {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('reviewer', overrides, null)
   const promptContext = Object.assign({}, context || {}, {
     roundKind: opts.roundKind,
     coverageDecisions: opts.coverageDecisions || [],
@@ -5166,18 +5185,20 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
     `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
-    { label: reviewer, schema: FINDINGS_SCHEMA })
+    Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null
   return ensureReviewerShape(out, Object.assign({}, opts, { round }))
 }
 async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('synthesis', overrides, null)
   const out = await agent(
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
-    { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
+    Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }
 async function saveRoundStateBestEffort(workItem, doc, round, deferred, runDir) {
@@ -5225,11 +5246,13 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
 // the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
 // (with extras.parentOrigin for a parent-traced / GATE finding), or null on failure (#104 -> halted).
 async function docReviser(fixContext, verdict, runDir, context) {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('fixer', overrides, 'doc')
   const out = await agent(
     `You are the doc-reviser (fixStep) for the ${context.docType} doc at ${context.docPath}. ` +
     `${FIX_RESULT_INSTRUCTION} Per plugins/superheroes/eval/doc-reviser-leaf.md resolve blocking findings. ` +
     `Fix context:\n${JSON.stringify(fixContext)}`,
-    { label: 'revise-doc', schema: FIX_RESULT_SCHEMA })
+    Object.assign({ model }, { label: 'revise-doc', schema: FIX_RESULT_SCHEMA }))
   return normalizeFixResult(out)
 }
 

@@ -313,9 +313,28 @@ const COURIER_JSON = {
   'post readout': () => JSON.stringify({ posted: true, recorded: true }),
 }
 
+// A genuinely clean/complete review needs a real verificationReceipt matching the round's
+// receiptArtifact + coverageDecisionIds (else the receipt-fabrication fix downgrades it to
+// confidence:low -> cannot-certify).
+function receiptFor(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt).match(/Prompt context: (\{.*\})$/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return {
+    artifact: ctx.receiptArtifact || 'stub',
+    chain: [
+      { step: 'citation', evidence: 'reviewed citations' },
+      { step: 'reachability', evidence: 'validated call path' },
+      { step: 'missing-check', evidence: 'checked missing FRs' },
+      { step: 'tooling', evidence: 'smoke passed' },
+    ],
+    coverageDecisionIds: ctx.receiptCoverageDecisionIds || [],
+  }
+}
+
 const GENUINE_RESPONSES = [
   [/^author-(plan|tasks)$/, () => ({ status: 'ok', notify: [] })],
-  [/^(architecture|code|security|test|premortem)-reviewer(:r\d+)?$/, () => ({ findings: [], confidence: 'high' })],
+  [/^(architecture|code|security|test|premortem)-reviewer(:r\d+)?$/, (p) => ({ findings: [], confidence: 'high', verificationReceipt: receiptFor(p) })],
   [/^synthesis:r\d+$/, () => ({ verdicts: [] })],
   [/^implement-task$/, () => ({ ok: true, signal: 'ok', evidence: { testPassed: true, testFailed: false } })],
   [/^task-reviewer:r\d+$/, () => ({ verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] })],
@@ -330,7 +349,7 @@ async function cannedAgent(prompt, opts) {
   const label = (opts && opts.label) || ''
   calls.push({ label, model: opts && opts.model, phase: (opts && opts.phase) || '(none)', prompt: String(prompt) })
   for (const [re, fn] of GENUINE_RESPONSES) {
-    if (re.test(label)) return fn()
+    if (re.test(label)) return fn(prompt)
   }
   if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
   if (COURIER_JSON[label]) return COURIER_JSON[label]()
@@ -360,6 +379,14 @@ async function main() {
   }
   assert.strictEqual(outcome.outcome, 'ready',
     `the canned green run must reach 'ready' (got ${JSON.stringify(outcome)})`)
+
+  // CLASS GUARD: no leaf may ever inherit the Workflow session model. The bundle wrapper is the
+  // choke point, so every fake-runtime agent invocation must arrive with an explicit opts.model.
+  const modelLess = calls.filter((c) => c.model === undefined || c.model === null)
+  assert.deepStrictEqual(
+    modelLess.map((c) => `${c.phase}/${c.label}`),
+    [],
+    'no agent invocation may reach the runtime without opts.model')
 
   // (1) MODEL PIN: every non-genuine leaf resolves to the cheapest (mechanical) tier; no genuine
   // agent is ever pinned there.
