@@ -1,0 +1,29 @@
+{
+  "name": "plan-120-replay",
+  "benchmark": true,
+  "maxRounds": 4,
+  "reviewerSet": ["architecture-reviewer", "code-reviewer", "premortem-reviewer", "security-reviewer", "test-reviewer"],
+  "fixEvents": [
+    {"afterRound": 1, "changedSubjects": ["Test"], "coverageDecisions": []},
+    {"afterRound": 2, "changedSubjects": ["Test"], "coverageDecisions": [{"id": "RCD-plan-coverage", "classKey": "Test::coverage::missing acceptance test", "text": "Acceptance fixtures cover repeated missing-test findings.", "sourceRound": 2}]}
+  ],
+  "reviewerEvents": [
+    {"round": 1, "reviewer": "architecture-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "code-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "premortem-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important", "classKey": "Test::coverage::missing acceptance test"}], "usageTotal": 200000},
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test", "severity": "Important", "classKey": "Test::coverage::missing acceptance test"}], "usageTotal": 25000},
+    {"round": 3, "reviewer": "architecture-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 100000},
+    {"round": 3, "reviewer": "code-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 100000},
+    {"round": 3, "reviewer": "premortem-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 100000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 100000},
+    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 100000}
+  ],
+  "frozenBaselineTokens": 3500000,
+  "expectedTerminal": "clean",
+  "requiresCompleteTelemetry": true,
+  "expectedCoverageDecision": "RCD-plan-coverage",
+  "expectedGeneralizeRequired": "Test::coverage::missing acceptance test",
+  "attribution": ["convergence", "skipped-dimensions", "tier-split"]
+}

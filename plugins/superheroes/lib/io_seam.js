@@ -25,6 +25,13 @@ const defaultIo = {
   async mkdirp(d) { require('fs').mkdirSync(d, { recursive: true }) },
   tmpdir() { return require('os').tmpdir() },   // sync: no IO
   join: joinPath,                                // sync: no IO
+  async runHelper(cmd, args) {
+    const cp = require('child_process').spawnSync(cmd, args || [], { encoding: 'utf8' })
+    return { ok: cp.status === 0, status: cp.status, stdout: cp.stdout || '', stderr: cp.stderr || '' }
+  },
+  contentHash(text) {
+    return require('crypto').createHash('sha256').update(String(text || ''), 'utf8').digest('hex')
+  },
 }
 function io() { return global.io || defaultIo }
 module.exports = { io, defaultIo, joinPath }

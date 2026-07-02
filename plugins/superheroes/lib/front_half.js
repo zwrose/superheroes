@@ -4,7 +4,7 @@
 // record_deferred / append_notify) stay Python executors (Task 11).
 
 function gateForTerminal(terminal) {
-  return (terminal === 'clean' || terminal === 'clean-with-skips') ? 'passed' : 'changes-requested'
+  return terminal === 'clean' ? 'passed' : 'changes-requested'
 }
 
 // Faithful port of front_half.py _PLACEHOLDER (same four alternatives, same IGNORECASE flag).

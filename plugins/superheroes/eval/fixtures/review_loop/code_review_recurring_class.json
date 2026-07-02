@@ -1,0 +1,32 @@
+{
+  "name": "code-review-recurring-class",
+  "benchmark": true,
+  "maxRounds": 4,
+  "fixtureShape": "code review with repeated Test coverage class across source and test files",
+  "reviewerSet": ["architecture-reviewer", "code-reviewer", "premortem-reviewer", "security-reviewer", "test-reviewer"],
+  "fixEvents": [
+    {"afterRound": 1, "changedSubjects": ["Code", "Test"], "coverageDecisions": []},
+    {"afterRound": 2, "changedSubjects": ["Test"], "coverageDecisions": [{"id": "RCD-code-test-coverage", "classKey": "Test::coverage::missing regression", "text": "Repeated missing regression-test class is covered by the new regression fixture.", "sourceRound": 2}]}
+  ],
+  "reviewerEvents": [
+    {"round": 1, "reviewer": "architecture-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "code-reviewer", "findings": [{"dimension": "Code", "taxonomy": "correctness", "title": "Patch misses source branch", "severity": "Important", "classKey": "Code::correctness::patch misses source branch"}], "usageTotal": 260000},
+    {"round": 1, "reviewer": "premortem-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 120000},
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing regression", "severity": "Important", "classKey": "Test::coverage::missing regression"}], "usageTotal": 260000},
+    {"round": 2, "reviewer": "code-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 35000},
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing regression", "severity": "Important", "classKey": "Test::coverage::missing regression"}], "usageTotal": 35000},
+    {"round": 3, "reviewer": "code-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 35000},
+    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 35000},
+    {"round": 4, "reviewer": "architecture-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 90000},
+    {"round": 4, "reviewer": "code-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 110000},
+    {"round": 4, "reviewer": "premortem-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 90000},
+    {"round": 4, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 90000},
+    {"round": 4, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 110000}
+  ],
+  "frozenBaselineTokens": 4200000,
+  "expectedTerminal": "clean",
+  "requiresCompleteTelemetry": true,
+  "expectedCoverageDecision": "RCD-code-test-coverage",
+  "expectedGeneralizeRequired": "Test::coverage::missing regression"
+}

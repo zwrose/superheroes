@@ -18,14 +18,12 @@ import panel_tally  # in-repo #104: compile_findings (mechanical identity-merge)
 
 
 def gate_for_terminal(terminal):
-    """Map a #104 loop terminal onto a definition-doc review gate value (FR-5).
+    """Map a review terminal onto a definition-doc review gate value.
 
-    clean / clean-with-skips -> "passed"; every other or unknown terminal
-    (cannot-certify, halted, continue, None, ...) -> "changes-requested" (fail-closed:
-    an unrecognized terminal never advances). Reads the terminal #104 produced; it does
-    not re-derive the decision from findings.
+    Only a true clean terminal can pass. A blocking clean-with-skips result is
+    visible but does not advance.
     """
-    return "passed" if terminal in ("clean", "clean-with-skips") else "changes-requested"
+    return "passed" if terminal == "clean" else "changes-requested"
 
 
 # placeholder tokens forbidden in a finished definition-doc (writing-plans' No-Placeholders bar);

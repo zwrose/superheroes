@@ -32,6 +32,10 @@ PARITY_TWINS = [
     ("panel_tally", "roundGate", "panel_tally", "round_gate"),
     ("panel_tally", "presentDeferred", "panel_tally", "present_deferred"),
     ("panel_tally", "decideTerminal", "panel_tally", "decide_terminal"),
+    ("panel_tally", "compileDimensionResults", "panel_tally", "compile_dimension_results"),
+    ("panel_tally", "roundGateFromDimensionResults", "panel_tally", "round_gate_from_dimension_results"),
+    ("panel_tally", "presentBlockingFromDimensionResults", "panel_tally", "present_blocking_from_dimension_results"),
+    ("panel_tally", "blockingFindingsFromDimensionResults", "panel_tally", "blocking_findings_from_dimension_results"),
     ("recover", "reconcile", "recover", "reconcile"),
     ("recover", "prAction", "recover", "pr_action"),
     ("recover", "rearmAction", "recover", "rearm_action"),
@@ -41,6 +45,11 @@ PARITY_TWINS = [
     ("build_progress", "reconcile", "build_progress", "reconcile"),
     ("worker_recovery", "decide", "worker_recovery", "decide"),
     ("task_review", "decide", "task_review", "decide"),
+    ("review_round_policy", "planRound", "review_round_policy", "plan_round"),
+    ("review_memory", "classKey", "review_memory", "class_key"),
+    ("review_memory", "recurrentClasses", "review_memory", "recurrent_classes"),
+    ("review_memory", "promoteRecord", "review_memory", "promote_record"),
+    ("review_memory", "recordFromDimensionResults", "review_memory", "record_from_dimension_results"),
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored
@@ -49,12 +58,13 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half", "build_progress", "worker_recovery", "task_review"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half", "build_progress", "worker_recovery", "task_review", "review_round_policy", "review_memory"]
 
 # Python fns that return a tuple whose JS twin returns an object — map (py_mod, py_fn) to field names.
 # Used by test_python_oracle to normalize the result before comparison with an object fixture.
 _TUPLE_TO_DICT_FIELDS = {
     ("panel_tally", "round_gate"): ["gate", "confidence", "incomplete"],
+    ("panel_tally", "round_gate_from_dimension_results"): ["gate", "confidence", "incomplete"],
     ("panel_tally", "decide_terminal"): ["terminal", "reason"],
 }
 
@@ -64,6 +74,7 @@ BUNDLED_NON_TWINS = {
     "review_panel_shell.js",
     "build_phase.js",
     "test_pilot_phase.js",
+    "fenced_json.js",
 }
 
 # ---------------------------------------------------------------------------

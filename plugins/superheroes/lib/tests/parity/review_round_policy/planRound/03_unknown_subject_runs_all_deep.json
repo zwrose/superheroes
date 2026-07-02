@@ -1,0 +1,20 @@
+{
+  "input": [{
+    "round": 3,
+    "dimensions": ["code-reviewer", "security-reviewer"],
+    "changedSubjects": null,
+    "previous": {
+      "code-reviewer": {"status": "run", "confidence": "high", "hasFindings": false, "subjects": ["Code"], "round": 2},
+      "security-reviewer": {"status": "run", "confidence": "high", "hasFindings": false, "subjects": ["Security"], "round": 2}
+    },
+    "confirmation": false
+  }],
+  "expected": {
+    "roundKind": "intermediate",
+    "dimensions": {
+      "code-reviewer": {"action": "run", "tier": "reviewer-deep", "reason": "unknown changed subjects"},
+      "security-reviewer": {"action": "run", "tier": "reviewer-deep", "reason": "unknown changed subjects"}
+    },
+    "escalationPolicy": "deep-only"
+  }
+}

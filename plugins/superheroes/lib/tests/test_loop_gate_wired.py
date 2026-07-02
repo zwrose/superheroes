@@ -31,3 +31,20 @@ def test_looping_skills_invoke_the_continuation_gate():
 
 def test_loop_state_lib_exists():
     assert os.path.isfile(os.path.join(SKILLS, "..", "lib", "loop_state.py"))
+
+
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_review_skills_reference_shared_loop_contract():
+    for rel in [
+        "skills/review-spec/SKILL.md",
+        "skills/review-plan/SKILL.md",
+        "skills/review-tasks/SKILL.md",
+        "skills/review-code/SKILL.md",
+    ]:
+        text = (ROOT / rel).read_text(encoding="utf-8")
+        assert "reference/review-loop.md" in text
+        assert "coverage decisions" in text

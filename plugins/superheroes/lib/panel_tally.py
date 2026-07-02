@@ -156,6 +156,87 @@ def round_gate(compiled, expected_roster, completed_roster):
     return gate, confidence, incomplete
 
 
+def _current_blocking_findings(results):
+    out = []
+    for result in (results or {}).values():
+        if not isinstance(result, dict) or result.get("status") != "run":
+            continue
+        for f in result.get("findings") or []:
+            if not isinstance(f, dict) or f.get("carried"):
+                continue
+            if f.get("severity") in BLOCKING:
+                out.append(f)
+    return out
+
+
+def present_blocking_from_dimension_results(results):
+    return len(_current_blocking_findings(results))
+
+
+def blocking_findings_from_dimension_results(results):
+    return [dict(f) for f in _current_blocking_findings(results)]
+
+
+def compile_dimension_results(results):
+    findings = []
+    for name, result in (results or {}).items():
+        if not isinstance(result, dict):
+            continue
+        for f in result.get("findings") or []:
+            if not isinstance(f, dict):
+                continue
+            item = dict(f)
+            if "dimension" not in item:
+                item["dimension"] = result.get("dimension") or name
+            if result.get("status") == "skipped":
+                item["carried"] = True
+                item["sourceRound"] = result.get("carriedFromRound")
+            findings.append(item)
+    return compile_findings(findings)
+
+
+def _valid_final_receipt(result, receipt_context=None):
+    receipt = result.get("verificationReceipt")
+    chain = receipt.get("chain") if isinstance(receipt, dict) else None
+    required = {"citation", "reachability", "missing-check", "tooling"}
+    if not isinstance(receipt, dict) or not receipt.get("artifact"):
+        return False
+    if not isinstance(receipt.get("coverageDecisionIds"), list):
+        return False
+    ctx = receipt_context or {}
+    if ctx.get("artifact") and receipt.get("artifact") != ctx.get("artifact"):
+        return False
+    needed_ids = set(ctx.get("coverageDecisionIds") or [])
+    if needed_ids and not needed_ids.issubset(set(receipt.get("coverageDecisionIds") or [])):
+        return False
+    seen = set()
+    for step in chain or []:
+        if not isinstance(step, dict):
+            return False
+        if not step.get("evidence"):
+            return False
+        seen.add(step.get("step"))
+    return required.issubset(seen)
+
+
+def round_gate_from_dimension_results(results, expected_roster, final_confirmation=False, receipt_context=None):
+    completed = [name for name, result in (results or {}).items() if result.get("status") in ("run", "skipped")]
+    compiled = compile_dimension_results(results)
+    gate, confidence, missing = round_gate(compiled, expected_roster, completed)
+    for name in expected_roster:
+        result = (results or {}).get(name) or {}
+        if result.get("confidence") != "high":
+            return "cannot-certify", "low", missing
+    if final_confirmation:
+        for name in expected_roster:
+            result = (results or {}).get(name) or {}
+            if not _valid_final_receipt(result, receipt_context):
+                return "cannot-certify", "low", missing
+    if gate == "clean" and _current_blocking_findings(results):
+        return "blocking", confidence, missing
+    return gate, confidence, missing
+
+
 # ── deferral accounting (FR-10) ──
 def present_deferred(compiled, deferred_set):
     """present-∩-deferred: count present BLOCKING findings whose identity was deferred and whose

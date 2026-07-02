@@ -34,7 +34,7 @@ advisory revoke-only and never grants `passed`, so a skipped reset is a warning,
 gate-integrity failure.
 
 stdlib only (the band convention). Outcome tokens (stdout): `recorded:passed`,
-`recorded:changes-requested`, `reset:pending`, `noop:not-approved`,
+`recorded:changes-requested`, `recorded:stale`, `reset:pending`, `noop:not-approved`,
 `skipped:noncanonical`, `skipped:unreadable`, `failed:set-gate`.
 """
 import argparse
@@ -90,19 +90,20 @@ def _read_gate(doc, work_item, root):
         return False, str(exc)
 
 
-def _set_gate(doc, work_item, review, root):
-    """Return (ok, err). definition_doc is the sole frontmatter writer.
-
-    Kept as a module-level helper (was a subprocess to definition_doc.py set-gate; now a
-    direct call) so test seams that monkeypatch `gate_write._set_gate` survive the collapse."""
+def _set_gate(doc, work_item, review, root, *, expected_hash, run_id, lease=None):
+    """Return (ok, err). definition_doc is the sole frontmatter writer."""
     try:
-        definition_doc.set_gate(_doc(work_item, doc, root), review)
+        result = definition_doc.set_gate(
+            _doc(work_item, doc, root), review,
+            expected_hash=expected_hash, run_id=run_id, lease=lease)
+        if not result.get("ok"):
+            return False, result.get("reason", "set-gate-failed")
         return True, ""
     except (ValueError, OSError) as exc:
         return False, str(exc)
 
 
-def certify(doc, work_item, reviewed_path, review, parent_doc, root):
+def certify(doc, work_item, reviewed_path, review, parent_doc, root, *, expected_hash, run_id, lease=None):
     """review-plan / review-tasks: record `review` on `doc`, downgrading to
     changes-requested if the parent isn't approved. Canonical-path guarded.
 
@@ -125,17 +126,21 @@ def certify(doc, work_item, reviewed_path, review, parent_doc, root):
             _say("parent %s gate is '%s' (not 'passed') — recording changes-requested, not "
                  "passed; the %s must be approved first." % (parent_doc, parent, parent_doc))
             review = "changes-requested"
-    ok, err = _set_gate(doc, work_item, review, root)
+    ok, err = _set_gate(doc, work_item, review, root, expected_hash=expected_hash, run_id=run_id, lease=lease)
     if ok:
         _emit("recorded:" + review)
         return 0
+    if err == "stale":
+        _say("reviewed doc changed before gate write — gate NOT recorded (stale content hash).")
+        _emit("recorded:stale")
+        return 3
     _say("set-gate failed — gate NOT recorded (the %s doc may be missing/malformed despite "
          "reaching this step): %s" % (doc, err))
     _emit("failed:set-gate")
     return 3
 
 
-def reset(doc, work_item, reviewed_path, root):
+def reset(doc, work_item, reviewed_path, root, *, expected_hash, run_id, lease=None):
     """review-spec stale-approval reset: if the spec is currently `passed`, revoke it to
     `pending` (the owner must re-approve the changed content). Never grants `passed`."""
     if not _same_file(reviewed_path, _canonical(root, work_item, doc)):
@@ -150,11 +155,15 @@ def reset(doc, work_item, reviewed_path, root):
         return _emit("skipped:unreadable")
     if current != "passed":
         return _emit("noop:not-approved")
-    ok, err = _set_gate(doc, work_item, "pending", root)
+    ok, err = _set_gate(doc, work_item, "pending", root, expected_hash=expected_hash, run_id=run_id, lease=lease)
     if ok:
         _say("spec was already approved and has now been revised — gate reset to 'pending'; "
              "the owner must re-approve before it advances.")
         return _emit("reset:pending")
+    if err == "stale":
+        _say("⚠ could not reset the stale-approval gate (doc changed before reset) — warn the owner: "
+             "the 'passed' gate is STALE and the spec needs re-approval.")
+        return _emit("recorded:stale")
     _say("⚠ could not reset the stale-approval gate (set-gate failed) — warn the owner: the "
          "'passed' gate is STALE and the spec needs re-approval: %s" % err)
     return _emit("failed:set-gate")
@@ -172,6 +181,9 @@ def main(argv):
     ap.add_argument("--parent-doc", choices=["spec", "plan"],
                     help="certify mode: the parent doc-type whose gate must be approved")
     ap.add_argument("--root", required=True)
+    ap.add_argument("--expected-hash", required=True)
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--lease", default=None)
     args = ap.parse_args(argv[1:])
 
     if args.mode == "certify":
@@ -180,8 +192,10 @@ def main(argv):
             _emit("error:bad-args")
             return 2
         return certify(args.doc, args.work_item, args.reviewed_path, args.review,
-                       args.parent_doc, args.root)
-    reset(args.doc, args.work_item, args.reviewed_path, args.root)
+                       args.parent_doc, args.root,
+                       expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
+    reset(args.doc, args.work_item, args.reviewed_path, args.root,
+          expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
     return 0
 
 

@@ -36,10 +36,11 @@ const sr = require('../showrunner.js')
     if (label && /^(architecture|code|security|test|premortem)-reviewer/.test(label)) return { findings: [] }
     return { findings: [] }
   }
+  const runDir1 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-1-'))
   const r = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: '/tmp/showrunner-wi-targeted-review-code-test-pilot-1-head-1',
+    runDir: runDir1,
   })
   assert.strictEqual(r.gate, 'passed')
   assert.ok(promptLog.some((p) => p.includes('Target worktree: /tmp/build-worktree') && p.includes('Expected head: head-1')),
@@ -62,10 +63,11 @@ const sr = require('../showrunner.js')
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
     return { findings: [] }   // every reviewer leg returns an empty findings array (clean round)
   }
+  const runDir2 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-2-'))
   const changed = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDirSuffix: 'test-pilot-2-head-1',
+    runDir: runDir2,
   })
   assert.strictEqual(changed.gate, 'passed')
   assert.strictEqual(changed.head, 'head-2')
