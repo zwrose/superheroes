@@ -162,7 +162,13 @@ const _INLINE_RECORD_BOUND = 6000
 async function _selfVerifiedHelper(ioApi, args, stagedPath, stagedText, corruptReason) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (stagedPath) {
-      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) { continue }
+      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) {
+        // a missing parent dir is the common first-attempt failure (fresh run dir); create it
+        // and let the retry re-stage.
+        const dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
+        if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
+        continue
+      }
     }
     const out = await ioApi.runHelper('python3', args)
     let parsed = null

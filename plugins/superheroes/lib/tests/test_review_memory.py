@@ -72,14 +72,16 @@ def test_persist_skeleton_strips_bodies_python_side(tmp_path):
     the on-disk contract (no evidence, no receipts) is enforced here, not in the caller."""
     rm = load_memory()
     records_path = str(tmp_path / "run" / "round-records.json")  # run dir doesn't exist yet
+    # keep the inline arg under Linux's 128KiB per-arg cap (MAX_ARG_STRLEN) — the point here
+    # is the Python-side stripping, not the transport size (the staged variant covers large)
     record = {"schemaVersion": 2, "round": 1, "kind": "baseline",
               "confirmationPending": False, "changedSubjects": ["Code"],
               "coverageDecisions": [{"id": "cd-1"}],
               "tokenUsage": {"code:r1": {"total": 5}},
-              "findings": _big_findings("code", 40), "carriedFindings": [],
+              "findings": _big_findings("code", 20, evidence_kb=1), "carriedFindings": [],
               "dimensions": {"code": {"dimension": "code", "status": "run", "confidence": "high",
                                       "round": 1, "subjects": ["Code"],
-                                      "findings": _big_findings("code", 40),
+                                      "findings": _big_findings("code", 20, evidence_kb=1),
                                       "verificationReceipt": {"chain": ["y" * 5000]}}}}
     r = _skeleton_cli(records_path, record, rm.content_hash(""))
     out = json.loads(r.stdout)
@@ -90,9 +92,9 @@ def test_persist_skeleton_strips_bodies_python_side(tmp_path):
     assert "verificationReceipt" not in text, "receipts must never land in round-records.json"
     persisted = json.loads(text)
     assert len(persisted) == 1 and persisted[0]["round"] == 1
-    assert len(persisted[0]["findings"]) == 40
+    assert len(persisted[0]["findings"]) == 20
     assert persisted[0]["findings"][0]["severity"] == "Critical"
-    assert persisted[0]["dimensions"]["code"]["blockingCount"] == 40
+    assert persisted[0]["dimensions"]["code"]["blockingCount"] == 20
     assert persisted[0]["runId"] == "run-1"
     assert persisted[0]["tokenUsage"] == {"code:r1": {"total": 5}}
     # fence: the returned hash matches the on-disk text (next round's expected-hash)

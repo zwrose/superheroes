@@ -914,7 +914,13 @@ const _INLINE_RECORD_BOUND = 6000
 async function _selfVerifiedHelper(ioApi, args, stagedPath, stagedText, corruptReason) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (stagedPath) {
-      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) { continue }
+      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) {
+        // a missing parent dir is the common first-attempt failure (fresh run dir); create it
+        // and let the retry re-stage.
+        const dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
+        if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
+        continue
+      }
     }
     const out = await ioApi.runHelper('python3', args)
     let parsed = null
@@ -4749,9 +4755,16 @@ async function fencedJsonWrite(path, payload, opts) {
   if (opts.overwrite) args.push('--allow-overwrite')
   else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
+  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
   let lastReason = null
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(stagedPath, text) } catch (_) { lastReason = 'payload-stage-failed'; continue }
+    try { await ioApi.writeFile(stagedPath, text) } catch (_) {
+      // a missing parent dir is the common first-attempt failure (fresh run dir); create it
+      // and let the retry re-stage — the leaf cost lands on the failure path only.
+      if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
+      lastReason = 'payload-stage-failed'
+      continue
+    }
     const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
@@ -4760,6 +4773,11 @@ async function fencedJsonWrite(path, payload, opts) {
     // stage (or an unparseable answer) earns the one retry.
     if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
       return { ok: false, reason: parsed.reason }
+    }
+    // payload-unreadable can also mean the silent leaf-bash stage failed on a missing dir
+    // (that writeFile reports no error) — same recovery.
+    if (parsed && parsed.reason === 'payload-unreadable' && dir) {
+      try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ }
     }
     lastReason = (parsed && parsed.reason) || lastReason
   }
