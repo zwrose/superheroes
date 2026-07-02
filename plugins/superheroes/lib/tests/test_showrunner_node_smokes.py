@@ -38,6 +38,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_draftpr_smoke.js",
     # #115 Task 17: startup overrides read + unconditional cheapest dumb-pipe pin (bundle wrapper).
     "plugins/superheroes/lib/tests/showrunner_task17_smoke.js",
+    # #38 Task 12: reviewCodeLeaves engine branch (reviewer/synthesis read-only on reviewer engine,
+    # fixStep write on implementation engine) + startup __SR_ENGINE_PREFS load.
+    "plugins/superheroes/lib/tests/showrunner_engine_review_smoke.js",
     # #115 Task 18: front_half.renderRunOutcome twin — phase_records embed + stub renderer.
     "plugins/superheroes/lib/tests/showrunner_front_half_render_outcome_smoke.js",
     # #115: the build_phase smokes — registered here (the discovery guard now also matches
@@ -60,6 +63,14 @@ SHOWRUNNER_SMOKES = [
     # FR-5 cwd-rooting for cmdRunner: selfContained() in cmdRunner pins cwd to repo root when
     # __SR_ROOT is set (RED->GREEN after the fix); no-op when unset; no double-cd guard.
     "plugins/superheroes/lib/tests/showrunner_cmdrunner_cwd_smoke.js",
+    # #38: engine_dispatch.js dispatchExternal — review/build happy paths, stdin-redirect delivery,
+    # UFR-5 timeout, UFR-6 unauditable, sec-101 commit-failure audit symmetry. Named
+    # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
+    # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
+    "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # #38 Task 11: build_phase.js worker/fixer/final-review engine-branch routing (UFR-2/4, FR-15,
+    # FIX I5 final-fixer report contract). Name starts build_phase_ so the discovery guard auto-matches.
+    "plugins/superheroes/lib/tests/build_phase_engine_smoke.js",
     # #120: native ship-phase catch-up stretch (freshen loop, conflict-abort, fence, FR-2 give-up).
     "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
     # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).

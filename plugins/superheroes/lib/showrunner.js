@@ -12,6 +12,9 @@ const frontHalfTwin = require('./front_half.js')
 const modelTierTwin = require('./model_tier.js')
 // #115 Task 16: back-half twins — CI status + PR recover (prAction already via recoverTwin above)
 const ciStatusTwin = require('./ci_status.js')
+// #38: the external-engine dispatch leaf + the pure engine-preference resolver twin.
+const engineDispatch = require('./engine_dispatch.js')
+const enginePrefTwin = require('./engine_pref.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -64,14 +67,37 @@ function reviewCodeLeaves(tiers, opts) {
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
     const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
-    const out = await agent(
+    const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
       `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
-      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`,
-      withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`
+    const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+    if (rEngine !== 'claude') {
+      // FR-9: source the effort override from the engine-prefs effort sub-map (keyed by role_kind),
+      // NOT the model-tier __SR_OVERRIDES map (keyed by role->model — resolveEffort could never match it).
+      // Depth-aware: the deep reviewers (security/architecture — the reviewer-deep model tier, REVIEW_DEEP)
+      // dispatch codex at 'review-deep' (xhigh); the rest at 'review' (high). roleKind stays 'review'.
+      const eff = enginePrefTwin.resolveEffort(rEngine, REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem: context, engine: rEngine, roleKind: 'review', effort: eff, prompt,
+        cwd: (target.worktree || procCwd()),
+        schema: FINDINGS_SCHEMA,
+      })
+      // UFR-7: unreadable/incomplete -> null; the panel's cannot-certify path re-runs the round on
+      // Claude, never recorded clean. A successful external review returns {findings}.
+      if (res && Array.isArray(res.findings)) return res.findings
+      const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      return (out && Array.isArray(out.findings)) ? out.findings : null
+    }
+    const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
     return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
   }
 
+  // Synthesis stays LOOP-OWNED (native Claude, tiers.synthesis) — never engine-routed. It is the
+  // panel's keep/drop judge over merged findings, not a reviewer-persona dispatch, and the adapter's
+  // parse_result(role_kind='review') only understands {findings:[...]} — a synthesis {verdicts:[...]}
+  // would always parse as unreadable. reviewerAgent (review) and fixStep (fix) are the only two
+  // engine-routed leaves (#38).
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
@@ -85,14 +111,25 @@ function reviewCodeLeaves(tiers, opts) {
 
   // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
   const fixStep = async (blockers, runDir) => {
-    const out = await agent(
+    const prompt =
       `You are the code-fixer. For each blocking finding below, attempt a real fix and COMMIT it to ` +
       `the change under review. If a finding traces to an upstream phase (plan, tasks, or build) rather ` +
       `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
       `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
       `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
-      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
-      withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`
+    const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
+    if (iEngine !== 'claude') {
+      const eff = enginePrefTwin.resolveEffort(iEngine, 'fix', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
+        cwd: (target.worktree || procCwd()), schema: FIX_REPORT_SCHEMA,
+      })
+      if (res && res.ok) return { fixed: [], deferred: [] }   // external fix committed by the adapter; verify gate re-runs downstream
+      const out = await agent(prompt, withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+      return out || null
+    }
+    const out = await agent(prompt, withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
     return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
   }
 
@@ -374,6 +411,20 @@ async function usableDraft(workItem, doc) {
 function authorModel() {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
   return modelTierTwin.resolveModel('author', overrides, null)
+}
+
+// #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).
+// Absent/malformed -> the safe degenerate default (both roles on claude, no effort overrides).
+function _enginePrefs() {
+  const p = (typeof globalThis !== 'undefined' && globalThis.__SR_ENGINE_PREFS) || null
+  return (p && typeof p === 'object') ? p : { reviewer: 'claude', implementation: 'claude', effort: {} }
+}
+
+// FR-9 effort overrides: the role_kind-keyed effort sub-map INSIDE __SR_ENGINE_PREFS (NOT the model-tier
+// __SR_OVERRIDES map, which is keyed by role->model). resolveEffort reads this; absent -> null -> default.
+function _effortOverrides() {
+  const p = _enginePrefs()
+  return (p && p.effort && typeof p.effort === 'object' && !Array.isArray(p.effort)) ? p.effort : null
 }
 // the durable per-work-item NOTIFY ledger (under the gitignored docs dir — run-local state).
 function notifyLedgerFor(workItem) { return `docs/superheroes/${workItem}/.notify.json` }
@@ -705,6 +756,27 @@ async function showrunner({ workItem }) {
   if (typeof globalThis !== 'undefined') {
     globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   }
+  // #38: load the per-role engine preferences once at startup from core.md's machine block. The
+  // Python CLI prints {"reviewer","implementation"} (both "claude" when absent/unreadable — the safe
+  // degenerate path, exit 0 always). Fail-safe: any exec error or bad JSON yields both-"claude" so the
+  // review/build leaves take the byte-unchanged agent() path.
+  const _epRes = await exec(['python3 plugins/superheroes/lib/engine_pref_load.py'])
+  let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
+  try {
+    const _p = (_epRes[0] && _epRes[0].stdout) || ''
+    const _parsed = JSON.parse(_p)
+    if (_parsed && typeof _parsed === 'object' && !Array.isArray(_parsed)) {
+      // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
+      // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
+      // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+      _epMap = {
+        reviewer: _parsed.reviewer || 'claude',
+        implementation: _parsed.implementation || 'claude',
+        effort: (_parsed.effort && typeof _parsed.effort === 'object' && !Array.isArray(_parsed.effort)) ? _parsed.effort : {},
+      }
+    }
+  } catch (_) {}
+  if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0

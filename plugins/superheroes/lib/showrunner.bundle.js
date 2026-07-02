@@ -1939,6 +1939,324 @@ module.exports = { decide }
 
 };
 
+// ===== engine_pref.js =====
+__modules["engine_pref"] = function (module, exports, require) {
+// engine_pref.js — twin of engine_pref.resolve_engine / resolve_effort.
+// Pure + deterministic engine-preference resolver. Fail-OPEN to 'claude'.
+
+const ENGINES = ['claude', 'codex', 'cursor']
+const DEFAULT_STALL_LIMIT_SECONDS = 300
+
+const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation' }
+// Depth-aware review: deep reviewers (security/architecture — reviewer-deep tier) -> 'review-deep'
+// (xhigh); regular review -> 'review' (high). Mirrors engine_pref.py._CODEX_EFFORT.
+const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low' }
+const _CURSOR_EFFORT = 'composer'
+
+// Own-key membership (mirror model_tier.js): JS `in`/bracket walk the prototype chain,
+// so a prototype-named engine/role ('constructor', 'toString') must not drift the result.
+function hasOwn(o, k) {
+  return Object.prototype.hasOwnProperty.call(o, k)
+}
+
+function resolveEngine(roleKind, prefs) {
+  if (!hasOwn(_ROLE_KEY, roleKind)) return 'claude'
+  const key = _ROLE_KEY[roleKind]
+  if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs)) return 'claude'
+  if (!hasOwn(prefs, key)) return 'claude'
+  const v = prefs[key]
+  if (typeof v === 'string' && ENGINES.indexOf(v) !== -1) return v
+  return 'claude'
+}
+
+function resolveEffort(engine, roleKind, overrides) {
+  let def
+  if (engine === 'codex') def = hasOwn(_CODEX_EFFORT, roleKind) ? _CODEX_EFFORT[roleKind] : 'high'
+  else if (engine === 'cursor') def = _CURSOR_EFFORT
+  else return null // claude or unknown engine
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, roleKind)) {
+    const v = overrides[roleKind]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+  }
+  return def
+}
+
+// Twin of resolve_timeout: the finite UFR-5 stall limit. A valid positive int override wins; else the
+// finite default. bool is excluded (JS has no int/bool subtype trap, but mirror the Python guard's intent:
+// only a real positive integer number is honored). Always returns a finite positive int; never throws.
+function resolveTimeout(overrides) {
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, 'timeout')) {
+    const v = overrides.timeout
+    if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
+  }
+  return DEFAULT_STALL_LIMIT_SECONDS
+}
+
+module.exports = { resolveEngine, resolveEffort, resolveTimeout, ENGINES, DEFAULT_STALL_LIMIT_SECONDS }
+
+};
+
+// ===== engine_dispatch.js =====
+__modules["engine_dispatch"] = function (module, exports, require) {
+// plugins/superheroes/lib/engine_dispatch.js
+// Spine leaf wrapper (#38): the single seam every JS call site invokes instead of agent() when the
+// engine is external (codex|cursor). Deterministic argv/parse/commit live in engine_adapter.py; this
+// wrapper sequences them through the spine's exec dumb-pipe and returns the NATIVE result shape so
+// everything downstream (loop math, verify gate, journal) is reused unchanged. Read roles are
+// read-only (no preSHA/commit); write roles capture preSHA -> engine edits -> adapter commits.
+const LIB = 'plugins/superheroes/lib'
+const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
+
+function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
+
+// Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
+// text is untrusted and MAY contain a line identical to any fixed heredoc sentinel, which would
+// terminate the heredoc early and corrupt the staged file. Encoding sidesteps sentinels entirely.
+// Buffer is permitted in the bundle (the FR-8 static guard only bans a short list of non-deterministic
+// or Node-only globals — the wall-clock/PRNG/filesystem/process APIs); base64 output is pure ASCII so
+// shq's single-quote escaping is sufficient.
+function _stageCmd(path, content) {
+  const b64 = Buffer.from(content == null ? '' : String(content), 'utf8').toString('base64')
+  return `printf %s ${shq(b64)} | base64 -d > ${shq(path)}`
+}
+
+// Reuse the spine's exec dumb-pipe (lazy require avoids a load-time cycle: showrunner requires the
+// bundle graph; deferring keeps engine_dispatch's require surface minimal for the smokes).
+let _execFn = null
+function _exec(commands) {
+  if (!_execFn) _execFn = require('./showrunner.js').exec
+  return _execFn(commands)
+}
+
+// Run ONE command through the exec dumb-pipe and parse its JSON stdout. Mirrors the canonical
+// build_phase.js:43-64 `execJson` contract: the cheap haiku courier occasionally drops/garbles a
+// command's stdout even though it ran (live: a journal_entry.py leaf returned stdout:"" with ok:true,
+// so JSON.parse("") threw and the build fail-closed-parked); retry ONCE on an empty or unparseable
+// stdout before failing closed. The dispatch-path commands here (journal append, adapter build-argv /
+// parse-result / commit, preSHA) are idempotent / harmless to repeat. Returns the parsed object, or
+// null after the retry (the caller fails closed on null). A clean {"ok":true} on the first call returns
+// immediately (one exec, no behavior change); a parseable {"ok":false} (a REAL durable-write failure)
+// is returned as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
+async function _execJson(cmd) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await _exec([cmd])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) {
+      const s = (r0.stdout == null ? '' : String(r0.stdout)).trim()
+      if (s) { try { return JSON.parse(s) } catch (_e) { /* garbled -> retry */ } }
+      // empty stdout -> retry (courier likely dropped it)
+    }
+    // exec-level failure or empty/garbled -> retry once, then give up
+  }
+  return null
+}
+
+// preSHA capture for write roles — the established spine pattern (showrunner.js:1226).
+async function _captureHead(wt) {
+  const res = await _exec([`git -C ${shq(wt)} rev-parse HEAD`])
+  const r0 = res && res[0]
+  if (r0 && r0.ok) { const s = (r0.stdout == null ? '' : String(r0.stdout)).trim(); if (s) return s }
+  return null
+}
+
+// Run the fully-formed external argv through exec, FEEDING the staged prompt file to the process
+// stdin via a shell redirect. BOTH engines take the prompt on stdin: codex's trailing `-` reads
+// stdin, and cursor-agent reads stdin when given no positional prompt. The argv tokens are
+// shell-quoted so paths/effort strings can't break the command; the redirect is appended last so
+// the prompt is always delivered (no </dev/null guard — there is always a prompt here).
+// FR-8 confinement: the command is ALWAYS prefixed with `cd <cwd> && ` (mirroring showrunner.js's
+// inWorktree()) so the external process runs rooted at the per-task build worktree — never at
+// __SR_ROOT (the repo root selfContained() would otherwise apply via exec's dumb-pipe). This matters
+// most for cursor, whose argv (engine_adapter.py) carries NO -C/cwd flag of its own; codex is
+// self-confining via -C but the cd prefix is harmless/idempotent for it too. Applied unconditionally
+// whenever a cwd is supplied (read roles are already read-only-sandboxed by the engine itself).
+//
+// FIX 2 (premortem): the JS Promise.race in dispatchExternal only stops US from WAITING on a stalled
+// CLI — the subprocess itself keeps running unkilled, orphaned, potentially still writing to the
+// worktree/git index while the caller has already fallen open and is retrying with the native Claude
+// worker (a write-write race on the same files). Bound the CLI at the OS level too: wrap it with a
+// portable `perl -e 'alarm shift @ARGV; exec @ARGV or exit 127'` — perl's alarm() SIGALRMs the process
+// after <timeoutSeconds>, and since exec() replaces the perl process image with the CLI (same PID), the
+// alarm fires against the CLI itself, killing it. This is belt-and-suspenders with the JS race (which
+// stays, so a slow-to-signal-death CLI still can't hang the caller past limitMs) — the perl layer's job
+// is only to make sure the CLI is actually DEAD, not just unwaited-on. perl/alarm/exec are ordinary CLI
+// tokens (not Node/JS globals), so they don't trip the bundle's banned-global static check.
+// Returns the raw stdout string (or null on fail).
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds) {
+  const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
+  const quotedArgv = argv.map((a) => shq(a)).join(' ')
+  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+  const cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  const res = await _exec([cmd])
+  const r0 = res && res[0]
+  if (r0 && r0.ok) return (r0.stdout == null ? '' : String(r0.stdout))
+  return null
+}
+
+async function _journalExternal(payload) {
+  // Journal the external action as a FIRST-CLASS `external_dispatch` event (FR-6): the audit line's
+  // `type` is external_dispatch (Task 4 added the type + the journal_entry.py --event-type flag), and
+  // the payload is written AS-IS (non-secret {engine,effort,roleKind,verify,outcome}). A failed durable
+  // append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
+  return _execJson(
+    `python3 ${LIB}/journal_entry.py --work-item ${shq(payload.workItem || '')} ` +
+    `--event-type external_dispatch --payload ` +
+    shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
+      verify: payload.verify, outcome: payload.outcome })))
+}
+
+// Scrub external-derived free-text (git stderr in a commit/dispatch-failure reason) BEFORE it enters
+// an owner-facing notice — the band's single scrub seam (pr_comment.py scrub reads stdin -> scrubbed
+// stdout, the same scrubber readout/parse_result use). On any exec/scrub failure fall back to a
+// fixed generic label (never surface the raw external text). Only used on the failure/notice path.
+async function _scrubReason(reason) {
+  const s = reason == null ? '' : String(reason)
+  if (!s) return s
+  const res = await _exec([`printf '%s' ${shq(s)} | python3 ${LIB}/pr_comment.py scrub`])
+  const r0 = res && res[0]
+  if (r0 && r0.ok && r0.stdout != null) return String(r0.stdout)
+  return 'external error (scrubbed)'
+}
+
+// FIX 3: the body runs inside a try/catch in the exported dispatchExternal below, so ANY thrown
+// error (a synchronous throw from a step here, or an unavailable Buffer/setTimeout global) still
+// returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
+// path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
+async function _dispatchExternalInner(o) {
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds } = o
+  const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
+  const limitMs = limitSeconds * 1000
+  const isWrite = (roleKind === 'build' || roleKind === 'fix')
+
+  // 1. Stage prompt + schema to disk (via exec). The PROMPT file is fed to the external process
+  //    stdin by _runArgv (both engines read the prompt from stdin); the SCHEMA path is passed to
+  //    build-argv via --schema-path (codex --output-schema for read roles).
+  // runId is built from CALLER-SUPPLIED identifiers only — no wall-clock time or PRNG calls (FR-8:
+  // the Workflow sandbox has no time/random globals, and the bundle-smoke statically bans those APIs
+  // because they break deterministic resume). taskId (write roles) or workItem (read roles) plus
+  // engine/roleKind give a stable-enough per-dispatch key; callers that omit both share a fallback
+  // key, which is safe because writeInputs/rawPath are consumed synchronously within this single
+  // dispatch and never read back across calls.
+  const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  const runId = `${engine}-${roleKind}-${runKey}`
+  const promptPath = `/tmp/engine-${runId}.prompt`
+  const schemaPath = `/tmp/engine-${runId}.schema.json`
+  const writeInputs = await _exec([
+    _stageCmd(promptPath, prompt || ''),
+    _stageCmd(schemaPath, JSON.stringify(schema || {})),
+  ])
+  if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
+    return { ok: false, reason: 'could-not-stage-external-inputs' }
+  }
+
+  // 2. preSHA (write roles only — read roles never mutate the tree, FR-7).
+  let preSha = null
+  if (isWrite) {
+    preSha = await _captureHead(cwd)
+    if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
+  }
+
+  // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
+  const run = (async () => {
+    const argvObj = await _execJson(
+      `python3 ${LIB}/engine_adapter.py build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
+      `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
+      `--schema-path ${shq(schemaPath)}`)
+    const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
+    if (!argv) return { ok: false, reason: 'build-argv-failed' }
+
+    // Feed the staged prompt file to the external process stdin (the argv itself carries no prompt).
+    // cwd is threaded through so _runArgv can confine the run to the worktree (FR-8; see _runArgv).
+    // limitSeconds is threaded through so _runArgv can OS-level-kill a stalled CLI (FIX 2 below) —
+    // the same value that bounds the JS Promise.race, so the perl alarm and the race agree.
+    const rawStdout = await _runArgv(argv, promptPath, cwd, limitSeconds)
+    if (rawStdout == null) return { ok: false, reason: 'external-run-failed' }
+
+    // parse-result SCRUBS external free-text at the adapter boundary (Task 6); pass raw stdout by file.
+    const rawPath = `/tmp/engine-${runId}.out`
+    const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
+    if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+    const parsed = await _execJson(
+      `python3 ${LIB}/engine_adapter.py parse-result --engine ${shq(engine)} --role ${shq(roleKind)} ` +
+      `--stdout-path ${shq(rawPath)}`)
+    if (!parsed || parsed.ok !== true) return { ok: false, reason: (parsed && parsed.reason) || 'unreadable' }
+    return parsed
+  })()
+
+  let parsed
+  // clearTimeout() the race's timeout handle once the race settles so a losing timer (the common
+  // case: `run` settles first) never pins the process/test-runner event loop alive for up to
+  // `limitMs` after this call already returned — pure Node hygiene, does not change the race's
+  // outcome or timing. (Not unref()'d: unref would let the loop exit before EITHER branch fires
+  // when the only other pending work is itself unref'd, silently abandoning the await.)
+  let timeoutHandle = null
+  try {
+    parsed = await Promise.race([
+      run,
+      new Promise((resolve) => {
+        timeoutHandle = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), limitMs)
+      }),
+    ])
+  } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
+  finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // 4. Read role: return findings straight through (no commit). Failure -> caller falls open to Claude.
+  // FIX 5 (UFR-6 symmetry): a read role is JUST as unauditable as a write role when the journal
+  // append itself fails — mirror the write-role check below (a failed journal -> {ok:false,
+  // reason:'unauditable'}) instead of discarding the append's own success/failure unchecked.
+  if (!isWrite) {
+    const jRead = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    if (!(jRead && jRead.ok)) return { ok: false, reason: 'unauditable' }
+    return parsed.ok ? { findings: parsed.findings || [] } : { ok: false, reason: parsed.reason }
+  }
+
+  // 5. Write role failure -> only uncommitted edits exist; caller reuses resetUncommitted + falls open (UFR-2).
+  if (!parsed.ok) {
+    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: parsed.reason || 'failed' })
+    return { ok: false, reason: parsed.reason }
+  }
+
+  // 6. Write success -> the adapter is the SOLE committer (preSHA-scoped fold; single Task-Id trailer).
+  const commit = await _execJson(
+    `python3 ${LIB}/engine_adapter.py commit --worktree ${shq(cwd)} --task-id ${shq(o.taskId || '')} ` +
+    `--pre-sha ${shq(preSha)}`)
+  if (!commit || commit.ok !== true) {
+    // M1: commit.error carries raw git stderr — SCRUB it before it can reach an owner-facing notice.
+    const reason = (commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed'
+    // sec-101: the engine DID run and edited the worktree here, so this outcome must ALSO leave exactly
+    // one audit line — otherwise commit-failure is the single external-dispatch outcome with no journal
+    // entry (FR-6/UFR-6 symmetry gap). Journal BEFORE returning; the reason is already scrubbed above.
+    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: 'commit-failed' })
+    return { ok: false, reason }
+  }
+
+  // 7. Journal BEFORE returning the native worker shape (UFR-6: unauditable -> the caller fails closed).
+  const j = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind,
+    verify: 'pending', outcome: 'ok' })
+  if (!(j && j.ok)) return { ok: false, reason: 'unauditable' }
+  return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
+}
+
+// FIX 3 (premortem): a synchronous throw ANYWHERE in the dispatch body (a bad destructure, an
+// unavailable Buffer/setTimeout global, an unexpected exec-shape) must still resolve to the native
+// {ok:false} failure shape — never throw out of dispatchExternal. Callers rely on a returned
+// failure to trigger their fall-open-to-Claude path (UFR-2 resetUncommitted + native worker); an
+// uncaught throw here would instead propagate up and abort the whole run.
+async function dispatchExternal(o) {
+  try {
+    return await _dispatchExternalInner(o || {})
+  } catch (_e) {
+    return { ok: false, reason: 'dispatch-error' }
+  }
+}
+
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS }
+
+};
+
 // ===== build_phase.js =====
 __modules["build_phase"] = function (module, exports, require) {
 // plugins/superheroes/lib/build_phase.js
@@ -1957,6 +2275,10 @@ const modelTierTwin = require('./model_tier.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
+// #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
+// engines (codex|cursor) for the write (build|fix) and read (review) roles.
+const engineDispatch = require('./engine_dispatch.js')
+const enginePrefTwin = require('./engine_pref.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
@@ -2028,6 +2350,20 @@ function _reconcile(...a) { return require('./build_progress.js').reconcile(...a
 // model_tier overrides: mirror showrunner.js's authorModel — read from globalThis.__SR_OVERRIDES
 // (set by the Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS).
 function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null }
+
+// engine prefs: mirror _overrides — read from globalThis.__SR_ENGINE_PREFS (planted by the Task-12
+// startup pipe; absent in test/throwaway runs -> both 'claude' -> the native agent() path, UNCHANGED).
+function _enginePrefs() {
+  const p = (typeof globalThis !== 'undefined' && globalThis.__SR_ENGINE_PREFS) || null
+  return (p && typeof p === 'object') ? p : { reviewer: 'claude', implementation: 'claude', effort: {} }
+}
+
+// FR-9 effort overrides: the effort sub-map keyed by role_kind {review,build,fix} lives INSIDE the
+// engine-prefs object (NOT the model-tier __SR_OVERRIDES map). resolveEffort reads this map; absent -> null.
+function _effortOverrides() {
+  const p = _enginePrefs()
+  return (p && p.effort && typeof p.effort === 'object' && !Array.isArray(p.effort)) ? p.effort : null
+}
 
 // #115 increment B: cmdRunner is gone. The IO/side-effect leaves are ported to exec(raw)+in-process
 // -parse (increment A); the two SMART judgement leaves (worker_recovery, task_review) are now
@@ -2268,6 +2604,46 @@ async function fenceOrPark(workItem, generation) {
   return !!(f && f.ok)
 }
 
+// UFR-4 run-time write preflight — cache the verdict for the whole run so we probe the host's
+// autoMode.allow grant ONCE (not per task). null = not yet probed. The probe runs the engine's OWN
+// write command inside the worktree; a denied/failed grant -> the impl role falls open to Claude.
+let _writeAuthOk = null
+let _writeAuthNotified = false
+async function _implWriteAuthorized(engine, wt) {
+  if (_writeAuthOk !== null) return _writeAuthOk
+  const v = await execJson(
+    `python3 ${LIB}/engine_authz.py test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`)
+  _writeAuthOk = !!(v && v.ok === true)
+  if (!_writeAuthOk && !_writeAuthNotified) {
+    _writeAuthNotified = true
+    try { log(`build: ${engine} is not authorized to write in this run (autoMode.allow not granted) — the implementation role falls open to Claude for the whole run (UFR-4)`) } catch (_) {}
+  }
+  return _writeAuthOk
+}
+
+// Route the write role (build|fix) to the chosen implementation engine. claude -> the existing agent()
+// path, BYTE-UNCHANGED. external -> dispatchExternal; on ANY non-success reset uncommitted edits (UFR-2)
+// and fall open to the native agent() (UFR-1). preSHA/commit-discipline live inside dispatchExternal.
+async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall }) {
+  const engine = enginePrefTwin.resolveEngine(roleKind, _enginePrefs())
+  if (engine === 'claude') return nativeAgentCall()
+  // UFR-4: before the FIRST external WRITE, confirm the host grants this engine write authority.
+  // Denied -> fall open to Claude for the whole run (build AND fixes) + one notice. Read roles skip this.
+  if (!(await _implWriteAuthorized(engine, wt))) return nativeAgentCall()
+  // FR-9: effort override comes from the engine-prefs effort sub-map (keyed by role_kind), NOT the
+  // model-tier _overrides() map (keyed by role->model — resolveEffort could never match it).
+  const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
+  const res = await engineDispatch.dispatchExternal({
+    engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
+    taskId, workItem,
+  })
+  if (res && res.ok) return res
+  // UFR-2: a failed/stalled external write left only uncommitted edits -> discard, then redo on Claude.
+  await resetUncommitted(wt, branch)
+  try { log(`build: ${engine} ${roleKind} did not complete (${(res && res.reason) || 'unknown'}) — falling open to Claude`) } catch (_) {}
+  return nativeAgentCall()
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
@@ -2277,12 +2653,20 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
-    const worker = await agent(
-      `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-      + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-      + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
-      + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
-      { label: 'worker', schema: { type: 'object', required: ['ok'] } })
+    const worker = await _implDispatch({
+      workItem, roleKind: 'build', taskId: task.id, wt, branch,
+      prompt:
+        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+      nativeAgentCall: () => agent(
+        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+        { label: 'worker', schema: { type: 'object', required: ['ok'] } }),
+    })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
@@ -2401,10 +2785,15 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before fix — park (UFR-10)' }
     }
-    await agent(
-      `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
-      + `"Task-Id: ${task.id}": ${JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))}`,
-      { label: 'fixer', model: fixerModel })
+    const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
+    await _implDispatch({
+      workItem, roleKind: 'fix', taskId: task.id, wt, branch,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}": ${_fixFindings}`,
+      nativeAgentCall: () => agent(
+        `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
+        + `"Task-Id: ${task.id}": ${_fixFindings}`,
+        { label: 'fixer', model: fixerModel }),
+    })
     history.push({ round, findings: review.findings || [] })
     round += 1
   }
@@ -2428,11 +2817,27 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // findings-generalist.json. This is the single-reviewer code leg (legKind.panel:false), so the
   // shell compiles the raw returned findings; there is no synthesis leaf.
   globalThis.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
-    const out = await agent(
+    const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+    const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`,
-      { label: `reviewer:${round}`, model: reviewerModel,
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+    if (rEngine !== 'claude') {
+      // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
+      // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
+      const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
+        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+      })
+      // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
+      // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
+      if (res && Array.isArray(res.findings)) return res.findings
+      const out = await agent(prompt, { label: `reviewer:${round}`, model: reviewerModel,
         schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      return (out && Array.isArray(out.findings)) ? out.findings : null
+    }
+    const out = await agent(prompt, { label: `reviewer:${round}`, model: reviewerModel,
+      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -2447,10 +2852,20 @@ async function runFinalReview(workItem, generation, branch, wt) {
   const fixStep = async (blockers) => {
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
-    if (!(await fenceOrPark(workItem, generation))) return null
-    await agent(`In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
-      { label: 'final-fixer', model: fixerModel })
-    return { fixed: blockers.map((b) => b.id || b.title) }
+    if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
+    // The whole-branch final review has NO per-task id in scope (mirror the real 504-511 closure):
+    // use the work-item as the fix dispatch's task id for the trailer/journal.
+    await _implDispatch({
+      workItem, roleKind: 'fix', taskId: workItem, wt, branch,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+      nativeAgentCall: () => agent(
+        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+        { label: 'final-fixer', model: fixerModel }),
+    })
+    // Always return the {fixed, deferred} REPORT shape (never the raw dispatch result / undefined):
+    // a truthy report so runFixStep does NOT treat it as a fix-failure, and recordDeferred can read .fixed.
+    // This preserves the exact contract of the real build_phase.js:504-511 (`return { fixed: [...] }`).
+    return { fixed: blockers.map((b) => b.id || b.title), deferred: [] }
   }
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
@@ -2781,6 +3196,9 @@ const frontHalfTwin = require('./front_half.js')
 const modelTierTwin = require('./model_tier.js')
 // #115 Task 16: back-half twins — CI status + PR recover (prAction already via recoverTwin above)
 const ciStatusTwin = require('./ci_status.js')
+// #38: the external-engine dispatch leaf + the pure engine-preference resolver twin.
+const engineDispatch = require('./engine_dispatch.js')
+const enginePrefTwin = require('./engine_pref.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -2833,14 +3251,37 @@ function reviewCodeLeaves(tiers, opts) {
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
     const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
-    const out = await agent(
+    const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
       `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
-      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`,
-      withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`
+    const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+    if (rEngine !== 'claude') {
+      // FR-9: source the effort override from the engine-prefs effort sub-map (keyed by role_kind),
+      // NOT the model-tier __SR_OVERRIDES map (keyed by role->model — resolveEffort could never match it).
+      // Depth-aware: the deep reviewers (security/architecture — the reviewer-deep model tier, REVIEW_DEEP)
+      // dispatch codex at 'review-deep' (xhigh); the rest at 'review' (high). roleKind stays 'review'.
+      const eff = enginePrefTwin.resolveEffort(rEngine, REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem: context, engine: rEngine, roleKind: 'review', effort: eff, prompt,
+        cwd: (target.worktree || procCwd()),
+        schema: FINDINGS_SCHEMA,
+      })
+      // UFR-7: unreadable/incomplete -> null; the panel's cannot-certify path re-runs the round on
+      // Claude, never recorded clean. A successful external review returns {findings}.
+      if (res && Array.isArray(res.findings)) return res.findings
+      const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
+      return (out && Array.isArray(out.findings)) ? out.findings : null
+    }
+    const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
     return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
   }
 
+  // Synthesis stays LOOP-OWNED (native Claude, tiers.synthesis) — never engine-routed. It is the
+  // panel's keep/drop judge over merged findings, not a reviewer-persona dispatch, and the adapter's
+  // parse_result(role_kind='review') only understands {findings:[...]} — a synthesis {verdicts:[...]}
+  // would always parse as unreadable. reviewerAgent (review) and fixStep (fix) are the only two
+  // engine-routed leaves (#38).
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
@@ -2854,14 +3295,25 @@ function reviewCodeLeaves(tiers, opts) {
 
   // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
   const fixStep = async (blockers, runDir) => {
-    const out = await agent(
+    const prompt =
       `You are the code-fixer. For each blocking finding below, attempt a real fix and COMMIT it to ` +
       `the change under review. If a finding traces to an upstream phase (plan, tasks, or build) rather ` +
       `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
       `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
       `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
-      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`,
-      withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`
+    const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
+    if (iEngine !== 'claude') {
+      const eff = enginePrefTwin.resolveEffort(iEngine, 'fix', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
+        cwd: (target.worktree || procCwd()), schema: FIX_REPORT_SCHEMA,
+      })
+      if (res && res.ok) return { fixed: [], deferred: [] }   // external fix committed by the adapter; verify gate re-runs downstream
+      const out = await agent(prompt, withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
+      return out || null
+    }
+    const out = await agent(prompt, withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
     return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
   }
 
@@ -3143,6 +3595,20 @@ async function usableDraft(workItem, doc) {
 function authorModel() {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
   return modelTierTwin.resolveModel('author', overrides, null)
+}
+
+// #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).
+// Absent/malformed -> the safe degenerate default (both roles on claude, no effort overrides).
+function _enginePrefs() {
+  const p = (typeof globalThis !== 'undefined' && globalThis.__SR_ENGINE_PREFS) || null
+  return (p && typeof p === 'object') ? p : { reviewer: 'claude', implementation: 'claude', effort: {} }
+}
+
+// FR-9 effort overrides: the role_kind-keyed effort sub-map INSIDE __SR_ENGINE_PREFS (NOT the model-tier
+// __SR_OVERRIDES map, which is keyed by role->model). resolveEffort reads this; absent -> null -> default.
+function _effortOverrides() {
+  const p = _enginePrefs()
+  return (p && p.effort && typeof p.effort === 'object' && !Array.isArray(p.effort)) ? p.effort : null
 }
 // the durable per-work-item NOTIFY ledger (under the gitignored docs dir — run-local state).
 function notifyLedgerFor(workItem) { return `docs/superheroes/${workItem}/.notify.json` }
@@ -3474,6 +3940,27 @@ async function showrunner({ workItem }) {
   if (typeof globalThis !== 'undefined') {
     globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   }
+  // #38: load the per-role engine preferences once at startup from core.md's machine block. The
+  // Python CLI prints {"reviewer","implementation"} (both "claude" when absent/unreadable — the safe
+  // degenerate path, exit 0 always). Fail-safe: any exec error or bad JSON yields both-"claude" so the
+  // review/build leaves take the byte-unchanged agent() path.
+  const _epRes = await exec(['python3 plugins/superheroes/lib/engine_pref_load.py'])
+  let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
+  try {
+    const _p = (_epRes[0] && _epRes[0].stdout) || ''
+    const _parsed = JSON.parse(_p)
+    if (_parsed && typeof _parsed === 'object' && !Array.isArray(_parsed)) {
+      // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
+      // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
+      // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+      _epMap = {
+        reviewer: _parsed.reviewer || 'claude',
+        implementation: _parsed.implementation || 'claude',
+        effort: (_parsed.effort && typeof _parsed.effort === 'object' && !Array.isArray(_parsed.effort)) ? _parsed.effort : {},
+      }
+    }
+  } catch (_) {}
+  if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0

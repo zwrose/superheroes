@@ -26,18 +26,50 @@ def test_render_then_parse_roundtrips():
     facts = {"verifyCommand": "npm test", "stackTags": ["node", "ts"],
              "threatModel": "multi-tenant", "patterns": "- auth: src/auth.ts:10"}
     text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
-    assert text.startswith("<!-- superheroes-core: schemaVersion=1 status=confirmed "
+    assert text.startswith("<!-- superheroes-core: schemaVersion=2 status=confirmed "
                            "created=2026-06-26 updated=2026-06-26 -->")
     assert "## Threat model" in text and "## Canonical patterns" in text
     assert "```json superheroes-core" in text
     got = CM.parse_core(text)
-    assert got["schemaVersion"] == 1
+    assert got["schemaVersion"] == 2
     assert got["status"] == "confirmed"
     assert got["verifyCommand"] == "npm test"
     assert got["stackTags"] == ["node", "ts"]
     assert got["threatModel"] == "multi-tenant"
     assert got["patterns"] == "- auth: src/auth.ts:10"
     assert got["created"] == "2026-06-26" and got["updated"] == "2026-06-26"
+
+
+def test_render_parse_engine_preferences_roundtrip_mixed():
+    # MIXED: reviewer != implementation (guards a same-engine-only fixture masking a routing bug).
+    # Also carries an optional FR-9 effort sub-map — it must survive the round-trip unchanged.
+    facts = {"verifyCommand": "npm test", "stackTags": ["node"],
+             "threatModel": "x", "patterns": "",
+             "enginePreferences": {"reviewer": "codex", "implementation": "cursor",
+                                   "effort": {"review": "medium", "fix": "high"}}}
+    text = CM.render_core(facts, "confirmed", "2026-06-30", "2026-06-30")
+    assert "schemaVersion=2" in text
+    got = CM.parse_core(text)
+    assert got["schemaVersion"] == 2
+    assert got["enginePreferences"] == {"reviewer": "codex", "implementation": "cursor",
+                                        "effort": {"review": "medium", "fix": "high"}}
+
+
+def test_parse_absent_engine_preferences_is_empty_dict():
+    facts = {"verifyCommand": "npm test", "stackTags": [], "threatModel": "", "patterns": ""}
+    text = CM.render_core(facts, "provisional", "2026-06-30", "2026-06-30")
+    assert CM.parse_core(text)["enginePreferences"] == {}
+
+
+def test_read_current_schema_is_two_with_engine_prefs(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = {"verifyCommand": "npm test", "stackTags": ["node"], "threatModel": "x",
+             "patterns": "", "enginePreferences": {"reviewer": "codex", "implementation": "claude"}}
+    CM.write(repo, facts, "confirmed", root=store, now="2026-06-30")
+    got = CM.read(repo, root=store)
+    assert got["schemaVersion"] == 2 and got["behind"] is False
+    assert got["enginePreferences"] == {"reviewer": "codex", "implementation": "claude"}
 
 
 def test_parse_missing_json_block_is_none():

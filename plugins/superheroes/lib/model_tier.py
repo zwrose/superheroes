@@ -2,7 +2,10 @@
 
 Pure + deterministic. review-code is the first consumer; the review trio
 (review-spec/review-plan/review-tasks) and audit-debt wire it next. Workhorse's
-Build leg deliberately defers to SDD's own model heuristic and is NOT a consumer.
+Build leg defers to SDD's own model heuristic and is NOT a model_tier consumer;
+note that the native build leg (build_phase.js) IS now an *engine* consumer (#38) —
+the engine axis (claude|codex|cursor via engine_pref) is orthogonal to this model
+tier and governs which agent family runs a role, not which Claude model.
 Returns the short names the Agent/Skill dispatch layer
 accepts ("sonnet"/"opus"/"haiku"), or None to inherit the session model.
 
