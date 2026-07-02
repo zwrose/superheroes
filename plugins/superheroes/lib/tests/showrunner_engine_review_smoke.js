@@ -39,7 +39,7 @@ async function partA() {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
     // #118 fold: spec-gate + model-overrides ride the 'read startup state' courier, not a read-gate exec
-    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} })
+    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: '{}' }]
@@ -80,7 +80,7 @@ async function partA() {
   globalThis.agent = async function (prompt, opts) {
     const label = (opts && opts.label) || ''
     // #118 fold: spec-gate + model-overrides ride the 'read startup state' courier, not a read-gate exec
-    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} })
+    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
         return [{ index: 0, ok: false, stdout: 'not-json' }]

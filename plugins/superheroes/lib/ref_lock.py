@@ -119,7 +119,10 @@ def _pid_dead(lease):
 
 
 def is_stale(lease, ttl, now=None):
-    """Stale iff EXPIRED *and* the holder pid is dead-on-this-boot (§4.4)."""
+    """Stale iff EXPIRED *and* the holder pid is dead-on-this-boot (§4.4). Pid liveness must
+    never SHORTEN the wait: the recorded pid belongs to the short-lived acquiring process
+    (recover_entry.py), which exits seconds into a healthy run — a dead pid cannot distinguish
+    a parked run from a live one. Parked runs release the lease at exit instead (release())."""
     if not isinstance(lease, dict):
         return True
     return _expired(lease.get("acquiredAt"), ttl, now) and _pid_dead(lease)
@@ -144,6 +147,19 @@ def acquire(store, work_item, ttl=DEFAULT_TTL, now=None):
     if _cas(store, work_item, _lease_obj(gen, ttl, now), sha):   # CAS on the stale blob
         return (True, gen, "stolen")
     return (False, gen, "lost-steal-cas")         # concurrent reclaimer won
+
+
+def release(store, work_item, generation):
+    """Delete the lease ref iff we still hold `generation` — atomic via `git update-ref -d
+    <ref> <oldsha>` (the oldvalue precondition). Terminal parks and hand-backs release at
+    exit so a relaunch never waits out the TTL; a superseded holder (stale generation)
+    no-ops False and never deletes the current holder's lease. A crash that skips this
+    still expires via the TTL + dead-pid path."""
+    sha, lease = read_lease(store, work_item)
+    if sha is None or not isinstance(lease, dict) or lease.get("generation") != generation:
+        return False
+    r = _git(store, "update-ref", "-d", _ref(work_item), sha)
+    return r.returncode == 0
 
 
 def renew(store, work_item, generation, ttl=DEFAULT_TTL, now=None):

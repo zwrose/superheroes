@@ -70,3 +70,70 @@ def test_renew_keeps_lease_but_fails_when_superseded(tmp_path):
     lock._force_lease(s, "wi", {"pid": 1, "host": lock._host(), "acquiredAt": "x",
                                 "bootId": None, "generation": gen + 1, "ttl": 1})
     assert lock.renew(s, "wi", gen) is False                # superseded -> cannot renew
+
+
+# --- release-on-park (a parked run must not cost a 30-min lockout before relaunch) ---
+# The lease's recorded pid belongs to the short-lived recover_entry.py process, NOT the run
+# (verified live 2026-07-02: the pid was gone seconds after acquire while the run continued),
+# so pid-liveness CANNOT distinguish a parked run from a live one on the same host. A live
+# lease refuses a second acquire until TTL; terminal parks RELEASE the lease instead.
+import hostinfo
+
+
+def _fresh_lease(pid, host, boot_id, generation=1):
+    # acquiredAt = now (NOT expired).
+    return {"pid": pid, "host": host, "acquiredAt": lock._stamp(),
+            "bootId": boot_id, "generation": generation, "ttl": lock.DEFAULT_TTL}
+
+
+def test_dead_pid_same_host_boot_still_held_until_ttl(tmp_path):
+    # The acquiring pid exits seconds after acquire on a LIVE run too — a dead pid on this
+    # host+boot proves nothing. An unexpired lease must refuse a second acquire (UFR-3);
+    # a double-launch must never steal a live run's lease.
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", _fresh_lease(999999, lock._host(), hostinfo.boot_id()))
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is False and reason == "held"
+
+
+def test_dead_pid_other_host_still_held_until_ttl(tmp_path):
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", _fresh_lease(999999, "some-other-host", "other-boot"))
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is False and reason == "held"
+
+
+def test_release_deletes_held_lease_and_unblocks_relaunch(tmp_path):
+    # The park path: release with OUR generation deletes the ref; the next acquire creates fresh.
+    s = _store(tmp_path)
+    ok, gen, _ = lock.acquire(s, "wi")
+    assert ok
+    assert lock.release(s, "wi", gen) is True
+    sha, lease = lock.read_lease(s, "wi")
+    assert sha is None and lease is None, "release must delete the lease ref"
+    ok2, gen2, reason2 = lock.acquire(s, "wi")
+    assert ok2 is True and reason2 == "created", "a relaunch after park acquires immediately"
+
+
+def test_release_with_stale_generation_noops(tmp_path):
+    # A superseded holder must never delete the current holder's lease.
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", _fresh_lease(999999, lock._host(), None, generation=5))
+    assert lock.release(s, "wi", 3) is False
+    sha, lease = lock.read_lease(s, "wi")
+    assert lease is not None and lease["generation"] == 5, "stale release must leave the lease"
+
+
+def test_release_absent_lease_noops(tmp_path):
+    s = _store(tmp_path)
+    assert lock.release(s, "wi", 1) is False
+
+
+def test_ttl_expiry_still_reclaims(tmp_path):
+    # The TTL + dead-pid path stays the crash backstop (a run that never reached its release).
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", {"pid": 999999, "host": lock._host(),
+                                "acquiredAt": "1970-01-01T00:00:00Z",
+                                "bootId": None, "generation": 1, "ttl": 1})
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is True and gen == 2 and reason == "stolen"

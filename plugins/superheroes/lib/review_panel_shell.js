@@ -12,6 +12,7 @@ const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
+const fencedJson = require('./fenced_json.js')
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
@@ -123,8 +124,13 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
+// load-summary is the read twin of compose-persist: the resume seed comes back as BOUNDED
+// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
+// recurrence, policy, and fix-context need in memory), never the full findings bodies —
+// echoing a multi-round evidence-laden file through the courier stdout is the same
+// mega-payload defect as the write side (live 2026-07-02), in reverse.
 async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -133,8 +139,28 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
   }
 }
 
+// The round-record BODY never rides the courier args (live 2026-07-02: the haiku courier
+// mangled the oversized inline --record-json and every native review leg parked
+// cannot-certify: round-memory-write-failed). Each dimension's slice is staged as its own
+// hash-VERIFIED file (bounded by one reviewer's output); review_memory.py compose-persist
+// then rebuilds + fence-persists the record Python-side from those paths + small scalars,
+// echoing back only {ok, contentHash}. The in-memory merge mirrors Python's (mergeRoundRecords).
 async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi) {
-  const args = ['plugins/superheroes/lib/review_memory.py', 'persist', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--record-json', JSON.stringify(record), '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+  for (const name of reviewerSet || []) {
+    const dim = (record.dimensions || {})[name] || { dimension: name, status: 'missing', findings: [] }
+    const staged = await fencedJson.writeTextVerified(
+      ioApi, ioApi.join(runDir, `dim-result-${name}-r${record.round}.json`), JSON.stringify(dim))
+    if (!staged.ok) return { ok: false, reason: `dim-result-write-failed:${name}` }
+  }
+  const args = ['plugins/superheroes/lib/review_memory.py', 'compose-persist',
+    '--path', ioApi.join(runDir, 'round-records.json'), '--run-dir', runDir,
+    '--round', String(record.round), '--kind', String(record.kind || 'unknown'),
+    '--dimensions', JSON.stringify(reviewerSet),
+    '--changed-subjects-json', JSON.stringify(record.changedSubjects === undefined ? null : record.changedSubjects),
+    '--coverage-decisions-json', JSON.stringify(record.coverageDecisions || []),
+    '--token-usage-json', JSON.stringify(record.tokenUsage || {}),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+  if (record.confirmationPending) args.push('--confirmation-pending')
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
   try {
@@ -144,13 +170,35 @@ async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, run
   }
 }
 
+// mergeRoundRecords: the in-memory twin of persist_record's merge (dedupe the round, sort) —
+// compose-persist no longer echoes the merged records back through the pipe.
+function mergeRoundRecords(records, record) {
+  const merged = (records || []).filter((r) => r && r.round !== record.round)
+  merged.push(record)
+  merged.sort((a, b) => (Number(a.round) || 0) - (Number(b.round) || 0))
+  return merged
+}
+
+// The post-fix update ships only the SMALL delta (confirmation marker, changed subjects,
+// coverage decisions, fix summary) — never the round body — via review_memory.py update-round.
 async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
-  const record = Object.assign({}, (recordsForFix || []).find((r) => r && r.round === round) || {})
-  if (legKind && legKind.panel) record.confirmationPending = true
-  record.changedSubjects = fixResult.changedSubjects || []
-  record.coverageDecisions = recordedCoverageDecisions || []
-  record.fix = { fixes: fixResult.fixes || fixResult.fixed || [], deferred: fixResult.deferred || [] }
-  return persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi)
+  const updates = {
+    changedSubjects: fixResult.changedSubjects || [],
+    coverageDecisions: recordedCoverageDecisions || [],
+    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: fixResult.deferred || [] },
+  }
+  if (legKind && legKind.panel) updates.confirmationPending = true
+  const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
+    '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round),
+    '--updates-json', JSON.stringify(updates),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+  if (lease) args.push('--lease', lease)
+  const out = await ioApi.runHelper('python3', args)
+  let parsed = null
+  try { parsed = out.ok ? JSON.parse(out.stdout) : null } catch (_) { parsed = null }
+  if (!parsed || !parsed.ok) return { ok: false, reason: (parsed && parsed.reason) || 'helper-failed' }
+  const records = (recordsForFix || []).map((r) => (r && r.round === round) ? Object.assign({}, r, updates) : r)
+  return { ok: true, contentHash: parsed.contentHash, records }
 }
 
 async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
@@ -210,34 +258,18 @@ function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   return leaves
 }
 
-function telemetryPayload(records, expectedLeaves, usage, benchmark, terminal) {
-  const missing = expectedLeaves.filter((leaf) => !usage[leaf])
-  const total = expectedLeaves.reduce((sum, leaf) => sum + Number((usage[leaf] && usage[leaf].total) || 0), 0)
-  const dimensionCounts = {}
-  for (const rec of records || []) {
-    for (const [name, dim] of Object.entries((rec && rec.dimensions) || {})) {
-      const counts = dimensionCounts[name] || { run: 0, skipped: 0, cheap: 0, deep: 0, escalated: 0 }
-      if (dim.status === 'skipped') counts.skipped += 1
-      if (dim.status === 'run') counts.run += 1
-      if (dim.tier === 'reviewer') counts.cheap += 1
-      if (dim.tier === 'reviewer-deep') counts.deep += 1
-      if (dim.escalated) counts.escalated += 1
-      dimensionCounts[name] = counts
-    }
-  }
-  return {
-    schemaVersion: 1,
-    terminal,
-    roundCount: (records || []).length,
-    rounds: records || [],
-    tokenUsage: { complete: missing.length === 0, expectedLeaves, present: expectedLeaves.filter((leaf) => usage[leaf]), missing, total },
-    dimensionCounts,
-    benchmarkValid: !benchmark || missing.length === 0,
-  }
-}
-
-async function writeTelemetry(runDir, payload, expectedHash, runId, lease, ioApi) {
-  const args = ['plugins/superheroes/lib/review_telemetry.py', 'write', '--path', ioApi.join(runDir, 'review-telemetry.json'), '--payload-json', JSON.stringify(payload), '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+// The telemetry `rounds` come from round-records.json ON DISK (review_telemetry.py
+// write-from-records composes Python-side); only small scalars ride the invocation, and the
+// helper answers with the small summary (payload minus rounds) so finalizeVerdict never
+// re-reads the full file back through the pipe.
+async function writeTelemetry(runDir, expectedLeaves, usage, terminal, expectedHash, runId, lease, ioApi) {
+  const args = ['plugins/superheroes/lib/review_telemetry.py', 'write-from-records',
+    '--path', ioApi.join(runDir, 'review-telemetry.json'),
+    '--records-path', ioApi.join(runDir, 'round-records.json'),
+    '--expected-leaves-json', JSON.stringify(expectedLeaves || []),
+    '--usage-json', JSON.stringify(usage || {}),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+  if (terminal) args.push('--terminal', String(terminal))
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
   try {
@@ -356,7 +388,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
         records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
-    const recordsForFix = Array.isArray(persisted.records) ? persisted.records : records.concat([record])
+    const recordsForFix = Array.isArray(persisted.records) ? persisted.records : mergeRoundRecords(records, record)
     records = recordsForFix
     memoryState = { ok: true, records: recordsForFix, contentHash: persisted.contentHash }
 
@@ -431,14 +463,17 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
 async function finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
   const expectedLeaves = []
   for (let r = 1; r <= round; r += 1) expectedLeaves.push(...expectedUsageLeaves(reviewerSet, r, legKind, fixRan && r === round))
-  const payload = telemetryPayload(records, expectedLeaves, allUsage, false, verdict.terminal)
   const telemPath = ioApi.join(runDir, 'review-telemetry.json')
   let telemHash = ioApi.contentHash('')
   try { telemHash = ioApi.contentHash(await ioApi.readText(telemPath)) } catch (_) {}
-  const telemWrite = await writeTelemetry(runDir, payload, telemHash, runId, lease, ioApi)
+  const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, telemHash, runId, lease, ioApi)
+  // Attach the SMALL summary the helper answered with (rounds stay on disk only) — re-reading
+  // the full telemetry file back through the pipe would re-create the mega-payload hop, and a
+  // verdict embedding every round would ride the terminal-record write the same way.
   let telemetry = { benchmarkValid: false, reason: 'telemetry-write-failed' }
   if (telemWrite.ok) {
-    try { telemetry = JSON.parse(await ioApi.readText(telemPath)) } catch (_) {}
+    telemetry = Object.assign({}, telemWrite)
+    delete telemetry.ok
   }
   return Object.assign({}, verdict, { telemetry })
 }

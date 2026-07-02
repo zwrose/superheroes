@@ -36,7 +36,7 @@ function makeAgentStub() {
     const label = (opts && opts.label) || ''
 
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} }) }]
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
 
     if (label === 'exec') {

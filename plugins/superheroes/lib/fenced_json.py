@@ -68,13 +68,33 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("cmd", choices=["write"])
     parser.add_argument("--path", required=True)
-    parser.add_argument("--payload-json", required=True)
+    parser.add_argument("--payload-json")
+    parser.add_argument("--payload-path",
+                        help="read the payload from this staged FILE (and unlink it on success) "
+                             "instead of an inline arg — a large payload must never ride the "
+                             "courier pipe inline (it gets mangled; live 2026-07-02)")
     parser.add_argument("--expected-hash")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--lease")
     args = parser.parse_args(argv)
-    payload = json.loads(args.payload_json)
+    if args.payload_path:
+        try:
+            with open(args.payload_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"ok": False, "reason": "payload-unreadable", "detail": str(exc)}))
+            return 1
+    elif args.payload_json is not None:
+        payload = json.loads(args.payload_json)
+    else:
+        print(json.dumps({"ok": False, "reason": "missing-payload"}))
+        return 1
     result = write_record(args.path, payload, expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
+    if result.get("ok") and args.payload_path:
+        try:
+            os.unlink(args.payload_path)
+        except OSError:
+            pass
     print(json.dumps(result))
     return 0 if result.get("ok") else 1
 

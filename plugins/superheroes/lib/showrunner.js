@@ -359,7 +359,18 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
 module.exports.runReviewDocPanel = runReviewDocPanel
 
-function docPathFor(workItem, doc) { return `docs/superheroes/${workItem}/${doc}.md` }
+// docDirFor: the work-item's docs dir, storage-mode-aware. showrunner() resolves it ONCE at
+// startup (readStartupState runs definition_doc.resolve_work_item_dir Python-side — correct for
+// in-repo AND out-of-repo storage, main checkout and linked worktrees) and plants the absolute
+// dir on globalThis.__SR_DOC_DIRS keyed by work-item. Un-planted (direct smoke/unit drives, or a
+// failed resolution) falls back to the legacy in-repo default. Sync on purpose: no per-call
+// courier leaf (#118 bar — 0-or-1 leaf per stretch).
+function docDirFor(workItem) {
+  const m = (typeof globalThis !== 'undefined' && globalThis.__SR_DOC_DIRS) || null
+  const d = (m && typeof m === 'object') ? m[workItem] : null
+  return (typeof d === 'string' && d) ? d : `docs/superheroes/${workItem}`
+}
+function docPathFor(workItem, doc) { return `${docDirFor(workItem)}/${doc}.md` }
 function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
 
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
@@ -591,8 +602,9 @@ function _effortOverrides() {
   const p = _enginePrefs()
   return (p && p.effort && typeof p.effort === 'object' && !Array.isArray(p.effort)) ? p.effort : null
 }
-// the durable per-work-item NOTIFY ledger (under the gitignored docs dir — run-local state).
-function notifyLedgerFor(workItem) { return `docs/superheroes/${workItem}/.notify.json` }
+// the durable per-work-item NOTIFY ledger (next to the docs — run-local state, never committed).
+// Rides docDirFor, so it lands in the project store for an out-of-repo-calibrated project.
+function notifyLedgerFor(workItem) { return `${docDirFor(workItem)}/.notify.json` }
 // appendNotify: IO accumulator write via exec (not cmdRunner). Returns false on failed durable write.
 async function appendNotify(workItem, entries) {
   const results = await exec([
@@ -607,6 +619,7 @@ async function appendNotify(workItem, entries) {
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.notifyLedgerFor = notifyLedgerFor
+module.exports.docPathFor = docPathFor
 
 // FR-7: compose the front-half run-outcome envelope (in-process via frontHalfTwin.renderRunOutcome)
 // and return a parked result. Reads best-effort per-phase terminal records + the durable NOTIFY ledger.
@@ -872,12 +885,28 @@ async function reconcile(workItem) {
   return Object.assign({}, decision, { generation: snap.generation })
 }
 
+// releaseLease: CAS-release the work-item ref-lease at EVERY terminal exit of the run — parks
+// and hand-backs alike — so a relaunch never waits out DEFAULT_TTL (live 2026-07-02: each park
+// cost 30 minutes). Only fires when THIS run acquired (generation threaded from reconcile; a
+// lease-held park carries none). Best-effort: a failed release leaves the TTL as the backstop,
+// and the generation precondition means a superseded holder's lease is never deleted.
+async function releaseLease(workItem, generation) {
+  if (generation == null) return
+  try {
+    await exec([
+      `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
+      `--generation ${shq(String(generation))} --release`,
+    ])
+  } catch (_) { /* TTL backstop */ }
+}
+
 async function showrunner({ workItem }) {
   // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
   // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   const r = await reconcile(workItem)
   if (r.action === 'park_gate' || r.action === 'gate') {
+    await releaseLease(workItem, r.generation)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
   // UFR-1: refuse to run if the spec hasn't been approved.
@@ -885,11 +914,19 @@ async function showrunner({ workItem }) {
   const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
   const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
   if (startup.action !== 'proceed') {
+    await releaseLease(workItem, r.generation)
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
   const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
   if (typeof globalThis !== 'undefined') {
     globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
+  }
+  // Plant the startup-resolved, storage-mode-aware docs dir for docDirFor (docPathFor /
+  // notifyLedgerFor). Best-effort: an absent/empty doc_dir (resolution failed, or an older canned
+  // response) plants nothing and the legacy in-repo fallback stays in force.
+  const _docDir = (startupFacts && typeof startupFacts.doc_dir === 'string' && startupFacts.doc_dir) || null
+  if (_docDir && typeof globalThis !== 'undefined') {
+    globalThis.__SR_DOC_DIRS = Object.assign({}, globalThis.__SR_DOC_DIRS, { [workItem]: _docDir })
   }
   // #38: load the per-role engine preferences once at startup from core.md's machine block. The
   // Python CLI prints {"reviewer","implementation"} (both "claude" when absent/unreadable — the safe
@@ -933,7 +970,14 @@ async function showrunner({ workItem }) {
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
     if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park
   }
-  return runPhases(workItem, fromStep, deps)
+  try {
+    return await runPhases(workItem, fromStep, deps)
+  } finally {
+    // Every runPhases exit is terminal for THIS run — phaseStep park, boundary park, or the
+    // ship hand-back ('ready') — and a crash unwinds through here too. Release the lease so
+    // the relaunch (or the owner's next run) never waits out the TTL.
+    await releaseLease(workItem, r.generation)
+  }
 }
 
 // readGate: IO read via exec (definition-doc on disk). A missing/malformed doc returns the
@@ -960,8 +1004,10 @@ async function readStartupState(workItem) {
     'wi = sys.argv[1]',
     'root = sys.argv[2]',
     'spec_gate = "unreadable"',
+    'doc_dir = ""',
     'try:',
     '    d = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
+    '    doc_dir = d',   // the storage-mode-aware docs dir — planted on __SR_DOC_DIRS (docDirFor)
     '    spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
     'except Exception:',
     '    pass',
@@ -971,16 +1017,20 @@ async function readStartupState(workItem) {
     '    overrides = {}',
     'if not isinstance(overrides, dict):',
     '    overrides = {}',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides}))',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir}))',
   ].join('\n')
   try {
     return await courier.runCourierJson(
       'read startup state',
       `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
-      { require: ['ok', 'spec_gate', 'model_overrides'] },
+      // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed
+      // resolution), so an absent field means a mangled courier response — retry rather than
+      // silently planting nothing (which would mis-route the NOTIFY ledger + review doc paths
+      // to the in-repo fallback on an out-of-repo-calibrated project mid-run).
+      { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] },
     )
   } catch (_) {
-    return { ok: true, spec_gate: 'unreadable', model_overrides: {} }
+    return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '' }
   }
 }
 

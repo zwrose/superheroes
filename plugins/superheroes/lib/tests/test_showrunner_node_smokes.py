@@ -19,11 +19,15 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_panel_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_produce_smoke.js",
+    # storage-mode-aware front-half doc/marker/ledger paths (out-of-repo project regression).
+    "plugins/superheroes/lib/tests/showrunner_fronthalf_docdir_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
+    # mega-JSON regression: loop persistence ships paths + small scalars, never the record body.
+    "plugins/superheroes/lib/tests/showrunner_reviewloop_payload_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_defer_confirmation_fence_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",

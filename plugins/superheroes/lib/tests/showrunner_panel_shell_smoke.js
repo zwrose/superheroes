@@ -264,7 +264,10 @@ async function main() {
     const baseIo = io()
     let persists = 0
     global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
-      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('persist')) {
+      // the loop's persist surface is compose-persist (round record) + update-round (post-fix
+      // delta) — the record body itself rides staged files, never these args.
+      if (String((args || [])[0]).includes('review_memory.py') &&
+          (args || []).some((a) => a === 'compose-persist' || a === 'update-round')) {
         persists += 1
         if (persists === 2) return { ok: false, stdout: '{"ok":false,"reason":"forced-post-fix"}' }
       }

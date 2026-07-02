@@ -26,6 +26,14 @@ for (const ln of text.split('\n')) {
 //      in both node and the sandbox). A bare `global.` crashes the live run with "global is not defined".
 assert.ok(!/\bglobal\./.test(text),
   'bundle uses bare `global.` (absent in the Workflow sandbox) — use globalThis')
+// (a5) The Workflow tool's permission layer rejects raw control bytes, so the bundle must carry
+//      them only as escape sequences (e.g. the \x00/\x80 sha-256 padding chars), never literally.
+{
+  const raw = text.match(new RegExp('[\\x00-\\x08\\x0b-\\x1f\\x7f-\\x9f]'))
+  assert.ok(!raw,
+    'bundle contains a raw control byte 0x' + (raw && raw[0].charCodeAt(0).toString(16)) +
+    ' at index ' + (raw && raw.index) + ' — escape it in bundle_showrunner.js')
+}
 // (b) Execute it in a sandbox that has NO require and NO Node builtins. `export const meta` is ESM
 //     syntax, so strip the `export ` keyword for the CommonJS-style eval. Set __SR_RUN=false so the
 //     auto-run entry is skipped and the registry is exposed for the compose assertion.
@@ -48,4 +56,15 @@ vm.runInContext('globalThis.__SR_RUN = false;\n;(async () => {\n' + text + '\n})
 const sr = sandbox.globalThis.__sr_require('showrunner.js')
 assert.strictEqual(typeof sr.showrunner, 'function', 'bundle did not compose a showrunner export')
 assert.ok(/const\s+meta\s*=/.test(text), 'bundle missing meta')
+// (c) __contentHash (the preamble's vendored sha-256, whose padding chars the (a5) guard forces
+//     into escape form) must stay byte-identical to a real sha-256 — the fenced set-gate compares it
+//     against Python's hashlib.
+const crypto = require('crypto')
+for (const sample of ['', 'abc', 'hello\nworld', 'x'.repeat(200),
+                      'em—dash § ✓ 你好', '🎡 astral', 'mixed — é\n' + 'y'.repeat(150)]) {
+  assert.strictEqual(
+    sandbox.globalThis.io.contentHash(sample),
+    crypto.createHash('sha256').update(sample).digest('hex'),
+    'bundle __contentHash diverges from sha-256 for ' + JSON.stringify(sample))
+}
 console.log('OK: bundle composes + executes in a no-require sandbox + exports showrunner')

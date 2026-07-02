@@ -4,6 +4,8 @@ import subprocess
 import sys
 
 LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+if os.path.abspath(LIB) not in sys.path:
+    sys.path.insert(0, os.path.abspath(LIB))
 
 
 def _run(tmp_root, doc, *extra):
@@ -16,6 +18,8 @@ def _run(tmp_root, doc, *extra):
 def _setup_doc(tmp_path, doc, body):
     d = tmp_path / "docs" / "superheroes" / "wi"
     d.mkdir(parents=True)
+    # spec.md anchors the mode-aware resolver in-repo (a live run always has an approved spec).
+    (d / "spec.md").write_text("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n")
     (d / ("%s.md" % doc)).write_text(
         "---\ndocType: %s\ngates: {review: pending}\n---\n# T\n\n%s" % (doc, body))
     return d
@@ -136,3 +140,67 @@ def test_emit_signals_gap_fields_not_in_large_text(tmp_path):
     out = json.loads(_run(str(tmp_path), "tasks", "--emit-signals").stdout)
     assert "text" not in out, "--emit-signals must NOT return the large doc text"
     assert "sections" not in out, "--emit-signals must NOT return sections list"
+
+
+# --- storage-mode awareness: the doc/marker paths must go through the resolver ---
+# Regression for the 2026-07-02 live run: an out-of-repo (global) calibrated project keeps its
+# definition-docs in the project store; the hard-wired docs/superheroes/<wi> path read nothing,
+# reported every section missing, and parked the run after 3 produce attempts.
+
+def _git(path):
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+
+
+def _setup_global_project(tmp_path, doc, body):
+    """A project calibrated for out-of-repo docs: registry says global; the definition-docs
+    (including the spec anchor) live in the project store, NOT under the repo root."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo)
+    import mode_registry
+    rec = mode_registry.write_registry(str(repo), mode_registry.GLOBAL, None)
+    assert rec, "global-mode registry write must succeed"
+    d = os.path.join(mode_registry.project_store_dir(str(repo)), "docs", "wi")
+    os.makedirs(d)
+    with open(os.path.join(d, "spec.md"), "w") as fh:
+        fh.write("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n")
+    with open(os.path.join(d, "%s.md" % doc), "w") as fh:
+        fh.write("---\ndocType: %s\ngates: {review: pending}\n---\n# T\n\n%s" % (doc, body))
+    return repo, d
+
+
+def test_global_mode_reads_doc_from_store(tmp_path):
+    repo, _ = _setup_global_project(tmp_path, "tasks", _TASKS_BODY)
+    out = json.loads(_run(str(repo), "tasks", "--emit-signals").stdout)
+    assert out["usable"] is False  # no marker stamped yet
+    assert out["missing_sections"] == [], (
+        "the doc lives in the project store — a hard-wired in-repo path reads nothing and "
+        "wrongly reports every section missing: %r" % (out,))
+
+
+def test_global_mode_write_marker_stamps_in_store(tmp_path):
+    repo, d = _setup_global_project(tmp_path, "tasks", _TASKS_BODY)
+    assert json.loads(_run(str(repo), "tasks", "--write-marker").stdout)["wrote"] is True
+    assert os.path.isfile(os.path.join(d, ".tasks.complete")), (
+        "the completion marker must sit next to the doc in the project store")
+    assert json.loads(_run(str(repo), "tasks").stdout)["usable"] is True
+    assert json.loads(_run(str(repo), "tasks", "--emit-signals").stdout)["usable"] is True
+
+
+def test_unknown_registry_schema_degrades_to_inrepo(tmp_path):
+    """A newer registry schema is undeterminable: degrade to the pure in-repo default
+    (gate_write._doc parity) rather than crash the completion check."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo)
+    import mode_registry
+    store = mode_registry.project_store_dir(str(repo))
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, "registry.json"), "w") as fh:
+        json.dump({"schemaVersion": 999, "storageMode": "global",
+                   "remoteKey": None, "createdAt": "t"}, fh)
+    d = _setup_doc(repo, "tasks", _TASKS_BODY)
+    r = _run(str(repo), "tasks", "--write-marker")
+    assert json.loads(r.stdout)["wrote"] is True, r.stderr
+    assert (d / ".tasks.complete").exists()
+    assert json.loads(_run(str(repo), "tasks").stdout)["usable"] is True
