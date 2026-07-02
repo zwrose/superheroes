@@ -34,10 +34,19 @@ async function fencedJsonWrite(path, payload, opts) {
   if (opts.lease) args.push('--lease', opts.lease)
   // stageAndRunHelper folds the parent-dir create into the same op, so the missing-dir first-attempt
   // failure the old two-leaf path retried through is gone. The one retry now covers only a
-  // transport-corrupt stage (payload-corrupt) or an unparseable helper answer.
+  // transport-corrupt stage (payload-corrupt), an unparseable helper answer, or a THROWING transport
+  // (bundle: a courier reject after courier_exec's retries; defaultIo: an fs error). The old two-leaf
+  // path caught the io.writeFile throw and retried -> fail-closed; keep that contract here so a
+  // transport throw parks {ok:false} for the callers' !recWrite.ok branch instead of crashing the run.
   let lastReason = null
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const out = await ioApi.stageAndRunHelper(stagedPath, text, 'python3', args)
+    let out
+    try {
+      out = await ioApi.stageAndRunHelper(stagedPath, text, 'python3', args)
+    } catch (_) {
+      lastReason = 'payload-stage-failed'
+      continue
+    }
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
     if (parsed && parsed.ok) return parsed
