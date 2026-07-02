@@ -32,6 +32,13 @@ def test_build_entry_writes_lock_generation(tmp_path, monkeypatch):
     res = json.loads(out.stdout)
     assert "branch" in res
     assert "path" in res            # build_entry now also emits the managed build-worktree path
+    # Isolation canary (#132): this is the one test whose SUBPROCESS does a real `git worktree add`,
+    # so it is where a broken conftest pin (or buildtree ignoring SUPERHEROES_WORKTREES_ROOT) would
+    # silently leak a checkout into the developer's ~/.superheroes-worktrees. Assert the managed
+    # worktree landed under the pinned pytest tmp root — hermetic (no global-state race with a real
+    # concurrent build), and loud in CI the moment either side of the pin regresses.
+    assert os.path.realpath(res["path"]).startswith(os.path.realpath(str(tmp_path))), (
+        "managed build worktree escaped the pinned root: %s" % res["path"])
     # build_entry also emits the reclaim_or_create outcome; resolveBuildTarget's fail-closed guard
     # parks on 'created', so a silent drop of this field must be caught here.
     assert "outcome" in res
