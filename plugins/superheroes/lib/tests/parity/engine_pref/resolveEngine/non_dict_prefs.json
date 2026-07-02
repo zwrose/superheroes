@@ -1,0 +1,1 @@
+{"input": ["review", "not-a-dict"], "expected": "claude"}

@@ -4,6 +4,7 @@ review / final-review. Git + store IO live here; build_state.py stays pure."""
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_state, control_plane, ship_gate, base_ref
+from engine_adapter import TASK_ID_TRAILER
 
 
 def _git(root, *args):
@@ -52,7 +53,9 @@ def _gather(root, work_item, valid_ids, worktree=None, base_branch=None):
     else:
         base = _base(git_root)
     mb = _git(git_root, "merge-base", "HEAD", base).stdout.strip() or base
-    log = _git(git_root, "log", "--format=%H%x1f%(trailers:key=Task-Id,valueonly)", "%s..HEAD" % mb)
+    log = _git(git_root, "log",
+               "--format=%H%x1f%(trailers:key=" + TASK_ID_TRAILER + ",valueonly)",
+               "%s..HEAD" % mb)
     rows = []
     for line in (log.stdout or "").splitlines():
         sha, _sep, tid = line.partition("\x1f")
