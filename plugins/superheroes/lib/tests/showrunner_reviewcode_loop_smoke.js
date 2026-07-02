@@ -86,8 +86,12 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
       calls.prov += 1
       return jsonOut({ ok: provOk, error: provOk ? undefined : 'disk full' })
     }
+    // #118: the config fallback rides the exec courier (raw stdout), not cmdRunner 'lib'
+    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+      return JSON.stringify({ verifyCommand: 'none', tiers: { reviewer: 'sonnet', reviewerDeep: 'opus', synthesis: 'opus', fixer: 'sonnet' } })
+    }
+    if (label === 'exec' && prompt.includes('git rev-parse')) return 'stub-head\n'
     if (label === 'lib') {
-      if (prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: { reviewer: 'sonnet', reviewerDeep: 'opus', synthesis: 'opus', fixer: 'sonnet' } }
       return { ok: true }
     }
     const m = label.match(/^(architecture|code|security|test|premortem)-reviewer:r(\d+)/)

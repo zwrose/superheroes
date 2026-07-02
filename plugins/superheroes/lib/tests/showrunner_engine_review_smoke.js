@@ -1,9 +1,10 @@
 // plugins/superheroes/lib/tests/showrunner_engine_review_smoke.js
 // TDD smoke for Task 12 (#38): reviewCodeLeaves engine branch + startup __SR_ENGINE_PREFS load.
 //
-// PART A: showrunner() startup issues an exec containing engine_pref_load.py and plants the parsed
-//   {reviewer, implementation, effort} map on globalThis.__SR_ENGINE_PREFS (mirrors Task 17's
-//   __SR_OVERRIDES pipe). Fail-safe: a bad/unreadable parse yields both-'claude' + empty effort.
+// PART A: showrunner() startup plants the parsed {reviewer, implementation, effort} map on
+//   globalThis.__SR_ENGINE_PREFS from the FOLDED 'read startup state' gather (#118: the separate
+//   engine_pref_load.py exec leaf is gone — startup is the deliberately-two-leaf stretch).
+//   Fail-safe: an absent/bad engine_prefs value yields both-'claude' + empty effort.
 //
 // PART B: reviewCodePhase's reviewerAgent (read-only) and fixStep (write) route through
 //   engineDispatch.dispatchExternal when the resolved engine != 'claude' — reviewer engine for
@@ -38,17 +39,21 @@ async function partA() {
   globalThis.agent = async function (prompt, opts) {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
-    // #118 fold: spec-gate + model-overrides ride the 'read startup state' courier, not a read-gate exec
-    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
+    // #118 fold: spec-gate + model-overrides + ENGINE PREFS all ride the ONE 'read startup state'
+    // courier — a separate engine_pref_load.py leaf must never fire.
+    if (label === 'read startup state') {
+      return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '',
+        engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: { review: 'medium' } } })
+    }
     if (label === 'exec') {
+      if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
+        throw new Error('engine_pref_load.py dispatched as its own leaf — must ride read startup state (#118)')
+      }
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: '{}' }]
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
-      }
-      if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
-        return [{ index: 0, ok: true, stdout: '{"reviewer":"codex","implementation":"cursor","effort":{"review":"medium"}}' }]
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
@@ -60,13 +65,11 @@ async function partA() {
   try {
     await sr.showrunner({ workItem: 'wi-eng' })
   } catch (_) {
-    // park or exception is fine; we only care that the engine-prefs exec fired
+    // park or exception is fine; we only care that the engine prefs were planted
   }
 
-  const epCall = calls.find(
-    (c) => c.label === 'exec' && c.prompt.includes('engine_pref_load.py'),
-  )
-  assert.ok(epCall, 'FAIL (a1): startup did not issue an exec containing engine_pref_load.py')
+  const epCall = calls.find((c) => c.label === 'read startup state' && c.prompt.includes('engine_pref'))
+  assert.ok(epCall, 'FAIL (a1): the read startup state script does not gather engine prefs')
 
   assert.deepStrictEqual(
     globalThis.__SR_ENGINE_PREFS,
@@ -79,12 +82,9 @@ async function partA() {
   calls.length = 0
   globalThis.agent = async function (prompt, opts) {
     const label = (opts && opts.label) || ''
-    // #118 fold: spec-gate + model-overrides ride the 'read startup state' courier, not a read-gate exec
+    // an older/mangled canned response WITHOUT engine_prefs must degrade to both-'claude'
     if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
     if (label === 'exec') {
-      if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
-        return [{ index: 0, ok: false, stdout: 'not-json' }]
-      }
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: '{}' }]
       }
@@ -105,7 +105,7 @@ async function partA() {
   )
 
   globalThis.__SR_ENGINE_PREFS = savedPrefs
-  console.log('OK (a): startup plants __SR_ENGINE_PREFS (incl. effort sub-map) via exec(engine_pref_load.py); fail-safe both-claude+empty-effort on bad parse')
+  console.log('OK (a): startup plants __SR_ENGINE_PREFS (incl. effort sub-map) via the folded read startup state gather; fail-safe both-claude+empty-effort when absent')
 }
 
 // ---------------------------------------------------------------------------
@@ -116,10 +116,11 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
   return async (prompt, opts) => {
     promptLog.push(prompt)
     const label = opts && opts.label
-    if (label === 'lib' && prompt.includes('git -C')) return 'head-1\n'
+    // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
+    if (label === 'exec' && prompt.includes('git -C')) return 'head-1\n'
     if (label === 'resume') return '1'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) {
-      return { verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} }
+    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+      return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} })
     }
     if (label && (label.startsWith('verify') || label === 'run verify')) {
       return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }

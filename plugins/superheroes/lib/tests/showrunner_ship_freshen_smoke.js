@@ -6,7 +6,7 @@ function run(plan) {
   global.agent = async (p, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resolve review target') return jsonOut({ ok: true, worktree: '/wt', expectedHead: '/wt-head' })
-    if (label === 'lib' && p.includes('fence_cli')) return { ok: plan.fence !== false }
+    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: plan.fence !== false })
     if (label === 'check ship-readiness') {
       if (plan.freshen === 'conflict') {
         return jsonOut({

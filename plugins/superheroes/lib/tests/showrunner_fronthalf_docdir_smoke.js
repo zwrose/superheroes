@@ -102,8 +102,10 @@ async function partReviewReadInner(resolved, legacy) {
   }
   const r = await sr.reviewDocPhase('plan', 'wi-d', { runId: 'run-d', reviewedHash: 'seed-hash' })
   assert.strictEqual(r.gate, 'passed', 'clean panel maps to passed')
-  const gatePrompt = persistPrompts.find((p) => p.includes('set-gate'))
-  assert.ok(gatePrompt, 'reviewDocPhase emitted a gate write')
+  // #118: reviewDocPhase RETURNS the set-gate persist spec; runPhases' tail chains it into the ONE
+  // 'save phase progress' leaf. The doc-dir hash contract is asserted on the returned command.
+  const gatePrompt = r.persist && r.persist.sideEffectCmd
+  assert.ok(gatePrompt && gatePrompt.includes('set-gate'), 'reviewDocPhase returned the gate write spec')
   const resolvedHash = io().contentHash(fs.readFileSync(`${resolved}/plan.md`, 'utf8'))
   const decoyHash = io().contentHash(fs.readFileSync(`${legacy}/plan.md`, 'utf8'))
   assert.notStrictEqual(resolvedHash, decoyHash, 'fixture sanity: decoy must differ')

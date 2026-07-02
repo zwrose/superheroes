@@ -510,10 +510,13 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
 }
 
 async function verifyAgent(verifyCommand, runDir, round) {
+  // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
+  // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
+  // session model). The preamble strips the marker before the real agent().
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: 'run verify', schema: VERIFY_SCHEMA })
+    { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
   if (!out) return 'fail'
   return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }

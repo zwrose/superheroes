@@ -101,6 +101,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_guard_smoke.js",
     # #120: forged-ship DoD walkthrough — catch-up + fix-loop + return-to-draft + hand-back end-to-end.
     "plugins/superheroes/lib/tests/showrunner_ship_walkthrough_smoke.js",
+    # #118 conformance: canned full run through the COMMITTED BUNDLE — per-phase courier-leaf
+    # budgets (the Labels matrix as fixture), the unconditional cheapest-model pin on every
+    # dumb pipe, the one-save-phase-progress tail, and the two-leaf startup stretch.
+    "plugins/superheroes/lib/tests/showrunner_stretch_budget_smoke.js",
 ]
 
 
