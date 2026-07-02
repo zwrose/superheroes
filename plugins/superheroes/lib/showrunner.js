@@ -1252,7 +1252,14 @@ async function reviewCodePhase(workItem, opts) {
   }
   // #104's advance/park mapping, read off the terminal (plan Key decision 2).
   if (!ADVANCE_TERMINALS.has(terminal)) {
-    await renderAndPostReadout(workItem, runDir, verdict)   // names parentOrigin at the review-phase park
+    const readout = await renderAndPostReadout(workItem, runDir, verdict)
+    if (!readout || !readout.ok) {
+      return {
+        phaseResult: { confidence: 'low', assumptions: [`review-code readout failed: ${(readout && readout.reason) || 'unknown'}`] },
+        gate: 'changes-requested', terminal, head: finalHead,
+        changed: !!(initialHead && finalHead && initialHead !== finalHead),
+      }
+    }
     return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
   }
   // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If

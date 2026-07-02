@@ -19,7 +19,7 @@ const BLOCKER = [{ file: 'docs/superheroes/wi/plan.md', line: 1, title: 'gap', s
 // (exec-level failure: set-gate sys.exit(1) -> leaf ok:false). journalWriteFails: the journal command
 // reports exec ok:true (bash exit 0) but its STDOUT is {"ok":false} — the durable-write fail-OPEN case
 // (journal_entry.py DurableWriteError prints {"ok":false} and exits 0). persistPhase must fail-CLOSE on it.
-function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, journalWriteFails }) {
+function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, setGateStale, journalWriteFails }) {
   let panelRuns = 0
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
@@ -31,9 +31,9 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
         // production-realistic JSON (set-gate prints {"ok":true,"review":...}, journal/checkpoint {"ok":true});
         // an EMPTY stdout would now read as a courier-drop (retried), so the clean cases emit real JSON.
         // setGateFails: return ok:false for the set-gate command (exec-level fail) so persistPhase fails closed.
-        const ok = !setGateFails
+        const ok = !setGateFails && !setGateStale
         return [
-          { index: 0, ok, stdout: JSON.stringify({ ok: true, review: 'passed', status: 'approved' }) },   // set-gate
+          { index: 0, ok, stdout: setGateStale ? JSON.stringify({ ok: false, reason: 'stale' }) : JSON.stringify({ ok: true, review: 'passed', status: 'approved' }) },   // set-gate
           // journalWriteFails: bash exit 0 (exec ok:true) but stdout is {"ok":false} — the exact
           // durable-write fail-OPEN shape persistPhase must catch by parsing the stdout (NOT a drop).
           { index: 1, ok: true, stdout: journalWriteFails ? JSON.stringify({ ok: false, error: 'durable write failed' }) : JSON.stringify({ ok: true }) },  // journal_entry
@@ -151,7 +151,7 @@ async function main() {
 
   // (g) stale reviewed hash parks and leaves the already-recorded gate unchanged.
   clean('wi-g')
-  ag = makeAgent({ gate: 'changes-requested', reviewerFindings: [], setGateFails: true })
+  ag = makeAgent({ gate: 'changes-requested', reviewerFindings: [], setGateStale: true })
   global.agent = ag
   r = await sr.reviewDocPhase('plan', 'wi-g', { runId: 'run-g', lease: 'lease-g', reviewedHash: 'stale-hash' })
   assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed before persistence')

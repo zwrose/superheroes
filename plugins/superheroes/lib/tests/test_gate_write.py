@@ -168,6 +168,17 @@ def test_certify_set_gate_failure_reports(tmp_path, capsys):
 # replacement test below covers that preserved fail-closed branch (the self-certify-hole floor:
 # the gate is NOT advanced to `passed`, the outcome is `failed:set-gate`, exit 3).
 
+def test_certify_stale_expected_hash_does_not_record(tmp_path, capsys):
+    root = _docs_root(tmp_path)
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
+    plan = _write(root, "plan")
+    rc, out = _run(capsys, "--mode", "certify", "--doc", "plan", "--work-item", WI,
+                   "--reviewed-path", plan, "--review", "passed", "--parent-doc", "spec", "--root", root,
+                   "--expected-hash", "wrong-hash", "--run-id", "test-run")
+    assert rc == 3 and out == "recorded:stale"
+    assert _gate(root, "plan") == "pending"
+
+
 def test_certify_set_gate_raises_fails_closed(tmp_path, capsys, monkeypatch):
     # GATE-INTEGRITY (the self-certify hole), via the direct seam: if definition_doc.set_gate
     # RAISES, certify produces a verdict it cannot record. It must NOT advance the gate to
@@ -183,6 +194,16 @@ def test_certify_set_gate_raises_fails_closed(tmp_path, capsys, monkeypatch):
                    *_fence_for(plan))
     assert rc == 3 and out == "failed:set-gate"
     assert _gate(root, "plan") == "pending"  # NOT advanced to passed — the floor holds
+
+
+def test_reset_stale_expected_hash_does_not_record(tmp_path, capsys):
+    root = _docs_root(tmp_path)
+    spec = _write(root, "spec"); _set_gate(spec, "passed")
+    rc, out = _run(capsys, "--mode", "reset", "--doc", "spec", "--work-item", WI,
+                   "--reviewed-path", spec, "--root", root,
+                   "--expected-hash", "wrong-hash", "--run-id", "test-run")
+    assert rc == 0 and out == "recorded:stale"
+    assert _gate(root, "spec") == "passed"
 
 
 # --- reset (review-spec stale approval) -----------------------------------

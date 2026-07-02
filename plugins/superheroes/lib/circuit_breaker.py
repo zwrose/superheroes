@@ -60,6 +60,18 @@ def check_circuit_breaker(rounds, max_rounds):
                        f"fixes are committed but not yet re-reviewed)."),
         }
 
+    # Criterion 2: no net progress across two consecutive round-transitions.
+    if n >= 3:
+        c_n = len(_blocking(rounds[n - 1]))
+        c_n1 = len(_blocking(rounds[n - 2]))
+        c_n2 = len(_blocking(rounds[n - 3]))
+        if c_n > 0 and c_n >= c_n1 and c_n1 >= c_n2:
+            return {
+                "halt": True,
+                "reason": "no-net-progress",
+                "detail": f"Blocking-finding count did not decrease over two rounds ({c_n2} → {c_n1} → {c_n}).",
+            }
+
     # Criterion 1: recurring finding across the two most recent rounds.
     if n >= 2:
         latest_rec = rounds[n - 1]
@@ -78,18 +90,6 @@ def check_circuit_breaker(rounds, max_rounds):
                 return {"halt": False, "reason": None, "detail": "recurrence pending coverage decision"}
             ids = "; ".join(sorted(keys))
             return {"halt": True, "reason": "recurring-finding", "detail": f"{len(recurring)} blocking finding(s) recurred after a fix was committed: {ids}"}
-
-    # Criterion 2: no net progress across two consecutive round-transitions.
-    if n >= 3:
-        c_n = len(_blocking(rounds[n - 1]))
-        c_n1 = len(_blocking(rounds[n - 2]))
-        c_n2 = len(_blocking(rounds[n - 3]))
-        if c_n > 0 and c_n >= c_n1 and c_n1 >= c_n2:
-            return {
-                "halt": True,
-                "reason": "no-net-progress",
-                "detail": f"Blocking-finding count did not decrease over two rounds ({c_n2} → {c_n1} → {c_n}).",
-            }
 
     return {"halt": False, "reason": None, "detail": "progressing"}
 

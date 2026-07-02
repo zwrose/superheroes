@@ -29,6 +29,15 @@ function checkCircuitBreaker(rounds, maxRounds) {
     return { halt: true, reason: 'max-iterations',
       detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
   }
+  if (n >= 3) {
+    const cN = _blocking(rounds[n - 1]).length
+    const cN1 = _blocking(rounds[n - 2]).length
+    const cN2 = _blocking(rounds[n - 3]).length
+    if (cN > 0 && cN >= cN1 && cN1 >= cN2) {
+      return { halt: true, reason: 'no-net-progress',
+        detail: `Blocking-finding count did not decrease over two rounds (${cN2} → ${cN1} → ${cN}).` }
+    }
+  }
   if (n >= 2) {
     const latestRec = rounds[n - 1]
     const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
@@ -52,15 +61,6 @@ function checkCircuitBreaker(rounds, maxRounds) {
       const ids = Array.from(keys).sort().join('; ')
       return { halt: true, reason: 'recurring-finding',
         detail: `${recurring.length} blocking finding(s) recurred after a fix was committed: ${ids}` }
-    }
-  }
-  if (n >= 3) {
-    const cN = _blocking(rounds[n - 1]).length
-    const cN1 = _blocking(rounds[n - 2]).length
-    const cN2 = _blocking(rounds[n - 3]).length
-    if (cN > 0 && cN >= cN1 && cN1 >= cN2) {
-      return { halt: true, reason: 'no-net-progress',
-        detail: `Blocking-finding count did not decrease over two rounds (${cN2} → ${cN1} → ${cN}).` }
     }
   }
   return { halt: false, reason: null, detail: 'progressing' }
