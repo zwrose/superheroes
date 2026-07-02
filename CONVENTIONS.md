@@ -743,6 +743,36 @@ is the lever). The `lib/` **bash** seam of §7.1 — skills shelling out to `lib
 layer that context injection cannot fix; it is tracked separately
 ([#93](https://github.com/zwrose/superheroes/issues/93)) and the seam form here is unchanged.
 
+### 7.5 Cross-engine contract (host-run-on vs engine-dispatched-to)
+
+The **host** is the harness the plugin *runs on* (§7.1–§7.2 — Claude Code or Codex). The **engine** is
+the agent a working role is *dispatched to* — `claude` (the default, unchanged), `codex`, or `cursor` —
+chosen per role (reviewer engine, implementation engine) by the owner in `configure`. These are
+orthogonal axes: the host is where the plugin executes; the engine is which model family does a role's
+work. An engine is selected *below* the host, at the dispatch leaf.
+
+Two postures are held strictly separate, mirroring `model_tier`:
+- **Engine *selection* fails open.** An unknown / unavailable / unauthorized / stalled engine silently
+  degrades to Claude — the same posture `model_tier` documents for a bad tier ("a wrong/absent tier is a
+  cost concern, never a safety one"). No run hangs or hard-fails on engine choice.
+- **A completed external *result* fails closed.** A build or fix that fails or can't run verify stops the
+  run; an unauditable run stops; an unreadable or incomplete review is re-run on Claude, never accepted
+  as green. This reuses the existing gates — no new safety logic.
+
+**Build-engine contract.** The native build leg (`build_phase.js`) is now an *engine* consumer: its
+worker, fixer, and final-review-fix leaves route to the implementation engine, and its whole-branch
+review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_adapter.py`. The engine
+axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
+engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
+
+**Confinement + hygiene.** External reviewers run read-only; external implementers run workspace-write,
+confined to the managed build worktree, with **no remote authority** — the band owns every push / PR /
+merge through its `enforcer.py`-gated path (an external producer can never autonomously merge, force-push,
+or push to the default branch). All external free-text is secret-scrubbed at the adapter boundary
+(`engine_adapter.parse_result` → `readout.scrub`) so every downstream surface — including the standalone
+`/review-code --post` PR comment — is clean. The build authorization is the owner's to grant; the band
+shows it and never applies it.
+
 ---
 
 ## 8. Deferred conventions

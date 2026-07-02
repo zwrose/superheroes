@@ -14,10 +14,13 @@ const modelTierTwin = require('./model_tier.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
+// #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
+// engines (codex|cursor) for the write (build|fix) and read (review) roles.
+const engineDispatch = require('./engine_dispatch.js')
+const enginePrefTwin = require('./engine_pref.js')
 
 const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
-let _finalReviewSeq = 0              // monotonic per-process final-review runDir suffix (bundle-safe)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function park(reason) { return { confidence: 'low', assumptions: [reason] } }
@@ -86,6 +89,20 @@ function _reconcile(...a) { return require('./build_progress.js').reconcile(...a
 // model_tier overrides: mirror showrunner.js's authorModel — read from globalThis.__SR_OVERRIDES
 // (set by the Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS).
 function _overrides() { return (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null }
+
+// engine prefs: mirror _overrides — read from globalThis.__SR_ENGINE_PREFS (planted by the Task-12
+// startup pipe; absent in test/throwaway runs -> both 'claude' -> the native agent() path, UNCHANGED).
+function _enginePrefs() {
+  const p = (typeof globalThis !== 'undefined' && globalThis.__SR_ENGINE_PREFS) || null
+  return (p && typeof p === 'object') ? p : { reviewer: 'claude', implementation: 'claude', effort: {} }
+}
+
+// FR-9 effort overrides: the effort sub-map keyed by role_kind {review,build,fix} lives INSIDE the
+// engine-prefs object (NOT the model-tier __SR_OVERRIDES map). resolveEffort reads this map; absent -> null.
+function _effortOverrides() {
+  const p = _enginePrefs()
+  return (p && p.effort && typeof p.effort === 'object' && !Array.isArray(p.effort)) ? p.effort : null
+}
 
 // #115 increment B: cmdRunner is gone. The IO/side-effect leaves are ported to exec(raw)+in-process
 // -parse (increment A); the two SMART judgement leaves (worker_recovery, task_review) are now
@@ -326,6 +343,46 @@ async function fenceOrPark(workItem, generation) {
   return !!(f && f.ok)
 }
 
+// UFR-4 run-time write preflight — cache the verdict for the whole run so we probe the host's
+// autoMode.allow grant ONCE (not per task). null = not yet probed. The probe runs the engine's OWN
+// write command inside the worktree; a denied/failed grant -> the impl role falls open to Claude.
+let _writeAuthOk = null
+let _writeAuthNotified = false
+async function _implWriteAuthorized(engine, wt) {
+  if (_writeAuthOk !== null) return _writeAuthOk
+  const v = await execJson(
+    `python3 ${LIB}/engine_authz.py test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`)
+  _writeAuthOk = !!(v && v.ok === true)
+  if (!_writeAuthOk && !_writeAuthNotified) {
+    _writeAuthNotified = true
+    try { log(`build: ${engine} is not authorized to write in this run (autoMode.allow not granted) — the implementation role falls open to Claude for the whole run (UFR-4)`) } catch (_) {}
+  }
+  return _writeAuthOk
+}
+
+// Route the write role (build|fix) to the chosen implementation engine. claude -> the existing agent()
+// path, BYTE-UNCHANGED. external -> dispatchExternal; on ANY non-success reset uncommitted edits (UFR-2)
+// and fall open to the native agent() (UFR-1). preSHA/commit-discipline live inside dispatchExternal.
+async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall }) {
+  const engine = enginePrefTwin.resolveEngine(roleKind, _enginePrefs())
+  if (engine === 'claude') return nativeAgentCall()
+  // UFR-4: before the FIRST external WRITE, confirm the host grants this engine write authority.
+  // Denied -> fall open to Claude for the whole run (build AND fixes) + one notice. Read roles skip this.
+  if (!(await _implWriteAuthorized(engine, wt))) return nativeAgentCall()
+  // FR-9: effort override comes from the engine-prefs effort sub-map (keyed by role_kind), NOT the
+  // model-tier _overrides() map (keyed by role->model — resolveEffort could never match it).
+  const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
+  const res = await engineDispatch.dispatchExternal({
+    engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
+    taskId, workItem,
+  })
+  if (res && res.ok) return res
+  // UFR-2: a failed/stalled external write left only uncommitted edits -> discard, then redo on Claude.
+  await resetUncommitted(wt, branch)
+  try { log(`build: ${engine} ${roleKind} did not complete (${(res && res.reason) || 'unknown'}) — falling open to Claude`) } catch (_) {}
+  return nativeAgentCall()
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
@@ -335,12 +392,20 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
-    const worker = await agent(
-      `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-      + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-      + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
-      + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
-      { label: 'worker', schema: { type: 'object', required: ['ok'] } })
+    const worker = await _implDispatch({
+      workItem, roleKind: 'build', taskId: task.id, wt, branch,
+      prompt:
+        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+      nativeAgentCall: () => agent(
+        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+        { label: 'worker', schema: { type: 'object', required: ['ok'] } }),
+    })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
@@ -459,10 +524,15 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before fix — park (UFR-10)' }
     }
-    await agent(
-      `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
-      + `"Task-Id: ${task.id}": ${JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))}`,
-      { label: 'fixer', model: fixerModel })
+    const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
+    await _implDispatch({
+      workItem, roleKind: 'fix', taskId: task.id, wt, branch,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}": ${_fixFindings}`,
+      nativeAgentCall: () => agent(
+        `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
+        + `"Task-Id: ${task.id}": ${_fixFindings}`,
+        { label: 'fixer', model: fixerModel }),
+    })
     history.push({ round, findings: review.findings || [] })
     round += 1
   }
@@ -480,20 +550,34 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // carried-forward Minors via execJson (retry the courier once on a dropped/garbled stdout); on fail -> [].
   const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
   const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
-  _finalReviewSeq += 1
-  const pid = (typeof process !== 'undefined' && process.pid) ? process.pid : 0
-  const runDir = `/tmp/wh-fr-${workItem}-g${generation}-p${pid}-${_finalReviewSeq}`
+  const runDir = `/tmp/workhorse-${workItem}-final-review`
   await io().mkdirp(runDir)
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
   // findings-generalist.json. This is the single-reviewer code leg (legKind.panel:false), so the
   // shell compiles the raw returned findings; there is no synthesis leaf.
   globalThis.reviewerAgent = async (_r, _ctx, _rub, _rdir, round) => {
-    const out = await agent(
+    const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+    const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`,
-      { label: `reviewer:${round}`, model: reviewerModel,
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+    if (rEngine !== 'claude') {
+      // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
+      // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
+      const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
+        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+      })
+      // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
+      // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
+      if (res && Array.isArray(res.findings)) return res.findings
+      const out = await agent(prompt, { label: `reviewer:${round}`, model: reviewerModel,
         schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      return (out && Array.isArray(out.findings)) ? out.findings : null
+    }
+    const out = await agent(prompt, { label: `reviewer:${round}`, model: reviewerModel,
+      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -505,13 +589,24 @@ async function runFinalReview(workItem, generation, branch, wt) {
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
   }
-  const fixStep = async (blockers) => {
+  const fixStep = async (_fixContext, verdict, _runDir) => {
+    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
-    if (!(await fenceOrPark(workItem, generation))) return null
-    await agent(`In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
-      { label: 'final-fixer', model: fixerModel })
-    return { fixed: blockers.map((b) => b.id || b.title) }
+    if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
+    // The whole-branch final review has NO per-task id in scope (mirror the real 504-511 closure):
+    // use the work-item as the fix dispatch's task id for the trailer/journal.
+    await _implDispatch({
+      workItem, roleKind: 'fix', taskId: workItem, wt, branch,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+      nativeAgentCall: () => agent(
+        `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+        { label: 'final-fixer', model: fixerModel }),
+    })
+    // Always return the {fixed, deferred} REPORT shape (never the raw dispatch result / undefined):
+    // a truthy report so runFixStep does NOT treat it as a fix-failure, and recordDeferred can read .fixed.
+    // This preserves the exact contract of the real build_phase.js:504-511 (`return { fixed: [...] }`).
+    return { fixed: blockers.map((b) => b.id || b.title), deferred: [] }
   }
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',

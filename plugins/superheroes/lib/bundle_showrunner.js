@@ -16,12 +16,14 @@ const LIB = __dirname
 // #115 increment B: worker_recovery + task_review added — build_phase.js now requires them in-process
 // (the two SMART deciders are twins now, no leaf). They bundle BEFORE build_phase.js; task_review's
 // deps (circuit_breaker + loop_state) are already first in the array, worker_recovery is pure.
+// #38 Task 10: engine_pref + engine_dispatch — external-engine resolver + dispatch leaf (before
+// build_phase.js/showrunner.js, which require them in-process).
 const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
                  'review_round_policy.js',
                  'ci_status.js', 'verify_gate.js',
                  'review_memory.js',
                  'review_panel_shell.js', 'test_pilot_phase.js', 'build_progress.js',
-                 'worker_recovery.js', 'task_review.js', 'build_phase.js',
+                 'worker_recovery.js', 'task_review.js', 'engine_pref.js', 'engine_dispatch.js', 'build_phase.js',
                  'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'fenced_json.js', 'showrunner.js']
 
 // Registry keys are the bare module name (no './' prefix, no '.js' suffix). `norm` MUST match the

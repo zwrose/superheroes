@@ -144,9 +144,9 @@ async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, run
   }
 }
 
-async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi) {
+async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const record = Object.assign({}, (recordsForFix || []).find((r) => r && r.round === round) || {})
-  record.confirmationPending = true
+  if (legKind && legKind.panel) record.confirmationPending = true
   record.changedSubjects = fixResult.changedSubjects || []
   record.coverageDecisions = recordedCoverageDecisions || []
   record.fix = { fixes: fixResult.fixes || fixResult.fixed || [], deferred: fixResult.deferred || [] }
@@ -414,7 +414,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       coverageContentHash = reloaded.contentHash
     }
 
-    const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi)
+    const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi, legKind)
     if (!postFix.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
@@ -450,12 +450,15 @@ function _validReviewerResult(out) {
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts)
-  if (Array.isArray(out)) out = { findings: out, confidence: out.length === 0 ? 'high' : 'low', legacyArray: true }
+  if (Array.isArray(out)) {
+    const conf = (baseOpts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
+    out = { findings: out, confidence: conf, legacyArray: true }
+  }
   let escalated = false
   if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
     escalated = true
     out = await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' }))
-    if (Array.isArray(out)) out = { findings: out, confidence: out.length === 0 ? 'high' : 'low', legacyArray: true }
+    if (Array.isArray(out)) out = { findings: out, confidence: 'high', legacyArray: true }
   }
   if (!_validReviewerResult(out) || out.confidence !== 'high') {
     roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: _validReviewerResult(out) ? out.findings : [], confidence: _validReviewerResult(out) ? out.confidence : 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }

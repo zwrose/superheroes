@@ -126,6 +126,17 @@ DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.mode
 MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
 ```
 
+**Resolve the per-role engine (orthogonal to the model tier).** The reviewer engine runs the five
+specialists (read-only); the implementation engine runs the auto-fix (FR-15). Default `claude` — a
+project that set nothing behaves exactly as today.
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+EP=$(python3 "$ROOT_DIR/lib/engine_pref_load.py")            # {"reviewer","implementation"} (both "claude" if unset)
+REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
+IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
+```
+
 When dispatching specialists, pass `model: $DEEP_MODEL` for
 `security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
 other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
@@ -283,13 +294,13 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Session directory:** `$SESSION_DIR` (round 1 artifacts under `round-1/`)
 - **Focus notes:** the `--focus` argument, if any
 - **Path:** default → auto-fix loop (compile + dedupe → triage → fix → re-review, committing locally); `--review-only` → one pass + interactive presentation; `--post` → one pass + post to GitHub
-- **What happens after dispatch (default loop):** compile + dedupe → triage → user interventions on judgment calls → fixer subagent commits → verify gate (`VERIFY_CMD`, unless `unverified`) → circuit-breaker → re-review or exit
+- **What happens after dispatch (default loop):** compile + dedupe → triage → user interventions on judgment calls → fixer subagent commits → verify gate (`VERIFY_CMD`, unless `unverified`) → circuit-breaker → re-review or exit. The auto-fix runs on `$IMPL_ENGINE` (FR-15): when it is `codex`/`cursor`, the fix is written by the external engine via `engine_adapter.py` (workspace-write) and committed by the adapter, then the same verify gate runs; when it is `claude`, the fixer subagent runs as today. This standalone path has no run-time `engine_authz.py test-dispatch` preflight (that lives only in the native build leg's `_implWriteAuthorized`); instead it relies on the host classifier's `autoMode.allow` deny to fall open behaviorally — an ungranted external-engine dispatch is denied by the host, the write never happens, and the fix falls open to Claude.
 
 Do **not** tier or skip specialists based on which files changed. Coverage uniformity matters more than saving an agent dispatch — a "no security-relevant files changed" guess is exactly when an IDOR slips through. All five always run. The agents themselves return an empty findings array when there's nothing in their dimension, which is cheap.
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt.
+Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt. When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each of the five specialists through `engine_adapter.py` (read-only sandbox) instead of the named subagent — the persona and `$RUBRIC` are unchanged, and each still returns its dimension's findings JSON; an unreadable or missing specialist slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). When `$REVIEWER_ENGINE` is `claude`, dispatch the named subagents exactly as below.
 
 **Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
 

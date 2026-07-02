@@ -269,6 +269,13 @@ cat > "$SESSION_DIR/round-1/review.json" <<EOF
 EOF
 ```
 
+> **External-engine secret hygiene (#38).** When the reviewer engine is Codex or Cursor, each
+> finding's `body`/`suggestion` free-text is **already secret-scrubbed** at the adapter boundary
+> (`engine_adapter.parse_result` runs `readout.scrub` before the finding enters the standard form),
+> so this `--post` payload — which copies `body`/`suggestion` straight into the public PR comment via
+> `gh api … /reviews` with no scrub of its own — carries no external secret in the clear. This is the
+> one surface the native `readout.build_readout` handoff does not gate; the adapter pre-scrub covers it.
+
 **Run `resolve_diff_lines.py`** to validate every comment anchor against the diff. This is non-optional — GitHub returns 422 "Line could not be resolved" for any inline comment whose `(file, line)` doesn't land on a `+` or context line inside a hunk; the script moves out-of-hunk comments to the nearest valid line (prefixing the body with `(Re: line N)`) and drops comments for files not in the diff:
 
 ```bash
