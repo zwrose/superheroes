@@ -10,6 +10,22 @@ const modelTier = require('../model_tier.js')
 
 const BLOCKER = { file: 'docs/superheroes/wi/plan.md', line: 7, title: 'missing invariant', severity: 'Critical', evidence: 'e' }
 
+function receiptFromPrompt(prompt) {
+  const raw = (String(prompt).match(/Prompt context: (\{.*\})/s) || [])[1]
+  let ctx = {}
+  try { ctx = JSON.parse(raw || '{}') } catch (_) {}
+  return {
+    artifact: ctx.receiptArtifact || 'stub',
+    chain: [
+      { step: 'citation', evidence: 'reviewed citations' },
+      { step: 'reachability', evidence: 'validated call path' },
+      { step: 'missing-check', evidence: 'checked missing FRs' },
+      { step: 'tooling', evidence: 'smoke passed' },
+    ],
+    coverageDecisionIds: ctx.receiptCoverageDecisionIds || [],
+  }
+}
+
 function installAgent({ blocking = false } = {}) {
   const calls = { reviewer: [], synth: [], revise: [], defer: 0 }
   let reviewerCalls = 0
@@ -19,7 +35,11 @@ function installAgent({ blocking = false } = {}) {
     if (label.startsWith('architecture') || label.endsWith('-reviewer')) {
       calls.reviewer.push({ label, model: opts && opts.model })
       reviewerCalls += 1
-      return { findings: blocking && reviewerCalls <= sr.DOC_REVIEWERS.length ? [BLOCKER] : [], confidence: 'high' }
+      return {
+        findings: blocking && reviewerCalls <= sr.DOC_REVIEWERS.length ? [BLOCKER] : [],
+        confidence: 'high',
+        verificationReceipt: receiptFromPrompt(prompt),
+      }
     }
     if (label.startsWith('synthesis')) {
       calls.synth.push({ label, model: opts && opts.model })
