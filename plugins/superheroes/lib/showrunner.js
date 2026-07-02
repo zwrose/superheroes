@@ -85,6 +85,10 @@ function normalizeFixResult(result) {
   if (!result || !Array.isArray(result.changedSubjects) || !Array.isArray(result.coverageDecisions)) return null
   return Object.assign({}, result, {
     fixes: result.fixes || result.fixed || [],
+    // record_deferred.py (frozen) reads ONLY `fixed` for the readout fixes-enrichment, while the
+    // FIX_RESULT_INSTRUCTION shape carries `fixes` — normalize BOTH keys so the report satisfies
+    // either consumer regardless of which key the fixer returned.
+    fixed: result.fixed || result.fixes || [],
     extras: Object.assign({}, result.extras || {}, { changedSubjects: result.changedSubjects, needsConfirmation: true }),
   })
 }
@@ -773,7 +777,8 @@ async function exec(commands, opts) {
   return _parseExecResult(out, cmds.length)
 }
 
-// persistPhase: batches side-effect -> journal_entry -> checkpoint_entry into one exec call.
+// persistPhase: one 'save phase progress' courier — the optional side-effect command chained (&&)
+// before phase_progress_entry.py save, which writes journal + checkpoint and read-back-confirms both.
 // Persist order (FR-4): side-effect first (when present), then journal, then checkpoint (cursor last).
 // Every interpolated non-constant arg is shq()-quoted.
 // Returns {ok: boolean} — ok is false if any command in the batch reported failure.
@@ -1584,11 +1589,18 @@ async function loadPr(workItem) {
 async function draftPRPhase(workItem) {
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
-  const out = await courier.runCourierJson(
-    'open draft PR',
-    `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
-    { require: ['ok', 'read_back'], retryRealFailure: false },
-  )
+  let out = null
+  try {
+    out = await courier.runCourierJson(
+      'open draft PR',
+      `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
+      { require: ['ok', 'read_back'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    // courier transport failure (dropped/garbled stdout twice) — park, never crash the run; a PR the
+    // first attempt may have created is re-adopted idempotently by pr_entry on the next run.
+    out = null
+  }
   if (!out || !out.ok || !out.pr || !out.read_back) {
     return {
       phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'draft-PR gated'] },
@@ -1600,11 +1612,16 @@ async function draftPRPhase(workItem) {
 
 // mark-ready: one folded courier leaf returning {ok, read_back, reason?}.
 async function markReadyPhase(workItem) {
-  const out = await courier.runCourierJson(
-    'mark PR ready',
-    `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
-    { require: ['ok', 'read_back'], retryRealFailure: false },
-  )
+  let out = null
+  try {
+    out = await courier.runCourierJson(
+      'mark PR ready',
+      `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
+      { require: ['ok', 'read_back'], retryRealFailure: false },
+    )
+  } catch (_e) {
+    out = null   // courier transport failure — park, never crash the run
+  }
   if (!out || !out.ok || !out.read_back) {
     return { phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'mark-ready gated'] }, sideEffect: null }
   }
@@ -1717,12 +1734,14 @@ async function shipPhase(workItem, pr, generation) {
     if (fresh && fresh.decision === 'conflict') {
       return park(workItem, pr, 'bringing in the base conflicts — undone (branch unchanged); please resolve and re-run')
     }
+    // fence first: on a lost lease ship_phase.py emits reconcile:{ok:false,reason:'unread'} TOO, so
+    // checking reconcile first would mask the lease-loss diagnostic behind a generic reconcile park.
+    if (ready && ready.fence && !ready.fence.ok) {
+      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
+    }
     const reconcile = ready && ready.reconcile
     if (reconcile && !reconcile.ok) {
       return park(workItem, pr, `could not reconcile the PR head before judging readiness (${reconcile.reason || 'unreadable'})`)
-    }
-    if (ready && ready.fence && !ready.fence.ok) {
-      return park(workItem, pr, 'lease lost before base catch-up — park (UFR-4)')
     }
     return park(workItem, pr, `branch freshness could not be confirmed (${(fresh && fresh.decision) || 'unreadable'}) — park (UFR-2)`)
   }

@@ -409,7 +409,6 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   await resetUncommitted(wt, branch)
   try { log(`build: ${engine} ${roleKind} did not complete (${(res && res.reason) || 'unknown'}) — falling open to Claude`) } catch (_) {}
   return nativeAgentCall()
-
 }
 
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the

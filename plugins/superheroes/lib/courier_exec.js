@@ -17,8 +17,19 @@ function currentAgent() {
   throw new Error('courier agent unavailable')
 }
 
+// FR-5 cwd-rooting: mirror showrunner's selfContained() — when __SR_ROOT is set (throwaway/live-eval
+// runs), root every courier command at the repo root so `python3 plugins/superheroes/lib/...` resolves.
+// Already-rooted commands (a leading `cd `) are left untouched; without __SR_ROOT this is a no-op.
+function rootedCommand(command) {
+  const root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null
+  if (!root) return command
+  const trimmed = String(command).replace(/^\s+/, '')
+  if (trimmed.startsWith('cd ')) return command
+  return "cd '" + root.replace(/'/g, "'\\''") + "' && " + command
+}
+
 function promptFor(command) {
-  return 'Run exactly this command and return ONLY stdout, unchanged:\n\n' + command
+  return 'Run exactly this command and return ONLY stdout, unchanged:\n\n' + rootedCommand(command)
 }
 
 function firstResult(raw) {
@@ -46,7 +57,9 @@ function missingRequired(value, required) {
 }
 
 async function callOnce(label, command) {
-  return currentAgent()(promptFor(command), { label })
+  // `courier: true` marks this a dumb pipe for the bundle preamble's unconditional cheapest-model
+  // pinning (same treatment as label 'exec'/'io'); the preamble strips it before the real agent().
+  return currentAgent()(promptFor(command), { label, courier: true })
 }
 
 async function runCourierText(label, command) {

@@ -50,7 +50,9 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
     try { set = JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) {}
     for (const d of report.deferred || []) if (d && d.id) set[d.id] = d.severity
     try { fs.writeFileSync(p, JSON.stringify(set)) } catch (_) {}
-    return JSON.stringify({ ok: true, extras: { fixes: report.fixed || report.fixes || [] } })
+    // mirror the frozen record_deferred.py exactly: it reads ONLY `fixed` (normalizeFixResult
+    // guarantees the key on every report) — a `fixes`-only report must surface as empty enrichment.
+    return JSON.stringify({ ok: true, extras: { fixes: Array.isArray(report.fixed) ? report.fixed : [] } })
   }
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
@@ -76,7 +78,7 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
           extras: { parentOrigin: 'plan' },
         }
       }
-      return { fixes: ids, fixed: ids, deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
+      return { fixes: ids, deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
     }
     if (label === 'readout') { calls.readout += 1; return '## Review loop — done' }
     if (label === 'post readout') { calls.readoutPost += 1; return jsonOut({ posted: true, recorded: true }) }

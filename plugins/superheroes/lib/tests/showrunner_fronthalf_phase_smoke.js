@@ -152,7 +152,8 @@ async function main() {
   assert.match(gatePrompt, /--lease ['"]?lease-f['"]?/)
   assert.strictEqual(r.phaseResult.confidence, 'high')
 
-  // (g) stale reviewed hash parks and leaves the already-recorded gate unchanged.
+  // (g) stale gate write parks low-confidence (fail-closed at the courier boundary); the
+  // unchanged-gate half of the stale contract is proven python-side in test_gate_write.py.
   clean('wi-g')
   ag = makeAgent({ gate: 'changes-requested', reviewerFindings: [], setGateStale: true })
   global.agent = ag
