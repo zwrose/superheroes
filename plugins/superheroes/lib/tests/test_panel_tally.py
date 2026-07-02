@@ -318,3 +318,59 @@ def test_write_failure_fails_closed_with_record_missing(tmp_path, monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
     v = PT.tally(str(tmp_path), 1, ["code"])
     assert v["terminal"] == "halted" and v.get("recordMissing") is True
+
+
+def test_round_gate_low_when_final_clean_lacks_receipt():
+    result = {"status": "run", "findings": [], "confidence": "high"}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True)
+    assert gate == "cannot-certify"
+    assert conf == "low"
+
+
+def test_round_gate_low_when_baseline_clean_is_low_confidence():
+    result = {"status": "run", "findings": [], "confidence": "low"}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=False)
+    assert gate == "cannot-certify"
+    assert conf == "low"
+
+
+def test_round_gate_low_when_confidence_missing():
+    result = {"status": "run", "findings": []}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=False)
+    assert gate == "cannot-certify"
+    assert conf == "low"
+
+
+def test_round_gate_high_when_final_clean_has_receipt():
+    result = {"status": "run", "findings": [], "confidence": "high", "verificationReceipt": {"artifact": "run-1:round-3", "chain": [{"step": "citation", "evidence": "reviewed source citations"}, {"step": "reachability", "evidence": "validated changed call path"}, {"step": "missing-check", "evidence": "searched for uncovered FRs"}, {"step": "tooling", "evidence": "pytest smoke passed"}], "coverageDecisionIds": ["RCD-1"]}}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True, receipt_context={"artifact": "run-1:round-3", "coverageDecisionIds": ["RCD-1"]})
+    assert gate == "clean"
+    assert conf == "high"
+
+
+def test_round_gate_low_when_receipt_has_labels_without_evidence():
+    result = {"status": "run", "findings": [], "confidence": "high", "verificationReceipt": {"chain": ["citation", "reachability", "missing-check", "tooling"]}}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True)
+    assert gate == "cannot-certify"
+    assert conf == "low"
+
+
+def test_round_gate_low_when_receipt_artifact_is_stale():
+    result = {"status": "run", "findings": [], "confidence": "high", "verificationReceipt": {"artifact": "old-run", "chain": [{"step": "citation", "evidence": "x"}, {"step": "reachability", "evidence": "x"}, {"step": "missing-check", "evidence": "x"}, {"step": "tooling", "evidence": "x"}], "coverageDecisionIds": ["RCD-1"]}}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True, receipt_context={"artifact": "run-1:round-3", "coverageDecisionIds": ["RCD-1"]})
+    assert gate == "cannot-certify"
+    assert conf == "low"
+
+
+def test_round_gate_low_when_receipt_omits_current_decision():
+    result = {"status": "run", "findings": [], "confidence": "high", "verificationReceipt": {"artifact": "run-1:round-3", "chain": [{"step": "citation", "evidence": "x"}, {"step": "reachability", "evidence": "x"}, {"step": "missing-check", "evidence": "x"}, {"step": "tooling", "evidence": "x"}], "coverageDecisionIds": []}}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True, receipt_context={"artifact": "run-1:round-3", "coverageDecisionIds": ["RCD-1"]})
+    assert gate == "cannot-certify"
+    assert conf == "low"
+
+
+def test_carried_blocker_counts_but_is_marked_carried():
+    carried = {"status": "skipped", "carriedFromRound": 1, "findings": [{"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}]}
+    compiled = PT.compile_dimension_results({"code": carried})
+    assert compiled[0]["carried"] is True
+    assert compiled[0]["sourceRound"] == 1

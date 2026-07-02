@@ -551,6 +551,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   const _minorsResult = await execJson(`python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)}`)
   const minors = Array.isArray(_minorsResult && _minorsResult.minors) ? _minorsResult.minors : []
   const runDir = `/tmp/workhorse-${workItem}-final-review`
+  await io().mkdirp(runDir)
   // The #104 shell resolves these caller leaves from global scope. #115: the reviewer RETURNS its
   // findings[] array (the panel holds it in memory + runs the merge/tally twins in-process) — no
   // findings-generalist.json. This is the single-reviewer code leg (legKind.panel:false), so the
@@ -588,7 +589,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
   }
-  const fixStep = async (blockers) => {
+  const fixStep = async (_fixContext, verdict, _runDir) => {
+    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED

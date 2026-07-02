@@ -167,6 +167,11 @@ Copy the spec to a stable artifact path and classify what it touches (over the r
 ```bash
 cp "$SPEC_PATH" "$SESSION_DIR/spec.md"
 
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUN_ID="review-${WORK_ITEM}-${SESSION_DIR##*/}"
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SESSION_DIR/spec.md")
+LEASE="${SESSION_DIR##*/}"
+
 TOUCHES=()
 grep -Eqi 'sign|login|account|permission|owner|private|personal' "$SESSION_DIR/spec.md" && TOUCHES+=("access")
 grep -Eqi 'screen|page|view|button|form|display|show'             "$SESSION_DIR/spec.md" && TOUCHES+=("UI")
@@ -445,23 +450,16 @@ skill only gates it on `REVISED` (a loop concern the helper can't know); the hel
 rest and **never grants `passed`** (it can only reset `passed`→`pending` or no-op):
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$REVISED" = yes ]; then
   ROOT=$(git rev-parse --show-toplevel)
+  REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SPEC_PATH")
   GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
-    --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT")
+    --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT" \
+    --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 fi
 ```
 
-`$GATE` is `reset:pending` (a stale approval was revoked), `noop:not-approved` (gate wasn't
-`passed` — nothing to revoke), `skipped:noncanonical`,
-`skipped:unreadable` (the gate could **not** be read — if it was approved, the approval may be
-stale and the owner must re-approve), or `failed:set-gate` (the stale `passed` could **not** be
-revoked — surface it: the approval is stale and the owner must re-approve); the helper prints
-the owner-facing detail to stderr. `set-gate --review pending` derives `status: draft`
-(§3.1), so a programmatic consumer sees the spec is no longer approved. (The fuller "any
-content change invalidates approval" contract is the §7 owner-approval-contract's; this
-closes the in-repo programmatic hole.)
+`$GATE` is `reset:pending`, `noop:not-approved`, `skipped:*`, or `failed:set-gate` — surface stderr on failure; the helper never grants `passed`.
 
 After the loop exits, print a terminal summary in chat:
 
@@ -479,7 +477,7 @@ After the loop exits, print a terminal summary in chat:
 
 Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map). **The only gate write review-spec can make is the stale-approval reset to `pending` above — it never writes `passed`.**
 
-The shared dispatch/compile/revise learning-loop steps and staleness nudge are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` — read it and apply it where this skill's flow references those steps.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
 ## Spec-Content Requirements (Opinionated)
 

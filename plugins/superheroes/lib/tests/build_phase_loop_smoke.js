@@ -18,11 +18,17 @@ global.log = () => {}
 // reviewPanel uses parallel() — stub it to run all functions sequentially.
 global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
 function makeAgent(routes) {
+  function routeMatches(label, needle) {
+    if (label === needle) return true
+    if (needle === 'verify:r' && label.startsWith('verify:r')) return true
+    if (String(needle).endsWith(':') && label.startsWith(needle)) return true
+    return false
+  }
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    // Exact-label first (labels are unique), so a short needle never shadows a longer script name
-    // via substring; then a prompt-substring fallback. A function resp receives the prompt (capture).
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    for (const [needle, resp] of routes) {
+      if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''
   }
@@ -69,6 +75,10 @@ const SMART_STUBS = [
   // #115 increment B: task_review is now an in-process TWIN (no leaf). The reviewer returns clean
   // verdicts + no findings, so the real twin decides 'complete' in-process — no stub route needed.
   ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+  // Whole-branch final review: runFinalReview's reviewer leaf (label reviewer:rN).
+  ['reviewer:', { findings: [] }],
+  // Panel verify leaf (label verify:rN) — raw run data for the in-process verify_gate twin.
+  ['verify:r', { command: 'pytest -q', returncode: 0, timedOut: false }],
   // verify_gate.py is called by the panel's verify leaf (label 'verify:r<round>'). Raw run data -> twin -> 'pass'.
   ['verify_gate.py', { command: 'pytest -q', returncode: 0, timedOut: false }],
 ]

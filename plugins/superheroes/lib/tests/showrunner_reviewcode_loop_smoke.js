@@ -13,19 +13,30 @@ const { findingIdentity } = require('../circuit_breaker.js')
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
-// A fresh on-disk runDir per scenario so the durable accumulator + deferred-set never leak across
-// scenarios OR across `node` runs (reviewCodePhase otherwise reuses /tmp/showrunner-<wi>-review-code).
 function fresh() { return fs.mkdtempSync(path.join(os.tmpdir(), 'rcloop-')) }
 
-// A scenario supplies, per round, the findings every reviewer returns (the same array drives all five
-// reviewers — a cited blocker compiles to one blocking finding by identity), the fixer behaviour, and
-// whether the covers-stamp write succeeds. `roundFindings` is a queue (last value repeats).
+function reviewerPayload(findings, runDir, round) {
+  return {
+    findings: findings || [],
+    confidence: 'high',
+    verificationReceipt: {
+      artifact: `${runDir}:round-${round}`,
+      chain: [
+        { step: 'citation', evidence: 'reviewed citations' },
+        { step: 'reachability', evidence: 'validated call path' },
+        { step: 'missing-check', evidence: 'checked missing FRs' },
+        { step: 'tooling', evidence: 'smoke passed' },
+      ],
+      coverageDecisionIds: [],
+    },
+    usage: { input: 0, output: 0, total: 1 },
+  }
+}
+
 function install({ roundFindings, fix = 'resolve', provOk = true }) {
   const queue = roundFindings.slice()
   const nextFindings = () => (queue.length > 1 ? queue.shift() : queue[0])
   const calls = { prov: 0, readout: 0, readoutPost: 0, fix: 0, recordDeferred: 0 }
-  // Emulate record_deferred.py inside the exec dumb-pipe: write deferred-set.json so the next round's
-  // in-process tally reads the deferral (present-∩-deferred -> clean-with-skips).
   function runRecordDeferred(cmd) {
     calls.recordDeferred += 1
     const rd = cmd.match(/--run-dir '([^']+)'/)
@@ -37,25 +48,32 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
     try { set = JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) {}
     for (const d of report.deferred || []) if (d && d.id) set[d.id] = d.severity
     try { fs.writeFileSync(p, JSON.stringify(set)) } catch (_) {}
-    return JSON.stringify({ ok: true, extras: { fixes: report.fixed || [] } })
+    return JSON.stringify({ ok: true, extras: { fixes: report.fixed || report.fixes || [] } })
   }
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
-    // #115 Task 16: verifyAgent emits raw run data; JS twin classifies in-process
     if (label.startsWith('verify')) return { command: 'run-tests', returncode: 0, timedOut: false }
-    if (label.startsWith('synthesis')) return { verdicts: [] }   // keep all merged findings
-    if (label === 'exec') {                                       // the cheap recordDeferred pipe
+    if (label.startsWith('synthesis')) return { verdicts: [], usage: { total: 1 } }
+    if (label === 'exec') {
       if (prompt.includes('record_deferred.py')) return [{ index: 0, ok: true, stdout: runRecordDeferred(prompt) }]
       return []
     }
-    if (label === 'code-fixer') {
+    if (label.startsWith('code-fixer')) {
       calls.fix += 1
       const f = nextFindings() || []
       const ids = f.filter((x) => x.severity === 'Critical' || x.severity === 'Important').map(findingIdentity)
-      if (fix === 'fail') return null                            // fix failure -> halted
-      if (fix === 'defer') return { fixed: [], deferred: ids.map((id) => ({ id, severity: 'Important', parentOrigin: 'plan' })) }
-      return { fixed: ids, deferred: [] }                        // resolve
+      if (fix === 'fail') return null
+      if (fix === 'defer') {
+        return {
+          fixes: [],
+          deferred: ids.map((id) => ({ id, severity: 'Important', parentOrigin: 'plan' })),
+          changedSubjects: ['Code'],
+          coverageDecisions: [],
+          extras: { parentOrigin: 'plan' },
+        }
+      }
+      return { fixes: ids, fixed: ids, deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
     }
     if (label === 'readout') { calls.readout += 1; return '## Review loop — done' }
     if (label === 'lib') {
@@ -64,51 +82,47 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
       if (prompt.includes('readout_post.py')) { calls.readoutPost += 1; return { posted: false, recorded: true } }
       return { ok: true }
     }
-    // every reviewer leg RETURNS {findings:[...]} (the panel holds them in memory).
-    if (/^(architecture|code|security|test|premortem)-reviewer/.test(label)) return { findings: nextFindings() || [] }
-    return { findings: [] }
+    const m = label.match(/^(architecture|code|security|test|premortem)-reviewer:r(\d+)/)
+    if (m) {
+      const round = Number(m[2]) || 1
+      const runDir = (prompt.match(/Prompt context: (\{.*\})/) || [])[1]
+      let ctx = {}
+      try { ctx = JSON.parse(runDir || '{}') } catch (_) {}
+      const rd = ctx.receiptArtifact ? ctx.receiptArtifact.replace(/:round-\d+$/, '') : 'run'
+      return reviewerPayload(nextFindings() || [], rd, round)
+    }
+    return reviewerPayload([], 'run', 1)
   }
   return calls
 }
 
 const BLOCKER = [{ file: 'a.py', line: 1, title: 'bug', severity: 'Important', evidence: 'e' }]
 
-// Stub resolveTarget: returns a synthetic build worktree so loop-terminal scenarios can exercise the
-// full reviewCodePhase path without a real build worktree on disk. The seam is on opts.resolveTarget.
-// expectedHead is null here so the head-mismatch check (which needs a real git HEAD) is not armed;
-// the loop-terminal scenarios focus on clean/halt/fix/skips/cc/ufr2, not head-verification coverage
-// (that is covered by the targeted smoke + the new resolver-seam smoke below).
 const STUB_WT = '/tmp/review-loop-stub-wt'
 const stubResolveTarget = async () => ({ worktree: STUB_WT, expectedHead: null })
 
 async function main() {
-  // 1. clean -> advance + covers stamped (FR-9), gate passed.
   let calls = install({ roundFindings: [[]] })
   let r = await sr.reviewCodePhase('wi-clean', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'clean -> passed')
   assert.strictEqual(calls.prov, 1, 'clean stamps covers exactly once')
 
-  // 2. clean-with-skips -> advance, gate passed, NO covers stamp (parks later at the ship gate). The
-  //    blocker is flagged every round but the fixer DEFERS it -> round 2 is present-∩-deferred.
   calls = install({ roundFindings: [BLOCKER], fix: 'defer' })
   r = await sr.reviewCodePhase('wi-skips', { runDir: fresh(), resolveTarget: stubResolveTarget })
-  assert.strictEqual(r.gate, 'passed', 'clean-with-skips advances like clean')
+  assert.strictEqual(r.gate, 'changes-requested', 'clean-with-skips parks while a blocking tail exists')
   assert.strictEqual(calls.prov, 0, 'clean-with-skips records NO covers stamp')
 
-  // 3. halted -> park (changes-requested) + readout posted (UFR-1). A blocker whose fix step fails.
   calls = install({ roundFindings: [BLOCKER], fix: 'fail' })
   r = await sr.reviewCodePhase('wi-halt', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'changes-requested', 'halted -> park')
   assert.ok(calls.readout === 1 && calls.readoutPost === 1, 'halted posts the uniform readout')
   assert.strictEqual(calls.prov, 0, 'a park never stamps covers')
 
-  // 4. cannot-certify -> park (changes-requested). A reviewer that does NOT complete (non-array).
   install({ roundFindings: [[]] })
   let incomplete = 0
   const realAgent = global.agent
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    // the first reviewer never returns a findings array (and its retry also fails) -> coverage gap.
     if (label.startsWith('architecture-reviewer')) { incomplete += 1; return { notFindings: true } }
     return realAgent(prompt, opts)
   }
@@ -116,15 +130,12 @@ async function main() {
   assert.strictEqual(r.gate, 'changes-requested', 'cannot-certify -> park')
   assert.ok(incomplete >= 1, 'an incomplete reviewer drives cannot-certify')
 
-  // 5. UFR-2: clean but the covers-stamp write fails -> low-confidence park, NOT ship-ready.
   calls = install({ roundFindings: [[]], provOk: false })
   r = await sr.reviewCodePhase('wi-ufr2', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'changes-requested', 'failed covers stamp -> park, never ship-ready (UFR-2)')
   assert.strictEqual(r.phaseResult.confidence, 'low', 'UFR-2 park is low-confidence (resumable)')
 
-  // 6. continue -> fix step + recordDeferred -> re-review clean (the fix path is wired, loop converges).
-  //    Round 1 flags the blocker (continue); the fixer RESOLVES it; round 2 returns [] -> clean.
-  calls = install({ roundFindings: [BLOCKER, []], fix: 'resolve' })
+  calls = install({ roundFindings: [BLOCKER, [], []], fix: 'resolve' })
   r = await sr.reviewCodePhase('wi-fix', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'continue then clean converges to passed')
   assert.ok(calls.fix === 1 && calls.recordDeferred === 1, 'the fix step + recordDeferred leaves are invoked')

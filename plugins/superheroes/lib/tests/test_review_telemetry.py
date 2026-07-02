@@ -1,0 +1,71 @@
+import importlib.util
+import json
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+LIB = os.path.dirname(HERE)
+
+
+def load():
+    spec = importlib.util.spec_from_file_location("review_telemetry", os.path.join(LIB, "review_telemetry.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+RT = load()
+
+
+def test_complete_usage_is_benchmark_valid(tmp_path):
+    record = RT.build_record(
+        rounds=[{"round": 1, "dimensions": {"code-reviewer": {"status": "run", "tier": "reviewer-deep"}}}],
+        expected_leaves=["code-reviewer:r1", "synthesis:r1"],
+        usage={"code-reviewer:r1": {"input": 3, "output": 4, "total": 7}, "synthesis:r1": {"input": 1, "output": 2, "total": 3}},
+        benchmark=True,
+    )
+    assert record["tokenUsage"]["complete"] is True
+    assert record["benchmarkValid"] is True
+    assert record["tokenUsage"]["total"] == 10
+
+
+def test_partial_usage_is_not_benchmark_valid(tmp_path):
+    record = RT.build_record(
+        rounds=[{"round": 1, "dimensions": {}}],
+        expected_leaves=["code-reviewer:r1", "synthesis:r1"],
+        usage={"code-reviewer:r1": {"total": 7}},
+        benchmark=True,
+    )
+    assert record["tokenUsage"]["complete"] is False
+    assert record["benchmarkValid"] is False
+    assert record["tokenUsage"]["missing"] == ["synthesis:r1"]
+
+
+def test_dimension_counts_record_run_skip_and_tiers():
+    record = RT.build_record(
+        rounds=[{"round": 1, "dimensions": {"test-reviewer": {"status": "run", "tier": "reviewer-deep"}, "security-reviewer": {"status": "skipped", "tier": "reviewer-deep", "escalated": True}}}],
+        expected_leaves=["test-reviewer:r1"],
+        usage={"test-reviewer:r1": {"total": 7}},
+        benchmark=False,
+    )
+    assert record["dimensionCounts"]["test-reviewer"]["run"] == 1
+    assert record["dimensionCounts"]["security-reviewer"]["skipped"] == 1
+    assert record["dimensionCounts"]["test-reviewer"]["deep"] == 1
+    assert record["dimensionCounts"]["security-reviewer"]["escalated"] == 1
+
+
+def test_write_failure_does_not_change_terminal(tmp_path, monkeypatch):
+    path = tmp_path / "review-telemetry.json"
+    record = RT.build_record(rounds=[], expected_leaves=[], usage={}, benchmark=False, terminal="clean")
+    monkeypatch.setattr(RT, "_atomic_write", lambda _path, _text: {"ok": False, "reason": "write-failed"})
+    result = RT.write_record(str(path), record, expected_hash=RT.content_hash(""), run_id="run-1")
+    assert result["ok"] is False
+    assert record["terminal"] == "clean"
+
+
+def test_stale_telemetry_write_refuses_to_overwrite(tmp_path):
+    path = tmp_path / "review-telemetry.json"
+    path.write_text('{"schemaVersion":1}\n', encoding="utf-8")
+    record = RT.build_record(rounds=[], expected_leaves=[], usage={}, benchmark=False, terminal="clean")
+    result = RT.write_record(str(path), record, expected_hash="wrong", run_id="run-2")
+    assert result == {"ok": False, "reason": "stale"}
+    assert path.read_text(encoding="utf-8") == '{"schemaVersion":1}\n'

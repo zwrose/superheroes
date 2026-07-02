@@ -169,6 +169,11 @@ cp "$PLAN_PATH" "$SESSION_DIR/plan.md"
 SPEC_PATH="$ROOT/docs/superheroes/$WORK_ITEM/spec.md"
 [ -f "$SPEC_PATH" ] && cp "$SPEC_PATH" "$SESSION_DIR/spec.md"   # context; absent → reviewers note the spec couldn't be cross-checked
 
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+RUN_ID="review-${WORK_ITEM}-${SESSION_DIR##*/}"
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SESSION_DIR/plan.md")
+LEASE="${SESSION_DIR##*/}"
+
 TOUCHES=()
 grep -Eqi 'route|endpoint|api|handler'                  "$SESSION_DIR/plan.md" && TOUCHES+=("API")
 grep -Eqi 'component|view|page|screen|UI'               "$SESSION_DIR/plan.md" && TOUCHES+=("UI")
@@ -433,23 +438,16 @@ gate to set; say so and stop at the terminal summary).
   still open, or the user **skipped** a blocking finding → record `changes-requested` (the
   plan is not cleared to advance; report what remains).
 
-The gate write — and its guards — live in **one tested place**, `lib/gate_write.py` (the
-same handshake review-tasks and review-spec use, so a fix can't miss a copy). It owns the
-whole sequence and **degrades, it does not crash**: resolve the-architect's lib (the single
-§3.1 frontmatter writer) cross-plugin → a **canonical-path guard** (refuse to stamp a doc
-other than the one reviewed — `set-gate` reconstructs `docs/superheroes/<work-item>/plan.md`
-from `--work-item`, so an out-of-layout `<path>` would otherwise hit a *different* doc) → the
-**parent-gate precondition** (a plan is never certified `passed` while its `spec` isn't
-approved — it downgrades to `changes-requested`) → a guarded `set-gate`. It prints a
-human-readable detail to stderr and a one-word outcome to stdout:
+The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
 
 ```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$PLAN_PATH")
 GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
   --work-item "$WORK_ITEM" --reviewed-path "$PLAN_PATH" --review "$REVIEW" \
-  --parent-doc spec --root "$ROOT")
+  --parent-doc spec --root "$ROOT" \
+  --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 ```
 
 `$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
@@ -474,7 +472,7 @@ After exit, print a terminal summary in chat:
 
 Nothing else is written to the repo — the revised `$PLAN_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
 
-The shared dispatch/compile/revise learning-loop steps and staleness nudge are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` — read it and apply it where this skill's flow references those steps.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
 ## Plan-Content Requirements (Opinionated)
 

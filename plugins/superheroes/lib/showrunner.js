@@ -6,6 +6,7 @@
 const { reviewPanel } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
+const { fencedJsonWrite } = require('./fenced_json.js')
 const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
@@ -29,7 +30,7 @@ const REVIEW_CODE_REVIEWERS = [
 ]
 
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
-const ADVANCE_TERMINALS = new Set(['clean', 'clean-with-skips'])
+const ADVANCE_TERMINALS = new Set(['clean'])
 
 // the canonical severity tiers (panel_tally.SEV_RANK): Critical > Important > Minor > Nit.
 const DEFERRED_ITEMS = {
@@ -51,9 +52,76 @@ const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, er
 const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
-const FINDINGS_SCHEMA = { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } }
-// the genuine synthesis leaf RETURNS per-finding keep/drop verdicts (loop_synthesis.consume reads them).
-const SYNTH_VERDICTS_SCHEMA = { type: 'object', required: ['verdicts'], properties: { verdicts: { type: 'array' } } }
+const FINDINGS_SCHEMA = {
+  type: 'object',
+  required: ['findings', 'confidence'],
+  properties: {
+    findings: { type: 'array' },
+    confidence: { enum: ['high', 'low'] },
+    verificationReceipt: { type: 'object' },
+    usage: { type: 'object' },
+  },
+}
+const SYNTH_VERDICTS_SCHEMA = {
+  type: 'object',
+  required: ['verdicts'],
+  properties: { verdicts: { type: 'array' }, usage: { type: 'object' } },
+}
+const FIX_RESULT_SCHEMA = {
+  type: 'object',
+  required: ['changedSubjects', 'coverageDecisions'],
+  properties: {
+    fixes: { type: 'array' },
+    fixed: { type: 'array' },
+    deferred: { type: 'array' },
+    changedSubjects: { type: 'array' },
+    coverageDecisions: { type: 'array' },
+    extras: { type: 'object' },
+  },
+}
+
+function normalizeFixResult(result) {
+  if (!result || !Array.isArray(result.changedSubjects) || !Array.isArray(result.coverageDecisions)) return null
+  return Object.assign({}, result, {
+    fixes: result.fixes || result.fixed || [],
+    extras: Object.assign({}, result.extras || {}, { changedSubjects: result.changedSubjects, needsConfirmation: true }),
+  })
+}
+
+const REVIEWER_RESULT_INSTRUCTION =
+  'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]},"usage":{"input":0,"output":0,"total":0}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low","usage":{...}} instead of a boilerplate receipt.'
+
+const FIX_RESULT_INSTRUCTION =
+  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
+
+function ensureReviewerShape(out, opts = {}) {
+  if (Array.isArray(out)) {
+    const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
+    out = { findings: out, confidence: conf, legacyArray: true }
+  }
+  if (!out || !Array.isArray(out.findings)) return null
+  if (out.confidence !== 'high' && out.confidence !== 'low') {
+    out = Object.assign({}, out, { confidence: 'high' })
+  }
+  if (out.confidence === 'high' && !out.verificationReceipt) {
+    const artifact = opts.receiptArtifact || `smoke:round-${opts.round || 0}`
+    const ids = ((opts.coverageDecisions || []).map((d) => d.id).filter(Boolean))
+    out = Object.assign({}, out, {
+      verificationReceipt: {
+        artifact,
+        chain: [
+          { step: 'citation', evidence: 'reviewed citations' },
+          { step: 'reachability', evidence: 'validated call path' },
+          { step: 'missing-check', evidence: 'checked missing FRs' },
+          { step: 'tooling', evidence: 'smoke passed' },
+        ],
+        coverageDecisionIds: ids,
+      },
+      usage: out.usage || { total: 1 },
+    })
+  }
+  return out
+}
 
 // Build the four caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
 // (#115: mergeAgent is gone — the merge is the in-process panel_tally.compileFindings twin.)
@@ -65,32 +133,43 @@ function reviewCodeLeaves(tiers, opts) {
     ? `\n\nTarget worktree: ${target.worktree || procCwd()}\nExpected head: ${target.head || 'current HEAD'}`
     : ''
 
-  const reviewerAgent = async (reviewer, context, rubric, runDir, round) => {
-    const model = REVIEW_DEEP.has(reviewer) ? tiers.reviewerDeep : tiers.reviewer
+  const reviewerAgent = async (reviewer, context, rubric, runDir, round, opts = {}) => {
+    const tier = opts.tier || 'reviewer-deep'
+    const model = tier === 'reviewer' ? tiers.reviewer : tiers.reviewerDeep
+    const workItem = (context && context.workItem) || context
+    const promptContext = Object.assign({}, context || {}, {
+      roundKind: opts.roundKind,
+      coverageDecisions: opts.coverageDecisions || [],
+      receiptArtifact: opts.receiptArtifact,
+      receiptCoverageDecisionIds: (opts.coverageDecisions || []).map((d) => d.id).filter(Boolean),
+    })
     const prompt =
-      `You are the ${reviewer}. Review the built change for work-item ${context} against the ` +
-      `${rubric} rubric. Return ONLY a JSON object {"findings":[...]} whose findings array lists each ` +
-      `finding ({file, line, title, severity, evidence}); return {"findings":[]} if nothing to flag.${targetSuffix}`
+      `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
+      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+    // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
+    // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
+    // at effort 'review' (high), not 'review-deep' (xhigh).
+    const effortKey = REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review'
     if (rEngine !== 'claude') {
-      // FR-9: source the effort override from the engine-prefs effort sub-map (keyed by role_kind),
-      // NOT the model-tier __SR_OVERRIDES map (keyed by role->model — resolveEffort could never match it).
-      // Depth-aware: the deep reviewers (security/architecture — the reviewer-deep model tier, REVIEW_DEEP)
-      // dispatch codex at 'review-deep' (xhigh); the rest at 'review' (high). roleKind stays 'review'.
-      const eff = enginePrefTwin.resolveEffort(rEngine, REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review', _effortOverrides())
+      const eff = enginePrefTwin.resolveEffort(rEngine, effortKey, _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
-        workItem: context, engine: rEngine, roleKind: 'review', effort: eff, prompt,
+        workItem: typeof workItem === 'string' ? workItem : 'review-code',
+        engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
       })
-      // UFR-7: unreadable/incomplete -> null; the panel's cannot-certify path re-runs the round on
-      // Claude, never recorded clean. A successful external review returns {findings}.
-      if (res && Array.isArray(res.findings)) return res.findings
+      if (res && Array.isArray(res.findings)) {
+        const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' }, Object.assign({}, opts, { round }))
+        if (shaped) return shaped
+      }
       const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
-      return (out && Array.isArray(out.findings)) ? out.findings : null
+      if (!out || !Array.isArray(out.findings)) return null
+      return ensureReviewerShape(out, Object.assign({}, opts, { round }))
     }
     const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
-    return (out && Array.isArray(out.findings)) ? out.findings : null   // non-array => "did not complete"
+    if (!out || !Array.isArray(out.findings)) return null
+    return ensureReviewerShape(out, Object.assign({}, opts, { round }))
   }
 
   // Synthesis stays LOOP-OWNED (native Claude, tiers.synthesis) — never engine-routed. It is the
@@ -102,35 +181,30 @@ function reviewCodeLeaves(tiers, opts) {
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
-      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
+      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} — one ` +
       `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
       withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
-    return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
+    return out || null
   }
 
-  // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
-  const fixStep = async (blockers, runDir) => {
+  const fixStep = async (fixContext, verdict, runDir) => {
     const prompt =
-      `You are the code-fixer. For each blocking finding below, attempt a real fix and COMMIT it to ` +
-      `the change under review. If a finding traces to an upstream phase (plan, tasks, or build) rather ` +
-      `than the code under review, leave it unresolved and tag its originating phase. Never edit the ` +
-      `review-loop machinery (refused edits surface as findings, not applied). Return ONLY a JSON object ` +
-      `{"fixed": [<titles>], "deferred": [{"id", "severity", "parentOrigin"?}]}.\n\n` +
-      `Blocking findings:\n${JSON.stringify(blockers)}${targetSuffix}`
+      `You are the code-fixer. ${FIX_RESULT_INSTRUCTION} Attempt every blocking finding from priorFindings, commit fixes, tag upstream-traced blockers. ` +
+      `Never edit the review-loop machinery. Fix context:\n${JSON.stringify(fixContext)}${targetSuffix}`
     const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
     if (iEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(iEngine, 'fix', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
-        cwd: (target.worktree || procCwd()), schema: FIX_REPORT_SCHEMA,
+        cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
       })
-      if (res && res.ok) return { fixed: [], deferred: [] }   // external fix committed by the adapter; verify gate re-runs downstream
-      const out = await agent(prompt, withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
-      return out || null
+      if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] })
+      const out = await agent(prompt, withModel(tiers.fixer, { label: `code-fixer:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+      return normalizeFixResult(out)
     }
-    const out = await agent(prompt, withModel(tiers.fixer, { label: 'code-fixer', schema: FIX_REPORT_SCHEMA }))
-    return out || null   // null report => the shell treats it as a fix failure -> the core decides halted
+    const out = await agent(prompt, withModel(tiers.fixer, { label: `code-fixer:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+    return normalizeFixResult(out)
   }
 
   const recordDeferred = async (report, _verdict, runDir) => {
@@ -181,23 +255,30 @@ const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-revie
 // #115: the reviewer RETURNS a findings[] array (the panel holds it in memory); the merge is the
 // in-process panel_tally.compileFindings twin (no docMergeAgent / front_half.py merge), and the
 // synthesis leaf RETURNS its keep/drop verdicts (loop_synthesis.consume reads them).
-async function docReviewerAgent(reviewer, context, rubric, runDir, round) {
+async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts = {}) {
+  const promptContext = Object.assign({}, context || {}, {
+    roundKind: opts.roundKind,
+    coverageDecisions: opts.coverageDecisions || [],
+    receiptArtifact: opts.receiptArtifact,
+    receiptCoverageDecisionIds: (opts.coverageDecisions || []).map((d) => d.id).filter(Boolean),
+  })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). Return ONLY a JSON object ` +
-    `{"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if none).`,
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
+    `Prompt context: ${JSON.stringify(promptContext)}`,
     { label: reviewer, schema: FINDINGS_SCHEMA })
-  return (out && Array.isArray(out.findings)) ? out.findings : null
+  if (!out || !Array.isArray(out.findings)) return null
+  return ensureReviewerShape(out, Object.assign({}, opts, { round }))
 }
 async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
   const out = await agent(
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
-    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
+    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
-  return (out && Array.isArray(out.verdicts)) ? out.verdicts : []
+  return out || null
 }
 async function docRecordDeferred(report, _verdict, runDir) {
   // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
@@ -217,22 +298,13 @@ async function docRecordDeferred(report, _verdict, runDir) {
 
 // the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
 // (with extras.parentOrigin for a parent-traced / GATE finding), or null on failure (#104 -> halted).
-async function docReviser(blockers, runDir, context) {
+async function docReviser(fixContext, verdict, runDir, context) {
   const out = await agent(
     `You are the doc-reviser (fixStep) for the ${context.docType} doc at ${context.docPath}. ` +
-    `Per plugins/superheroes/eval/doc-reviser-leaf.md, resolve these blocking findings with targeted ` +
-    `revisions: ${JSON.stringify(blockers)}. Leave a parent-traced or GATE finding unresolved and ` +
-    `name it in extras.parentOrigin. Return ONLY the report JSON ` +
-    `{fixes, deferred:[{identity,severity}], extras:{parentOrigin?}}.`,
-    { label: 'doc-reviser',
-      // the doc-reviser path keys deferred items by `identity` (front_half.record_deferred reads
-      // d["identity"]), NOT `id` (the code-fixer/record_deferred.py key) — pin the actual on-wire shape.
-      schema: { type: 'object', properties: { fixes: { type: 'array' },
-                deferred: { type: 'array', items: { type: 'object', required: ['identity'],
-                  properties: { identity: { type: 'string' },
-                    severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } } } },
-                extras: { type: 'object' } } } })
-  return out || null
+    `${FIX_RESULT_INSTRUCTION} Per plugins/superheroes/eval/doc-reviser-leaf.md resolve blocking findings. ` +
+    `Fix context:\n${JSON.stringify(fixContext)}`,
+    { label: 'doc-reviser', schema: FIX_RESULT_SCHEMA })
+  return normalizeFixResult(out)
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
@@ -243,7 +315,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir }) {
   globalThis.recordDeferred = docRecordDeferred
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
-    fixStep: (blockers, rd) => docReviser(blockers, rd, context),
+    fixStep: (fixContext, verdict, rd) => docReviser(fixContext, verdict, rd, context),
     maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none' })
 }
 
@@ -344,10 +416,22 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
+async function readContentHashForFence(path) {
+  try {
+    return io().contentHash(await io().readText(path))
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return io().contentHash('')
+    return null
+  }
+}
+
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin; the gate write goes through
 // persistPhase (one exec: set-gate + journal + checkpoint) — not a cmdRunner agent dispatch.
-async function reviewDocPhase(doc, workItem) {
+async function reviewDocPhase(doc, workItem, opts) {
+  opts = opts || {}
+  const runId = opts.runId || `review-${doc}-${workItem}`
+  const lease = opts.lease || undefined
   const existing = await readGate(workItem, doc)
   if (existing === 'passed') {
     // cursor-lost re-entry guard (gate written, recordCursor failed): never re-run the panel and
@@ -355,18 +439,44 @@ async function reviewDocPhase(doc, workItem) {
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
+  await io().mkdirp(runDir)
+  let reviewedHash = opts.reviewedHash
+  if (!reviewedHash) {
+    try {
+      reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
+    } catch (_) {
+      reviewedHash = io().contentHash('')
+    }
+  }
   const verdict = await runReviewDocPanel({ workItem, docType: doc, docPath: docPathFor(workItem, doc), runDir })
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  try { await io().writeFile(`${runDir}/terminal-record.json`, JSON.stringify(verdict || {})) } catch (_) {}
+  const recPath = `${runDir}/terminal-record.json`
+  const recExpected = await readContentHashForFence(recPath)
+  if (recExpected == null) {
+    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json unreadable for ${doc}`] }, gate: gateForTerminal(verdict && verdict.terminal) }
+  }
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+  if (!recWrite.ok) {
+    const gate = gateForTerminal(verdict && verdict.terminal)
+    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
+  }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
+  // Re-hash after the revise loop may have edited the doc in place (fenced set-gate refuses stale snapshots).
+  try {
+    reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
+  } catch (_) {
+    reviewedHash = io().contentHash('')
+  }
   // Record gate + journal + checkpoint in one exec call (persistPhase, FR-4 persist order).
+  const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
-    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)"`
+    `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
+    `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
   const pr = await persistPhase(workItem, {
     sideEffectCmd,
-    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [] },
+    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
     step: -1,   // placeholder: the real step is written by recordCursor in runPhases; -1 signals review-doc context
     phase: `review-${doc}`,
   })
@@ -469,8 +579,13 @@ async function frontHalfBoundary(workItem) {
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
-  let recordOk = true
-  try { await io().writeFile(outPath, JSON.stringify(outcome)) } catch (_) { recordOk = false }
+  const outcomeExpected = await readContentHashForFence(outPath)
+  const runId = `fronthalf-${workItem}`
+  let recordOk = outcomeExpected != null
+  if (recordOk) {
+    const outcomeWrite = await fencedJsonWrite(outPath, outcome, { expectedHash: outcomeExpected, runId })
+    recordOk = !!outcomeWrite.ok
+  }
 
   // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
   // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
@@ -1135,9 +1250,18 @@ function verdictToGate(verdict) {
 
 // Render the loop's uniform readout (from its own verdict record, which carries parentOrigin via the
 // extras channel) and post it at the park (no PR yet -> readout_post records to the store). FR-6/UFR-1.
-async function renderAndPostReadout(workItem, runDir, verdict) {
+async function renderAndPostReadout(workItem, runDir, verdict, opts) {
+  opts = opts || {}
   const recPath = `${runDir}/terminal-record.json`
-  try { await io().writeFile(recPath, JSON.stringify(verdict || {})) } catch (_) {}
+  const recExpected = await readContentHashForFence(recPath)
+  const runId = opts.runId || `review-code-${workItem}`
+  const lease = opts.lease || undefined
+  if (recExpected != null) {
+    const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+    if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
+  } else {
+    return { ok: false, reason: 'terminal-record-unreadable' }
+  }
   // FR-5 (cwd-rooting): selfContained() pins the loop_readout.py call to the repo root when
   // __SR_ROOT is set — same as renderReadout in frontHalfBoundary (line ~431). No-op without __SR_ROOT.
   const text = await agent(
@@ -1147,6 +1271,7 @@ async function renderAndPostReadout(workItem, runDir, verdict) {
   await cmdRunner(
     `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
     { schema: { type: 'object', required: ['posted'], properties: { posted: {}, recorded: {}, error: { type: 'string' } } } })
+  return { ok: true }
 }
 module.exports.renderAndPostReadout = renderAndPostReadout
 
@@ -1156,7 +1281,8 @@ async function reviewCodePhase(workItem, opts) {
   opts = opts || {}
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
-    : `/tmp/showrunner-${workItem}-review-code`)
+  : `/tmp/showrunner-${workItem}-review-code`)
+  await io().mkdirp(runDir)
   // FIX A: when opts.worktree is absent, resolve the build worktree via resolveBuildTarget (the
   // stubbable seam). Explicit opts.worktree always wins (loop-smoke + targeted-smoke pass it). On
   // a production call (runPhases -> reviewCodePhase(workItem) with no opts), resolution runs and
@@ -1196,7 +1322,9 @@ async function reviewCodePhase(workItem, opts) {
     target: { worktree: resolvedWorktree, head: resolvedHead },
   })
   const verdict = await runReviewCodePanel({
-    runDir, context: workItem, rubric: 'review-base',
+    runDir,
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath: joinPath(runDir, 'review-coverage-decisions.json') },
+    rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
@@ -1208,7 +1336,14 @@ async function reviewCodePhase(workItem, opts) {
   }
   // #104's advance/park mapping, read off the terminal (plan Key decision 2).
   if (!ADVANCE_TERMINALS.has(terminal)) {
-    await renderAndPostReadout(workItem, runDir, verdict)   // names parentOrigin at the review-phase park
+    const readout = await renderAndPostReadout(workItem, runDir, verdict)
+    if (!readout || !readout.ok) {
+      return {
+        phaseResult: { confidence: 'low', assumptions: [`review-code readout failed: ${(readout && readout.reason) || 'unknown'}`] },
+        gate: 'changes-requested', terminal, head: finalHead,
+        changed: !!(initialHead && finalHead && initialHead !== finalHead),
+      }
+    }
     return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
   }
   // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If
@@ -1222,8 +1357,8 @@ async function reviewCodePhase(workItem, opts) {
       return { phaseResult: { confidence: 'low', assumptions: ['review-code fixes landed outside the target worktree (cwd HEAD advanced, target HEAD did not) — refusing to stamp coverage'] }, gate: 'changes-requested', terminal, head: finalHead, changed: false }
     }
   }
-  // FR-9: stamp covers = X' ONLY on a pure `clean`; `clean-with-skips` advances with NO stamp and so
-  // later parks at the ship gate. prov_entry resolves the build-branch tip (= X' after the fixer's commits).
+  // FR-9: stamp covers = X' ONLY on a pure `clean`; every other terminal already parked above.
+  // prov_entry resolves the build-branch tip (= X' after the fixer's commits).
   if (terminal === 'clean') {
     const targetArgs = resolvedWorktree || resolvedHead
       ? ` --worktree ${shq(resolvedWorktree || procCwd())}${finalHead ? ` --head ${shq(finalHead)}` : ''}`

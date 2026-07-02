@@ -63,3 +63,27 @@ def test_record_missing_warned_ufr9():
 def test_parent_origin_multi_phase_names_every_phase_fr6():
     out = LR.render(_record(terminal="halted", parentOrigin="plan, tasks"))
     assert "plan" in out and "tasks" in out and "upstream" in out.lower()
+
+
+def test_partial_telemetry_named_not_benchmark_valid():
+    out = LR.render(_record(telemetry={"benchmarkValid": False, "tokenUsage": {"complete": False, "missing": ["synthesis:r1"]}}))
+    assert "not benchmark-valid" in out
+    assert "synthesis:r1" in out
+
+
+def test_complete_telemetry_renders_counts_and_tokens():
+    out = LR.render(_record(telemetry={"roundCount": 2, "benchmarkValid": True, "tokenUsage": {"complete": True, "total": 42}, "dimensionCounts": {"test-reviewer": {"run": 2, "skipped": 0, "cheap": 1, "deep": 1, "escalated": 1}}}))
+    assert "Telemetry: 2 rounds" in out
+    assert "test-reviewer: run 2" in out
+    assert "tokens 42" in out
+
+
+def test_readout_renders_coverage_decisions_and_challenges():
+    out = LR.render(_record(coverageDecisions=[
+        {"id": "RCD-1", "classKey": "Test::coverage::missing acceptance test", "text": "Acceptance fixtures cover repeated missing-test findings.", "sourceRound": 2},
+        {"id": "RCD-bad", "classKey": "Security::leak", "text": "Security-only changes never affect readouts.", "challengedBy": "security-reviewer"},
+    ]))
+    assert "Coverage decisions:" in out
+    assert "RCD-1" in out
+    assert "Test::coverage::missing acceptance test" in out
+    assert "challenged by security-reviewer" in out

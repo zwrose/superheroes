@@ -17,15 +17,18 @@ global.agent = async () => null
 // The SAME blocking finding identity (a.py::recurring bug) recurs round after round despite a
 // "successful" fix each round — exactly the stuck loop the breaker exists to stop.
 const RECURRING = [{ file: 'a.py', line: 7, title: 'Recurring Bug', severity: 'Critical', evidence: 'e' }]
+function receipt(runDir, round) {
+  return { artifact: `${runDir}:round-${round}`, chain: [{ step: 'citation', evidence: 'e' }, { step: 'reachability', evidence: 'e' }, { step: 'missing-check', evidence: 'e' }, { step: 'tooling', evidence: 'e' }], coverageDecisionIds: [] }
+}
 
 async function main() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'breaker-'))
-  // Reviewer flags the same blocker every round; the fixStep always "succeeds" (so the halt is NOT a
-  // fix-failure halt) but the finding keeps coming back -> recurrence across rounds 1 and 2.
-  global.reviewerAgent = async () => RECURRING.map((f) => ({ ...f }))
+  global.reviewerAgent = async (_r, _c, _rub, runDir, round) => ({
+    findings: RECURRING, confidence: 'high', verificationReceipt: receipt(runDir, round), usage: { total: 1 },
+  })
   const verdict = await reviewPanel({
     reviewerSet: ['code'], context: {}, rubric: 'r', runKey: dir, runDir: dir,
-    fixStep: async () => ({ fixed: ['a.py::recurring bug'] }),   // "fixed" but it recurs next round
+    fixStep: async () => ({ fixed: ['a.py::recurring bug'], changedSubjects: ['Code'], coverageDecisions: [] }),
     maxRounds: 7, legKind: { panel: true, code: false },
   })
   assert.strictEqual(verdict.terminal, 'halted', 'a recurring blocking finding must halt the loop')

@@ -483,6 +483,6 @@ The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both
 
 ## Learning Loop & Staleness Nudge
 
-The learning-loop, staleness-nudge, and provisional-profile steps shared across all review skills are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` — read it and apply it at the end of each run and wherever the flow references those steps.
+For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
 The subagent prompt templates, verification rules, and common mistakes for this skill are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md`.
