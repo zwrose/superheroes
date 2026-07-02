@@ -28,3 +28,17 @@ def test_render_shows_core_layers_and_is_read_only(tmp_path):
     screen = cv.render(str(tmp_path), root=root)
     assert "pytest" in screen and "review-crew" in screen and "single-user" in screen
     assert sorted(os.listdir(cdir)) == before   # render wrote nothing (FR-18)
+
+
+def test_render_shows_storage_health_line(tmp_path):
+    import json
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)  # mints the live store
+    orphan = os.path.join(root, "projects", "eeee000000000001")
+    os.makedirs(orphan)
+    sc.atomic_write(os.path.join(orphan, "meta.json"),
+                    json.dumps({"schemaVersion": 1, "sourcePath": str(tmp_path / "gone")}))
+    screen = cv.render(str(tmp_path), root=root)
+    assert "storage health" in screen
+    assert "1 orphaned" in screen

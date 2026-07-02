@@ -272,7 +272,12 @@ def ensure_project_store(cwd, root=None):
                 return None
         meta = os.path.join(d, "meta.json")
         if not os.path.isfile(meta):
-            store_core.atomic_write(meta, json.dumps({"schemaVersion": SCHEMA_VERSION}))
+            # sourcePath is mint-time provenance: the config key is a one-way hash, so
+            # without it an abandoned store can never be traced back to its source repo
+            # (or classified as an orphan by store_sweep). Never rewrite an existing
+            # meta.json — a missing sourcePath just means "unknown provenance".
+            store_core.atomic_write(meta, json.dumps(
+                {"schemaVersion": SCHEMA_VERSION, "sourcePath": os.path.realpath(cwd)}))
         return d
     except (OSError, subprocess.SubprocessError):
         return None

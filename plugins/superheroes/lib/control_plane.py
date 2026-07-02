@@ -150,7 +150,10 @@ def ensure_store(cwd, root=None):
                 return None
         meta = os.path.join(d, "meta.json")
         if not os.path.isfile(meta):
-            atomic_write(meta, json.dumps({"schemaVersion": SCHEMA_VERSION}))
+            # sourcePath = mint-time provenance (the checkout key is a one-way hash);
+            # never rewritten — a missing sourcePath means "unknown provenance".
+            atomic_write(meta, json.dumps(
+                {"schemaVersion": SCHEMA_VERSION, "sourcePath": os.path.realpath(cwd)}))
         return d
     except (OSError, subprocess.SubprocessError):
         return None

@@ -41,6 +41,21 @@ action that owns it, leaving the rest of the calibration untouched:
   This is the mandatory/optional split: a missing **review-crew** layer is an incomplete set-up the
   route already sends to `fix`; optional heroes (test-pilot) never force a repair — they surface
   here as an offer. A hero the owner declines (here or at set-up) is recorded so it is not re-offered.
+- **Sweep orphaned per-project stores** → when the view's `storage health` line reports orphaned
+  or unknown-provenance stores, offer the sweep. Always report first, show the counts and the
+  orphan list, and delete only on the owner's explicit confirm:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  python3 "$ROOT_DIR/lib/store_sweep.py" report
+  # show the owner the counts + orphaned paths; on their explicit confirm:
+  python3 "$ROOT_DIR/lib/store_sweep.py" sweep
+  ```
+
+  `sweep` deletes only provenance-orphaned stores (recorded source path gone, no real content) —
+  never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
+  are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
+  reads as real and is kept.
 - **Switch the storage mode** → the confirmed switch below.
 - **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
   `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing

@@ -36,6 +36,25 @@ def test_ensure_project_store_creates_git_and_meta(tmp_path):
     assert json.load(open(os.path.join(d, "meta.json")))["schemaVersion"] == mr.SCHEMA_VERSION
 
 
+def test_ensure_project_store_records_source_path_provenance(tmp_path):
+    _init_repo(tmp_path)
+    d = mr.ensure_project_store(str(tmp_path), root=str(tmp_path / "store"))
+    meta = json.load(open(os.path.join(d, "meta.json")))
+    assert meta["sourcePath"] == os.path.realpath(str(tmp_path))
+
+
+def test_ensure_project_store_never_rewrites_existing_meta(tmp_path):
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    import store_core as sc
+    d = os.path.join(root, "projects", mr.config_key(str(tmp_path)))
+    os.makedirs(d)
+    sc.atomic_write(os.path.join(d, "meta.json"), json.dumps({"schemaVersion": 1}))
+    assert mr.ensure_project_store(str(tmp_path), root=root) == d
+    meta = json.load(open(os.path.join(d, "meta.json")))
+    assert meta == {"schemaVersion": 1}  # pre-provenance meta stays byte-identical
+
+
 def test_ensure_project_store_is_idempotent(tmp_path):
     _init_repo(tmp_path)
     root = str(tmp_path / "store")
