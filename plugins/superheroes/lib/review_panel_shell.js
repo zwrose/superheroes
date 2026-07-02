@@ -536,11 +536,11 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
       reason = 'coverage incomplete — missing review angle(s): ' + missing.join(', ')
     }
     const markedPending = (records || []).some((r) => r && r.confirmationPending)
-    if (terminal === 'clean' && markedPending && !enterConfirmation) {
+    if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
       terminal = 'continue'
       reason = 'awaiting final confirmation round'
     }
-    if (terminal === 'clean' && policy.roundKind === 'confirmation') {
+    if ((terminal === 'clean' || terminal === 'clean-with-skips') && policy.roundKind === 'confirmation') {
       // confirmation round succeeded — clear marker on persisted record handled next round
     }
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
