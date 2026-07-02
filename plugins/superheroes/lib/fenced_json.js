@@ -1,50 +1,43 @@
 const { io } = require('./io_seam.js')
 
-// writeTextVerified: put `text` on disk and PROVE it arrived intact. In the Workflow bundle the
-// io seam is an LLM courier that can mangle a large body in transit (live 2026-07-02), so the
-// write is followed by an on-disk hash read-back (a 64-char echo — too small to mangle) compared
-// against the locally computed hash; one retry, then fail-closed. On node's disk io the verify
-// is a cheap no-op check.
-async function writeTextVerified(ioApi, path, text) {
-  const want = ioApi.contentHash(text)
-  // Ensure the parent dir exists — fenced_json.py's atomic replace used to makedirs for the
-  // whole payload write; the staged file needs the same guarantee (a fresh /tmp run dir).
-  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
-  if (dir) { try { await ioApi.mkdirp(dir) } catch (_) { /* the write below fails closed */ } }
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(path, text) } catch (_) { continue }
-    const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'hash', '--path', path])
-    try {
-      const parsed = JSON.parse((out && out.stdout) || '')
-      if (parsed && parsed.ok && parsed.contentHash === want) return { ok: true, contentHash: want }
-    } catch (_) { /* retry */ }
-  }
-  return { ok: false, reason: 'verified-write-failed' }
-}
-
+// fencedJsonWrite: put a JSON artifact on disk through the courier in TWO leaves — one
+// unverified stage-write of the payload file, then one fenced_json.py write that verifies the
+// staged text's sha256 ITSELF before applying (--payload-hash). A courier that mangles the
+// staged body in transit (live 2026-07-02) fails the Python-side hash check as payload-corrupt
+// and the stage is retried once, then fail-closed — never silently altered content. This folds
+// the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash read-back + write)
+// into stage + verify-write.
+//
+// opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
+// against the hash the caller last observed) or overwrite:true (single-writer, lease-guarded
+// run artifacts like terminal-record.json, where the runtime unconditionally replaces and the
+// old read-then-CAS pair protected nothing the lease doesn't already).
 async function fencedJsonWrite(path, payload, opts) {
   const ioApi = io()
-  if (!opts || !opts.expectedHash) return { ok: false, reason: 'missing-expected-hash' }
-  let current = ''
-  try { current = await ioApi.readText(path) } catch (err) {
-    if (!(err && err.code === 'ENOENT')) return { ok: false, reason: 'unreadable' }
-  }
-  if (ioApi.contentHash(current) !== opts.expectedHash) return { ok: false, reason: 'stale' }
-  if (!opts.runId) return { ok: false, reason: 'missing-run-id' }
+  if (!opts || !opts.runId) return { ok: false, reason: 'missing-run-id' }
+  if (!opts.expectedHash && !opts.overwrite) return { ok: false, reason: 'missing-expected-hash' }
   const next = Object.assign({}, payload || {}, { runId: opts.runId, lease: opts.lease })
-  // Stage the payload as a hash-verified FILE and hand the helper its path — an unbounded
-  // payload must never ride the courier args inline (it gets mangled; live 2026-07-02).
+  const text = JSON.stringify(next)
+  const want = ioApi.contentHash(text)
   const stagedPath = path + '.payload'
-  const staged = await writeTextVerified(ioApi, stagedPath, JSON.stringify(next))
-  if (!staged.ok) return { ok: false, reason: 'payload-stage-failed' }
-  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path, '--payload-path', stagedPath, '--expected-hash', opts.expectedHash, '--run-id', opts.runId]
+  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path,
+    '--payload-path', stagedPath, '--payload-hash', want, '--run-id', opts.runId]
+  if (opts.overwrite) args.push('--allow-overwrite')
+  else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
-  const out = await ioApi.runHelper('python3', args)
-  try {
-    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'write-failed' }
-  } catch (_) {
-    return { ok: false, reason: 'write-failed' }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try { await ioApi.writeFile(stagedPath, text) } catch (_) { continue }
+    const out = await ioApi.runHelper('python3', args)
+    let parsed = null
+    try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return parsed
+    // a real refusal (stale, missing-run-id, replace-failed) is final; only a transport-corrupt
+    // stage (or an unparseable answer) earns the one retry.
+    if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
+      return { ok: false, reason: parsed.reason }
+    }
   }
+  return { ok: false, reason: 'payload-stage-failed' }
 }
 
-module.exports = { fencedJsonWrite, writeTextVerified }
+module.exports = { fencedJsonWrite }

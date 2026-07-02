@@ -39,9 +39,9 @@ def test_carried_findings_do_not_recur():
     assert rm.recurrent_classes(records) == []
 
 
-# --- compose-persist / update-round / hash: the record body never rides the courier args ---
-# (live 2026-07-02: the haiku courier mangled the oversized inline --record-json payload and every
-# native review leg parked cannot-certify: round-memory-write-failed).
+# --- persist-skeleton / update-round / hash: the round record's DURABLE form is the bounded
+# skeleton (D3) — evidence bodies never touch round-records.json, and the inline transport
+# self-verifies via --record-hash (a courier that mangles the JSON cannot recompute its sha256).
 import subprocess
 import sys
 
@@ -58,68 +58,130 @@ def _big_findings(dimension, n, evidence_kb=2):
             for i in range(n)]
 
 
-def _stage_dim(run_dir, name, round_no, result):
-    path = os.path.join(run_dir, f"dim-result-{name}-r{round_no}.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(result, fh)
-    return path
-
-
-def test_compose_persist_composes_large_record_from_dim_files(tmp_path):
-    """A realistic multi-hundred-KB round record persists via file paths + small scalars only."""
+def _skeleton_cli(records_path, record, expected_hash, run_id="run-1", record_hash=None):
     rm = load_memory()
-    run_dir = str(tmp_path)
-    records_path = os.path.join(run_dir, "round-records.json")
-    dims = ["code", "security"]
-    for name in dims:
-        _stage_dim(run_dir, name, 1, {"dimension": name, "status": "run", "confidence": "high",
-                                      "findings": _big_findings(name, 60)})   # ~120KB per dim
-    r = _cli("compose-persist", "--path", records_path, "--run-dir", run_dir,
-             "--round", "1", "--kind", "baseline", "--dimensions", json.dumps(dims),
-             "--changed-subjects-json", "null", "--coverage-decisions-json", "[]",
-             "--token-usage-json", json.dumps({"code:r1": {"total": 5}}),
-             "--expected-hash", rm.content_hash(""), "--run-id", "run-1")
+    record_json = json.dumps(record)
+    return _cli("persist-skeleton", "--path", records_path,
+                "--record-json", record_json,
+                "--record-hash", record_hash or rm.content_hash(record_json),
+                "--expected-hash", expected_hash, "--run-id", run_id)
+
+
+def test_persist_skeleton_strips_bodies_python_side(tmp_path):
+    """Even a full-bodied record shipped by a drifted JS twin lands as skeletons on disk —
+    the on-disk contract (no evidence, no receipts) is enforced here, not in the caller."""
+    rm = load_memory()
+    records_path = str(tmp_path / "run" / "round-records.json")  # run dir doesn't exist yet
+    record = {"schemaVersion": 2, "round": 1, "kind": "baseline",
+              "confirmationPending": False, "changedSubjects": ["Code"],
+              "coverageDecisions": [{"id": "cd-1"}],
+              "tokenUsage": {"code:r1": {"total": 5}},
+              "findings": _big_findings("code", 40), "carriedFindings": [],
+              "dimensions": {"code": {"dimension": "code", "status": "run", "confidence": "high",
+                                      "round": 1, "subjects": ["Code"],
+                                      "findings": _big_findings("code", 40),
+                                      "verificationReceipt": {"chain": ["y" * 5000]}}}}
+    r = _skeleton_cli(records_path, record, rm.content_hash(""))
     out = json.loads(r.stdout)
     assert out["ok"] is True, r.stderr
-    assert "records" not in out, "compose-persist must NOT echo the records (mega stdout)"
-    assert out["contentHash"]
-    persisted = json.loads(open(records_path, encoding="utf-8").read())
+    assert "records" not in out, "persist-skeleton must NOT echo the records (mega stdout)"
+    text = open(records_path, encoding="utf-8").read()
+    assert "evidence" not in text, "finding bodies must never land in round-records.json"
+    assert "verificationReceipt" not in text, "receipts must never land in round-records.json"
+    persisted = json.loads(text)
     assert len(persisted) == 1 and persisted[0]["round"] == 1
-    assert len(persisted[0]["findings"]) == 120
+    assert len(persisted[0]["findings"]) == 40
+    assert persisted[0]["findings"][0]["severity"] == "Critical"
+    assert persisted[0]["dimensions"]["code"]["blockingCount"] == 40
     assert persisted[0]["runId"] == "run-1"
     assert persisted[0]["tokenUsage"] == {"code:r1": {"total": 5}}
     # fence: the returned hash matches the on-disk text (next round's expected-hash)
-    assert out["contentHash"] == rm.content_hash(open(records_path, encoding="utf-8").read())
+    assert out["contentHash"] == rm.content_hash(text)
 
 
-def test_compose_persist_missing_dim_file_fails_closed(tmp_path):
+def test_persist_skeleton_record_hash_mismatch_fails_closed(tmp_path):
+    """The transport self-check: a courier-mangled --record-json no longer matches the
+    shipped sha256, so nothing is written (retry-or-park upstream, never silent corruption)."""
     rm = load_memory()
-    run_dir = str(tmp_path)
-    records_path = os.path.join(run_dir, "round-records.json")
-    r = _cli("compose-persist", "--path", records_path, "--run-dir", run_dir,
-             "--round", "1", "--kind", "baseline", "--dimensions", json.dumps(["code"]),
-             "--changed-subjects-json", "null", "--coverage-decisions-json", "[]",
-             "--token-usage-json", "{}",
+    records_path = str(tmp_path / "round-records.json")
+    r = _skeleton_cli(records_path, {"schemaVersion": 2, "round": 1, "kind": "baseline"},
+                      rm.content_hash(""), record_hash="0" * 64)
+    out = json.loads(r.stdout)
+    assert out == {"ok": False, "reason": "record-corrupt"}
+    assert not os.path.exists(records_path)
+
+
+def test_persist_skeleton_record_path_variant(tmp_path):
+    """A many-finding skeleton that outgrows a safe inline arg rides a staged file; the same
+    --record-hash self-check covers the staged text."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    staged = tmp_path / "round-skeleton-r1.json"
+    record_json = json.dumps({"schemaVersion": 2, "round": 1, "kind": "baseline",
+                              "findings": [{"file": "a.py", "title": f"f{i}", "severity": "Minor"}
+                                           for i in range(200)]})
+    staged.write_text(record_json, encoding="utf-8")
+    r = _cli("persist-skeleton", "--path", records_path, "--record-path", str(staged),
+             "--record-hash", rm.content_hash(record_json),
              "--expected-hash", rm.content_hash(""), "--run-id", "run-1")
     out = json.loads(r.stdout)
-    assert out["ok"] is False
-    assert "dim-result" in out.get("reason", "")
-    assert not os.path.exists(records_path), "a failed compose must not write the records file"
+    assert out["ok"] is True, r.stderr
+    assert len(json.loads(open(records_path, encoding="utf-8").read())[0]["findings"]) == 200
+    # a corrupted staged file fails the same self-check
+    staged.write_text(record_json + " ", encoding="utf-8")
+    r = _cli("persist-skeleton", "--path", records_path, "--record-path", str(staged),
+             "--record-hash", rm.content_hash(record_json),
+             "--expected-hash", out["contentHash"], "--run-id", "run-2")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "record-corrupt"}
 
 
-def test_compose_persist_stale_hash_refused(tmp_path):
-    run_dir = str(tmp_path)
-    records_path = os.path.join(run_dir, "round-records.json")
+def test_update_round_slims_deferred_bodies(tmp_path):
+    """A deferred entry embedding its full finding body must land slimmed — bodies can't
+    smuggle back into round-records.json through the post-fix delta (their durable home is
+    the best-effort round-bodies dump)."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    base = rm.persist_record(records_path, [], {"schemaVersion": 2, "round": 1, "kind": "baseline"},
+                             expected_hash=rm.content_hash(""), run_id="run-1")
+    updates = {"fix": {"fixes": [], "deferred": [
+        {"identity": "a.py::x", "severity": "Critical", "reason": "R" * 600,
+         "finding": {"file": "a.py", "title": "x", "severity": "Critical",
+                     "evidence": "E" * 5000}}]}}
+    r = _cli("update-round", "--path", records_path, "--round", "1",
+             "--updates-json", json.dumps(updates),
+             "--expected-hash", base["contentHash"], "--run-id", "run-2")
+    assert json.loads(r.stdout)["ok"] is True, r.stderr
+    text = open(records_path, encoding="utf-8").read()
+    assert "E" * 100 not in text, "deferred finding bodies must never land in round-records.json"
+    entry = json.loads(text)[0]["fix"]["deferred"][0]
+    assert entry["identity"] == "a.py::x" and len(entry["reason"]) == 500
+    assert entry["finding"] == {"file": "a.py", "title": "x", "severity": "Critical"}
+
+
+def test_persist_skeleton_stale_hash_refused(tmp_path):
+    records_path = str(tmp_path / "round-records.json")
     with open(records_path, "w", encoding="utf-8") as fh:
         fh.write("[]\n")
-    _stage_dim(run_dir, "code", 1, {"dimension": "code", "status": "run", "findings": []})
-    r = _cli("compose-persist", "--path", records_path, "--run-dir", run_dir,
-             "--round", "1", "--kind", "baseline", "--dimensions", json.dumps(["code"]),
-             "--changed-subjects-json", "null", "--coverage-decisions-json", "[]",
-             "--token-usage-json", "{}",
-             "--expected-hash", "wrong", "--run-id", "run-1")
+    r = _skeleton_cli(records_path, {"schemaVersion": 2, "round": 1, "kind": "baseline"}, "wrong")
     out = json.loads(r.stdout)
     assert out == {"ok": False, "reason": "stale"}
+    assert json.loads(open(records_path, encoding="utf-8").read()) == []
+
+
+def test_load_summary_extras_path_folds_the_entry_reads(tmp_path):
+    records_path = str(tmp_path / "round-records.json")
+    extras_path = str(tmp_path / "last-extras.json")
+    with open(extras_path, "w", encoding="utf-8") as fh:
+        json.dump({"changedSubjects": ["Code"], "needsConfirmation": True}, fh)
+    r = _cli("load-summary", "--path", records_path, "--dimensions", '["code"]',
+             "--extras-path", extras_path)
+    out = json.loads(r.stdout)
+    assert out["ok"] is True and out["records"] == []
+    assert out["extras"] == {"changedSubjects": ["Code"], "needsConfirmation": True}
+    # missing or corrupt extras answer as null (the loop's readJson-default parity)
+    r = _cli("load-summary", "--path", records_path, "--dimensions", '["code"]',
+             "--extras-path", str(tmp_path / "absent.json"))
+    assert json.loads(r.stdout)["extras"] is None
 
 
 def test_update_round_applies_small_delta(tmp_path):

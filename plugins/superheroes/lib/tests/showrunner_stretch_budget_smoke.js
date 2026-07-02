@@ -90,23 +90,24 @@ const PHASE_BUDGETS = {
   // read draft signals (pre-author) + post-author marker verify + save phase progress
   plan: 3,
   tasks: 3,
-  // read-gate exec (1) + one panel round: load-summary (1), last-extras read (1), coverage read
-  // (1), 5 staged dim writes + 5 mkdirs + 5 hash verifies (the #136 hash-verified staging),
-  // compose-persist (1), deferred-set read (1), telemetry read+write (2) + save round state (1)
-  // + reviewed-doc reads + terminal-record fence (read, mkdir, stage-write, hash, fenced write)
-  // + save phase progress (1). This count is DOMINATED by the #129/#136 per-op io surface —
-  // the defect-4 batching proposal in PR #118-conformance targets exactly these leaves.
-  'review-plan': 35,
-  'review-tasks': 35,
-  // entry gathers (read-gate, build_entry, task list, fence — 6 exec) + gather build state +
-  // per-task record-built/record-reviewed + verify+minors + final-review round (run verify +
-  // round-record io + review_memory/telemetry helpers) + stamp build coverage + prov exec
-  // + save phase progress
-  workhorse: 24,
-  // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + one panel
-  // round (as review-plan, incl. run verify) + final/cwd head reads (2 exec) + terminal-record
-  // fence + stamp review coverage + save phase progress
-  'review-code': 29,
+  // read-gate exec (1) + run-dir mkdir (1) + reviewed-doc pre-read (1) + deferred-set seed
+  // read (1) + the D3 round persistence: load-summary+extras gather (1), coverage doc read (1),
+  // persist-skeleton (1), deferred-set tally read (1), telemetry write (1), save round state (1)
+  // + terminal-record 2-leaf fenced write (stage + verify-write) + reviewed-doc re-hash read (1)
+  // + save phase progress (1). Was 35 pre-D3 (per-dim hash-verified staging + compose +
+  // telemetry/terminal-record read-hash ceremony — the defect-4 io surface, now folded).
+  'review-plan': 14,
+  'review-tasks': 14,
+  // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
+  // per-task record-built/record-reviewed + verify+minors + final-review round mkdir +
+  // (load-summary+extras, coverage read, run verify, persist-skeleton, deferred read,
+  // telemetry write) + stamp build coverage + prov exec + save phase progress. Was 24 pre-D3.
+  workhorse: 19,
+  // run-dir mkdir + resolve review target (the ONE entry gather: worktree + head + config +
+  // cwd-head) + one panel round (load-summary+extras, coverage read, run verify,
+  // persist-skeleton, deferred read, telemetry write) + final/cwd head reads (2 exec) + stamp
+  // review coverage + save phase progress. Was 29 pre-D3.
+  'review-code': 12,
   // open draft PR + save phase progress
   'draft-PR': 2,
   // resolve review target (build-worktree pin) + read test context + plan/results/server/seed
@@ -147,15 +148,33 @@ function runHelperResponse(cmdline) {
       const p = args[args.indexOf('--path') + 1]
       return JSON.stringify({ ok: true, contentHash: sha256(files[p] != null ? files[p] : '') })
     }
-    if (args[0] === 'load-summary') return JSON.stringify({ ok: true, records: [], contentHash: sha256('') })
-    if (args[0] === 'compose-persist') return JSON.stringify({ ok: true, contentHash: 'ch-round' })
+    if (args[0] === 'load-summary') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
+    if (args[0] === 'persist-skeleton') {
+      // D3: the ONE verified round-record leaf — the inline skeleton must self-verify
+      // (record-hash == sha256 of record-json) and must never carry evidence bodies.
+      const recordJson = args[args.indexOf('--record-json') + 1]
+      if (sha256(recordJson) !== args[args.indexOf('--record-hash') + 1]) {
+        throw new Error('persist-skeleton --record-hash does not match --record-json')
+      }
+      if (recordJson.includes('"evidence"')) throw new Error('persist-skeleton shipped finding bodies (D3 skeleton contract)')
+      return JSON.stringify({ ok: true, contentHash: 'ch-round' })
+    }
+    if (args[0] === 'compose-persist') {
+      throw new Error('compose-persist rode a leaf — the D3 skeleton persist replaced the staging ceremony')
+    }
     if (args[0] === 'update-round') return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
     const p = args[args.indexOf('--path') + 1]
     const staged = args[args.indexOf('--payload-path') + 1]
-    files[p] = files[staged] != null ? files[staged] : '{}'
+    const stagedText = files[staged] != null ? files[staged] : '{}'
+    // D3: the 2-leaf fenced write — the helper verifies the staged text's hash itself.
+    const hashIdx = args.indexOf('--payload-hash')
+    if (hashIdx >= 0 && sha256(stagedText) !== args[hashIdx + 1]) {
+      return JSON.stringify({ ok: false, reason: 'payload-corrupt' })
+    }
+    files[p] = stagedText
     return JSON.stringify({ ok: true, contentHash: sha256(files[p]) })
   }
   if (script.endsWith('coverage_decisions.py')) return JSON.stringify({ ok: true })

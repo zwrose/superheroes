@@ -2,12 +2,15 @@
 // courier pipe (live 2026-07-02: the haiku courier mangled the oversized inline --record-json,
 // persistRoundRecord failed, and every native review leg parked cannot-certify:
 // round-memory-write-failed; the telemetry + terminal-record writes failed the same way).
-// Asserts, on a round with realistically LARGE findings:
-//   (a) every review_memory/review_telemetry helper invocation carries only paths + small
-//       scalars — no --record-json/--payload-json, no arg anywhere near the record size;
-//   (b) the round record still lands complete on disk (composed Python-side from the staged
-//       per-dimension files), and the verdict's telemetry is the small summary (no rounds);
-//   (c) fencedJsonWrite stages its payload as a file (--payload-path), never inline.
+// Asserts, on a round with realistically LARGE findings, the D3 durability contract:
+//   (a) every review_memory/review_telemetry helper invocation stays bounded — the ONE inline
+//       record arg is the self-verified SKELETON (--record-hash = sha256(--record-json), no
+//       evidence bodies, small), never the full record;
+//   (b) round-records.json lands as skeletons (identity/severity survive; bodies never touch
+//       it); the dropped/deferred bodies land in the best-effort round-bodies dump; the
+//       verdict's telemetry is the small summary and the on-disk telemetry embeds no rounds;
+//   (c) fencedJsonWrite stages its payload as a file (--payload-path + --payload-hash),
+//       never inline.
 'use strict'
 const assert = require('assert')
 const fs = require('fs'); const os = require('os'); const path = require('path')
@@ -59,36 +62,55 @@ async function main() {
   }
   const v = await reviewPanel({
     reviewerSet: ['code'], context: {}, rubric: 'r', runKey: dir, runDir: dir,
-    fixStep: async () => ({ fixed: BIG_FINDINGS.map((f) => `${f.file}::${f.title}`), changedSubjects: ['Code'], coverageDecisions: [] }),
+    fixStep: async () => ({
+      fixed: BIG_FINDINGS.slice(1).map((f) => `${f.file}::${f.title}`),
+      deferred: [{ identity: `${BIG_FINDINGS[0].file}::${BIG_FINDINGS[0].title}`, severity: 'Critical', reason: 'out of scope for this branch', finding: BIG_FINDINGS[0] }],
+      changedSubjects: ['Code'], coverageDecisions: [],
+    }),
     maxRounds: 7, legKind: { panel: true, code: false },
   })
   assert.strictEqual(v.terminal, 'clean', `large-findings loop must still converge clean, got ${v.terminal} (${v.reason})`)
 
-  // (a) no unbounded inline body in ANY loop helper invocation
+  // (a) every loop helper invocation stays bounded; the one inline record is the self-verified
+  // skeleton (record-hash = sha256 of record-json, no evidence bodies)
   for (const call of helperCalls) {
     const script = String(call[1] || '')
     if (!/review_memory|review_telemetry|fenced_json/.test(script)) continue
-    assert.ok(!call.includes('--record-json'), `--record-json still present: ${script}`)
     assert.ok(!call.includes('--payload-json'), `--payload-json still present: ${script}`)
     for (const arg of call) {
       assert.ok(String(arg).length <= ARG_BOUND,
         `helper arg of ${String(arg).length}B (record is ${RECORD_SIZE}B) rides the courier inline: ${script} ${String(arg).slice(0, 80)}…`)
     }
+    const rjIdx = call.indexOf('--record-json')
+    if (rjIdx >= 0) {
+      const recordJson = String(call[rjIdx + 1])
+      assert.ok(!recordJson.includes(BIG_EVIDENCE), 'the inline record must be the skeleton (no evidence bodies)')
+      assert.strictEqual(call[call.indexOf('--record-hash') + 1], defaultIo.contentHash(recordJson),
+        'the inline record must self-verify (--record-hash = sha256 of --record-json)')
+    }
   }
 
-  // (b) the record landed complete on disk, composed from the staged per-dimension files
-  const recs = JSON.parse(fs.readFileSync(path.join(dir, 'round-records.json'), 'utf8'))
+  // (b) D3: round-records.json holds SKELETONS — identity/severity survive, bodies never land
+  const recsText = fs.readFileSync(path.join(dir, 'round-records.json'), 'utf8')
+  assert.ok(!recsText.includes(BIG_EVIDENCE), 'finding bodies must never land in round-records.json')
+  const recs = JSON.parse(recsText)
   const r1 = recs.find((r) => r.round === 1)
   assert.ok(r1, 'round 1 record persisted')
-  assert.strictEqual(r1.findings.length, BIG_FINDINGS.length, 'all large findings persisted')
-  assert.strictEqual(r1.findings[0].evidence, BIG_EVIDENCE, 'finding bodies intact')
-  assert.deepStrictEqual(r1.fix && r1.fix.fixes.length, BIG_FINDINGS.length, 'post-fix delta applied')
-  assert.ok(fs.existsSync(path.join(dir, 'dim-result-code-r1.json')), 'per-dimension result staged as a file')
-  // telemetry attached to the verdict is the SMALL summary — rounds stay on disk only
+  assert.strictEqual(r1.findings.length, BIG_FINDINGS.length, 'every finding skeleton persisted')
+  assert.strictEqual(r1.findings[0].severity, 'Critical', 'skeletons keep identity/severity')
+  assert.deepStrictEqual(r1.fix && r1.fix.fixes.length, BIG_FINDINGS.length - 1, 'post-fix delta applied')
+  assert.ok(!fs.existsSync(path.join(dir, 'dim-result-code-r1.json')),
+    'the per-dimension staging ceremony is gone (D3: one skeleton leaf)')
+  // the deferred finding's FULL body rides the best-effort round-bodies dump (the audit target)
+  const bodies = JSON.parse(fs.readFileSync(path.join(dir, 'round-bodies-r1.json'), 'utf8'))
+  assert.strictEqual(bodies.round, 1)
+  assert.strictEqual(bodies.deferred[0].finding.evidence, BIG_EVIDENCE, 'deferred bodies dumped in full')
+  // telemetry attached to the verdict is the SMALL summary — and the on-disk record matches
   assert.ok(v.telemetry && v.telemetry.benchmarkValid !== undefined, 'verdict carries telemetry summary')
   assert.ok(!('rounds' in v.telemetry), 'verdict.telemetry must NOT embed the rounds')
   const telem = JSON.parse(fs.readFileSync(path.join(dir, 'review-telemetry.json'), 'utf8'))
-  assert.ok(Array.isArray(telem.rounds) && telem.rounds.length >= 1, 'on-disk telemetry keeps full rounds')
+  assert.ok(!('rounds' in telem), 'D3: on-disk telemetry must not duplicate the round records')
+  assert.ok(telem.roundCount >= 1, 'telemetry keeps the round scalars')
 
   // (c) fencedJsonWrite stages the payload as a verified file, never inline
   helperCalls.length = 0
@@ -101,13 +123,14 @@ async function main() {
   const fjCall = helperCalls.find((c) => String(c[1]).includes('fenced_json.py'))
   assert.ok(fjCall, 'fencedJsonWrite went through the helper')
   assert.ok(fjCall.includes('--payload-path'), 'fencedJsonWrite must pass --payload-path')
+  assert.ok(fjCall.includes('--payload-hash'), 'fencedJsonWrite must self-verify the staged payload (--payload-hash)')
   assert.ok(!fjCall.includes('--payload-json'), 'fencedJsonWrite must not pass --payload-json')
   for (const arg of fjCall) assert.ok(String(arg).length <= ARG_BOUND, 'fenced write arg too large')
   assert.ok(!fs.existsSync(recPath + '.payload'), 'staged payload file consumed on success')
 
   // (d) the RESUME read is bounded too: a large on-disk history loads as summaries via
   // load-summary — the evidence bodies never ride the courier stdout back (the read twin
-  // of the compose-persist fix).
+  // of the persist-skeleton write side; pre-D3 full-bodied files load the same way).
   const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resume-'))
   const bigRecs = [1, 2].map((rnd) => ({
     schemaVersion: 2, round: rnd, kind: 'baseline', confirmationPending: false,

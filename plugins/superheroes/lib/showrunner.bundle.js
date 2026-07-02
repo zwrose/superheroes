@@ -677,7 +677,74 @@ function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, 
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults }
+// skeletonRecord: the JS twin of review_memory.py summarize_record — the bounded durable form
+// of a round record (D3). Findings keep only identity/class/severity (title<=300); dimension
+// records keep their scheduling scalars + skeleton findings. This is what persist-skeleton
+// ships inline (Python re-applies summarize_record on arrival, so a drift here can widen the
+// leaf payload but can never widen the on-disk contract).
+const _SKELETON_FIELDS = ['file', 'line', 'title', 'severity', 'taxonomy', 'dimension',
+                          'classKey', 'carried', 'sourceRound']
+const _MAX_TITLE = 300
+
+function _skeletonFinding(finding) {
+  if (!finding || typeof finding !== 'object') return {}
+  const out = {}
+  for (const k of _SKELETON_FIELDS) if (k in finding) out[k] = finding[k]
+  if (typeof out.title === 'string' && out.title.length > _MAX_TITLE) out.title = out.title.slice(0, _MAX_TITLE)
+  return out
+}
+
+function _summarizeDimension(dim) {
+  if (!dim || typeof dim !== 'object') return {}
+  const findings = Array.isArray(dim.findings) ? dim.findings : []
+  const out = {}
+  for (const k of ['dimension', 'status', 'confidence', 'round', 'subjects',
+                   'carriedFromRound', 'escalated', 'tier']) if (k in dim) out[k] = dim[k]
+  out.findings = findings.map(_skeletonFinding)
+  out.hasFindings = findings.length > 0 || !!dim.hasFindings
+  out.blockingCount = findings.filter((f) => f && typeof f === 'object' && BLOCKING.has(f.severity)).length
+  return out
+}
+
+// skeletonDeferred: the JS twin of _skeleton_deferred — deferred entries ride the update-round
+// delta as identity/severity/reason (+ skeleton finding); the full bodies' durable home is the
+// best-effort round-bodies dump.
+const _MAX_DEFER_REASON = 500
+
+function skeletonDeferred(items) {
+  const out = []
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== 'object') { out.push(item); continue }
+    const slim = {}
+    for (const k of ['identity', 'id', 'severity', 'reason']) if (k in item) slim[k] = item[k]
+    if (typeof slim.reason === 'string' && slim.reason.length > _MAX_DEFER_REASON) slim.reason = slim.reason.slice(0, _MAX_DEFER_REASON)
+    if (item.finding && typeof item.finding === 'object' && !Array.isArray(item.finding)) slim.finding = _skeletonFinding(item.finding)
+    out.push(slim)
+  }
+  return out
+}
+
+function skeletonRecord(record) {
+  const rec = (record && typeof record === 'object') ? record : {}
+  const findings = Array.isArray(rec.findings) ? rec.findings : []
+  const carried = Array.isArray(rec.carriedFindings) ? rec.carriedFindings : []
+  const dims = {}
+  for (const [name, d] of Object.entries(rec.dimensions || {})) dims[name] = _summarizeDimension(d)
+  return {
+    schemaVersion: rec.schemaVersion === undefined ? null : rec.schemaVersion,
+    round: rec.round === undefined ? null : rec.round,
+    kind: rec.kind === undefined ? null : rec.kind,
+    confirmationPending: !!rec.confirmationPending,
+    changedSubjects: rec.changedSubjects === undefined ? null : rec.changedSubjects,
+    coverageDecisions: rec.coverageDecisions || [],
+    tokenUsage: rec.tokenUsage === undefined ? null : rec.tokenUsage,
+    findings: findings.map(_skeletonFinding),
+    carriedFindings: carried.map(_skeletonFinding),
+    dimensions: dims,
+  }
+}
+
+module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred }
 
 };
 
@@ -697,7 +764,6 @@ const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
-const fencedJson = require('./fenced_json.js')
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
@@ -809,13 +875,15 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
-// load-summary is the read twin of compose-persist: the resume seed comes back as BOUNDED
+// load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
 // per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never the full findings bodies —
+// recurrence, policy, and fix-context need in memory), never full findings bodies —
 // echoing a multi-round evidence-laden file through the courier stdout is the same
-// mega-payload defect as the write side (live 2026-07-02), in reverse.
+// mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
+// the loop's second entry read (last-extras.json) into the same leaf; it comes back as
+// `extras` (null when missing/corrupt — the old readJson-default parity).
 async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json')])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -824,39 +892,62 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
   }
 }
 
-// The round-record BODY never rides the courier args (live 2026-07-02: the haiku courier
-// mangled the oversized inline --record-json and every native review leg parked
-// cannot-certify: round-memory-write-failed). Each dimension's slice is staged as its own
-// hash-VERIFIED file (bounded by one reviewer's output); review_memory.py compose-persist
-// then rebuilds + fence-persists the record Python-side from those paths + small scalars,
-// echoing back only {ok, contentHash}. The in-memory merge mirrors Python's (mergeRoundRecords).
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — exactly
+// what load-summary seeds a resume with), persisted in ONE verified CAS leaf for the typical
+// round: the skeleton rides the courier args inline, self-verified by --record-hash =
+// sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
+// corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
+// of persisting silently altered content. A many-finding round whose skeleton outgrows a safe
+// inline arg falls back to a staged file (+1 unverified stage leaf; the same hash check covers
+// it). Python re-applies summarize_record on arrival, so evidence bodies can never land in
+// round-records.json even if the JS twin drifts. Full bodies of the audit targets
+// (dropped/deferred findings) ride the separate BEST-EFFORT round-bodies dump; the final
+// round's bodies live in terminal-record.json.
+const _INLINE_RECORD_BOUND = 6000
 async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi) {
-  for (const name of reviewerSet || []) {
-    const dim = (record.dimensions || {})[name] || { dimension: name, status: 'missing', findings: [] }
-    const staged = await fencedJson.writeTextVerified(
-      ioApi, ioApi.join(runDir, `dim-result-${name}-r${record.round}.json`), JSON.stringify(dim))
-    if (!staged.ok) return { ok: false, reason: `dim-result-write-failed:${name}` }
-  }
-  const args = ['plugins/superheroes/lib/review_memory.py', 'compose-persist',
-    '--path', ioApi.join(runDir, 'round-records.json'), '--run-dir', runDir,
-    '--round', String(record.round), '--kind', String(record.kind || 'unknown'),
-    '--dimensions', JSON.stringify(reviewerSet),
-    '--changed-subjects-json', JSON.stringify(record.changedSubjects === undefined ? null : record.changedSubjects),
-    '--coverage-decisions-json', JSON.stringify(record.coverageDecisions || []),
-    '--token-usage-json', JSON.stringify(record.tokenUsage || {}),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
-  if (record.confirmationPending) args.push('--confirmation-pending')
+  const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
+  const inline = recordJson.length <= _INLINE_RECORD_BOUND
+  const stagedPath = ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
+  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
+    '--path', ioApi.join(runDir, 'round-records.json')]
+  args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
+  args.push('--record-hash', ioApi.contentHash(recordJson),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId)
   if (lease) args.push('--lease', lease)
-  const out = await ioApi.runHelper('python3', args)
-  try {
-    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'helper-failed' }
-  } catch (_) {
-    return { ok: false, reason: 'helper-failed' }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!inline) {
+      try { await ioApi.writeFile(stagedPath, recordJson) } catch (_) { continue }
+    }
+    const out = await ioApi.runHelper('python3', args)
+    let parsed = null
+    try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return parsed
+    // a real refusal (stale/unreadable) is final; only a transport-corrupt record (or an
+    // unparseable answer) earns the one retry.
+    if (parsed && parsed.reason && parsed.reason !== 'record-corrupt') return { ok: false, reason: parsed.reason }
   }
+  return { ok: false, reason: 'helper-failed' }
+}
+
+// D3 best-effort forensics: the FULL bodies of this round's dropped + deferred findings — the
+// audit targets (UFR-10 dropped-blocker evidence, receipt trust audits). A fixed finding's
+// evidence is its fix commit, so fixed bodies don't ride. ONE fire-and-forget leaf under the
+// spec's FR-4 best-effort carve-out: nothing advances on this write, so a failed (or
+// courier-mangled) dump degrades the audit trail, never the run.
+async function dumpRoundBodiesBestEffort(runDir, round, verdict, fixReport, ioApi) {
+  const drops = (verdict && Array.isArray(verdict.drops)) ? verdict.drops : []
+  const deferred = (fixReport && Array.isArray(fixReport.deferred)) ? fixReport.deferred : []
+  if (!drops.length && !deferred.length) return
+  try {
+    await ioApi.writeFile(ioApi.join(runDir, `round-bodies-r${round}.json`),
+      JSON.stringify({ schemaVersion: 1, round, drops, deferred }))
+  } catch (_) { /* best-effort by contract */ }
 }
 
 // mergeRoundRecords: the in-memory twin of persist_record's merge (dedupe the round, sort) —
-// compose-persist no longer echoes the merged records back through the pipe.
+// persist-skeleton never echoes the merged records back through the pipe, and the in-memory
+// copy keeps the CURRENT session's full-bodied record (richer fix context than the durable
+// skeleton; a resume gets the skeletons, same as before D3).
 function mergeRoundRecords(records, record) {
   const merged = (records || []).filter((r) => r && r.round !== record.round)
   merged.push(record)
@@ -866,11 +957,13 @@ function mergeRoundRecords(records, record) {
 
 // The post-fix update ships only the SMALL delta (confirmation marker, changed subjects,
 // coverage decisions, fix summary) — never the round body — via review_memory.py update-round.
+// Deferred entries ride slimmed (identity/severity/reason + skeleton finding): their full
+// bodies go to the round-bodies dump, not through this pipe or into round-records.json.
 async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: recordedCoverageDecisions || [],
-    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: fixResult.deferred || [] },
+    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []) },
   }
   if (legKind && legKind.panel) updates.confirmationPending = true
   const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
@@ -943,17 +1036,19 @@ function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   return leaves
 }
 
-// The telemetry `rounds` come from round-records.json ON DISK (review_telemetry.py
-// write-from-records composes Python-side); only small scalars ride the invocation, and the
-// helper answers with the small summary (payload minus rounds) so finalizeVerdict never
-// re-reads the full file back through the pipe.
-async function writeTelemetry(runDir, expectedLeaves, usage, terminal, expectedHash, runId, lease, ioApi) {
+// The telemetry round scalars (roundCount, dimensionCounts) come from round-records.json ON
+// DISK (review_telemetry.py write-from-records composes Python-side); only small scalars ride
+// the invocation, and the helper answers with the same small summary it wrote (D3: telemetry
+// never embeds rounds) so finalizeVerdict never re-reads the file back through the pipe.
+// No expected-hash: the telemetry file is a single-writer run artifact written once at the
+// terminal — the old pre-read + CAS pair cost a leaf and protected nothing the lease doesn't.
+async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, lease, ioApi) {
   const args = ['plugins/superheroes/lib/review_telemetry.py', 'write-from-records',
     '--path', ioApi.join(runDir, 'review-telemetry.json'),
     '--records-path', ioApi.join(runDir, 'round-records.json'),
     '--expected-leaves-json', JSON.stringify(expectedLeaves || []),
     '--usage-json', JSON.stringify(usage || {}),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+    '--run-id', runId]
   if (terminal) args.push('--terminal', String(terminal))
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
@@ -986,7 +1081,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let memoryState = await loadRoundRecords(runDir, reviewerSet || [], ioApi)
   let records = memoryState.ok ? memoryState.records : []
   let round = resumeRound(records)
-  let lastExtras = await ioApi.readJson(`${runDir}/last-extras.json`, null)
+  let lastExtras = memoryState.extras !== undefined ? memoryState.extras : null
   let justMarkedForConfirmation = false
   let fixRanThisRun = false
   const allUsage = {}
@@ -1139,6 +1234,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
     records = postFix.records || recordsForFix
     memoryState = { ok: true, records, contentHash: postFix.contentHash }
+    await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
     justMarkedForConfirmation = true
     try { await ioApi.writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {}
     round += 1
@@ -1148,13 +1244,11 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
 async function finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
   const expectedLeaves = []
   for (let r = 1; r <= round; r += 1) expectedLeaves.push(...expectedUsageLeaves(reviewerSet, r, legKind, fixRan && r === round))
-  const telemPath = ioApi.join(runDir, 'review-telemetry.json')
-  let telemHash = ioApi.contentHash('')
-  try { telemHash = ioApi.contentHash(await ioApi.readText(telemPath)) } catch (_) {}
-  const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, telemHash, runId, lease, ioApi)
-  // Attach the SMALL summary the helper answered with (rounds stay on disk only) — re-reading
-  // the full telemetry file back through the pipe would re-create the mega-payload hop, and a
-  // verdict embedding every round would ride the terminal-record write the same way.
+  const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, runId, lease, ioApi)
+  // Attach the SMALL summary the helper answered with (the round history stays in
+  // round-records.json only) — re-reading the telemetry file back through the pipe would
+  // re-create the mega-payload hop, and a verdict embedding every round would ride the
+  // terminal-record write the same way.
   let telemetry = { benchmarkValid: false, reason: 'telemetry-write-failed' }
   if (telemWrite.ok) {
     telemetry = Object.assign({}, telemWrite)
@@ -4609,54 +4703,47 @@ module.exports = { gateForTerminal, isUsableDraft, renderRunOutcome }
 __modules["fenced_json"] = function (module, exports, require) {
 const { io } = require('./io_seam.js')
 
-// writeTextVerified: put `text` on disk and PROVE it arrived intact. In the Workflow bundle the
-// io seam is an LLM courier that can mangle a large body in transit (live 2026-07-02), so the
-// write is followed by an on-disk hash read-back (a 64-char echo — too small to mangle) compared
-// against the locally computed hash; one retry, then fail-closed. On node's disk io the verify
-// is a cheap no-op check.
-async function writeTextVerified(ioApi, path, text) {
-  const want = ioApi.contentHash(text)
-  // Ensure the parent dir exists — fenced_json.py's atomic replace used to makedirs for the
-  // whole payload write; the staged file needs the same guarantee (a fresh /tmp run dir).
-  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
-  if (dir) { try { await ioApi.mkdirp(dir) } catch (_) { /* the write below fails closed */ } }
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(path, text) } catch (_) { continue }
-    const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'hash', '--path', path])
-    try {
-      const parsed = JSON.parse((out && out.stdout) || '')
-      if (parsed && parsed.ok && parsed.contentHash === want) return { ok: true, contentHash: want }
-    } catch (_) { /* retry */ }
-  }
-  return { ok: false, reason: 'verified-write-failed' }
-}
-
+// fencedJsonWrite: put a JSON artifact on disk through the courier in TWO leaves — one
+// unverified stage-write of the payload file, then one fenced_json.py write that verifies the
+// staged text's sha256 ITSELF before applying (--payload-hash). A courier that mangles the
+// staged body in transit (live 2026-07-02) fails the Python-side hash check as payload-corrupt
+// and the stage is retried once, then fail-closed — never silently altered content. This folds
+// the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash read-back + write)
+// into stage + verify-write.
+//
+// opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
+// against the hash the caller last observed) or overwrite:true (single-writer, lease-guarded
+// run artifacts like terminal-record.json, where the runtime unconditionally replaces and the
+// old read-then-CAS pair protected nothing the lease doesn't already).
 async function fencedJsonWrite(path, payload, opts) {
   const ioApi = io()
-  if (!opts || !opts.expectedHash) return { ok: false, reason: 'missing-expected-hash' }
-  let current = ''
-  try { current = await ioApi.readText(path) } catch (err) {
-    if (!(err && err.code === 'ENOENT')) return { ok: false, reason: 'unreadable' }
-  }
-  if (ioApi.contentHash(current) !== opts.expectedHash) return { ok: false, reason: 'stale' }
-  if (!opts.runId) return { ok: false, reason: 'missing-run-id' }
+  if (!opts || !opts.runId) return { ok: false, reason: 'missing-run-id' }
+  if (!opts.expectedHash && !opts.overwrite) return { ok: false, reason: 'missing-expected-hash' }
   const next = Object.assign({}, payload || {}, { runId: opts.runId, lease: opts.lease })
-  // Stage the payload as a hash-verified FILE and hand the helper its path — an unbounded
-  // payload must never ride the courier args inline (it gets mangled; live 2026-07-02).
+  const text = JSON.stringify(next)
+  const want = ioApi.contentHash(text)
   const stagedPath = path + '.payload'
-  const staged = await writeTextVerified(ioApi, stagedPath, JSON.stringify(next))
-  if (!staged.ok) return { ok: false, reason: 'payload-stage-failed' }
-  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path, '--payload-path', stagedPath, '--expected-hash', opts.expectedHash, '--run-id', opts.runId]
+  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path,
+    '--payload-path', stagedPath, '--payload-hash', want, '--run-id', opts.runId]
+  if (opts.overwrite) args.push('--allow-overwrite')
+  else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
-  const out = await ioApi.runHelper('python3', args)
-  try {
-    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'write-failed' }
-  } catch (_) {
-    return { ok: false, reason: 'write-failed' }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try { await ioApi.writeFile(stagedPath, text) } catch (_) { continue }
+    const out = await ioApi.runHelper('python3', args)
+    let parsed = null
+    try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return parsed
+    // a real refusal (stale, missing-run-id, replace-failed) is final; only a transport-corrupt
+    // stage (or an unparseable answer) earns the one retry.
+    if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
+      return { ok: false, reason: parsed.reason }
+    }
   }
+  return { ok: false, reason: 'payload-stage-failed' }
 }
 
-module.exports = { fencedJsonWrite, writeTextVerified }
+module.exports = { fencedJsonWrite }
 
 };
 
@@ -5124,15 +5211,6 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
-async function readContentHashForFence(path) {
-  try {
-    return io().contentHash(await io().readText(path))
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return io().contentHash('')
-    return null
-  }
-}
-
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin. #118: the gate write rides the
 // per-phase 'save phase progress' tail in runPhases (set-gate chained ahead of journal+checkpoint)
@@ -5173,12 +5251,10 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
+  // D3 fold: overwrite mode — a single-writer, lease-guarded run artifact; the old
+  // read-current-hash-then-CAS pair cost two extra leaves and protected nothing the lease doesn't.
   const recPath = `${runDir}/terminal-record.json`
-  const recExpected = await readContentHashForFence(recPath)
-  if (recExpected == null) {
-    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json unreadable for ${doc}`] }, gate: gateForTerminal(verdict && verdict.terminal) }
-  }
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
   if (!recWrite.ok) {
     const gate = gateForTerminal(verdict && verdict.terminal)
     return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
@@ -5306,13 +5382,9 @@ async function frontHalfBoundary(workItem) {
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
-  const outcomeExpected = await readContentHashForFence(outPath)
   const runId = `fronthalf-${workItem}`
-  let recordOk = outcomeExpected != null
-  if (recordOk) {
-    const outcomeWrite = await fencedJsonWrite(outPath, outcome, { expectedHash: outcomeExpected, runId })
-    recordOk = !!outcomeWrite.ok
-  }
+  const outcomeWrite = await fencedJsonWrite(outPath, outcome, { overwrite: true, runId })
+  let recordOk = !!outcomeWrite.ok
 
   // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
   // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
@@ -6109,15 +6181,10 @@ function verdictToGate(verdict) {
 async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   opts = opts || {}
   const recPath = `${runDir}/terminal-record.json`
-  const recExpected = await readContentHashForFence(recPath)
   const runId = opts.runId || `review-code-${workItem}`
   const lease = opts.lease || undefined
-  if (recExpected != null) {
-    const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
-    if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
-  } else {
-    return { ok: false, reason: 'terminal-record-unreadable' }
-  }
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
   // FR-5 (cwd-rooting): courier_exec's rootedCommand pins the loop_readout.py call to the repo
   // root when __SR_ROOT is set — same as renderReadout in frontHalfBoundary. The render is a dumb
   // pipe (run a command, echo stdout), so it rides the courier: pinned cheapest + one-shot retry.

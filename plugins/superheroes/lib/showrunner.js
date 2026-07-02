@@ -460,15 +460,6 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
-async function readContentHashForFence(path) {
-  try {
-    return io().contentHash(await io().readText(path))
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return io().contentHash('')
-    return null
-  }
-}
-
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin. #118: the gate write rides the
 // per-phase 'save phase progress' tail in runPhases (set-gate chained ahead of journal+checkpoint)
@@ -509,12 +500,10 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
+  // D3 fold: overwrite mode — a single-writer, lease-guarded run artifact; the old
+  // read-current-hash-then-CAS pair cost two extra leaves and protected nothing the lease doesn't.
   const recPath = `${runDir}/terminal-record.json`
-  const recExpected = await readContentHashForFence(recPath)
-  if (recExpected == null) {
-    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json unreadable for ${doc}`] }, gate: gateForTerminal(verdict && verdict.terminal) }
-  }
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
   if (!recWrite.ok) {
     const gate = gateForTerminal(verdict && verdict.terminal)
     return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
@@ -642,13 +631,9 @@ async function frontHalfBoundary(workItem) {
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
-  const outcomeExpected = await readContentHashForFence(outPath)
   const runId = `fronthalf-${workItem}`
-  let recordOk = outcomeExpected != null
-  if (recordOk) {
-    const outcomeWrite = await fencedJsonWrite(outPath, outcome, { expectedHash: outcomeExpected, runId })
-    recordOk = !!outcomeWrite.ok
-  }
+  const outcomeWrite = await fencedJsonWrite(outPath, outcome, { overwrite: true, runId })
+  let recordOk = !!outcomeWrite.ok
 
   // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
   // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
@@ -1445,15 +1430,10 @@ function verdictToGate(verdict) {
 async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   opts = opts || {}
   const recPath = `${runDir}/terminal-record.json`
-  const recExpected = await readContentHashForFence(recPath)
   const runId = opts.runId || `review-code-${workItem}`
   const lease = opts.lease || undefined
-  if (recExpected != null) {
-    const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
-    if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
-  } else {
-    return { ok: false, reason: 'terminal-record-unreadable' }
-  }
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
   // FR-5 (cwd-rooting): courier_exec's rootedCommand pins the loop_readout.py call to the repo
   // root when __SR_ROOT is set — same as renderReadout in frontHalfBoundary. The render is a dumb
   // pipe (run a command, echo stdout), so it rides the courier: pinned cheapest + one-shot retry.
