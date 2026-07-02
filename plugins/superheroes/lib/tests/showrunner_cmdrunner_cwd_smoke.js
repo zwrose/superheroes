@@ -103,6 +103,9 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
     let readoutPrompt = null
     global.agent = async (p, opts) => {
       if ((opts && opts.label) === 'readout') { readoutPrompt = p; return 'readout text' }
+      if ((opts && opts.label) === 'post readout') {
+        return [{ ok: true, stdout: JSON.stringify({ posted: true, recorded: true }) }]
+      }
       return { posted: true }
     }
     sr.__setIo && sr.__setIo({ writeFile: async () => {} })

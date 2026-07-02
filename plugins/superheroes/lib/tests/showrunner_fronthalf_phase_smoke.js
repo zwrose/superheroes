@@ -20,37 +20,34 @@ const BLOCKER = [{ file: 'docs/superheroes/wi/plan.md', line: 1, title: 'gap', s
 // (exec-level failure: set-gate sys.exit(1) -> leaf ok:false). journalWriteFails: the journal command
 // reports exec ok:true (bash exit 0) but its STDOUT is {"ok":false} — the durable-write fail-OPEN case
 // (journal_entry.py DurableWriteError prints {"ok":false} and exits 0). persistPhase must fail-CLOSE on it.
+function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
+
+// setGateFails / journalWriteFails: shape the save phase progress courier response.
 function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, setGateStale, journalWriteFails }) {
   let panelRuns = 0
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
+    if (label === 'save phase progress') {
+      if (setGateFails || setGateStale || journalWriteFails) {
+        // setGateStale: the fenced set-gate refuses a stale snapshot (exits non-zero inside the
+        // batched sideEffectCmd) — the courier reports ok:false and persistPhase fails closed.
+        return jsonOut({ ok: false, reason: setGateFails ? 'set-gate failed' : (setGateStale ? 'stale' : 'durable write failed') })
+      }
+      return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    }
+    if (label === 'save round state') return jsonOut({ ok: true })
     if (label === 'exec') {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
-      if (prompt.includes('set-gate')) {
-        // persistPhase batches set-gate + journal + checkpoint into one exec call. Success stdouts are
-        // production-realistic JSON (set-gate prints {"ok":true,"review":...}, journal/checkpoint {"ok":true});
-        // an EMPTY stdout would now read as a courier-drop (retried), so the clean cases emit real JSON.
-        // setGateFails: return ok:false for the set-gate command (exec-level fail) so persistPhase fails closed.
-        const ok = !setGateFails && !setGateStale
-        return [
-          { index: 0, ok, stdout: setGateStale ? JSON.stringify({ ok: false, reason: 'stale' }) : JSON.stringify({ ok: true, review: 'passed', status: 'approved' }) },   // set-gate
-          // journalWriteFails: bash exit 0 (exec ok:true) but stdout is {"ok":false} — the exact
-          // durable-write fail-OPEN shape persistPhase must catch by parsing the stdout (NOT a drop).
-          { index: 1, ok: true, stdout: journalWriteFails ? JSON.stringify({ ok: false, error: 'durable write failed' }) : JSON.stringify({ ok: true }) },  // journal_entry
-          { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },  // checkpoint_entry
-        ]
-      }
       // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
       if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as exec — must use JS twin')
-      // Generic exec (recordDeferred, io writes, etc.)
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     // gate-for-terminal must NOT be dispatched as a cmdRunner agent either.
     if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as cmdRunner — must use JS twin')
     if (label.endsWith('-reviewer')) { panelRuns += 1; return { findings: reviewerFindings, confidence: 'high' } }
     if (label.startsWith('synthesis')) return { verdicts: [] }         // keep all merged findings
-    if (label === 'doc-reviser') return reviserFails ? null : { fixes: [], deferred: [] }
+    if (label === 'revise-doc') return reviserFails ? null : { fixes: [], deferred: [] }
     return null
   }
   fn.panelRuns = () => panelRuns
@@ -118,28 +115,32 @@ async function main() {
 
   // (e-unit) persistPhase directly: exec ok:true + stdout {"ok":false} must return {ok:false}; a
   // matching all-{"ok":true} batch must return {ok:true}. Proves the parse fold (vs the pre-fix every(r.ok)).
-  global.agent = async () => [
-    { index: 0, ok: true, stdout: JSON.stringify({ ok: true, review: 'passed', status: 'approved' }) },  // set-gate
-    { index: 1, ok: true, stdout: JSON.stringify({ ok: false }) },       // journal durable-write failed, exit 0
-    { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },        // checkpoint ok
-  ]
+  global.agent = async (_p, opts) => {
+    if (opts && opts.label === 'save phase progress') {
+      return jsonOut({ ok: false, reason: 'durable write failed' })
+    }
+    return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  }
   let pp = await sr.persistPhase('wi-e2', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
-  assert.deepStrictEqual(pp, { ok: false },
-    'persistPhase fails-close when a batched command stdout is {"ok":false} despite exec ok:true (C1)')
-  global.agent = async () => [
-    { index: 0, ok: true, stdout: JSON.stringify({ ok: true, review: 'passed', status: 'approved' }) },  // set-gate
-    { index: 1, ok: true, stdout: JSON.stringify({ ok: true }) },
-    { index: 2, ok: true, stdout: JSON.stringify({ ok: true }) },
-  ]
+  assert.deepStrictEqual(pp, { ok: false, error: 'durable write failed' },
+    'persistPhase fails-close when save phase progress returns ok:false (C1)')
+  global.agent = async (_p, opts) => {
+    if (opts && opts.label === 'save phase progress') {
+      return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    }
+    return jsonOut({ ok: true })
+  }
   pp = await sr.persistPhase('wi-e3', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
-  assert.deepStrictEqual(pp, { ok: true }, 'persistPhase happy path: all stdout {"ok":true} -> {ok:true}')
+  assert.deepStrictEqual(pp, { ok: true, recovered: false }, 'persistPhase happy path read-back confirmed')
 
   // (f) direct reviewDocPhase gate writes include the reviewed snapshot hash, run id, and lease.
   clean('wi-f')
   const execPrompts = []
   ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
   global.agent = async (prompt, opts) => {
-    if ((opts && opts.label) === 'exec') execPrompts.push(prompt)
+    // the fenced set-gate rides inside persistPhase's 'save phase progress' courier prompt (#118 fold)
+    const l = (opts && opts.label) || ''
+    if (l === 'exec' || l === 'save phase progress') execPrompts.push(prompt)
     return ag(prompt, opts)
   }
   r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f', reviewedHash: 'hash-f' })
@@ -151,7 +152,8 @@ async function main() {
   assert.match(gatePrompt, /--lease ['"]?lease-f['"]?/)
   assert.strictEqual(r.phaseResult.confidence, 'high')
 
-  // (g) stale reviewed hash parks and leaves the already-recorded gate unchanged.
+  // (g) stale gate write parks low-confidence (fail-closed at the courier boundary); the
+  // unchanged-gate half of the stale contract is proven python-side in test_gate_write.py.
   clean('wi-g')
   ag = makeAgent({ gate: 'changes-requested', reviewerFindings: [], setGateStale: true })
   global.agent = ag

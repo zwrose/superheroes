@@ -1,0 +1,21 @@
+{
+  "input": [
+    {
+      "records": [
+        {
+          "stepId": "s1",
+          "status": "failed",
+          "failureType": "app_bug"
+        }
+      ]
+    },
+    []
+  ],
+  "expected": {
+    "action": "fix_batch",
+    "failedStepIds": [
+      "s1"
+    ],
+    "summary": "Fix browser app failures: s1"
+  }
+}

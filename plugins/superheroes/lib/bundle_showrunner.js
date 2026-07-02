@@ -22,7 +22,7 @@ const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'pa
                  'review_round_policy.js',
                  'ci_status.js', 'verify_gate.js',
                  'review_memory.js',
-                 'review_panel_shell.js', 'test_pilot_phase.js', 'build_progress.js',
+                 'review_panel_shell.js', 'courier_exec.js', 'pr_comment_scrub.js', 'test_pilot_deciders.js', 'test_pilot_phase.js', 'build_progress.js',
                  'worker_recovery.js', 'task_review.js', 'engine_pref.js', 'engine_dispatch.js', 'build_phase.js',
                  'model_tier.js', 'phase_step.js', 'recover.js', 'front_half.js', 'fenced_json.js', 'showrunner.js']
 
@@ -71,7 +71,8 @@ globalThis.agent = function (prompt, opts) {
   // the mechanical tier. exec and io leaves are pure side-effect executors — they ALWAYS run at the
   // cheapest model unconditionally, independent of __SR_LEAF_MODEL or any session default.
   // Genuine-LLM (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test run override).
-  var __isDumb = (o.label === 'exec' || o.label === 'io')
+  var __isDumb = (o.label === 'exec' || o.label === 'io' || o.courier === true)
+  if (o.courier !== undefined) delete o.courier   // courier marker is preamble-only, never forwarded
   if (__isDumb) {
     o.model = __cheapest()
   } else if (globalThis.__SR_LEAF_MODEL) {

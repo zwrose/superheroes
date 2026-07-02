@@ -26,6 +26,26 @@ function makeAgent(routes) {
   }
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    if (label.startsWith('branch-reviewer:')) {
+      for (const [needle, resp] of routes) {
+        if (typeof needle === 'string' && needle.startsWith('branch-reviewer')) {
+          return typeof resp === 'function' ? resp(prompt) : resp
+        }
+      }
+      return { findings: [] }
+    }
+    if (label === 'gather build state') {
+      for (const [needle, resp] of routes) {
+        if (needle === 'exec' && typeof resp === 'function') {
+          const raw = resp('build_state_cli.py gather')
+          const row = Array.isArray(raw) ? raw[0] : raw
+          const stdout = (row && row.stdout != null) ? row.stdout : '{}'
+          return [{ ok: true, stdout }]
+        }
+      }
+    }
+    // Exact/prefix label match first (labels are unique; `needle:` prefixes route per-round labels),
+    // then a prompt-substring fallback. A function resp receives the prompt (capture).
     for (const [needle, resp] of routes) {
       if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
     }
@@ -71,16 +91,16 @@ function standardLeaf(p, { provOk = true } = {}) {
 // whole-branch final-review verify gate (label 'verify:r<round>') which the panel runs as a leaf.
 // reviewerAgent/recordDeferred are set on globalThis below.
 const SMART_STUBS = [
-  ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+  ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
   // #115 increment B: task_review is now an in-process TWIN (no leaf). The reviewer returns clean
   // verdicts + no findings, so the real twin decides 'complete' in-process — no stub route needed.
-  ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-  // Whole-branch final review: runFinalReview's reviewer leaf (label reviewer:rN).
-  ['reviewer:', { findings: [] }],
-  // Panel verify leaf (label verify:rN) — raw run data for the in-process verify_gate twin.
-  ['verify:r', { command: 'pytest -q', returncode: 0, timedOut: false }],
-  // verify_gate.py is called by the panel's verify leaf (label 'verify:r<round>'). Raw run data -> twin -> 'pass'.
-  ['verify_gate.py', { command: 'pytest -q', returncode: 0, timedOut: false }],
+  ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+  ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+  ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+  ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+  ['branch-reviewer:', { findings: [] }],
+  ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
+  ['run verify', { command: 'none', returncode: 0, timedOut: false }],
 ]
 
 ;(async () => {
@@ -189,17 +209,17 @@ const SMART_STUBS = [
       execStub((p) => {
         if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
         if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false, final_review: { clean: true }, provenance: 'absent' })
-        if (p.includes('verify_command_cli.py')) return JSON.stringify({ command: 'none' })
-        if (p.includes('record-final-review')) { recordFinalReviews += 1; return JSON.stringify({ ok: true }) }
         if (p.includes('prov_entry.py')) { provWrites4b += 1; return JSON.stringify({ ok: true }) }
         return standardLeaf(p)
       }),
-      ['worker', () => { workerBuilt += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
-      // #115 increment B: task_review is an in-process twin now; clean verdicts -> twin says 'complete'.
-      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-      // verify_gate.py is a FINAL-REVIEW-ONLY leaf — counting it proves the whole-branch final review
-      // actually RE-RAN (never reached on a skip). record-final-review corroborates.
-      ['verify_gate.py', () => { finalReviewRan += 1; return { command: 'none', returncode: 0, timedOut: false } }],
+      ['implement-task', () => { workerBuilt += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+      ['branch-reviewer:r1', { findings: [] }],
+      ['stamp build coverage', () => { recordFinalReviews += 1; return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }] }],
+      ['run verify', () => { finalReviewRan += 1; return { command: 'none', returncode: 0, timedOut: false } }],
     ])
     globalThis.reviewerAgent = async () => ([])
     globalThis.recordDeferred = async () => {}
@@ -290,7 +310,7 @@ const SMART_STUBS = [
         return standardLeaf(p)
       }),
       ['reset-uncommitted', { ok: true }],   // reset "succeeds" but doesn't actually clean the tree
-      ['worker', () => { workerDispatched += 1; return { ok: true, signal: 'ok', evidence: {} } }],
+      ['implement-task', () => { workerDispatched += 1; return { ok: true, signal: 'ok', evidence: {} } }],
     ])
     const r = await bp.buildPhase('wi', 5)
     assert.strictEqual(r.confidence, 'low', 'FIX 4: a still-dirty tree after reset parks (UFR-12)')

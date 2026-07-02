@@ -1,0 +1,20 @@
+{
+  "input": [
+    {
+      "files": [
+        "docs/usage.md"
+      ]
+    },
+    {
+      "docs_only": true,
+      "routes": [
+        "/settings"
+      ]
+    },
+    {}
+  ],
+  "expected": {
+    "verdict": "applicable",
+    "reason": "browser/user-facing signal: routes"
+  }
+}

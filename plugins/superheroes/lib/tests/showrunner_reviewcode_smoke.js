@@ -4,6 +4,39 @@
 const assert = require('assert')
 const sr = require('../showrunner.js')
 
+function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
+
+function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q' } = {}) {
+  let wtHeadCalls = 0
+  return async (prompt, opts) => {
+    const label = (opts && opts.label) || ''
+    if (label === 'lib' && prompt.includes('git -C')) {
+      wtHeadCalls += 1
+      return wtHeadCalls <= 1 ? 'head-1\n' : 'head-2\n'
+    }
+    if (label === 'lib' && prompt.includes('git rev-parse')) return 'head-1\n'
+    if (label === 'resume') return '1'
+    if (label === 'lib' && prompt.includes('review_code_config.py')) {
+      assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')
+      return { verifyCommand, tiers: {} }
+    }
+    if (label === 'run verify') {
+      assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')
+      return { command: verifyCommand, returncode: 0, timedOut: false }
+    }
+    if (label.startsWith('synthesis:')) return { verdicts: [] }
+    if (label === 'stamp review coverage') {
+      assert.ok(prompt.includes('prov_entry.py') && prompt.includes('--worktree') && prompt.includes('--head'),
+        'provenance restamp is bound to explicit worktree/head')
+      return jsonOut({ ok: true })
+    }
+    if (label.startsWith('branch-reviewer:')) return { findings: [] }
+    if (label === 'readout') return '## Review loop — done'
+    if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
+    return { findings: [] }
+  }
+}
+
 ;(async () => {
   assert.strictEqual(sr.verdictToGate({ gate: 'clean', terminal: 'clean' }), 'passed',
     'a clean verdict -> passed')
@@ -15,26 +48,10 @@ const sr = require('../showrunner.js')
   let promptLog = []
   global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
   global.log = () => {}
-  // #115: reviewers RETURN {findings:[...]} (no findings-<name>.json); the synthesis leaf RETURNS
-  // {verdicts:[...]}; merge/tally are in-process twins (no panel_tally.py / tally agent).
+  const firstStub = reviewAgentStub()
   global.agent = async (prompt, opts) => {
     promptLog.push(prompt)
-    const label = opts && opts.label
-    if (label === 'lib' && prompt.includes('git -C')) return 'head-1\n'
-    if (label === 'resume') return '1'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) {
-      assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')
-      return { verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} }
-    }
-    if (label && label.startsWith('verify')) {
-      assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')
-      // #115 Task 16: verifyAgent now emits raw run data; JS twin classifies in-process
-      return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }
-    }
-    if (label && label.startsWith('synthesis')) return { verdicts: [] }
-    if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
-    if (label && /^(architecture|code|security|test|premortem)-reviewer/.test(label)) return { findings: [] }
-    return { findings: [] }
+    return firstStub(prompt, opts)
   }
   const runDir1 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-1-'))
   const r = await sr.reviewCodePhase('wi-targeted', {
@@ -47,21 +64,12 @@ const sr = require('../showrunner.js')
     'review leaves receive explicit worktree/head context')
   assert.ok(promptLog.some((p) => p.includes("cd '/tmp/build-worktree' &&") && p.includes('verify_gate.py')),
     'targeted stabilization runs the verify gate from the explicit worktree')
-  assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--worktree') && p.includes('--head')),
-    'provenance restamp is bound to explicit worktree/head')
 
   promptLog = []
-  let gitHeads = ['head-1\n', 'head-2\n']
+  const changedStub = reviewAgentStub({ verifyCommand: 'none' })
   global.agent = async (prompt, opts) => {
     promptLog.push(prompt)
-    const label = opts && opts.label
-    if (label === 'lib' && prompt.includes('git -C')) return gitHeads.shift() || 'head-2\n'
-    if (label === 'resume') return '1'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
-    if (label && label.startsWith('verify')) return { command: 'none', returncode: null, timedOut: false }
-    if (label && label.startsWith('synthesis')) return { verdicts: [] }
-    if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
-    return { findings: [] }   // every reviewer leg returns an empty findings array (clean round)
+    return changedStub(prompt, opts)
   }
   const runDir2 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-2-'))
   const changed = await sr.reviewCodePhase('wi-targeted', {

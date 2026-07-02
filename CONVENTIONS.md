@@ -909,6 +909,15 @@ unverified premise*, not a status note.
 
 ### 10.4 The live launch contract (showrunner skill, single work-item)
 
+**Courier stretch contract (#118).** Deterministic showrunner stretches use **at most one
+courier leaf by default**; genuine model work (authoring, review panels, fixers) remains
+separate leaves. The lease/reconcile **world snapshot** at startup is the named exception —
+it may batch multiple reads in one courier call. Every **advancing durable write** must be
+**idempotent** and **read-back confirmed** before the run advances past that step; a failed
+read-back parks fail-closed. **Best-effort** writes (round-state snapshots, deferred-finding
+backups, readout posting) must be explicitly named and must **not** gate advancement on their
+delivery alone.
+
 The `superheroes:showrunner` skill turns the merged spine **on** for one approved work-item.
 The launch path is **pre-flight → bundle → Workflow tool**:
 

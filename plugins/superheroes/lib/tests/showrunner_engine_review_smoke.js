@@ -18,6 +18,17 @@ const assert = require('assert')
 
 const sr = require('../showrunner.js')
 const engineDispatchMod = require('../engine_dispatch.js')
+const fs = require('fs')
+
+// #129's reviewPanel persists a durable round-records.json (+ deferred-set.json) accumulator in the
+// runDir. These scenarios use FIXED /tmp runDirs, so a stale accumulator from an earlier run of this
+// very file would corrupt the next run's round-1 state (e.g. the blocking finding arrives pre-deferred
+// and the fix dispatch never fires). Reset before every scenario for hermetic re-runs.
+function freshRunDir(d) {
+  fs.rmSync(d, { recursive: true, force: true })
+  fs.mkdirSync(d, { recursive: true })
+  return d
+}
 
 async function partA() {
   const calls = []
@@ -27,6 +38,8 @@ async function partA() {
   globalThis.agent = async function (prompt, opts) {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
+    // #118 fold: spec-gate + model-overrides ride the 'read startup state' courier, not a read-gate exec
+    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} })
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: '{}' }]
@@ -66,6 +79,8 @@ async function partA() {
   calls.length = 0
   globalThis.agent = async function (prompt, opts) {
     const label = (opts && opts.label) || ''
+    // #118 fold: spec-gate + model-overrides ride the 'read startup state' courier, not a read-gate exec
+    if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} })
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
         return [{ index: 0, ok: false, stdout: 'not-json' }]
@@ -106,7 +121,7 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
     if (label === 'lib' && prompt.includes('review_code_config.py')) {
       return { verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} }
     }
-    if (label && label.startsWith('verify')) {
+    if (label && (label.startsWith('verify') || label === 'run verify')) {
       return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }
     }
     if (label && label.startsWith('synthesis')) {
@@ -114,6 +129,8 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
       return { verdicts: [] }
     }
     if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
+    // #118 fold: the covers stamp is the 'stamp review coverage' courier (stdout text, not a lib object)
+    if (label === 'stamp review coverage') return JSON.stringify({ ok: true })
     return null   // any native reviewer agent() call is asserted-against below, not stubbed here
   }
 }
@@ -154,7 +171,7 @@ async function partB() {
   const r1 = await sr.reviewCodePhase('wi-eng-review', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: '/tmp/showrunner-wi-eng-review-review-code-test-1',
+    runDir: freshRunDir('/tmp/showrunner-wi-eng-review-review-code-test-1'),
   })
 
   const reviewDispatch = dispatchCalls.filter((c) => c.roleKind === 'review')
@@ -208,7 +225,7 @@ async function partB() {
   const r2 = await sr.reviewCodePhase('wi-eng-ufr7', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: '/tmp/showrunner-wi-eng-ufr7-review-code-test-1',
+    runDir: freshRunDir('/tmp/showrunner-wi-eng-ufr7-review-code-test-1'),
   })
   assert.ok(dispatchCalls.some((c) => c.roleKind === 'review'), 'FAIL (b2a): dispatchExternal must still be attempted for roleKind:review')
   assert.strictEqual(nativeReviewerFired, true, 'FAIL (b2b): UFR-7 unreadable external review must fall open to the native reviewer agent()')
@@ -256,7 +273,7 @@ async function partB() {
   const r3 = await sr.reviewCodePhase('wi-eng-mixed', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: '/tmp/showrunner-wi-eng-mixed-review-code-test-1',
+    runDir: freshRunDir('/tmp/showrunner-wi-eng-mixed-review-code-test-1'),
   })
   const reviewDispatch3 = dispatchCalls.filter((c) => c.roleKind === 'review')
   const fixDispatch3 = dispatchCalls.filter((c) => c.roleKind === 'fix')

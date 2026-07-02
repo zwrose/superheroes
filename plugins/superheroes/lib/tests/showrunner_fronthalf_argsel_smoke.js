@@ -35,6 +35,10 @@ function makeAgentStub() {
   return async function agent(prompt, opts) {
     const label = (opts && opts.label) || ''
 
+    if (label === 'read startup state') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} }) }]
+    }
+
     if (label === 'exec') {
       // exec() dispatches as a batch; each result is {index, ok, stdout}.
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
@@ -56,15 +60,17 @@ function makeAgentStub() {
       return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
     }
 
+    if (label === 'save phase progress') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
+    }
+
     if (label === 'lib') {
-      // cmdRunner stubs: journal_entry, checkpoint_entry, render-outcome
       if (typeof prompt === 'string' && prompt.includes('journal_entry')) return { ok: true }
       if (typeof prompt === 'string' && prompt.includes('checkpoint_entry')) return { ok: true, pr: null }
       if (typeof prompt === 'string' && prompt.includes('phase_step_cli')) {
         throw new Error('phase_step_cli dispatched as agent — must use JS twin')
       }
       if (typeof prompt === 'string' && prompt.includes('render-outcome')) {
-        // Return a plain string so frontHalfBoundary uses it as the park reason
         return 'front-half complete (smoke stub)'
       }
       return { ok: true }

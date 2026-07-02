@@ -1,0 +1,18 @@
+{
+  "input": [
+    {
+      "steps": [
+        {
+          "id": "s1",
+          "status": "failed",
+          "failureType": "test_bug"
+        }
+      ]
+    },
+    []
+  ],
+  "expected": {
+    "action": "park_unclassified_failure",
+    "reason": "one or more browser failures are not app-bug failures"
+  }
+}

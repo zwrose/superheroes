@@ -96,8 +96,8 @@ async function main() {
     global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => cleanResult(runDir, round, opts)
     const prevAgent = global.agent
     global.agent = async (prompt, opts) => {
-      if (opts && opts.label && opts.label.startsWith('verify:')) {
-        return { command: 'run-tests', returncode: '0', timedOut: 'false' }
+      if (opts && opts.label === 'run verify') {
+        return { command: 'run-tests', returncode: '0', timedOut: 'false' }  // courier-stringified
       }
       return null
     }

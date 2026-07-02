@@ -478,7 +478,7 @@ async function verifyAgent(verifyCommand, runDir, round) {
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: `verify:r${round}`, schema: VERIFY_SCHEMA })
+    { label: 'run verify', schema: VERIFY_SCHEMA })
   if (!out) return 'fail'
   return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }

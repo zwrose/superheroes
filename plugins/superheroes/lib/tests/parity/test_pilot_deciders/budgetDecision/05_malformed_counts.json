@@ -1,0 +1,11 @@
+{
+  "input": [
+    {
+      "browserSteps": "7"
+    }
+  ],
+  "expected": {
+    "action": "park_budget_exceeded",
+    "reason": "malformed numeric value for counts.browserSteps"
+  }
+}

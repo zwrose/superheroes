@@ -7,6 +7,8 @@ const assert = require('assert')
 const fs = require('fs'); const os = require('os'); const path = require('path')
 const sr = require('../showrunner.js')
 
+function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
+
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
@@ -35,12 +37,10 @@ async function main() {
     if (label === 'lib' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
     if (label === 'resume') return '1'
     if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
-    if (label && label.startsWith('verify')) return { command: 'none', returncode: null, timedOut: false }
-    if (label && label.startsWith('synthesis')) return { verdicts: [] }
-    if (label === 'lib' && prompt.includes('prov_entry.py')) return { ok: true }
-    if (label === 'lib' && prompt.includes('readout_post.py')) return { posted: true, recorded: true }
-    if (label === 'readout') return '## Review loop — done'
-    if (/^(architecture|code|security|test|premortem)-reviewer/.test(label)) return { findings: [] }
+    if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
+    if (label.startsWith('synthesis:')) return { verdicts: [] }
+    if (label === 'stamp review coverage') return jsonOut({ ok: true })
+    if (/^(architecture|code|security|test|premortem)-reviewer:/.test(label)) return { findings: [] }
     return { findings: [] }
   }
   // exec is used by the exec-based dumb-pipe (recordDeferred). Wire a no-op.
@@ -64,7 +64,7 @@ async function main() {
   )
 
   // The reviewers' targetSuffix must name the resolved worktree + head.
-  const reviewerPrompt = seenPrompts.find((p) => /^(architecture|code|security|test|premortem)-reviewer/.test(p.label))
+  const reviewerPrompt = seenPrompts.find((p) => /^(architecture|code|security|test|premortem)-reviewer:/.test(p.label))
   assert.ok(reviewerPrompt, 'a reviewer was dispatched')
   assert.ok(
     reviewerPrompt.prompt.includes(RESOLVED_WT),
@@ -98,7 +98,7 @@ async function main() {
   )
   // No reviewer, config, or verify prompts dispatched — the phase parks immediately, never reviews root.
   const reviewerDispatched = nullResolvePrompts.some((p) =>
-    /^(architecture|code|security|test|premortem)-reviewer/.test(p.label) ||
+    p.label.startsWith('branch-reviewer:') ||
     (p.label === 'lib' && p.prompt.includes('review_code_config.py'))
   )
   assert.ok(!reviewerDispatched, 'null resolver: no reviewer or config dispatched — root is NOT reviewed')
@@ -113,16 +113,11 @@ async function main() {
   function execStubForOutcome(outcome) {
     return async (prompt, opts) => {
       const label = (opts && opts.label) || ''
-      if (label !== 'exec') return { findings: [] }
-      if (prompt.includes('build_entry.py')) {
-        const setup = { branch: 'codex/x', path: '/tmp/real-build-wt' }
-        if (outcome !== undefined) setup.outcome = outcome
-        return [{ index: 0, ok: true, stdout: JSON.stringify(setup) }]
+      if (label === 'resolve review target') {
+        if (outcome === 'created') return jsonOut({ ok: false, error: 'fresh worktree created' })
+        return jsonOut({ ok: true, worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef' })
       }
-      if (prompt.includes('rev-parse HEAD')) {
-        return [{ index: 0, ok: true, stdout: 'real-head-deadbeef\n' }]
-      }
-      return [{ index: 0, ok: false, stdout: '' }]
+      return { findings: [] }
     }
   }
 

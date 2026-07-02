@@ -10,6 +10,8 @@ const fs = require('fs'); const os = require('os'); const path = require('path')
 const sr = require('../showrunner.js')
 const { findingIdentity } = require('../circuit_breaker.js')
 
+function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
+
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
@@ -48,18 +50,21 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
     try { set = JSON.parse(fs.readFileSync(p, 'utf8')) } catch (_) {}
     for (const d of report.deferred || []) if (d && d.id) set[d.id] = d.severity
     try { fs.writeFileSync(p, JSON.stringify(set)) } catch (_) {}
-    return JSON.stringify({ ok: true, extras: { fixes: report.fixed || report.fixes || [] } })
+    // mirror the frozen record_deferred.py exactly: it reads ONLY `fixed` (normalizeFixResult
+    // guarantees the key on every report) — a `fixes`-only report must surface as empty enrichment.
+    return JSON.stringify({ ok: true, extras: { fixes: Array.isArray(report.fixed) ? report.fixed : [] } })
   }
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
-    if (label.startsWith('verify')) return { command: 'run-tests', returncode: 0, timedOut: false }
+    // #115 Task 16: verifyAgent emits raw run data; JS twin classifies in-process
+    if (label === 'run verify') return { command: 'run-tests', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis')) return { verdicts: [], usage: { total: 1 } }
-    if (label === 'exec') {
+    if (label === 'exec') {                                       // the cheap recordDeferred pipe
       if (prompt.includes('record_deferred.py')) return [{ index: 0, ok: true, stdout: runRecordDeferred(prompt) }]
       return []
     }
-    if (label.startsWith('code-fixer')) {
+    if (label.startsWith('fix-code')) {
       calls.fix += 1
       const f = nextFindings() || []
       const ids = f.filter((x) => x.severity === 'Critical' || x.severity === 'Important').map(findingIdentity)
@@ -73,13 +78,16 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
           extras: { parentOrigin: 'plan' },
         }
       }
-      return { fixes: ids, fixed: ids, deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
+      return { fixes: ids, deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
     }
     if (label === 'readout') { calls.readout += 1; return '## Review loop — done' }
+    if (label === 'post readout') { calls.readoutPost += 1; return jsonOut({ posted: true, recorded: true }) }
+    if (label === 'stamp review coverage') {
+      calls.prov += 1
+      return jsonOut({ ok: provOk, error: provOk ? undefined : 'disk full' })
+    }
     if (label === 'lib') {
       if (prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: { reviewer: 'sonnet', reviewerDeep: 'opus', synthesis: 'opus', fixer: 'sonnet' } }
-      if (prompt.includes('prov_entry.py')) { calls.prov += 1; return { ok: provOk, error: provOk ? undefined : 'disk full' } }
-      if (prompt.includes('readout_post.py')) { calls.readoutPost += 1; return { posted: false, recorded: true } }
       return { ok: true }
     }
     const m = label.match(/^(architecture|code|security|test|premortem)-reviewer:r(\d+)/)
@@ -123,6 +131,7 @@ async function main() {
   const realAgent = global.agent
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    // this reviewer never returns a findings array (and its retry also fails) -> coverage gap.
     if (label.startsWith('architecture-reviewer')) { incomplete += 1; return { notFindings: true } }
     return realAgent(prompt, opts)
   }

@@ -1,0 +1,51 @@
+{
+  "input": [
+    {
+      "source": "browser",
+      "coverageRationale": "Exercises the user-visible save path",
+      "steps": [
+        {
+          "id": "step-1",
+          "status": "pass",
+          "notes": "Loaded page"
+        },
+        {
+          "id": "step-2",
+          "status": "fail",
+          "notes": "Authorization: Bearer abc123def456"
+        }
+      ],
+      "fixes": [
+        {
+          "sha": "abc1234",
+          "summary": "Fix button"
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "action": "aggregated",
+    "source": "browser",
+    "records": [
+      {
+        "stepId": "step-1",
+        "status": "pass",
+        "notes": "Loaded page",
+        "browserExecuted": true
+      },
+      {
+        "stepId": "step-2",
+        "status": "fail",
+        "notes": "Authorization: [REDACTED]",
+        "browserExecuted": true
+      }
+    ],
+    "coverageRationale": "Exercises the user-visible save path",
+    "fixes": [
+      {
+        "sha": "abc1234",
+        "summary": "Fix button"
+      }
+    ]
+  }
+}

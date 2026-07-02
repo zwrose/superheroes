@@ -64,7 +64,8 @@ import os
 import sys
 
 if sys.argv[1:3] == ["pr", "list"]:
-    print(json.dumps([{"number": 7, "url": "https://example.test/pr/7", "isDraft": True, "state": "OPEN"}]))
+    ready = os.path.exists(os.environ.get("READY_MARKER", ""))
+    print(json.dumps([{"number": 7, "url": "https://example.test/pr/7", "isDraft": not ready, "state": "OPEN"}]))
     raise SystemExit(0)
 if sys.argv[1:3] == ["pr", "ready"]:
     with open(os.environ["READY_MARKER"], "a", encoding="utf-8") as fh:
@@ -121,7 +122,7 @@ def test_mark_ready_entrypoint_flips_after_current_test_pilot_status(tmp_path):
 
     result, marker = _run_mark_ready(repo, tmp_path)
 
-    assert result == {"ok": True}
+    assert result == {"ok": True, "read_back": True}
     assert marker.read_text(encoding="utf-8") == "7\n"
 
 

@@ -1,0 +1,17 @@
+{
+  "input": [
+    {
+      "source": "browser",
+      "steps": [
+        {
+          "status": "pass",
+          "notes": "no id"
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "action": "park",
+    "reason": "browser result record is missing a step id"
+  }
+}

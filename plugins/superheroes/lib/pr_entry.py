@@ -54,9 +54,12 @@ if a.step == "draft":
     world = {"pr": _gh_pr(branch)}
     act = recover.pr_action(world)                       # adopt | create | gate (exactly-once)
     if act == "gate":
-        print(json.dumps({"ok": False, "reason": "PR read transient/merged — not creating a 2nd PR"})); sys.exit(0)
+        print(json.dumps({"ok": False, "read_back": False,
+                          "reason": "PR read transient/merged — not creating a 2nd PR"})); sys.exit(0)
     if act == "adopt":
-        print(json.dumps({"ok": True, "pr": world["pr"]})); sys.exit(0)
+        current = _gh_pr(branch)
+        read_back = isinstance(current, dict) and isinstance(world["pr"], dict) and current.get("number") == world["pr"].get("number")
+        print(json.dumps({"ok": True, "pr": world["pr"], "read_back": bool(read_back)})); sys.exit(0)
     # create: only after the ship-gate proves SDD build + review-code ran over the SHIPPED HEAD —
     # the build branch's tip (what the PR ships), resolved from checkpoint.branch, not the cwd HEAD.
     try:
@@ -86,34 +89,36 @@ if a.step == "draft":
         out = subprocess.run(_gh_create_cmd, capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         # the create may have landed server-side -> park; recover.pr_action adopts it on resume.
-        print(json.dumps({"ok": False, "reason": "gh pr create timed out — will adopt on resume"})); sys.exit(0)
+        print(json.dumps({"ok": False, "read_back": False, "reason": "gh pr create timed out — will adopt on resume"})); sys.exit(0)
     if out.returncode != 0:
-        print(json.dumps({"ok": False, "reason": "gh pr create failed"})); sys.exit(0)
+        print(json.dumps({"ok": False, "read_back": False, "reason": "gh pr create failed"})); sys.exit(0)
     # Read the just-created PR back. A transient read failure must NOT be recorded as ok:true with
     # pr=null (that loses the PR for ship/mark-ready, and the readout never reaches the PR thread).
     # Park instead — on resume recover.pr_action adopts the now-existing PR (exactly-once preserved).
     pr = _gh_pr(branch)
     if not isinstance(pr, dict):
-        print(json.dumps({"ok": False,
+        print(json.dumps({"ok": False, "read_back": False,
                           "reason": "PR created but read-back failed transiently — will adopt on resume"}))
         sys.exit(0)
-    print(json.dumps({"ok": True, "pr": pr}))
+    current = _gh_pr(branch)
+    read_back = isinstance(current, dict) and current.get("number") == pr.get("number")
+    print(json.dumps({"ok": True, "pr": pr, "read_back": bool(read_back)}))
 else:  # mark-ready
     pr = _gh_pr(branch)
     decision = pr_phase.mark_ready_action(pr)
     if decision == "gate":
-        print(json.dumps({"ok": False, "reason": "PR isDraft unreadable — not flipping blind"})); sys.exit(0)
+        print(json.dumps({"ok": False, "read_back": False, "reason": "PR isDraft unreadable — not flipping blind"})); sys.exit(0)
     try:
         _hp = subprocess.run(["git", "rev-parse", branch or "HEAD"], capture_output=True, text=True, timeout=10)
     except subprocess.TimeoutExpired:
         print(json.dumps({"ok": False, "reason": "git rev-parse timed out"})); sys.exit(0)
     head = _hp.stdout.strip()
     if _hp.returncode != 0 or not head:
-        print(json.dumps({"ok": False, "reason": "cannot resolve branch HEAD for test-pilot status"})); sys.exit(0)
+        print(json.dumps({"ok": False, "read_back": False, "reason": "cannot resolve branch HEAD for test-pilot status"})); sys.exit(0)
     status_result = test_pilot_status.assert_current(test_pilot_status.status_path(root, a.work_item), head)
     status_decision = pr_phase.mark_ready_status_action(status_result)
     if status_decision["action"] == "gate":
-        print(json.dumps({"ok": False, "reason": status_decision["reason"]})); sys.exit(0)
+        print(json.dumps({"ok": False, "read_back": False, "reason": status_decision["reason"]})); sys.exit(0)
     if decision == "flip":
         n = str(pr["number"])
 
@@ -137,6 +142,8 @@ else:  # mark-ready
 
         res = idempotent_write.idempotent_apply("ready:pr=%s" % n, _reader, _apply)
         if not res["ok"]:
-            print(json.dumps({"ok": False, "reason": res["reason"] or "gh pr ready failed — PR still draft"}))
+            print(json.dumps({"ok": False, "read_back": False, "reason": res["reason"] or "gh pr ready failed — PR still draft"}))
             sys.exit(0)
-    print(json.dumps({"ok": True}))
+    current = _gh_pr(branch)
+    read_back = isinstance(current, dict) and current.get("isDraft") is False
+    print(json.dumps({"ok": True, "read_back": bool(read_back)}))

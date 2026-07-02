@@ -30,6 +30,22 @@ function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt, opts) : resp
+    // #118 fold: named courier leaves (record/gather/stamp) carry one command each — feed the
+    // command through the scenario's exec map so per-scenario variations keep working.
+    const COURIER_LABELS = new Set(['record task built', 'record task reviewed', 'stamp build coverage', 'gather build state'])
+    if (COURIER_LABELS.has(label)) {
+      for (const [needle, resp] of routes) {
+        if (needle === 'exec' && typeof resp === 'function') {
+          const cmd = prompt.split('\n\n').slice(1).join('\n\n')
+          return resp(cmd, opts)
+        }
+      }
+    }
+    // #118 relabel: the per-task reviewer is 'task-reviewer:rN' — scenarios route it as 'review'.
+    if (label.startsWith('task-reviewer:')) {
+      for (const [needle, resp] of routes) if (needle === 'review') return typeof resp === 'function' ? resp(prompt, opts) : resp
+    }
+    if (label === 'read verify + minors') return JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] })
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt, opts) : resp
     return ''
   }
@@ -67,8 +83,9 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
   if (p.includes('build_state_cli.py gather')) return JSON.stringify({ unmapped_commits: 0 })
   if (p.includes('fence_cli.py')) return JSON.stringify({ ok: true })
   if (p.includes('journal_entry.py')) return JSON.stringify({ ok: true })
-  if (p.includes('record-reviewed')) return JSON.stringify({ ok: true })
-  if (p.includes('record-final-review')) return JSON.stringify({ ok: true })
+  if (p.includes('record-built')) return JSON.stringify({ ok: true, read_back: true, task: '1' })
+  if (p.includes('record-reviewed')) return JSON.stringify({ ok: true, read_back: true, task: '1' })
+  if (p.includes('record-final-review')) return JSON.stringify({ ok: true, read_back: true })
   if (p.includes('minor_rollup_cli.py')) return JSON.stringify({ minors: [] })
   if (p.includes('verify_command_cli.py')) return JSON.stringify({ command: 'pytest -q' })
   if (p.includes('prov_entry.py')) return provOk ? JSON.stringify({ ok: true }) : JSON.stringify({ ok: false, error: 'disk' })
@@ -91,7 +108,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     let workerFired = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p, { authzCalls })),
-      ['worker', () => { workerFired += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['implement-task', () => { workerFired += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ])
     const bp = require('../build_phase.js')
@@ -107,7 +124,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     let gatherFired = false
     global.agent = makeAgent([
       execRoute((p) => { if (p.includes('build_state_cli.py gather')) gatherFired = true; return standardLeaf(p, { authzCalls }) }),
-      ['worker', () => { workerFired += 1; return { ok: true, signal: 'ok', evidence: {} } }],
+      ['implement-task', () => { workerFired += 1; return { ok: true, signal: 'ok', evidence: {} } }],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ])
     await bp.buildOneTask('wi', 5, { id: '2', title: 'Two' }, 'br', '1,2', '/tmp/wt')
@@ -145,7 +162,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
       ['reset-uncommitted', () => { resetFired += 1; return { ok: true } }],
-      ['worker', () => { workerFired2 += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['implement-task', () => { workerFired2 += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ])
     const r2 = await bp.buildOneTask('wi', 5, { id: '3', title: 'Three' }, 'br', '3', '/tmp/wt')
@@ -160,7 +177,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     let verifyGateFired = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
-      ['worker', () => ({ ok: true, signal: 'ok', evidence: {} })],
+      ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
       ['verify_gate.py', () => { verifyGateFired += 1; return { command: 'pytest -q', returncode: 0, timedOut: false } }],
     ])
@@ -175,7 +192,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     let verifyGateFiredFail = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
-      ['worker', () => ({ ok: true, signal: 'ok', evidence: {} })],
+      ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
       ['verify_gate.py', () => { verifyGateFiredFail += 1; return { command: 'pytest -q', returncode: 1, timedOut: false } }],
     ])
@@ -211,7 +228,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     dispatchCalls.length = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
-      ['worker', () => ({ ok: true, signal: 'ok', evidence: {} })],
+      ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['verify_gate.py', () => ({ command: 'pytest -q', returncode: 0, timedOut: false })],
     ])
     resetFinalReviewRunDir('wi')
@@ -245,8 +262,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     let fixerFired3 = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p, { authzOk: false, authzCalls })),
-      ['worker', () => { workerFired3 += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
-      ['fixer', () => { fixerFired3 += 1; return { ok: true } }],
+      ['implement-task', () => { workerFired3 += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['fix-task', () => { fixerFired3 += 1; return { ok: true } }],
       ['review', (() => {
         let n = 0
         return () => {

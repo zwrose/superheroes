@@ -8,9 +8,23 @@ global.log = () => {}
 function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
+    if (label === 'gather build state') {
+      for (const [needle, resp] of routes) {
+        if (needle === 'exec' && typeof resp === 'function') {
+          const raw = resp('build_state_cli.py gather')
+          const row = Array.isArray(raw) ? raw[0] : raw
+          const stdout = (row && row.stdout != null) ? row.stdout : '{}'
+          return [{ ok: true, stdout }]
+        }
+      }
+    }
     // Exact-label first (labels are unique), so a short needle never shadows a longer script name
     // via substring; then a prompt-substring fallback. A function resp receives the prompt (capture).
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    for (const [needle, resp] of routes) {
+      if (label === needle || (needle.endsWith(':r') && label.startsWith(needle))) {
+        return typeof resp === 'function' ? resp(prompt) : resp
+      }
+    }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''
   }
@@ -39,8 +53,10 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   let gatherPrompt = ''
   global.agent = makeAgent([
     execRoute({ unmapped: 0, capture: (p) => { if (p.includes('build_state_cli.py gather')) gatherPrompt = p } }),
-    ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
-    ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+    ['task-reviewer:r', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+    ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ])
   let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1,2', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a clean task should not park')
@@ -60,8 +76,10 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   try {
     global.agent = makeAgent([
       execRoute({ unmapped: 0, capture: (p) => { if (p.includes('build_state_cli.py gather')) basePrompt = p } }),
-      ['worker', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
-      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
     ])
     r = await bp.buildOneTask('wi', 5, TASK, 'live-showrunner-102', '1,2', '/tmp/wt')
     assert.strictEqual(r.parked, false, 'a clean task on a configured base should not park')
@@ -78,17 +96,17 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
       if (prompt.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
-    ['worker', { ok: true, signal: 'ok', evidence: {} }],
+    ['implement-task', { ok: true, signal: 'ok', evidence: {} }],
   ])
   r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'a failed trailer-check leaf must park (fail closed, UFR-7)')
-  assert.ok(/verify commit trailers/i.test(r.reason || ''), 'honest UFR-7 fail-closed reason')
+  assert.ok(/boom/i.test(r.reason || ''), 'honest UFR-7 fail-closed reason')
 
   // (2) Worker stuck (plan_wrong) -> the worker_recovery TWIN parks for real (UFR-3). No leaf: the
   //     worker returns {ok:false, signal:'plan_wrong'} and workerRecoveryTwin.decide parks in-process.
   global.agent = makeAgent([
     execRoute(),
-    ['worker', { ok: false, signal: 'plan_wrong' }],
+    ['implement-task', { ok: false, signal: 'plan_wrong' }],
   ])
   r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'worker plan_wrong should park (UFR-3)')
@@ -100,9 +118,9 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   //     park is genuine (the twin halts a non-progressing loop), not a stubbed action.
   global.agent = makeAgent([
     execRoute(),
-    ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' },
+    ['task-reviewer:r', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' },
                  findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }],
-    ['fixer', ''],
+    ['fix-task', ''],
   ])
   r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'unconverged review should park (UFR-4)')
@@ -131,13 +149,14 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   let reviewCalls = 0
   global.agent = makeAgent([
     execRoute(),
-    ['review', () => {
+    ['task-reviewer:r', () => {
       reviewCalls += 1
       return reviewCalls >= 2
         ? { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }
         : { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [{ severity: 'Important', file: 'a', title: 'bug' }] }
     }],
-    ['fixer', ''],
+    ['fix-task', ''],
+    ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ])
   r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a converging fix loop should complete, not park')
@@ -150,8 +169,9 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   let recoverCalls = 0
   global.agent = makeAgent([
     execRoute(),
-    ['review', () => { recoverCalls += 1; return { verdicts: '{"spec_compliance":"pass","code_quality":"pass"}', findings: [] } }],
-    ['fixer', ''],
+    ['task-reviewer:r', () => { recoverCalls += 1; return { verdicts: '{"spec_compliance":"pass","code_quality":"pass"}', findings: [] } }],
+    ['fix-task', ''],
+    ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ])
   r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, false, 'a stringified-verdicts review must be recovered (defensive parse) and complete, not loop')
@@ -166,12 +186,12 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   const HARD_CAP = bp.MAX_ROUNDS * 5   // a runaway would blow past this; the bound keeps us <= MAX_ROUNDS
   global.agent = makeAgent([
     execRoute(),
-    ['review', () => {
+    ['task-reviewer:r', () => {
       boundCalls += 1
       assert.ok(boundCalls <= HARD_CAP, `RUNAWAY: reviewer dispatched ${boundCalls} times (>${HARD_CAP}) — the loop is unbounded`)
       return { verdicts: 'not json', findings: [] }
     }],
-    ['fixer', ''],
+    ['fix-task', ''],
   ])
   r = await bp.reviewOneTask('wi', 5, TASK, 'superheroes/wi-abc', '/tmp/wt')
   assert.strictEqual(r.parked, true, 'an unrecoverable verdicts shape must PARK the loop (bounded), not run away')

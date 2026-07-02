@@ -48,6 +48,10 @@ PARITY_TWINS = [
     ("build_progress", "reconcile", "build_progress", "reconcile"),
     ("worker_recovery", "decide", "worker_recovery", "decide"),
     ("task_review", "decide", "task_review", "decide"),
+    ("test_pilot_deciders", "applicabilityDecision", "test_pilot_applicability", "decide"),
+    ("test_pilot_deciders", "budgetDecision", "test_pilot_budget", "decide"),
+    ("test_pilot_deciders", "aggregateResults", "test_pilot_results", "aggregate_browser_results"),
+    ("test_pilot_deciders", "retryDecisionFromFacts", "test_pilot_retry", "decide"),
     ("review_round_policy", "planRound", "review_round_policy", "plan_round"),
     ("review_memory", "classKey", "review_memory", "class_key"),
     ("review_memory", "recurrentClasses", "review_memory", "recurrent_classes"),
@@ -61,7 +65,7 @@ JS_ONLY_TWINS = [
 ]
 
 # The exhaustive list of twin module stems; clause (c) cross-checks against bundler MODULES.
-PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half", "build_progress", "worker_recovery", "task_review", "review_round_policy", "review_memory", "engine_pref"]
+PARITY_TARGET_MODULES = ["phase_step", "ci_status", "verify_gate", "model_tier", "circuit_breaker", "loop_state", "loop_synthesis", "panel_tally", "recover", "front_half", "build_progress", "worker_recovery", "task_review", "test_pilot_deciders", "review_round_policy", "review_memory", "engine_pref"]
 
 # Python fns that return a tuple whose JS twin returns an object — map (py_mod, py_fn) to field names.
 # Used by test_python_oracle to normalize the result before comparison with an object fixture.
@@ -77,6 +81,8 @@ BUNDLED_NON_TWINS = {
     "review_panel_shell.js",
     "build_phase.js",
     "test_pilot_phase.js",
+    "courier_exec.js",
+    "pr_comment_scrub.js",
     "fenced_json.js",
     "engine_dispatch.js",
 }
