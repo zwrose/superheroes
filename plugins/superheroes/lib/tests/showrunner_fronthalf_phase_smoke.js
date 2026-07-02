@@ -17,6 +17,13 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
 const BLOCKER = [{ file: 'docs/superheroes/wi/plan.md', line: 1, title: 'gap', severity: 'Critical', evidence: 'e' }]
+const BIG_MINOR_FINDINGS = Array.from({ length: 24 }, (_, i) => ({
+  file: 'docs/superheroes/wi/plan.md',
+  line: i + 2,
+  title: `large nonblocking note ${i}`,
+  severity: 'Minor',
+  evidence: 'e'.repeat(700),
+}))
 
 // gate: what read-gate returns. setGateFails: the set-gate step in persistPhase returns ok:false
 // (exec-level failure: set-gate sys.exit(1) -> leaf ok:false). journalWriteFails: the journal command
@@ -166,6 +173,36 @@ async function main() {
   loopOut = await sr.runPhases('wi-g', 1, { reviewDoc: (doc, wi) => sr.reviewDocPhase(doc, wi, { runId: 'run-g', lease: 'lease-g', reviewedHash: 'stale-hash' }) })
   assert.strictEqual(loopOut.outcome, 'parked', 'stale/failed gate write parks instead of advancing')
   assert.match(loopOut.reason, /phase progress not recorded/, 'the park names the durable-write failure')
+
+  // (h) terminal-record persistence must not stage a large verdict blob through the courier. A
+  // truncating write leaf leaves an old terminal-record.json behind in the live failure class; the
+  // phase must compose and overwrite the record in-process from small scalars + on-disk records.
+  clean('wi-h')
+  const hDir = '/tmp/showrunner-wi-h-review-plan'
+  fs.mkdirSync(hDir, { recursive: true })
+  fs.writeFileSync(`${hDir}/terminal-record.json`, JSON.stringify({ terminal: 'stale-prior-run' }))
+  const oldIo = global.io
+  const baseIo = io()
+  global.io = Object.assign({}, baseIo, {
+    async writeFile(p, s) {
+      const text = typeof s === 'string' ? s : JSON.stringify(s)
+      if (String(p).endsWith('terminal-record.json.payload') && text.length > 8192) {
+        fs.writeFileSync(p, text.slice(0, 8192))
+        return
+      }
+      return baseIo.writeFile(p, s)
+    },
+  })
+  ag = makeAgent({ gate: 'pending', reviewerFindings: BIG_MINOR_FINDINGS })
+  global.agent = ag
+  r = await sr.reviewDocPhase('plan', 'wi-h', { runId: 'run-h' })
+  global.io = oldIo
+  assert.strictEqual(r.phaseResult.confidence, 'high', 'large terminal-record compose should not park at payload stage')
+  const terminal = JSON.parse(fs.readFileSync(`${hDir}/terminal-record.json`, 'utf8'))
+  assert.strictEqual(terminal.terminal, 'clean', 'stale prior terminal record must be overwritten')
+  assert.ok(!('findings' in terminal), 'terminal record must not carry evidence-bodied findings')
+  assert.ok(!fs.readFileSync(`${hDir}/terminal-record.json`, 'utf8').includes('stale-prior-run'),
+    'stale prior terminal record content must be gone')
 
   console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard + durable-write fail-close (C1)')
 }

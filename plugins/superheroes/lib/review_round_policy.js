@@ -1,6 +1,15 @@
 // plugins/superheroes/lib/review_round_policy.js
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
+const SUBJECT_FALLBACK = {
+  test: 'Test',
+  security: 'Security',
+  code: 'Code',
+  architecture: 'Architecture',
+  failure: 'Failure-Mode',
+  premortem: 'Failure-Mode',
+}
+const POLICY_SUBJECTS = new Set(Object.values(SUBJECT_FALLBACK))
 
 function _dim(prev, name) {
   if (!prev || typeof prev !== 'object' || Array.isArray(prev)) return {}
@@ -9,7 +18,29 @@ function _dim(prev, name) {
 }
 
 function _changedSubjects(value) {
-  return Array.isArray(value) && value.every((x) => typeof x === 'string') ? value : null
+  if (!Array.isArray(value)) return null
+  const out = []
+  for (const item of value) {
+    if (typeof item === 'string') {
+      out.push(item)
+      continue
+    }
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      for (const key of ['subject', 'dimension', 'policySubject']) {
+        const subject = _policySubject(item[key])
+        if (subject) out.push(subject)
+      }
+      continue
+    }
+    return null
+  }
+  return Array.from(new Set(out))
+}
+
+function _policySubject(value) {
+  if (typeof value !== 'string' || !value) return null
+  if (POLICY_SUBJECTS.has(value)) return value
+  return SUBJECT_FALLBACK[String(value || '').split('-')[0].toLowerCase()] || null
 }
 
 function _safeRound(value) {
@@ -26,7 +57,7 @@ function _subjects(name, info) {
   for (const finding of Array.isArray(info.findings) ? info.findings : []) {
     if (finding && typeof finding.dimension === 'string') subjects.push(finding.dimension)
   }
-  const fallback = { test: 'Test', security: 'Security', code: 'Code', architecture: 'Architecture', failure: 'Failure-Mode' }[String(name || '').split('-')[0].toLowerCase()]
+  const fallback = SUBJECT_FALLBACK[String(name || '').split('-')[0].toLowerCase()]
   if (fallback) subjects.push(fallback)
   return Array.from(new Set(subjects))
 }

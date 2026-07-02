@@ -34,3 +34,30 @@ def test_fractional_round_string_is_malformed():
     })
     assert out["dimensions"]["test-reviewer"]["reason"] == "malformed round state"
     assert out["escalationPolicy"] == "deep-only"
+
+
+def test_object_changed_subjects_from_live_doc_fix_still_schedule_skips():
+    out = RP.plan_round({
+        "round": 2,
+        "dimensions": ["architecture-reviewer", "security-reviewer"],
+        "changedSubjects": [{"section": "Components > lib/acceptance_launch.py", "reason": "fixed architecture finding"}],
+        "previous": {
+            "architecture-reviewer": {
+                "status": "run",
+                "confidence": "high",
+                "hasFindings": True,
+                "subjects": ["Architecture"],
+                "round": 1,
+            },
+            "security-reviewer": {
+                "status": "run",
+                "confidence": "high",
+                "hasFindings": False,
+                "subjects": ["Security"],
+                "round": 1,
+            },
+        },
+    })
+    assert out["escalationPolicy"] == "cheap-first"
+    assert out["dimensions"]["architecture-reviewer"]["tier"] == "reviewer"
+    assert out["dimensions"]["security-reviewer"]["action"] == "skip"

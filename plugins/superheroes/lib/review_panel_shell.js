@@ -229,7 +229,11 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: recordedCoverageDecisions || [],
-    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []) },
+    fix: {
+      fixes: fixResult.fixes || fixResult.fixed || [],
+      deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []),
+      changedSubjectDetails: fixResult.changedSubjectDetails || [],
+    },
   }
   if (legKind && legKind.panel) updates.confirmationPending = true
   const updatesJson = JSON.stringify(updates)
@@ -272,10 +276,34 @@ async function loadCoverageDecisions(target, ioApi) {
 function collectRoundUsage(roundFindings, round, synthesized) {
   const usage = {}
   for (const [name, result] of Object.entries(roundFindings || {})) {
-    if (result && result.usage) usage[`${name}:r${round}`] = result.usage
+    const real = _realUsage(result && result.usage)
+    if (real) usage[`${name}:r${round}`] = real
   }
-  if (synthesized && synthesized.usage) usage[`synthesis:r${round}`] = synthesized.usage
+  const synthUsage = _realUsage(synthesized && synthesized.usage)
+  if (synthUsage) usage[`synthesis:r${round}`] = synthUsage
   return usage
+}
+
+function _realUsage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const out = {}
+  let positive = false
+  for (const [key, v] of Object.entries(value)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue
+    if (v > 0) positive = true
+    out[key] = v
+  }
+  return positive ? out : null
+}
+
+function _stripZeroUsage(out) {
+  if (!out || typeof out !== 'object' || Array.isArray(out)) return out
+  const usage = _realUsage(out.usage)
+  if (usage) return Object.assign({}, out, { usage })
+  if (!Object.prototype.hasOwnProperty.call(out, 'usage')) return out
+  const cleaned = Object.assign({}, out)
+  delete cleaned.usage
+  return cleaned
 }
 
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
@@ -559,24 +587,33 @@ function _validReviewerResult(out) {
   return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
+function _shapeReviewerResult(out, opts) {
+  if (Array.isArray(out)) {
+    const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
+    return { findings: out, confidence: conf, legacyArray: true }
+  }
+  return _stripZeroUsage(out)
+}
+
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
-  let out = await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts)
-  if (Array.isArray(out)) {
-    const conf = (baseOpts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    out = { findings: out, confidence: conf, legacyArray: true }
-  }
+  let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
   if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
     escalated = true
-    out = await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' }))
-    if (Array.isArray(out)) out = { findings: out, confidence: 'high', legacyArray: true }
+    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
+    if (!_validReviewerResult(out) || out.receiptMissing) {
+      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
+    }
+  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
   }
-  if (!_validReviewerResult(out) || out.confidence !== 'high') {
-    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: _validReviewerResult(out) ? out.findings : [], confidence: _validReviewerResult(out) ? out.confidence : 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }
+  if (!_validReviewerResult(out)) {
+    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: true, legacyArray: !!(out && out.legacyArray), escalated }
     return
   }
-  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier }, out)
+  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier, malformed: false }, out)
 }
 
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {

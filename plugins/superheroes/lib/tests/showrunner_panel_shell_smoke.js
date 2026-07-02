@@ -164,6 +164,30 @@ async function main() {
 
   {
     const dir = freshDir()
+    global.reviewerAgent = async () => ({ findings: [], confidence: 'low', receiptMissing: true })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
+    assert.notStrictEqual(v.terminal, 'clean')
+    const recs = JSON.parse(fs.readFileSync(path.join(dir, 'round-records.json'), 'utf8'))
+    assert.strictEqual(recs[0].dimensions['code-reviewer'].status, 'run',
+      'a shaped low-confidence reviewer result ran; only null/malformed results are missing')
+    assert.strictEqual(recs[0].dimensions['code-reviewer'].confidence, 'low')
+  }
+
+  {
+    const dir = freshDir()
+    let calls = 0
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => {
+      calls += 1
+      if (calls === 1) return { findings: [], confidence: 'low', receiptMissing: true }
+      return cleanResult(runDir, round, opts)
+    }
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
+    assert.strictEqual(v.terminal, 'clean')
+    assert.strictEqual(calls, 2, 'a deep-tier receipt miss gets one deep retry before recording')
+  }
+
+  {
+    const dir = freshDir()
     const seen = []
     let first = true
     global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => {
@@ -179,6 +203,17 @@ async function main() {
     assert.ok(seen.some((x) => x.tier === 'reviewer'))
     assert.ok(seen.some((x) => x.tier === 'reviewer-deep'))
     assert.strictEqual(v.terminal, 'clean')
+  }
+
+  {
+    const dir = freshDir()
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) =>
+      ({ findings: [], confidence: 'high', verificationReceipt: receipt(runDir, round, opts), usage: { input: 0, output: 0, total: 0 } })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
+    assert.strictEqual(v.terminal, 'clean')
+    assert.ok(v.telemetry.tokenUsage.missing.includes('code-reviewer:r1'),
+      'zero usage stubs are omitted instead of counted as real telemetry')
+    assert.ok(!v.telemetry.tokenUsage.present.includes('code-reviewer:r1'))
   }
 
   {
