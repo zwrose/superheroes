@@ -13,7 +13,12 @@ global.log = () => {}
 global.agent = async (prompt, opts) => {
   const label = (opts && opts.label) || ''
   if (label === 'resume') return '1'
-  if (label.startsWith('architecture') || label.endsWith('-reviewer')) { calls.reviewer += 1; return { findings: [] } }
+  // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
+  // downgrades it to confidence:low -> cannot-certify).
+  if (label.startsWith('architecture') || label.endsWith('-reviewer')) {
+    calls.reviewer += 1
+    return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+  }
   if (label.startsWith('synthesis')) { calls.synth += 1; return { verdicts: [] } }
   if (label === 'exec') { if (prompt.includes('record-deferred')) calls.defer += 1; return [] }
   if (label === 'lib') return { ok: true }     // read-gate / set-gate cmdRunner calls

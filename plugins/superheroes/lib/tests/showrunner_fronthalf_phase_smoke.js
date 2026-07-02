@@ -47,7 +47,12 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     }
     // gate-for-terminal must NOT be dispatched as a cmdRunner agent either.
     if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as cmdRunner — must use JS twin')
-    if (label.endsWith('-reviewer')) { panelRuns += 1; return { findings: reviewerFindings, confidence: 'high' } }
+    // a genuinely clean/complete review needs a real verificationReceipt (else the receipt-fabrication
+    // fix downgrades it to confidence:low -> cannot-certify).
+    if (label.endsWith('-reviewer')) {
+      panelRuns += 1
+      return { findings: reviewerFindings, confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+    }
     if (label.startsWith('synthesis')) return { verdicts: [] }         // keep all merged findings
     if (label === 'revise-doc') return reviserFails ? null : { fixes: [], deferred: [] }
     return null

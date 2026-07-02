@@ -95,7 +95,11 @@ async function partReviewReadInner(resolved, legacy) {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: 'pending' }) }]
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
-    if (label.endsWith('-reviewer')) return { findings: [], confidence: 'high' }
+    // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
+    // downgrades it to confidence:low -> cannot-certify).
+    if (label.endsWith('-reviewer')) {
+      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+    }
     if (label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'revise-doc') return { fixes: [], deferred: [] }
     return null

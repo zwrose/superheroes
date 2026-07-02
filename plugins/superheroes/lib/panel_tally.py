@@ -230,6 +230,12 @@ def round_gate_from_dimension_results(results, expected_roster, final_confirmati
     if final_confirmation:
         for name in expected_roster:
             result = (results or {}).get(name) or {}
+            # externalReview (#38/receipt-fabrication fix): an external-engine reviewer has no
+            # native chain-of-verification receipt to offer, but it IS a real independent review —
+            # accept it as an alternate, honestly-labeled confirmation path instead of demanding a
+            # receipt shape it structurally can't produce.
+            if result.get("externalReview"):
+                continue
             if not _valid_final_receipt(result, receipt_context):
                 return "cannot-certify", "low", missing
     if gate == "clean" and _current_blocking_findings(results):

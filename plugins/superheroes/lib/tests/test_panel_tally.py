@@ -348,6 +348,16 @@ def test_round_gate_high_when_final_clean_has_receipt():
     assert conf == "high"
 
 
+def test_round_gate_high_when_final_clean_is_external_review_without_receipt():
+    # externalReview (#38/receipt-fabrication fix): an external-engine reviewer structurally has
+    # no native chain-of-verification receipt to offer. It must still pass the final-confirmation
+    # check as an honestly-labeled alternate confirmation path, not fail closed for lacking one.
+    result = {"status": "run", "findings": [], "confidence": "high", "externalReview": "codex"}
+    gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True)
+    assert gate == "clean"
+    assert conf == "high"
+
+
 def test_round_gate_low_when_receipt_has_labels_without_evidence():
     result = {"status": "run", "findings": [], "confidence": "high", "verificationReceipt": {"chain": ["citation", "reachability", "missing-check", "tooling"]}}
     gate, conf, missing = PT.round_gate_from_dimension_results({"code": result}, ["code"], final_confirmation=True)

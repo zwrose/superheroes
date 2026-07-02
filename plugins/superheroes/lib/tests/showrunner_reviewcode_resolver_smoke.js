@@ -41,7 +41,11 @@ async function main() {
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
     if (label === 'stamp review coverage') return jsonOut({ ok: true })
-    if (/^(architecture|code|security|test|premortem)-reviewer:/.test(label)) return { findings: [] }
+    // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
+    // downgrades it to confidence:low -> cannot-certify).
+    if (/^(architecture|code|security|test|premortem)-reviewer:/.test(label)) {
+      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+    }
     return { findings: [] }
   }
   // exec is used by the exec-based dumb-pipe (recordDeferred). Wire a no-op.
