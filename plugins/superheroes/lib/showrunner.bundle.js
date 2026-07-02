@@ -1948,7 +1948,9 @@ const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
 
 const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation' }
-const _CODEX_EFFORT = { review: 'high', build: 'high', fix: 'low' }
+// Depth-aware review: deep reviewers (security/architecture — reviewer-deep tier) -> 'review-deep'
+// (xhigh); regular review -> 'review' (high). Mirrors engine_pref.py._CODEX_EFFORT.
+const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low' }
 const _CURSOR_EFFORT = 'composer'
 
 // Own-key membership (mirror model_tier.js): JS `in`/bracket walk the prototype chain,
@@ -2820,7 +2822,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
     if (rEngine !== 'claude') {
-      const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+      // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
+      // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
+      const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
@@ -3255,7 +3259,9 @@ function reviewCodeLeaves(tiers, opts) {
     if (rEngine !== 'claude') {
       // FR-9: source the effort override from the engine-prefs effort sub-map (keyed by role_kind),
       // NOT the model-tier __SR_OVERRIDES map (keyed by role->model — resolveEffort could never match it).
-      const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+      // Depth-aware: the deep reviewers (security/architecture — the reviewer-deep model tier, REVIEW_DEEP)
+      // dispatch codex at 'review-deep' (xhigh); the rest at 'review' (high). roleKind stays 'review'.
+      const eff = enginePrefTwin.resolveEffort(rEngine, REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem: context, engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),

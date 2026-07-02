@@ -169,6 +169,20 @@ async function partB() {
   assert.ok(dispatchCalls.every((c) => c.roleKind === 'review' || c.roleKind === 'fix'),
     'FAIL (b1e): dispatchExternal must never be called for synthesis — only roleKind:review or roleKind:fix')
 
+  // (b1f/g) depth-aware effort (FR-9): the deep reviewers (security/architecture — the reviewer-deep
+  // tier) dispatch codex at xhigh; the regular reviewers (code/test/premortem) at high. roleKind stays
+  // 'review' for all (asserted above); only the resolved effort differs by reviewer depth.
+  const deepEfforts = reviewDispatch
+    .filter((c) => /You are the (security|architecture)-reviewer\b/.test(c.prompt || ''))
+    .map((c) => c.effort)
+  const regularEfforts = reviewDispatch
+    .filter((c) => /You are the (code|test|premortem)-reviewer\b/.test(c.prompt || ''))
+    .map((c) => c.effort)
+  assert.ok(deepEfforts.length > 0 && deepEfforts.every((e) => e === 'xhigh'),
+    'FAIL (b1f): deep reviewers (security/architecture) must dispatch codex at effort xhigh')
+  assert.ok(regularEfforts.length > 0 && regularEfforts.every((e) => e === 'high'),
+    'FAIL (b1g): regular reviewers (code/test/premortem) must dispatch codex at effort high')
+
   // (b2) UFR-7: dispatchExternal for roleKind:review returns unreadable -> the native reviewer agent()
   // fires for that reviewer as the fall-open path, and the round is not recorded clean.
   dispatchCalls.length = 0

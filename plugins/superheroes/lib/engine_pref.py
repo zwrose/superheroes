@@ -20,8 +20,10 @@ ENGINES = ("claude", "codex", "cursor")
 _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementation"}
 
 # effort defaults per engine. codex is effort-tiered; cursor is one composer model
-# (FR-10, exempt); claude defers to model_tier (None).
-_CODEX_EFFORT = {"review": "high", "build": "high", "fix": "low"}
+# (FR-10, exempt); claude defers to model_tier (None). Depth-aware review: the deep reviewers
+# (security/architecture — the reviewer-deep model tier) dispatch at 'review-deep' -> xhigh;
+# regular review -> high. gpt-5.5 efforts: none/low/medium/high/xhigh.
+_CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low"}
 _CURSOR_EFFORT = "composer"
 
 DEFAULT_STALL_LIMIT_SECONDS = 300

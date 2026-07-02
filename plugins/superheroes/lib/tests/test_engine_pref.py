@@ -40,6 +40,7 @@ def test_resolve_engine_falls_open_to_claude():
 
 def test_resolve_effort_defaults():
     assert EP.resolve_effort("codex", "review") == "high"
+    assert EP.resolve_effort("codex", "review-deep") == "xhigh"   # deep reviewers (security/architecture)
     assert EP.resolve_effort("codex", "build") == "high"
     assert EP.resolve_effort("codex", "fix") == "low"
     assert EP.resolve_effort("cursor", "review") == "composer"
@@ -50,6 +51,8 @@ def test_resolve_effort_defaults():
 
 def test_resolve_effort_override_wins_else_default():
     assert EP.resolve_effort("codex", "review", {"review": "medium"}) == "medium"
+    assert EP.resolve_effort("codex", "review-deep", {"review-deep": "high"}) == "high"  # deep override wins
+    assert EP.resolve_effort("codex", "review-deep") == "xhigh"                          # deep default
     assert EP.resolve_effort("codex", "review", {"review": ""}) == "high"    # empty → default
     assert EP.resolve_effort("codex", "review", {"review": 7}) == "high"      # non-str → default
     assert EP.resolve_effort("codex", "review", "not-a-dict") == "high"

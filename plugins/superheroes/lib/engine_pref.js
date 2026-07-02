@@ -5,7 +5,9 @@ const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
 
 const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation' }
-const _CODEX_EFFORT = { review: 'high', build: 'high', fix: 'low' }
+// Depth-aware review: deep reviewers (security/architecture — reviewer-deep tier) -> 'review-deep'
+// (xhigh); regular review -> 'review' (high). Mirrors engine_pref.py._CODEX_EFFORT.
+const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low' }
 const _CURSOR_EFFORT = 'composer'
 
 // Own-key membership (mirror model_tier.js): JS `in`/bracket walk the prototype chain,

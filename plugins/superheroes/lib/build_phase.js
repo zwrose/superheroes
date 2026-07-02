@@ -561,7 +561,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
       + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
     if (rEngine !== 'claude') {
-      const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+      // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
+      // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
+      const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },

@@ -75,7 +75,9 @@ function reviewCodeLeaves(tiers, opts) {
     if (rEngine !== 'claude') {
       // FR-9: source the effort override from the engine-prefs effort sub-map (keyed by role_kind),
       // NOT the model-tier __SR_OVERRIDES map (keyed by role->model — resolveEffort could never match it).
-      const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+      // Depth-aware: the deep reviewers (security/architecture — the reviewer-deep model tier, REVIEW_DEEP)
+      // dispatch codex at 'review-deep' (xhigh); the rest at 'review' (high). roleKind stays 'review'.
+      const eff = enginePrefTwin.resolveEffort(rEngine, REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem: context, engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
