@@ -183,6 +183,61 @@ def persist_record(path, records, record, expected_hash=None, run_id=None, lease
         return {"ok": False, "reason": "write-failed", "detail": str(exc)}
 
 
+def _dim_result_path(run_dir, name, round_no):
+    return os.path.join(run_dir, "dim-result-%s-r%s.json" % (name, round_no))
+
+
+def compose_round_record(run_dir, round_no, kind, dimensions, changed_subjects,
+                         coverage_decisions, token_usage, confirmation_pending=False):
+    """Compose the round record Python-side from the per-dimension result FILES the loop
+    staged in the run dir (dim-result-<name>-r<round>.json) plus small scalars. The record
+    body never rides the courier pipe as an inline argument (live 2026-07-02: an LLM courier
+    mangled the oversized inline JSON and every native review leg parked). Fail-closed:
+    a missing/corrupt dimension file refuses the compose."""
+    dim_results = {}
+    for name in dimensions or []:
+        path = _dim_result_path(run_dir, name, round_no)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                result = json.load(fh)
+        except FileNotFoundError:
+            return {"ok": False, "reason": "dim-result-missing:%s" % name}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "reason": "dim-result-unreadable:%s" % name, "detail": str(exc)}
+        if not isinstance(result, dict):
+            return {"ok": False, "reason": "dim-result-unreadable:%s" % name, "detail": "not a dict"}
+        dim_results[name] = result
+    record = record_from_dimension_results(
+        round_no, kind, dim_results, changed_subjects, coverage_decisions, token_usage,
+        confirmation_pending)
+    return {"ok": True, "record": record}
+
+
+def update_round_record(path, round_no, updates, expected_hash=None, run_id=None, lease=None):
+    """Apply a SMALL delta (confirmationPending / changedSubjects / coverageDecisions / fix)
+    to an already-persisted round's record — the post-fix update never re-ships the round
+    body through the pipe. Same fenced-persist semantics as persist_record."""
+    state = load_records_state(path, [])
+    if expected_hash and state.get("contentHash") != expected_hash:
+        return {"ok": False, "reason": "stale"}
+    if not state.get("ok"):
+        return {"ok": False, "reason": state.get("state") or "unreadable"}
+    records = state.get("records") or []
+    target = next((r for r in records if r.get("round") == round_no), None)
+    if target is None:
+        return {"ok": False, "reason": "round-missing"}
+    merged = dict(target)
+    merged.update(updates or {})
+    return persist_record(path, records, merged, expected_hash=expected_hash,
+                          run_id=run_id, lease=lease)
+
+
+def _strip_records(result):
+    """The CLI answer for compose-persist/update-round: ok + contentHash only — echoing the
+    merged records back through the courier stdout would be the same mega-payload defect."""
+    return {k: v for k, v in result.items() if k != "records"}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -196,7 +251,65 @@ def main(argv=None):
     persist_p.add_argument("--expected-hash")
     persist_p.add_argument("--run-id", required=True)
     persist_p.add_argument("--lease")
+    compose_p = sub.add_parser("compose-persist")
+    compose_p.add_argument("--path", required=True)
+    compose_p.add_argument("--run-dir", required=True)
+    compose_p.add_argument("--round", required=True, type=int)
+    compose_p.add_argument("--kind", required=True)
+    compose_p.add_argument("--dimensions", required=True)
+    compose_p.add_argument("--changed-subjects-json", default="null")
+    compose_p.add_argument("--coverage-decisions-json", default="[]")
+    compose_p.add_argument("--token-usage-json", default="{}")
+    compose_p.add_argument("--confirmation-pending", action="store_true")
+    compose_p.add_argument("--expected-hash")
+    compose_p.add_argument("--run-id", required=True)
+    compose_p.add_argument("--lease")
+    update_p = sub.add_parser("update-round")
+    update_p.add_argument("--path", required=True)
+    update_p.add_argument("--round", required=True, type=int)
+    update_p.add_argument("--updates-json", required=True)
+    update_p.add_argument("--expected-hash")
+    update_p.add_argument("--run-id", required=True)
+    update_p.add_argument("--lease")
+    hash_p = sub.add_parser("hash")
+    hash_p.add_argument("--path", required=True)
     args = parser.parse_args(argv)
+    if args.cmd == "hash":
+        try:
+            with open(args.path, encoding="utf-8") as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            text = ""
+        except OSError as exc:
+            print(json.dumps({"ok": False, "reason": "unreadable", "detail": str(exc)}))
+            return 1
+        print(json.dumps({"ok": True, "contentHash": content_hash(text)}))
+        return 0
+    if args.cmd == "compose-persist":
+        composed = compose_round_record(
+            args.run_dir, args.round, args.kind, json.loads(args.dimensions),
+            json.loads(args.changed_subjects_json), json.loads(args.coverage_decisions_json),
+            json.loads(args.token_usage_json), args.confirmation_pending)
+        if not composed.get("ok"):
+            print(json.dumps(composed))
+            return 1
+        state = load_records_state(args.path, json.loads(args.dimensions))
+        if args.expected_hash and state.get("contentHash") != args.expected_hash:
+            print(json.dumps({"ok": False, "reason": "stale"}))
+            return 1
+        if not state.get("ok"):
+            print(json.dumps({"ok": False, "reason": state.get("state") or "unreadable"}))
+            return 1
+        result = persist_record(args.path, state.get("records") or [], composed["record"],
+                                expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
+        print(json.dumps(_strip_records(result)))
+        return 0 if result.get("ok") else 1
+    if args.cmd == "update-round":
+        result = update_round_record(args.path, args.round, json.loads(args.updates_json),
+                                     expected_hash=args.expected_hash, run_id=args.run_id,
+                                     lease=args.lease)
+        print(json.dumps(_strip_records(result)))
+        return 0 if result.get("ok") else 1
     dimensions = json.loads(args.dimensions)
     if args.cmd == "load":
         result = load_records_state(args.path, dimensions)

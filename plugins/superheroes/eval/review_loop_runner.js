@@ -31,22 +31,20 @@ global.io = Object.assign({}, defaultIo, {
       return { ok: false, status: 1, stdout: '{"ok":false,"reason":"forced-telemetry-failure"}\n', stderr: 'forced telemetry failure' }
     }
     const argv = args || []
-    if (String(argv[0]).endsWith('review_telemetry.py') && argv.includes('write')) {
-      const idx = argv.indexOf('--payload-json')
-      if (idx >= 0) {
-        const payload = JSON.parse(argv[idx + 1])
-        const tokenUsage = payload.tokenUsage || {}
-        const missing = tokenUsage.missing || []
-        const fixMissing = missing.filter((leaf) => leaf.startsWith('fix:r'))
-        if (fixMissing.length) {
-          tokenUsage.missing = missing.filter((leaf) => !leaf.startsWith('fix:r'))
-          tokenUsage.present = [...new Set([...(tokenUsage.present || []), ...fixMissing])]
-          tokenUsage.complete = tokenUsage.missing.length === 0
-          tokenUsage.total = Number(tokenUsage.total || 0) + fixMissing.reduce((sum, leaf) => sum + Number((usage[leaf] && usage[leaf].total) || 1), 0)
-          payload.tokenUsage = tokenUsage
-          payload.benchmarkValid = tokenUsage.complete
-          argv[idx + 1] = JSON.stringify(payload)
+    // The telemetry rounds now come from round-records.json on disk (write-from-records); only
+    // the small usage map rides the invocation. Simulate the fix leaf's usage (the live fix
+    // leaf does not report usage) by injecting the expected fix:rN leaves into --usage-json.
+    if (String(argv[0]).endsWith('review_telemetry.py') && argv.includes('write-from-records')) {
+      const uIdx = argv.indexOf('--usage-json')
+      const eIdx = argv.indexOf('--expected-leaves-json')
+      if (uIdx >= 0 && eIdx >= 0) {
+        const usageArg = JSON.parse(argv[uIdx + 1])
+        for (const leaf of JSON.parse(argv[eIdx + 1])) {
+          if (leaf.startsWith('fix:r') && !usageArg[leaf]) {
+            usageArg[leaf] = { total: Number((usage[leaf] && usage[leaf].total) || 1) }
+          }
         }
+        argv[uIdx + 1] = JSON.stringify(usageArg)
       }
     }
     return defaultIo.runHelper(cmd, args)

@@ -88,15 +88,64 @@ def write_record(path, record, expected_hash=None, run_id=None, lease=None):
     return _atomic_write(path, json.dumps(record, indent=2) + "\n")
 
 
+def _load_rounds(records_path):
+    """Read the loop's round records from disk via review_memory's canonical reader.
+    Missing file -> ok with [] (early terminals finalize before any round persisted);
+    corrupt -> fail-closed."""
+    import sys
+    lib_dir = os.path.dirname(os.path.abspath(__file__))
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+    import review_memory
+    return review_memory.load_records_state(records_path, [])
+
+
+def write_from_records(path, records_path, expected_leaves, usage, terminal=None,
+                       benchmark=False, expected_hash=None, run_id=None, lease=None):
+    """Compose + write the telemetry record with `rounds` read from round-records.json ON
+    DISK — the rounds never ride the courier pipe inline (live 2026-07-02: the inline
+    --payload-json with every round embedded was courier-mangled). Returns the SMALL summary
+    (payload minus rounds) so the caller can attach it to the verdict without re-reading."""
+    state = _load_rounds(records_path)
+    if not state.get("ok"):
+        return {"ok": False, "reason": "records-" + (state.get("state") or "unreadable")}
+    payload = build_record(state.get("records") or [], expected_leaves, usage,
+                           benchmark=benchmark, terminal=terminal)
+    result = write_record(path, payload, expected_hash=expected_hash, run_id=run_id, lease=lease)
+    if not result.get("ok"):
+        return result
+    summary = {k: v for k, v in payload.items() if k != "rounds"}
+    summary["ok"] = True
+    return summary
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["write"])
+    parser.add_argument("cmd", choices=["write", "write-from-records"])
     parser.add_argument("--path", required=True)
-    parser.add_argument("--payload-json", required=True)
+    parser.add_argument("--payload-json")
+    parser.add_argument("--records-path")
+    parser.add_argument("--expected-leaves-json", default="[]")
+    parser.add_argument("--usage-json", default="{}")
+    parser.add_argument("--terminal")
+    parser.add_argument("--benchmark", action="store_true")
     parser.add_argument("--expected-hash")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--lease")
     args = parser.parse_args(argv)
+    if args.cmd == "write-from-records":
+        if not args.records_path:
+            print(json.dumps({"ok": False, "reason": "missing-records-path"}))
+            return 1
+        result = write_from_records(
+            args.path, args.records_path, json.loads(args.expected_leaves_json),
+            json.loads(args.usage_json), terminal=args.terminal, benchmark=args.benchmark,
+            expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
+    if args.payload_json is None:
+        print(json.dumps({"ok": False, "reason": "missing-payload-json"}))
+        return 1
     record = json.loads(args.payload_json)
     result = write_record(args.path, record, expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
     print(json.dumps(result))
