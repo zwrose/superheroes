@@ -145,3 +145,47 @@ def test_known_roles_matches_core_default_tiers():
     core = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(core)
     assert set(MTO.KNOWN_ROLES) == set(core.DEFAULT_TIERS)
+
+
+def test_effective_tiers_merges_defaults_with_profile_overrides(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\nreviewer: fable\n", encoding="utf-8")
+    effective = MTO.effective_tiers(str(p))
+    assert effective["reviewer"] == "fable"
+    assert effective["synthesis"] == "opus"
+    assert effective["mechanical"] == "haiku"
+
+
+def test_write_model_tiers_block_creates_and_preserves_other_sections(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("## Threat model\nsingle-user\n\n## Conventions\nkeep me\n", encoding="utf-8")
+    result = MTO.update_overrides(str(p), {"reviewer": "fable", "fixer": "opus"}, [])
+    text = p.read_text(encoding="utf-8")
+    assert result["warnings"] == []
+    assert "## Threat model\nsingle-user" in text
+    assert "## Conventions\nkeep me" in text
+    assert "## Model tiers\nreviewer: fable\nfixer: opus\n" in text
+    assert MTO.load_overrides(str(p)) == {"reviewer": "fable", "fixer": "opus"}
+
+
+def test_write_model_tiers_block_replaces_clears_and_drops_unknown_roles(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("before\n\n## Model tiers\nreviewer: sonnet\nsynthesis: opus\n\n## After\nkept\n",
+                 encoding="utf-8")
+    result = MTO.update_overrides(str(p), {"bogus": "opus", "fixer": "haiku"}, ["reviewer"])
+    text = p.read_text(encoding="utf-8")
+    assert any("unknown role: bogus" in w for w in result["warnings"])
+    assert "reviewer: sonnet" not in text
+    assert "synthesis: opus" in text
+    assert "fixer: haiku" in text
+    assert text.startswith("before\n\n")
+    assert "\n## After\nkept\n" in text
+    assert MTO.load_overrides(str(p)) == {"synthesis": "opus", "fixer": "haiku"}
+
+
+def test_write_unknown_model_warns_but_keeps_override(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\n", encoding="utf-8")
+    result = MTO.update_overrides(str(p), {"reviewer": "experimental-model"}, [])
+    assert any("unknown model for reviewer: experimental-model" in w for w in result["warnings"])
+    assert MTO.load_overrides(str(p)) == {"reviewer": "experimental-model"}

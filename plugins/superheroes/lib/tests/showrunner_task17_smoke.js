@@ -8,7 +8,8 @@
 //   (b) bundle wrapper: a dumb-pipe leaf (label='exec' or label='io') ALWAYS receives
 //       the cheapest model (DEFAULT_TIERS.mechanical = 'haiku') even when __SR_LEAF_MODEL
 //       is set to something else (e.g. 'sonnet'). A non-dumb leaf ('lib', 'reviewer', etc.)
-//       DOES get __SR_LEAF_MODEL when set.
+//       DOES get __SR_LEAF_MODEL when set. A smart leaf with neither __SR_LEAF_MODEL nor
+//       opts.model receives the Opus fallback, so it can never inherit the session model.
 //
 // For (b): the wrapper lives in the bundle's PREAMBLE, not in showrunner.js. We evaluate the
 // bundle in a vm sandbox (as showrunner_bundle_smoke.js does) and call globalThis.agent()
@@ -187,26 +188,46 @@ async function partB() {
     `FAIL (b3): lib leaf model must be __SR_LEAF_MODEL='sonnet', got '${received[0].model}'`,
   )
 
-  // (b4) No __SR_LEAF_MODEL set: non-dumb leaf should NOT have model forced
-  sandbox.globalThis.__SR_LEAF_MODEL = null
+  // (b4) __SR_LEAF_MODEL keeps throwaway-run precedence even over an explicitly-pinned smart leaf.
   received.length = 0
-  try { await sandbox.globalThis.agent('test lib no-override', { label: 'reviewer:r1' }) } catch (_) {}
-  assert.ok(received.length > 0, 'FAIL (b4): no call to underlying agent for reviewer label')
-  // Without __SR_LEAF_MODEL, the model in opts should be undefined (not set by caller, not overridden)
-  assert.ok(
-    received[0].model === undefined || received[0].model === null,
-    `FAIL (b4): without __SR_LEAF_MODEL, non-dumb leaf should have no model override, got '${received[0].model}'`,
+  try { await sandbox.globalThis.agent('test explicit smart override', { label: 'reviewer:r1', model: 'opus' }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b4): no call to underlying agent for explicit smart leaf')
+  assert.strictEqual(
+    received[0].model,
+    'sonnet',
+    `FAIL (b4): __SR_LEAF_MODEL must override explicit smart opts.model, got '${received[0].model}'`,
   )
 
-  // (b5) Even with no opts at all, exec label should still get cheapest
+  // (b5) No __SR_LEAF_MODEL set + explicit smart opts.model: preserve the caller's pin.
+  sandbox.globalThis.__SR_LEAF_MODEL = null
+  received.length = 0
+  try { await sandbox.globalThis.agent('test explicit smart pin', { label: 'reviewer:r1', model: 'opus' }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b5): no call to underlying agent for explicit reviewer label')
+  assert.strictEqual(
+    received[0].model,
+    'opus',
+    `FAIL (b5): explicit smart opts.model should be preserved without __SR_LEAF_MODEL, got '${received[0].model}'`,
+  )
+
+  // (b6) No __SR_LEAF_MODEL set + no opts.model: smart leaf gets the Opus fallback.
+  received.length = 0
+  try { await sandbox.globalThis.agent('test lib no-override', { label: 'reviewer:r1' }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b6): no call to underlying agent for reviewer label')
+  assert.strictEqual(
+    received[0].model,
+    modelTier.DEFAULT_TIERS.synthesis,
+    `FAIL (b6): smart leaf without opts.model must fall back to Opus, got '${received[0].model}'`,
+  )
+
+  // (b7) Even with no opts at all, exec label should still get cheapest
   sandbox.globalThis.__SR_LEAF_MODEL = 'sonnet'
   received.length = 0
   try { await sandbox.globalThis.agent('test exec no-opts', { label: 'exec' }) } catch (_) {}
-  assert.ok(received.length > 0, 'FAIL (b5): no call to underlying agent for exec with no opts')
+  assert.ok(received.length > 0, 'FAIL (b7): no call to underlying agent for exec with no opts')
   assert.strictEqual(
     received[0].model,
     cheapest,
-    `FAIL (b5): exec with no prior model in opts must still get cheapest ('${cheapest}'), got '${received[0].model}'`,
+    `FAIL (b7): exec with no prior model in opts must still get cheapest ('${cheapest}'), got '${received[0].model}'`,
   )
 
   console.log('OK (b): bundle wrapper — exec/io always cheapest regardless of __SR_LEAF_MODEL; non-dumb gets __SR_LEAF_MODEL')

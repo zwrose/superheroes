@@ -14,6 +14,7 @@ if _LIB_DIR not in sys.path:
 import core_md         # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
+import model_tier_overrides  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
@@ -52,8 +53,15 @@ def collect(cwd, root=None):
         health = store_sweep.report(root=root)["counts"]  # read-only scan
     except Exception:
         health = None
+    try:
+        profile = model_tier_overrides.resolve_profile_path(cwd)
+        tiers = model_tier_overrides.effective_tiers(profile)
+        overrides = model_tier_overrides.load_overrides(profile)
+    except Exception:
+        profile, tiers, overrides = None, None, {}
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
-            "drift": drift, "storeHealth": health}
+            "drift": drift, "storeHealth": health,
+            "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile}
 
 
 def _health_line(counts):
@@ -89,6 +97,15 @@ def render(cwd, *, root=None):
         out.append("")
         out.append(f"## Layer: {hero}")
         out.append((text or "").strip())
+    out.append("")
+    out.append("## Model tiers")
+    tiers = data.get("modelTiers")
+    if not tiers:
+        out.append("(using built-in defaults; review-crew profile not resolved)")
+    else:
+        for role in model_tier_overrides.KNOWN_ROLES:
+            model = tiers.get(role)
+            out.append(f"{role}: {model if model is not None else '(session, orchestrator only)'}")
     out.append("")
     out.append("## Pinned patterns")
     out.append((data["patterns"] or "(none)").strip())

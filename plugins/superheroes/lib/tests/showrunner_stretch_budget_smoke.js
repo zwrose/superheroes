@@ -361,6 +361,14 @@ async function main() {
   assert.strictEqual(outcome.outcome, 'ready',
     `the canned green run must reach 'ready' (got ${JSON.stringify(outcome)})`)
 
+  // CLASS GUARD: no leaf may ever inherit the Workflow session model. The bundle wrapper is the
+  // choke point, so every fake-runtime agent invocation must arrive with an explicit opts.model.
+  const modelLess = calls.filter((c) => c.model === undefined || c.model === null)
+  assert.deepStrictEqual(
+    modelLess.map((c) => `${c.phase}/${c.label}`),
+    [],
+    'no agent invocation may reach the runtime without opts.model')
+
   // (1) MODEL PIN: every non-genuine leaf resolves to the cheapest (mechanical) tier; no genuine
   // agent is ever pinned there.
   const unpinned = calls.filter((c) => !isGenuine(c.label) && c.model !== CHEAPEST)
