@@ -1,3 +1,9 @@
+# Contents
+
+- Render the combined view
+- The tune menu
+- Switch the storage mode
+
 # configure — view & tune path
 
 Reached from `configure` when a project is configured and healthy (FR-1). Renders the whole
@@ -16,10 +22,11 @@ print(configure_view.render('.'))"
 ```
 
 One plain-text screen, top to bottom: the project's core facts, each hero's layer, the pinned
-patterns — "here is everything superheroes knows about this project," not a list of files. Any
-current staleness/drift is shown as a **single, dismissible reminder on every run** (whether or not
-it was dismissed before); the owner can act on it or dismiss it again for that run. Rendering is
-read-only — it never confirms a provisional calibration (FR-18).
+patterns, and the effective per-role model tiers — "here is everything superheroes knows about
+this project," not a list of files. Any current staleness/drift is shown as a **single,
+dismissible reminder on every run** (whether or not it was dismissed before); the owner can act on
+it or dismiss it again for that run. Rendering is read-only — it never confirms a provisional
+calibration (FR-18).
 
 ## 2 — The tune menu (FR-5)
 
@@ -60,6 +67,27 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
   `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing
   `enginePreferences` through `core_md`. Set a role back to `claude` (or clear it) to fall fully open.
+- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/author)
+  → show the effective map first, then write only the `## Model tiers` block in the resolved
+  review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  python3 "$ROOT_DIR/lib/model_tier_overrides.py" show
+  ```
+
+  To set overrides (including `fable`, but only when the owner explicitly asks for it) or clear
+  overrides back to `DEFAULT_TIERS`, run the helper; it creates the block if absent, replaces it if
+  present, and preserves every other profile section:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  python3 "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=fable --clear fixer
+  ```
+
+  Role names are validated against `KNOWN_ROLES`; unknown roles are dropped with a warning. Unknown
+  model strings warn but do not fail, so newly available model names can be deliberately configured
+  before the plugin ships a new allowlist.
 
 ## 3 — Switch the storage mode (FR-10), always showing what will move
 

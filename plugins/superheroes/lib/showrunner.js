@@ -258,6 +258,8 @@ const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-revie
 // in-process panel_tally.compileFindings twin (no docMergeAgent / front_half.py merge), and the
 // synthesis leaf RETURNS its keep/drop verdicts (loop_synthesis.consume reads them).
 async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts = {}) {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('reviewer', overrides, null)
   const promptContext = Object.assign({}, context || {}, {
     roundKind: opts.roundKind,
     coverageDecisions: opts.coverageDecisions || [],
@@ -268,18 +270,20 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
     `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
-    { label: reviewer, schema: FINDINGS_SCHEMA })
+    Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null
   return ensureReviewerShape(out, Object.assign({}, opts, { round }))
 }
 async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('synthesis', overrides, null)
   const out = await agent(
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
     `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
-    { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA })
+    Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
 }
 async function saveRoundStateBestEffort(workItem, doc, round, deferred, runDir) {
@@ -327,11 +331,13 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
 // the doc-reviser fixStep: dispatch the doc-reviser leaf; return the resolved/deferred report
 // (with extras.parentOrigin for a parent-traced / GATE finding), or null on failure (#104 -> halted).
 async function docReviser(fixContext, verdict, runDir, context) {
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('fixer', overrides, 'doc')
   const out = await agent(
     `You are the doc-reviser (fixStep) for the ${context.docType} doc at ${context.docPath}. ` +
     `${FIX_RESULT_INSTRUCTION} Per plugins/superheroes/eval/doc-reviser-leaf.md resolve blocking findings. ` +
     `Fix context:\n${JSON.stringify(fixContext)}`,
-    { label: 'revise-doc', schema: FIX_RESULT_SCHEMA })
+    Object.assign({ model }, { label: 'revise-doc', schema: FIX_RESULT_SCHEMA }))
   return normalizeFixResult(out)
 }
 

@@ -42,3 +42,23 @@ def test_render_shows_storage_health_line(tmp_path):
     screen = cv.render(str(tmp_path), root=root)
     assert "storage health" in screen
     assert "1 orphaned" in screen
+
+
+def test_render_shows_effective_model_tiers(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": ""},
+                                        "confirmed", "2026-06-27", "2026-06-27"))
+    sc.atomic_write(os.path.join(cdir, "review-crew.md"), "<!-- review-crew: v1 -->\nscope\n")
+    sc.atomic_write(os.path.join(str(tmp_path), ".claude", "review-profile.md"),
+                    "## Model tiers\nreviewer: fable\n")
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Model tiers" in screen
+    assert "reviewer: fable" in screen
+    assert "synthesis: opus" in screen
+    assert "mechanical: haiku" in screen

@@ -43,7 +43,8 @@ const PREAMBLE = `export const meta = {
 // inlined spine (which reads globals) sees them. agent is WRAPPED so EVERY leaf gets, centrally:
 //  (1) model pinning — dumb pipes (exec/io) are UNCONDITIONALLY pinned to the cheapest model
 //      (DEFAULT_TIERS.mechanical) regardless of __SR_LEAF_MODEL or any session default; genuine-LLM
-//      (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test runs) or the session default.
+//      (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test runs), preserve explicit
+//      opts.model otherwise, or fall back to Opus. No leaf inherits the session model.
 //  (2) the current phase as its progress group — globalThis.__SR_PHASE, set by runPhases — so the
 //      Workflow UI shows named phases instead of a flat undifferentiated list.
 // Display label: turn a generic 'lib'/'io' leaf into the lib script (+ subcommand) or io op it runs,
@@ -64,6 +65,14 @@ function __cheapest() {
   if (__cheapestCache === null) __cheapestCache = __require('model_tier').DEFAULT_TIERS.mechanical
   return __cheapestCache
 }
+// __safeSmartDefault: final fallback for any genuine leaf whose caller forgot opts.model. Resolving
+// the synthesis tier through the bundled model_tier module gives the explicit Opus safety floor and
+// keeps this lazy like __cheapest().
+var __safeSmartDefaultCache = null
+function __safeSmartDefault() {
+  if (__safeSmartDefaultCache === null) __safeSmartDefaultCache = __require('model_tier').resolveModel('synthesis', null, null)
+  return __safeSmartDefaultCache
+}
 const __realAgent = agent
 globalThis.agent = function (prompt, opts) {
   var o = Object.assign({}, opts || {})
@@ -78,6 +87,7 @@ globalThis.agent = function (prompt, opts) {
   } else if (globalThis.__SR_LEAF_MODEL) {
     o.model = globalThis.__SR_LEAF_MODEL
   }
+  if (!o.model) o.model = __safeSmartDefault()
   if (!o.phase && globalThis.__SR_PHASE) o.phase = globalThis.__SR_PHASE
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
   return __realAgent(prompt, o)
