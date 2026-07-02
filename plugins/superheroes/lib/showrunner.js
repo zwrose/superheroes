@@ -3,7 +3,7 @@
 // forwards decisions; every judgment is a pure JS twin (in-process) or a #86 shell.
 // #115 Task 12: front-half spine rewired — reconcile/phaseStep/gateForTerminal/usableDraft/
 // authorModel are now in-process JS twin calls; zero decider agents on the front-half.
-const { reviewPanel } = require('./review_panel_shell.js')
+const { reviewPanel, gatherReviewSetup } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
 const { fencedJsonWrite } = require('./fenced_json.js')
@@ -232,7 +232,7 @@ function reviewCodeLeaves(tiers, opts) {
 }
 
 // Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
-async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree }) {
+async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree, preloaded }) {
   globalThis.reviewerAgent = leaves.reviewerAgent
   globalThis.synthesisLeaf = leaves.synthesisLeaf
   globalThis.recordDeferred = leaves.recordDeferred
@@ -243,6 +243,7 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
     maxRounds: 7,
     legKind: { panel: true, code: true },
     verifyCommand,
+    preloaded,
   }))
 }
 
@@ -336,9 +337,12 @@ async function docReviser(fixContext, verdict, runDir, context) {
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
-async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDeferred }) {
+async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDeferred, preloaded }) {
   const context = { workItem, docType, docPath }
-  if (runtimeDeferred && runtimeDeferred.size === 0) {
+  // fold 2 (#141): with a preloaded gather the deferred-set seed was already read (and runtimeDeferred
+  // seeded by the caller) inside the one gather leaf — don't re-read it here. Only the unfolded
+  // fallback path (gather failed / a direct smoke) does its own seed read.
+  if (!preloaded && runtimeDeferred && runtimeDeferred.size === 0) {
     const saved = await io().readJson(`${runDir}/deferred-set.json`, {})
     for (const id of Object.keys(saved || {})) runtimeDeferred.set(id, saved[id])
   }
@@ -349,7 +353,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (fixContext, verdict, rd) => docReviser(fixContext, verdict, rd, context),
-    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none' })
+    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none', preloaded })
 }
 
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
@@ -475,14 +479,25 @@ async function reviewDocPhase(doc, workItem, opts) {
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
-  await io().mkdirp(runDir)
+  const docPath = docPathFor(workItem, doc)
+  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + deferred-set seed + load-summary +
+  // entry coverage read. Seed runtimeDeferred from it and hand it to the panel as `preloaded`. A
+  // gather transport failure -> null: fall back to a plain mkdir and let the panel read its own
+  // entry state (correct, just unfolded).
+  const setup = await gatherReviewSetup({
+    runDir, reviewerSet: DOC_REVIEWERS, context: { workItem, docType: doc, docPath },
+    legKind: { panel: true, code: false }, ioApi: io(),
+  })
+  if (!setup) await io().mkdirp(runDir)
   const deferred = new Map()
+  if (setup) for (const id of Object.keys(setup.deferredSet || {})) deferred.set(id, setup.deferredSet[id])
   const verdict = await runReviewDocPanel({
     workItem,
     docType: doc,
-    docPath: docPathFor(workItem, doc),
+    docPath,
     runDir,
     runtimeDeferred: deferred,
+    preloaded: setup || undefined,
   })
   await saveRoundStateBestEffort(
     workItem,
@@ -1471,7 +1486,15 @@ async function reviewCodePhase(workItem, opts) {
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
   : `/tmp/showrunner-${workItem}-review-code`)
-  await io().mkdirp(runDir)
+  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + load-summary + entry coverage read (the
+  // code leg has no deferred-set seed — doc-only — but the round-1 tally still folds via the
+  // gathered deferredSet). Gather failure -> null: fall back to a plain mkdir + the panel's own reads.
+  const coverageDecisionPath = joinPath(runDir, 'review-coverage-decisions.json')
+  const setup = await gatherReviewSetup({
+    runDir, reviewerSet: REVIEW_CODE_REVIEWERS, context: { workItem, coverageDecisionPath },
+    legKind: { panel: true, code: true }, ioApi: io(),
+  })
+  if (!setup) await io().mkdirp(runDir)
   // FIX A: when opts.worktree is absent, resolve the build worktree via resolveBuildTarget (the
   // stubbable seam). Explicit opts.worktree always wins (loop-smoke + targeted-smoke pass it). On
   // a production call (runPhases -> reviewCodePhase(workItem) with no opts), resolution runs and
@@ -1527,9 +1550,10 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath: joinPath(runDir, 'review-coverage-decisions.json') },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
+    preloaded: setup || undefined,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
   const finalHead = resolvedHead

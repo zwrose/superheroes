@@ -321,14 +321,51 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
   }
 }
 
+// gatherReviewSetup: fold 2 (#141) — run the review loop's decision-free entry stretch (run-dir
+// mkdir + deferred-set seed read + load-summary + coverage load) as ONE review_setup_gather.py leaf,
+// all Python-side. Returns the combined blob { ok, memory, deferredSet, coverage } for the caller to
+// hand reviewPanel as `preloaded` (and, on the doc leg, to seed runtimeDeferred). Returns null on a
+// gather transport failure — the caller then falls back to a plain mkdir + reviewPanel's own reads
+// (correct, just unfolded). reviewerSet MUST equal the set the caller passes reviewPanel, so the
+// gathered memory/coverage are byte-parity with reviewPanel's own entry reads.
+async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi }) {
+  const api = ioApi || io()
+  const target = await coverageDecisionTarget(runDir, context, legKind || {}, api)
+  const args = ['plugins/superheroes/lib/review_setup_gather.py', 'gather',
+    '--run-dir', runDir,
+    '--records-path', api.join(runDir, 'round-records.json'),
+    '--dimensions', JSON.stringify(reviewerSet || []),
+    '--extras-path', api.join(runDir, 'last-extras.json'),
+    '--deferred-path', api.join(runDir, 'deferred-set.json'),
+    '--coverage-path', target.path,
+    '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code']
+  const out = await api.runHelper('python3', args)
+  try {
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && parsed.ok && parsed.memory && parsed.coverage) {
+      if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
+      return parsed
+    }
+  } catch (_) { /* fall through — caller uses the unfolded path */ }
+  return null
+}
+
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep,
                             maxRounds = 7, legKind = {}, verifyCommand = 'none',
-                            forceCoverageDecisionExpectedHash }) {
+                            forceCoverageDecisionExpectedHash, preloaded }) {
   runDir = runDir || runKey
   const runId = runKey || runDir
   const lease = legKind && legKind.lease
   const ioApi = io()
-  let memoryState = await loadRoundRecords(runDir, reviewerSet || [], ioApi)
+  // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
+  // load-summary (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
+  // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
+  // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
+  // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).
+  let memoryState = (preloaded && preloaded.memory) ? preloaded.memory
+    : await loadRoundRecords(runDir, reviewerSet || [], ioApi)
+  let entryCoverage = (preloaded && preloaded.coverage) ? preloaded.coverage : null
+  let entryDeferredSet = preloaded ? preloaded.deferredSet : undefined
   let records = memoryState.ok ? memoryState.records : []
   let round = resumeRound(records)
   let lastExtras = memoryState.extras !== undefined ? memoryState.extras : null
@@ -351,7 +388,11 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     justMarkedForConfirmation = false
 
     const coverageTarget = await coverageDecisionTarget(runDir, context, legKind, ioApi)
-    const coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
+    // fold 2 (#141): consume the gathered entry coverage on the first round; every later round
+    // re-reads (a fix can record new coverage decisions mid-loop — lines below already re-read).
+    let coverageState
+    if (entryCoverage) { coverageState = entryCoverage; entryCoverage = null }
+    else coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
     if (!coverageState.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (coverageState.state || coverageState.reason || 'unreadable'), round },
@@ -428,9 +469,13 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
         records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
 
+    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set (no fix has run between the
+    // entry gather and this tally, so it is byte-identical to a fresh disk read). It is consumed
+    // once — every later round re-reads (a fix may defer findings in between).
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
       roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions: roundCoverageDecisions,
-      runId, extras: lastExtras, enterConfirmation })
+      runId, extras: lastExtras, enterConfirmation, preloadedDeferredSet: entryDeferredSet })
+    entryDeferredSet = undefined
     if (!_usable(verdict)) return _failClosed()
 
     if (verdict.terminal !== 'continue') {
@@ -556,7 +601,7 @@ async function verifyAgent(verifyCommand, runDir, round) {
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
-                           runId, enterConfirmation = false }) {
+                           runId, enterConfirmation = false, preloadedDeferredSet = undefined }) {
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
     for (const k of ['fixes', 'deferred', 'parentOrigin']) if (k in extras) safeExtras[k] = extras[k]
@@ -581,7 +626,10 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
     }
-    const deferredSet = await loadDeferredSet(runDir)
+    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set; every later round reads it
+    // fresh (a fix may have deferred findings since the gather).
+    const deferredSet = (preloadedDeferredSet && typeof preloadedDeferredSet === 'object')
+      ? preloadedDeferredSet : await loadDeferredSet(runDir)
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     const pdef = panelTally.presentDeferred(compiled, deferredSet)
     const skip = new Set(Object.keys(deferredSet))
@@ -658,4 +706,4 @@ const VERIFY_SCHEMA = { type: 'object', required: ['command'],
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-module.exports = { reviewPanel, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }

@@ -29,6 +29,19 @@ const defaultIo = {
     const cp = require('child_process').spawnSync(cmd, args || [], { encoding: 'utf8' })
     return { ok: cp.status === 0, status: cp.status, stdout: cp.stdout || '', stderr: cp.stderr || '' }
   },
+  // stageAndRunHelper: the single-leaf twin of writeFile(stagedPath)+runHelper(cmd,args) (fold 1,
+  // #141). Ensures the staged path's parent dir, writes the payload verbatim, then runs the helper —
+  // in the bundle this is ONE leaf-bash command (mkdir && opaque base64 write && helper), so a
+  // staged fenced write costs one courier leaf, not two. Result shape matches runHelper so the
+  // fenced-write retry loop reads it uniformly across both runtimes.
+  async stageAndRunHelper(stagedPath, text, cmd, args) {
+    const fs = require('fs')
+    const dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
+    if (dir) fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(stagedPath, typeof text === 'string' ? text : JSON.stringify(text))
+    const cp = require('child_process').spawnSync(cmd, args || [], { encoding: 'utf8' })
+    return { ok: cp.status === 0, status: cp.status, stdout: cp.stdout || '', stderr: cp.stderr || '' }
+  },
   contentHash(text) {
     return require('crypto').createHash('sha256').update(String(text || ''), 'utf8').digest('hex')
   },

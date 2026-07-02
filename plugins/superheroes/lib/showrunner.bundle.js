@@ -128,6 +128,20 @@ function __contentHash(text) {
   for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
   return out
 }
+// __helperResult: parse a leaf-bash helper answer (stdout + trailing __SR_EXIT:N marker) into the
+// runHelper result shape. Shared by runHelper and stageAndRunHelper (fold 1, #141) so both keep the
+// SAME fence tolerance + exit-marker slice. Find the LAST marker anywhere (a misbehaving haiku
+// courier stochastically fences the answer AFTER the marker), slice stdout up to it, strip one
+// wrapping fence pair.
+function __helperResult(s) {
+  s = String(s || '')
+  var re = /__SR_EXIT:(\d+)/g, m, last = null
+  while ((m = re.exec(s)) !== null) last = m
+  var status = last ? Number(last[1]) : 1
+  var stdout = last ? s.slice(0, last.index) : s
+  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
+  return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -141,25 +155,33 @@ globalThis.io = {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
     await __sh("python3 - <<'__SR_EOF__'\nimport base64\nwith open(" + JSON.stringify(p) + ", 'wb') as fh:\n    fh.write(base64.b64decode('" + __b64(b) + "'))\nprint('ok')\n__SR_EOF__")
   },
+  // stageAndRunHelper: fold 1 (#141) — the single-leaf twin of writeFile(stagedPath)+runHelper. ONE
+  // command chains: mkdir -p <parent> && <opaque base64 stage-write, stdout to /dev/null> && <helper>.
+  // The stage rides the SAME opaque base64 heredoc transport as writeFile (an LLM leaf copies the blob
+  // verbatim or fails visibly), and its stdout is suppressed so ONLY the helper's answer precedes the
+  // exit marker. A mangled/failed stage short-circuits the && so the helper never runs — the caller's
+  // Python-side --payload-hash check then fails closed exactly as before, one retry. D3 byte-identical.
+  async stageAndRunHelper(stagedPath, text, cmd, args) {
+    const b = (typeof text === 'string') ? text : JSON.stringify(text)
+    var dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
+    var mk = dir ? ('mkdir -p ' + __q(dir) + ' && ') : ''
+    var helper = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
+    var chain = mk + "python3 - <<'__SR_EOF__' >/dev/null && " + helper + ' 2>&1; echo __SR_EXIT:$?\nimport base64\nwith open(' + JSON.stringify(stagedPath) + ", 'wb') as fh:\n    fh.write(base64.b64decode('" + __b64(b) + "'))\n__SR_EOF__"
+    return __helperResult(String(await __sh(chain) || ''))
+  },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
     var parts = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
-    var s = String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || '')
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in ``` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
     // end-anchored match misses and a clean exit-0 helper is falsely read as FAILED (coverage-
     // decisions-unreadable / telemetry-write-failed / memory degraded — the review-plan park class).
-    // Find the LAST marker anywhere, slice stdout up to it, then strip one wrapping fence pair from
-    // that slice. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
+    // __helperResult finds the LAST marker anywhere, slices stdout up to it, strips one wrapping
+    // fence pair. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
     // payload is arbitrary text that may legitimately contain fences).
-    var re = /__SR_EXIT:(\d+)/g, m, last = null
-    while ((m = re.exec(s)) !== null) last = m
-    var status = last ? Number(last[1]) : 1
-    var stdout = last ? s.slice(0, last.index) : s
-    stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
-    return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || ''))
   },
 }
 // Full-run mode (read by showrunner() in Task 8): inject native authoring WITHOUT frontHalfBoundary.
@@ -1108,14 +1130,51 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
   }
 }
 
+// gatherReviewSetup: fold 2 (#141) — run the review loop's decision-free entry stretch (run-dir
+// mkdir + deferred-set seed read + load-summary + coverage load) as ONE review_setup_gather.py leaf,
+// all Python-side. Returns the combined blob { ok, memory, deferredSet, coverage } for the caller to
+// hand reviewPanel as `preloaded` (and, on the doc leg, to seed runtimeDeferred). Returns null on a
+// gather transport failure — the caller then falls back to a plain mkdir + reviewPanel's own reads
+// (correct, just unfolded). reviewerSet MUST equal the set the caller passes reviewPanel, so the
+// gathered memory/coverage are byte-parity with reviewPanel's own entry reads.
+async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi }) {
+  const api = ioApi || io()
+  const target = await coverageDecisionTarget(runDir, context, legKind || {}, api)
+  const args = ['plugins/superheroes/lib/review_setup_gather.py', 'gather',
+    '--run-dir', runDir,
+    '--records-path', api.join(runDir, 'round-records.json'),
+    '--dimensions', JSON.stringify(reviewerSet || []),
+    '--extras-path', api.join(runDir, 'last-extras.json'),
+    '--deferred-path', api.join(runDir, 'deferred-set.json'),
+    '--coverage-path', target.path,
+    '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code']
+  const out = await api.runHelper('python3', args)
+  try {
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && parsed.ok && parsed.memory && parsed.coverage) {
+      if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
+      return parsed
+    }
+  } catch (_) { /* fall through — caller uses the unfolded path */ }
+  return null
+}
+
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep,
                             maxRounds = 7, legKind = {}, verifyCommand = 'none',
-                            forceCoverageDecisionExpectedHash }) {
+                            forceCoverageDecisionExpectedHash, preloaded }) {
   runDir = runDir || runKey
   const runId = runKey || runDir
   const lease = legKind && legKind.lease
   const ioApi = io()
-  let memoryState = await loadRoundRecords(runDir, reviewerSet || [], ioApi)
+  // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
+  // load-summary (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
+  // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
+  // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
+  // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).
+  let memoryState = (preloaded && preloaded.memory) ? preloaded.memory
+    : await loadRoundRecords(runDir, reviewerSet || [], ioApi)
+  let entryCoverage = (preloaded && preloaded.coverage) ? preloaded.coverage : null
+  let entryDeferredSet = preloaded ? preloaded.deferredSet : undefined
   let records = memoryState.ok ? memoryState.records : []
   let round = resumeRound(records)
   let lastExtras = memoryState.extras !== undefined ? memoryState.extras : null
@@ -1138,7 +1197,11 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     justMarkedForConfirmation = false
 
     const coverageTarget = await coverageDecisionTarget(runDir, context, legKind, ioApi)
-    const coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
+    // fold 2 (#141): consume the gathered entry coverage on the first round; every later round
+    // re-reads (a fix can record new coverage decisions mid-loop — lines below already re-read).
+    let coverageState
+    if (entryCoverage) { coverageState = entryCoverage; entryCoverage = null }
+    else coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
     if (!coverageState.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (coverageState.state || coverageState.reason || 'unreadable'), round },
@@ -1215,9 +1278,13 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
         records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
 
+    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set (no fix has run between the
+    // entry gather and this tally, so it is byte-identical to a fresh disk read). It is consumed
+    // once — every later round re-reads (a fix may defer findings in between).
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
       roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions: roundCoverageDecisions,
-      runId, extras: lastExtras, enterConfirmation })
+      runId, extras: lastExtras, enterConfirmation, preloadedDeferredSet: entryDeferredSet })
+    entryDeferredSet = undefined
     if (!_usable(verdict)) return _failClosed()
 
     if (verdict.terminal !== 'continue') {
@@ -1343,7 +1410,7 @@ async function verifyAgent(verifyCommand, runDir, round) {
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
-                           runId, enterConfirmation = false }) {
+                           runId, enterConfirmation = false, preloadedDeferredSet = undefined }) {
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
     for (const k of ['fixes', 'deferred', 'parentOrigin']) if (k in extras) safeExtras[k] = extras[k]
@@ -1368,7 +1435,10 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
     }
-    const deferredSet = await loadDeferredSet(runDir)
+    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set; every later round reads it
+    // fresh (a fix may have deferred findings since the gather).
+    const deferredSet = (preloadedDeferredSet && typeof preloadedDeferredSet === 'object')
+      ? preloadedDeferredSet : await loadDeferredSet(runDir)
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     const pdef = panelTally.presentDeferred(compiled, deferredSet)
     const skip = new Set(Object.keys(deferredSet))
@@ -1445,7 +1515,7 @@ const VERIFY_SCHEMA = { type: 'object', required: ['command'],
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-module.exports = { reviewPanel, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
 
 };
 
@@ -4768,13 +4838,16 @@ module.exports = { gateForTerminal, isUsableDraft, renderRunOutcome }
 __modules["fenced_json"] = function (module, exports, require) {
 const { io } = require('./io_seam.js')
 
-// fencedJsonWrite: put a JSON artifact on disk through the courier in TWO leaves — one
-// unverified stage-write of the payload file, then one fenced_json.py write that verifies the
-// staged text's sha256 ITSELF before applying (--payload-hash). A courier that mangles the
-// staged body in transit (live 2026-07-02) fails the Python-side hash check as payload-corrupt
-// and the stage is retried once, then fail-closed — never silently altered content. This folds
-// the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash read-back + write)
-// into stage + verify-write.
+// fencedJsonWrite: put a JSON artifact on disk through the courier in ONE leaf (fold 1, #141) —
+// io.stageAndRunHelper chains the opaque base64 stage-write AND the fenced_json.py verify-write
+// into a single leaf-bash command (mkdir -p <dir> && stage && helper). fenced_json.py still
+// verifies the staged text's sha256 ITSELF before applying (--payload-hash), so a courier that
+// mangles the staged body in transit (live 2026-07-02) fails the Python-side hash check as
+// payload-corrupt and the write is retried once, then fail-closed — never silently altered
+// content. This folds the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash
+// read-back + write) all the way down to ONE staged+verified leaf. D3 durability byte-identical:
+// the staged-hash contract, the fence, and the overwrite/CAS semantics are unchanged — only the
+// two transport leaves (stage, verify-write) collapse into one.
 //
 // opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
 // against the hash the caller last observed) or overwrite:true. Overwrite is LAST-WRITER-WINS,
@@ -4797,17 +4870,12 @@ async function fencedJsonWrite(path, payload, opts) {
   if (opts.overwrite) args.push('--allow-overwrite')
   else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
-  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
+  // stageAndRunHelper folds the parent-dir create into the same op, so the missing-dir first-attempt
+  // failure the old two-leaf path retried through is gone. The one retry now covers only a
+  // transport-corrupt stage (payload-corrupt) or an unparseable helper answer.
   let lastReason = null
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(stagedPath, text) } catch (_) {
-      // a missing parent dir is the common first-attempt failure (fresh run dir); create it
-      // and let the retry re-stage — the leaf cost lands on the failure path only.
-      if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
-      lastReason = 'payload-stage-failed'
-      continue
-    }
-    const out = await ioApi.runHelper('python3', args)
+    const out = await ioApi.stageAndRunHelper(stagedPath, text, 'python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
     if (parsed && parsed.ok) return parsed
@@ -4815,11 +4883,6 @@ async function fencedJsonWrite(path, payload, opts) {
     // stage (or an unparseable answer) earns the one retry.
     if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
       return { ok: false, reason: parsed.reason }
-    }
-    // payload-unreadable can also mean the silent leaf-bash stage failed on a missing dir
-    // (that writeFile reports no error) — same recovery.
-    if (parsed && parsed.reason === 'payload-unreadable' && dir) {
-      try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ }
     }
     lastReason = (parsed && parsed.reason) || lastReason
   }
@@ -4837,7 +4900,7 @@ __modules["showrunner"] = function (module, exports, require) {
 // forwards decisions; every judgment is a pure JS twin (in-process) or a #86 shell.
 // #115 Task 12: front-half spine rewired — reconcile/phaseStep/gateForTerminal/usableDraft/
 // authorModel are now in-process JS twin calls; zero decider agents on the front-half.
-const { reviewPanel } = require('./review_panel_shell.js')
+const { reviewPanel, gatherReviewSetup } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
 const { fencedJsonWrite } = require('./fenced_json.js')
@@ -5066,7 +5129,7 @@ function reviewCodeLeaves(tiers, opts) {
 }
 
 // Drive the shared loop with the code-review configuration + leaves (FR-1..FR-5, FR-7, FR-8).
-async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree }) {
+async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leaves, worktree, preloaded }) {
   globalThis.reviewerAgent = leaves.reviewerAgent
   globalThis.synthesisLeaf = leaves.synthesisLeaf
   globalThis.recordDeferred = leaves.recordDeferred
@@ -5077,6 +5140,7 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
     maxRounds: 7,
     legKind: { panel: true, code: true },
     verifyCommand,
+    preloaded,
   }))
 }
 
@@ -5170,9 +5234,12 @@ async function docReviser(fixContext, verdict, runDir, context) {
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
-async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDeferred }) {
+async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDeferred, preloaded }) {
   const context = { workItem, docType, docPath }
-  if (runtimeDeferred && runtimeDeferred.size === 0) {
+  // fold 2 (#141): with a preloaded gather the deferred-set seed was already read (and runtimeDeferred
+  // seeded by the caller) inside the one gather leaf — don't re-read it here. Only the unfolded
+  // fallback path (gather failed / a direct smoke) does its own seed read.
+  if (!preloaded && runtimeDeferred && runtimeDeferred.size === 0) {
     const saved = await io().readJson(`${runDir}/deferred-set.json`, {})
     for (const id of Object.keys(saved || {})) runtimeDeferred.set(id, saved[id])
   }
@@ -5183,7 +5250,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (fixContext, verdict, rd) => docReviser(fixContext, verdict, rd, context),
-    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none' })
+    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none', preloaded })
 }
 
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
@@ -5309,14 +5376,25 @@ async function reviewDocPhase(doc, workItem, opts) {
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
-  await io().mkdirp(runDir)
+  const docPath = docPathFor(workItem, doc)
+  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + deferred-set seed + load-summary +
+  // entry coverage read. Seed runtimeDeferred from it and hand it to the panel as `preloaded`. A
+  // gather transport failure -> null: fall back to a plain mkdir and let the panel read its own
+  // entry state (correct, just unfolded).
+  const setup = await gatherReviewSetup({
+    runDir, reviewerSet: DOC_REVIEWERS, context: { workItem, docType: doc, docPath },
+    legKind: { panel: true, code: false }, ioApi: io(),
+  })
+  if (!setup) await io().mkdirp(runDir)
   const deferred = new Map()
+  if (setup) for (const id of Object.keys(setup.deferredSet || {})) deferred.set(id, setup.deferredSet[id])
   const verdict = await runReviewDocPanel({
     workItem,
     docType: doc,
-    docPath: docPathFor(workItem, doc),
+    docPath,
     runDir,
     runtimeDeferred: deferred,
+    preloaded: setup || undefined,
   })
   await saveRoundStateBestEffort(
     workItem,
@@ -6305,7 +6383,15 @@ async function reviewCodePhase(workItem, opts) {
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
   : `/tmp/showrunner-${workItem}-review-code`)
-  await io().mkdirp(runDir)
+  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + load-summary + entry coverage read (the
+  // code leg has no deferred-set seed — doc-only — but the round-1 tally still folds via the
+  // gathered deferredSet). Gather failure -> null: fall back to a plain mkdir + the panel's own reads.
+  const coverageDecisionPath = joinPath(runDir, 'review-coverage-decisions.json')
+  const setup = await gatherReviewSetup({
+    runDir, reviewerSet: REVIEW_CODE_REVIEWERS, context: { workItem, coverageDecisionPath },
+    legKind: { panel: true, code: true }, ioApi: io(),
+  })
+  if (!setup) await io().mkdirp(runDir)
   // FIX A: when opts.worktree is absent, resolve the build worktree via resolveBuildTarget (the
   // stubbable seam). Explicit opts.worktree always wins (loop-smoke + targeted-smoke pass it). On
   // a production call (runPhases -> reviewCodePhase(workItem) with no opts), resolution runs and
@@ -6361,9 +6447,10 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath: joinPath(runDir, 'review-coverage-decisions.json') },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
+    preloaded: setup || undefined,
   })
   const terminal = (verdict && verdict.terminal) || 'halted'
   const finalHead = resolvedHead

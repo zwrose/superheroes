@@ -165,6 +165,20 @@ function __contentHash(text) {
   for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
   return out
 }
+// __helperResult: parse a leaf-bash helper answer (stdout + trailing __SR_EXIT:N marker) into the
+// runHelper result shape. Shared by runHelper and stageAndRunHelper (fold 1, #141) so both keep the
+// SAME fence tolerance + exit-marker slice. Find the LAST marker anywhere (a misbehaving haiku
+// courier stochastically fences the answer AFTER the marker), slice stdout up to it, strip one
+// wrapping fence pair.
+function __helperResult(s) {
+  s = String(s || '')
+  var re = /__SR_EXIT:(\\d+)/g, m, last = null
+  while ((m = re.exec(s)) !== null) last = m
+  var status = last ? Number(last[1]) : 1
+  var stdout = last ? s.slice(0, last.index) : s
+  stdout = stdout.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').replace(/\\n$/, '')
+  return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -178,25 +192,33 @@ globalThis.io = {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
     await __sh("python3 - <<'__SR_EOF__'\\nimport base64\\nwith open(" + JSON.stringify(p) + ", 'wb') as fh:\\n    fh.write(base64.b64decode('" + __b64(b) + "'))\\nprint('ok')\\n__SR_EOF__")
   },
+  // stageAndRunHelper: fold 1 (#141) — the single-leaf twin of writeFile(stagedPath)+runHelper. ONE
+  // command chains: mkdir -p <parent> && <opaque base64 stage-write, stdout to /dev/null> && <helper>.
+  // The stage rides the SAME opaque base64 heredoc transport as writeFile (an LLM leaf copies the blob
+  // verbatim or fails visibly), and its stdout is suppressed so ONLY the helper's answer precedes the
+  // exit marker. A mangled/failed stage short-circuits the && so the helper never runs — the caller's
+  // Python-side --payload-hash check then fails closed exactly as before, one retry. D3 byte-identical.
+  async stageAndRunHelper(stagedPath, text, cmd, args) {
+    const b = (typeof text === 'string') ? text : JSON.stringify(text)
+    var dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
+    var mk = dir ? ('mkdir -p ' + __q(dir) + ' && ') : ''
+    var helper = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
+    var chain = mk + "python3 - <<'__SR_EOF__' >/dev/null && " + helper + ' 2>&1; echo __SR_EXIT:$?\\nimport base64\\nwith open(' + JSON.stringify(stagedPath) + ", 'wb') as fh:\\n    fh.write(base64.b64decode('" + __b64(b) + "'))\\n__SR_EOF__"
+    return __helperResult(String(await __sh(chain) || ''))
+  },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
     var parts = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
-    var s = String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || '')
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in \`\`\` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
     // end-anchored match misses and a clean exit-0 helper is falsely read as FAILED (coverage-
     // decisions-unreadable / telemetry-write-failed / memory degraded — the review-plan park class).
-    // Find the LAST marker anywhere, slice stdout up to it, then strip one wrapping fence pair from
-    // that slice. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
+    // __helperResult finds the LAST marker anywhere, slices stdout up to it, strips one wrapping
+    // fence pair. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
     // payload is arbitrary text that may legitimately contain fences).
-    var re = /__SR_EXIT:(\\d+)/g, m, last = null
-    while ((m = re.exec(s)) !== null) last = m
-    var status = last ? Number(last[1]) : 1
-    var stdout = last ? s.slice(0, last.index) : s
-    stdout = stdout.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').replace(/\\n$/, '')
-    return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || ''))
   },
 }
 // Full-run mode (read by showrunner() in Task 8): inject native authoring WITHOUT frontHalfBoundary.

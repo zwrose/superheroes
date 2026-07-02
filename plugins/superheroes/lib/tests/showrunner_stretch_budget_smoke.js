@@ -91,25 +91,25 @@ const PHASE_BUDGETS = {
   // read draft signals (pre-author) + post-author marker verify + save phase progress
   plan: 3,
   tasks: 3,
-  // read-gate exec (1) + run-dir mkdir (1) + deferred-set seed read (1) + the D3 round
-  // persistence: load-summary+extras gather w/ stale-staging sweep (1), coverage load helper
-  // (1 — Python-side, courier prose never enters the fence), persist-skeleton (1),
-  // deferred-set tally read (1), telemetry write (1), save round state (1) + terminal-record
-  // 2-leaf fenced write (stage + verify-write) + save phase progress (1). The reviewed-doc
-  // hash reads are GONE (set-gate fences via the Python-side 'current' sentinel). Was 35
-  // pre-D3 (per-dim staging + compose + read-hash ceremony), 14 pre-courier-hardening.
-  'review-plan': 12,
-  'review-tasks': 12,
+  // read-gate exec (1) + fold 2 (#141) pre-round SETUP GATHER (1 — the run-dir mkdir + deferred-set
+  // seed + load-summary+extras + coverage load, folded Python-side by review_setup_gather.py; the
+  // round-1 deferred-set tally reuses the gathered set, no extra leaf) + persist-skeleton (1) +
+  // telemetry write (1) + save round state (1) + fold 1 (#141) terminal-record fenced write as ONE
+  // stage+verify leaf (1) + save phase progress (1). Was 12 post-D3 (4 separate entry reads + a
+  // 2-leaf fenced write), 35 pre-D3, 14 pre-courier-hardening.
+  'review-plan': 7,
+  'review-tasks': 7,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round mkdir +
   // (load-summary+extras, coverage read, run verify, persist-skeleton, deferred read,
   // telemetry write) + stamp build coverage + prov exec + save phase progress. Was 24 pre-D3.
   workhorse: 19,
-  // run-dir mkdir + resolve review target (the ONE entry gather: worktree + head + config +
-  // cwd-head) + one panel round (load-summary+extras, coverage read, run verify,
-  // persist-skeleton, deferred read, telemetry write) + final/cwd head reads (2 exec) + stamp
-  // review coverage + save phase progress. Was 29 pre-D3.
-  'review-code': 12,
+  // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + fold 2
+  // (#141) pre-round SETUP GATHER (1 — run-dir mkdir + load-summary + coverage, folded Python-side;
+  // the round-1 deferred tally reuses it, no extra leaf) + one panel round (run verify,
+  // persist-skeleton, telemetry write = 3) + final/cwd head reads (2 exec) + stamp review coverage +
+  // save phase progress. Was 12 post-D3, 29 pre-D3.
+  'review-code': 9,
   // open draft PR + save phase progress
   'draft-PR': 2,
   // resolve review target (build-worktree pin) + read test context + plan/results/server/seed
@@ -173,6 +173,16 @@ function runHelperResponse(cmdline) {
       return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
     }
   }
+  if (script.endsWith('review_setup_gather.py')) {
+    // fold 2 (#141): the ONE pre-round gather leaf — mkdir + load-summary + deferred seed + coverage
+    // folded Python-side. A fresh canned run has no prior records/coverage/deferrals.
+    return JSON.stringify({
+      ok: true,
+      memory: { ok: true, state: 'missing', records: [], contentHash: sha256(''), extras: null },
+      deferredSet: {},
+      coverage: { ok: true, decisions: [], contentHash: sha256('') },
+    })
+  }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
     const p = args[args.indexOf('--path') + 1]
@@ -204,6 +214,15 @@ function shellResponse(cmd) {
   // withTargetCommandPrompts prefixes review-code commands with `cd '<worktree>' && ` — strip it
   // so the path/command routing below still matches.
   cmd = cmd.replace(/^cd '[^']*' && /, '')
+  // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] opaque base64 stage-write (stdout to
+  // /dev/null) && the fenced_json.py helper, all one leaf. Decode the payload into the in-memory FS
+  // FIRST so the helper's --payload-hash check sees the real staged bytes, then answer the helper.
+  const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
+  if (cw) {
+    files[JSON.parse(cw[2])] = Buffer.from(cw[3], 'base64').toString('utf8')
+    const out = runHelperResponse(cw[1])
+    return (out != null ? out : '{}') + '\n__SR_EXIT:0'
+  }
   // The OPAQUE write transport: base64 payload in a python heredoc, decoded byte-exact.
   const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
   if (bw) { files[JSON.parse(bw[1])] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
