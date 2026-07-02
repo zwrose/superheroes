@@ -5,7 +5,9 @@
 // reviewer findings + the doc-reviser fixStep, not by a canned tally verdict. Stubs the leaves.
 // #115 Task 12: gateForTerminal is the in-process JS twin (no gate-for-terminal cmdRunner agent).
 //   readGate uses exec (not cmdRunner label='lib').
-//   reviewDocPhase records the gate via persistPhase (exec with set-gate + journal + checkpoint).
+// #118: reviewDocPhase RETURNS its persist spec (set-gate side-effect + journal payload); the ONE
+//   'save phase progress' write happens in runPhases' per-phase tail — the failure scenarios drive
+//   runPhases and assert the park there (UFR-5: never advance on an un-recorded gate).
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
@@ -90,28 +92,28 @@ async function main() {
   r = await sr.reviewDocPhase('plan', 'wi-c')
   assert.strictEqual(r.gate, 'changes-requested', 'halted terminal maps to changes-requested (JS twin)')
 
-  // (d) clean review but the set-gate persistPhase fails -> park low-confidence (UFR-5 guard).
+  // (d) clean review but the set-gate write fails at the per-phase tail -> runPhases parks (UFR-5).
+  // The persist now lives in runPhases' tail (ONE 'save phase progress' leaf), so the failure is
+  // asserted on the loop outcome — the run must never advance past an un-recorded gate.
   clean('wi-d')
   ag = makeAgent({ gate: 'pending', reviewerFindings: [], setGateFails: true })
   global.agent = ag
-  r = await sr.reviewDocPhase('plan', 'wi-d')
-  assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed')
-  assert.strictEqual(r.phaseResult.confidence, 'low', 'a failed gate write parks (low confidence, UFR-5)')
+  let loopOut = await sr.runPhases('wi-d', 1, { reviewDoc: (doc, wi) => sr.reviewDocPhase(doc, wi) })
+  assert.strictEqual(loopOut.outcome, 'parked', 'a failed gate write parks the run (UFR-5)')
+  assert.strictEqual(loopOut.phase, 'review-plan')
+  assert.match(loopOut.reason, /phase progress not recorded/, 'the park names the durable-write failure')
 
-  // (e) DURABLE-WRITE FAIL-CLOSE (the C1 regression): the journal command's bash exits 0 (exec ok:true)
-  //     but its STDOUT is {"ok":false} — journal_entry.py's DurableWriteError print-then-exit-0 shape.
-  //     The pre-fix `every(r => r.ok)` ignored stdout -> persistPhase returned {ok:true} -> reviewDocPhase
-  //     advanced HIGH-confidence on un-recorded state (silent UFR-5 defeat). After the fix persistPhase
-  //     parses each stdout and fails-CLOSE on a script-level {"ok":false}, so we park LOW.
+  // (e) DURABLE-WRITE FAIL-CLOSE (the C1 regression): the save command's bash exits 0 (exec ok:true)
+  //     but its STDOUT is {"ok":false} — the DurableWriteError print-then-exit-0 shape. persistPhase
+  //     parses the stdout and fails-CLOSE, so runPhases parks instead of advancing.
   clean('wi-e')
   ag = makeAgent({ gate: 'pending', reviewerFindings: [], journalWriteFails: true })
   global.agent = ag
-  r = await sr.reviewDocPhase('plan', 'wi-e')
-  assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed')
-  assert.strictEqual(r.phaseResult.confidence, 'low',
-    'a journal {"ok":false} durable-write failure (bash exit 0) parks LOW — persistPhase fails-close (C1)')
-  assert.deepStrictEqual(r.phaseResult.assumptions, ['gate write did not record for plan'],
-    'the park reason names the un-recorded gate write (UFR-5)')
+  loopOut = await sr.runPhases('wi-e', 1, { reviewDoc: (doc, wi) => sr.reviewDocPhase(doc, wi) })
+  assert.strictEqual(loopOut.outcome, 'parked',
+    'a journal {"ok":false} durable-write failure (bash exit 0) parks — persistPhase fails-close (C1)')
+  assert.strictEqual(loopOut.phase, 'review-plan')
+  assert.match(loopOut.reason, /phase progress not recorded/, 'the park names the un-recorded write (UFR-5)')
 
   // (e-unit) persistPhase directly: exec ok:true + stdout {"ok":false} must return {ok:false}; a
   // matching all-{"ok":true} batch must return {ok:true}. Proves the parse fold (vs the pre-fix every(r.ok)).
@@ -133,33 +135,32 @@ async function main() {
   pp = await sr.persistPhase('wi-e3', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
   assert.deepStrictEqual(pp, { ok: true, recovered: false }, 'persistPhase happy path read-back confirmed')
 
-  // (f) direct reviewDocPhase gate writes include the reviewed snapshot hash, run id, and lease.
+  // (f) reviewDocPhase returns the set-gate persist spec (side-effect command + journal payload)
+  // carrying the 'current' fence sentinel, run id, and lease — the runPhases tail chains it ahead
+  // of the phase_progress_entry save inside the ONE 'save phase progress' leaf (#118 fold). The
+  // doc hash is computed PYTHON-SIDE at write time: a runtime contentHash(readText(doc)) fed the
+  // fence courier prose live (2026-07-02) and parked every gate write as 'stale'.
   clean('wi-f')
-  const execPrompts = []
   ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
-  global.agent = async (prompt, opts) => {
-    // the fenced set-gate rides inside persistPhase's 'save phase progress' courier prompt (#118 fold)
-    const l = (opts && opts.label) || ''
-    if (l === 'exec' || l === 'save phase progress') execPrompts.push(prompt)
-    return ag(prompt, opts)
-  }
-  r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f', reviewedHash: 'hash-f' })
-  const gatePrompt = execPrompts.find((p) => p.includes('set-gate') || p.includes('gate_write.py'))
-  assert.ok(gatePrompt, 'reviewDocPhase emitted a gate write command')
-  const postPanelHash = io().contentHash(fs.readFileSync('docs/superheroes/wi-f/plan.md', 'utf8'))
-  assert.match(gatePrompt, new RegExp(`--expected-hash ['"]?${postPanelHash}['"]?`), 'gate write uses post-panel doc hash, not pre-loop snapshot')
+  global.agent = ag
+  r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f' })
+  assert.ok(r.persist && r.persist.sideEffectCmd, 'reviewDocPhase returned the set-gate persist spec')
+  const gatePrompt = r.persist.sideEffectCmd
+  assert.ok(gatePrompt.includes('set-gate'), 'the persist side effect is the fenced set-gate')
+  assert.match(gatePrompt, /--expected-hash ['"]?current['"]?/, 'gate write fences via the Python-side current-hash sentinel (no courier-read hash)')
   assert.match(gatePrompt, /--run-id ['"]?run-f['"]?/)
   assert.match(gatePrompt, /--lease ['"]?lease-f['"]?/)
+  assert.deepStrictEqual(r.persist.journalPayload.phase, 'review-plan', 'the journal payload names the review phase')
   assert.strictEqual(r.phaseResult.confidence, 'high')
 
-  // (g) stale gate write parks low-confidence (fail-closed at the courier boundary); the
+  // (g) stale gate write parks at the tail (fail-closed at the courier boundary); the
   // unchanged-gate half of the stale contract is proven python-side in test_gate_write.py.
   clean('wi-g')
   ag = makeAgent({ gate: 'changes-requested', reviewerFindings: [], setGateStale: true })
   global.agent = ag
-  r = await sr.reviewDocPhase('plan', 'wi-g', { runId: 'run-g', lease: 'lease-g', reviewedHash: 'stale-hash' })
-  assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed before persistence')
-  assert.strictEqual(r.phaseResult.confidence, 'low', 'stale/failed gate write parks instead of advancing')
+  loopOut = await sr.runPhases('wi-g', 1, { reviewDoc: (doc, wi) => sr.reviewDocPhase(doc, wi, { runId: 'run-g', lease: 'lease-g', reviewedHash: 'stale-hash' }) })
+  assert.strictEqual(loopOut.outcome, 'parked', 'stale/failed gate write parks instead of advancing')
+  assert.match(loopOut.reason, /phase progress not recorded/, 'the park names the durable-write failure')
 
   console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard + durable-write fail-close (C1)')
 }

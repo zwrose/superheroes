@@ -100,3 +100,89 @@ def test_payload_path_missing_fails_closed(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is False
     assert not path.exists()
+
+
+# --- --payload-hash + --allow-overwrite: the 2-leaf fenced write (D3 fold) ---
+# The runtime's stage-write is UNVERIFIED (one leaf); this helper verifies the staged text's
+# sha256 itself before applying, folding the old hash read-back leaf into the write.
+
+
+def test_payload_hash_mismatch_fails_closed_as_payload_corrupt(tmp_path):
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    staged.write_text('{"terminal": "clean"}', encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", "0" * 64,
+             "--expected-hash", FJ.content_hash(""), "--run-id", "run-1")
+    out = json.loads(r.stdout)
+    assert out == {"ok": False, "reason": "payload-corrupt"}
+    assert not path.exists()
+    assert staged.exists(), "a corrupt staged payload is kept for the runtime's retry"
+
+
+def test_payload_hash_match_writes(tmp_path):
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    text = '{"terminal": "clean"}'
+    staged.write_text(text, encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", FJ.content_hash(text),
+             "--expected-hash", FJ.content_hash(""), "--run-id", "run-1")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stderr
+    assert json.loads(path.read_text(encoding="utf-8"))["terminal"] == "clean"
+
+
+def test_allow_overwrite_replaces_without_expected_hash(tmp_path):
+    path = tmp_path / "terminal-record.json"
+    path.write_text('{"runId":"old","terminal":"halt"}\n', encoding="utf-8")
+    staged = tmp_path / "terminal-record.json.payload"
+    text = '{"terminal": "clean"}'
+    staged.write_text(text, encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", FJ.content_hash(text), "--allow-overwrite", "--run-id", "run-2")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stderr
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert written["terminal"] == "clean" and written["runId"] == "run-2"
+
+
+def test_payload_hash_tolerates_one_heredoc_newline(tmp_path):
+    """The bundle's leaf-bash writeFile is a heredoc: it puts body+'\\n' on disk, one byte the
+    sender's hash never covered. The staged check tolerates exactly that one newline; a second
+    one (or any other alteration) still fails."""
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    text = '{"terminal": "clean"}'
+    staged.write_text(text + "\n", encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", FJ.content_hash(text), "--allow-overwrite", "--run-id", "run-1")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stdout + r.stderr
+    staged.write_text(text + "\n\n", encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--payload-hash", FJ.content_hash(text), "--allow-overwrite", "--run-id", "run-2")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "payload-corrupt"}
+
+
+def test_allow_overwrite_requires_payload_hash(tmp_path):
+    """Overwrite mode skips the CAS fence, so the payload self-check is its ONLY integrity
+    guard — a courier that drops the --payload-hash pair must fail closed, not fail open."""
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    staged.write_text('{"terminal": "clean"}', encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged),
+             "--allow-overwrite", "--run-id", "run-1")
+    assert json.loads(r.stdout) == {"ok": False, "reason": "payload-hash-required"}
+    assert not path.exists()
+
+
+def test_no_expected_hash_and_no_allow_overwrite_still_refused(tmp_path):
+    # the CAS default is unchanged: omitting the fence is an error unless overwrite is explicit
+    path = tmp_path / "terminal-record.json"
+    staged = tmp_path / "terminal-record.json.payload"
+    staged.write_text('{"terminal": "clean"}', encoding="utf-8")
+    r = _cli("write", "--path", str(path), "--payload-path", str(staged), "--run-id", "run-1")
+    out = json.loads(r.stdout)
+    assert out == {"ok": False, "reason": "missing-expected-hash"}
+    assert not path.exists()

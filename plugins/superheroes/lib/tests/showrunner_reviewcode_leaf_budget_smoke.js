@@ -14,10 +14,14 @@ global.parallel = async (fns) => { const out = []; for (const f of (fns || [])) 
     const label = (opts && opts.label) || ''
     labels.push(label)
     if (label === 'resolve review target') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/tmp/wt', expectedHead: 'abc123' }) }]
+      // #118 entry fold: the ONE gather carries worktree + head + config + cwd head
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/tmp/wt', expectedHead: 'abc123', config: { verifyCommand: 'none', tiers: {} }, cwdHead: 'cwd000' }) }]
     }
-    if (label === 'lib' && prompt.includes('rev-parse')) return 'abc123'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
+    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+      throw new Error('config must ride the resolve review target gather, not its own leaf (#118 entry fold)')
+    }
+    if (label === 'exec' && prompt.includes('git -C') && prompt.includes('rev-parse')) return 'abc123'
+    if (label === 'exec' && prompt.includes('git rev-parse')) return 'cwd000'
     if (/^(architecture|code|security|test|premortem)-reviewer:r/.test(label)) {
       reviewerCalls += 1
       return { findings: reviewerCalls === 1 ? [{ id: 'X', file: 'a.js', title: 'bug', severity: 'Important' }] : [] }

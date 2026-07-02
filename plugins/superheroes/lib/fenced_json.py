@@ -14,6 +14,18 @@ def content_hash(text):
     return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
 
+def staged_hash_ok(raw, want):
+    """True when the staged file's text matches the sender's hash. Tolerates EXACTLY one
+    trailing newline the transport appended: the bundle's leaf-bash writeFile is a heredoc
+    (`cat > p <<EOF`), which puts body+'\\n' on disk — one byte the sender's hash never
+    covered. Any other alteration (including a second newline) still fails."""
+    if not want:
+        return False
+    if content_hash(raw) == want:
+        return True
+    return raw.endswith("\n") and content_hash(raw[:-1]) == want
+
+
 def _current(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -44,16 +56,18 @@ def _atomic_replace(path, text):
         return {"ok": False, "reason": "replace-failed", "detail": str(exc)}
 
 
-def write_record(path, payload, expected_hash=None, run_id=None, lease=None):
+def write_record(path, payload, expected_hash=None, run_id=None, lease=None,
+                 allow_overwrite=False):
     if not run_id:
         return {"ok": False, "reason": "missing-run-id"}
-    if not expected_hash:
-        return {"ok": False, "reason": "missing-expected-hash"}
-    state = _current(path)
-    if not state.get("ok"):
-        return {"ok": False, "reason": state.get("reason", "unreadable")}
-    if state["hash"] != expected_hash:
-        return {"ok": False, "reason": "stale"}
+    if not allow_overwrite:
+        if not expected_hash:
+            return {"ok": False, "reason": "missing-expected-hash"}
+        state = _current(path)
+        if not state.get("ok"):
+            return {"ok": False, "reason": state.get("reason", "unreadable")}
+        if state["hash"] != expected_hash:
+            return {"ok": False, "reason": "stale"}
     record = dict(payload or {})
     record["runId"] = run_id
     if lease:
@@ -73,15 +87,38 @@ def main(argv=None):
                         help="read the payload from this staged FILE (and unlink it on success) "
                              "instead of an inline arg — a large payload must never ride the "
                              "courier pipe inline (it gets mangled; live 2026-07-02)")
+    parser.add_argument("--payload-hash",
+                        help="sha256 of the staged payload file's exact text — verified here "
+                             "BEFORE the write, folding the courier-side hash read-back leaf "
+                             "into this one (a mangled staged write fails closed as "
+                             "payload-corrupt instead of persisting silently altered content)")
     parser.add_argument("--expected-hash")
+    parser.add_argument("--allow-overwrite", action="store_true",
+                        help="skip the expected-hash CAS: unconditionally replace the artifact "
+                             "(single-writer, lease-guarded run artifacts like terminal-record)")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--lease")
     args = parser.parse_args(argv)
+    # The overwrite mode skips the CAS fence, so the payload self-check is its ONLY integrity
+    # guard — a courier that drops the optional --payload-hash pair must fail closed, not fail
+    # open. (In CAS mode the hash stays verify-when-present: pre-D3 bundles call --payload-path
+    # without it, and their expected-hash fence still holds.)
+    if args.allow_overwrite and args.payload_path and not args.payload_hash:
+        print(json.dumps({"ok": False, "reason": "payload-hash-required"}))
+        return 1
     if args.payload_path:
         try:
             with open(args.payload_path, encoding="utf-8") as fh:
-                payload = json.load(fh)
-        except (OSError, ValueError) as exc:
+                raw = fh.read()
+        except OSError as exc:
+            print(json.dumps({"ok": False, "reason": "payload-unreadable", "detail": str(exc)}))
+            return 1
+        if args.payload_hash and not staged_hash_ok(raw, args.payload_hash):
+            print(json.dumps({"ok": False, "reason": "payload-corrupt"}))
+            return 1
+        try:
+            payload = json.loads(raw)
+        except ValueError as exc:
             print(json.dumps({"ok": False, "reason": "payload-unreadable", "detail": str(exc)}))
             return 1
     elif args.payload_json is not None:
@@ -89,7 +126,8 @@ def main(argv=None):
     else:
         print(json.dumps({"ok": False, "reason": "missing-payload"}))
         return 1
-    result = write_record(args.path, payload, expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
+    result = write_record(args.path, payload, expected_hash=args.expected_hash, run_id=args.run_id,
+                          lease=args.lease, allow_overwrite=args.allow_overwrite)
     if result.get("ok") and args.payload_path:
         try:
             os.unlink(args.payload_path)

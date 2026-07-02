@@ -58,6 +58,17 @@ def _apply(paths, work_item, step, phase, payload, side):
     return reflects is True, detail
 
 
+def _reflects_journal(paths, payload):
+    journal_ok = any(record == payload for record in _phase_records(paths["events"]))
+    return journal_ok, {"journal_confirmed": journal_ok}
+
+
+def _apply_journal(paths, payload):
+    if not any(record == payload for record in _phase_records(paths["events"])):
+        journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
+    return _reflects_journal(paths, payload)
+
+
 def save(args):
     try:
         payload = _payload(args.payload)
@@ -66,12 +77,30 @@ def save(args):
         return {"ok": False, "error": str(e)}
     paths = control_plane.paths(os.getcwd(), args.work_item)
     step = int(args.step)
+    journal_only = bool(getattr(args, "journal_only", False))
+    # --journal-only (#118 park tail): record the phase journal entry durably WITHOUT touching the
+    # checkpoint cursor — a parked phase did not complete, so lastGoodStep must not advance (a
+    # resume would otherwise skip the parked phase). Same idempotent-apply shape, journal-scoped.
     key = "phase:%s:step=%s:phase=%s:payload=%s" % (
         args.work_item,
         step,
         args.phase,
         json.dumps(payload, sort_keys=True),
     )
+    if journal_only:
+        result = idempotent_write.idempotent_apply(
+            key + ":journal-only",
+            lambda: _reflects_journal(paths, payload),
+            lambda: _apply_journal(paths, payload),
+        )
+        detail = result.get("detail") or {}
+        return {
+            "ok": bool(result.get("ok")),
+            "already": bool(result.get("already")),
+            "applied": bool(result.get("applied")),
+            "reason": result.get("reason"),
+            "journal_confirmed": bool(detail.get("journal_confirmed")),
+        }
     result = idempotent_write.idempotent_apply(
         key,
         lambda: _reflects(paths, step, args.phase, payload),
@@ -99,6 +128,7 @@ def main(argv):
     s.add_argument("--phase", required=True)
     s.add_argument("--payload", required=True)
     s.add_argument("--json", dest="side", default=None)
+    s.add_argument("--journal-only", dest="journal_only", action="store_true")
     args = parser.parse_args(argv[1:])
     if args.cmd == "save":
         print(json.dumps(save(args), sort_keys=True))

@@ -305,11 +305,13 @@ async function buildPhase(workItem, generation) {
 // Reset ONLY uncommitted/untracked changes; never discard a commit (UFR-12). Returns {ok,error?}
 // so a failed reset parks honestly (UFR-6) rather than spinning to the guard bound.
 async function resetUncommitted(wt, branch) {
+  // dumb pipe (fixed git commands, echo ok): courier:true so the bundle preamble pins it to the
+  // cheapest model (#118 — an unmarked label inherits the session model).
   return agent(
     `In the build worktree at ${wt} (branch ${branch}), reset only uncommitted state: `
     + `git checkout -- . && git clean -fd . — do NOT touch any commit. `
     + `Return JSON {"ok":true} on success or {"ok":false,"error":"<reason>"}.`,
-    { label: 'reset-uncommitted', schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
+    { label: 'reset-uncommitted', courier: true, schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
 }
 
 // Record build provenance once over HEAD = X (FR-9), via the existing prov_entry leaf.

@@ -65,8 +65,8 @@ function __join() { return Array.prototype.slice.call(arguments).join('/').repla
 // divergence parks every live gate write as 'stale'. Byte-array padding (no string escapes),
 // so no control characters appear in this script (the Workflow permission layer rejects them).
 // Lone surrogates encode as U+FFFD, matching node's utf-8 conversion.
-function __contentHash(text) {
-  var str = String(text || ''), bytes = [], i, j, c
+function __utf8Bytes(text) {
+  var str = String(text || ''), bytes = [], i, c
   for (i = 0; i < str.length; i++) {
     c = str.charCodeAt(i)
     if (c < 0x80) bytes.push(c)
@@ -77,6 +77,23 @@ function __contentHash(text) {
     } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
     else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
   }
+  return bytes
+}
+// __b64: base64 over the UTF-8 bytes — the OPAQUE payload encoding for writeFile (an LLM leaf
+// can copy an alphabet-soup blob verbatim or fail visibly; it cannot paraphrase it the way it
+// can rewrite readable JSON — the live 2026-07-02 staged-write mangle class).
+function __b64(text) {
+  var bytes = __utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
+    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
+    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
+    out += (b2 === undefined) ? '=' : A[b2 & 63]
+  }
+  return out
+}
+function __contentHash(text) {
+  var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
   bytes.push(0x80)
   while (bytes.length % 64 !== 56) bytes.push(0)
@@ -114,7 +131,16 @@ function __contentHash(text) {
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
-  async writeFile(p, s) { const b = (typeof s === 'string') ? s : JSON.stringify(s); await __sh('cat > ' + __q(p) + " <<'__SR_EOF__'\n" + b + '\n__SR_EOF__') },
+  // writeFile rides an OPAQUE transport: the payload travels base64-encoded inside a python
+  // heredoc and is decoded + written byte-exact Python-side. An LLM leaf can only copy the
+  // blob verbatim or fail visibly — it cannot paraphrase the content the way it can rewrite
+  // readable JSON (live 2026-07-02: a staged dim-write leaf re-wrote the PREVIOUS dimension's
+  // content). Byte-exact also means no heredoc trailing-newline artifact on new writes (the
+  // Python-side staged-hash checks keep the one-newline tolerance for old-bundle compat).
+  async writeFile(p, s) {
+    const b = (typeof s === 'string') ? s : JSON.stringify(s)
+    await __sh("python3 - <<'__SR_EOF__'\nimport base64\nwith open(" + JSON.stringify(p) + ", 'wb') as fh:\n    fh.write(base64.b64decode('" + __b64(b) + "'))\nprint('ok')\n__SR_EOF__")
+  },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
   contentHash(text) { return __contentHash(text) },
@@ -677,7 +703,74 @@ function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, 
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults }
+// skeletonRecord: the JS twin of review_memory.py summarize_record — the bounded durable form
+// of a round record (D3). Findings keep only identity/class/severity (title<=300); dimension
+// records keep their scheduling scalars + skeleton findings. This is what persist-skeleton
+// ships inline (Python re-applies summarize_record on arrival, so a drift here can widen the
+// leaf payload but can never widen the on-disk contract).
+const _SKELETON_FIELDS = ['file', 'line', 'title', 'severity', 'taxonomy', 'dimension',
+                          'classKey', 'carried', 'sourceRound']
+const _MAX_TITLE = 300
+
+function _skeletonFinding(finding) {
+  if (!finding || typeof finding !== 'object') return {}
+  const out = {}
+  for (const k of _SKELETON_FIELDS) if (k in finding) out[k] = finding[k]
+  if (typeof out.title === 'string' && out.title.length > _MAX_TITLE) out.title = out.title.slice(0, _MAX_TITLE)
+  return out
+}
+
+function _summarizeDimension(dim) {
+  if (!dim || typeof dim !== 'object') return {}
+  const findings = Array.isArray(dim.findings) ? dim.findings : []
+  const out = {}
+  for (const k of ['dimension', 'status', 'confidence', 'round', 'subjects',
+                   'carriedFromRound', 'escalated', 'tier']) if (k in dim) out[k] = dim[k]
+  out.findings = findings.map(_skeletonFinding)
+  out.hasFindings = findings.length > 0 || !!dim.hasFindings
+  out.blockingCount = findings.filter((f) => f && typeof f === 'object' && BLOCKING.has(f.severity)).length
+  return out
+}
+
+// skeletonDeferred: the JS twin of _skeleton_deferred — deferred entries ride the update-round
+// delta as identity/severity/reason (+ skeleton finding); the full bodies' durable home is the
+// best-effort round-bodies dump.
+const _MAX_DEFER_REASON = 500
+
+function skeletonDeferred(items) {
+  const out = []
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== 'object') { out.push(item); continue }
+    const slim = {}
+    for (const k of ['identity', 'id', 'severity', 'reason']) if (k in item) slim[k] = item[k]
+    if (typeof slim.reason === 'string' && slim.reason.length > _MAX_DEFER_REASON) slim.reason = slim.reason.slice(0, _MAX_DEFER_REASON)
+    if (item.finding && typeof item.finding === 'object' && !Array.isArray(item.finding)) slim.finding = _skeletonFinding(item.finding)
+    out.push(slim)
+  }
+  return out
+}
+
+function skeletonRecord(record) {
+  const rec = (record && typeof record === 'object') ? record : {}
+  const findings = Array.isArray(rec.findings) ? rec.findings : []
+  const carried = Array.isArray(rec.carriedFindings) ? rec.carriedFindings : []
+  const dims = {}
+  for (const [name, d] of Object.entries(rec.dimensions || {})) dims[name] = _summarizeDimension(d)
+  return {
+    schemaVersion: rec.schemaVersion === undefined ? null : rec.schemaVersion,
+    round: rec.round === undefined ? null : rec.round,
+    kind: rec.kind === undefined ? null : rec.kind,
+    confirmationPending: !!rec.confirmationPending,
+    changedSubjects: rec.changedSubjects === undefined ? null : rec.changedSubjects,
+    coverageDecisions: rec.coverageDecisions || [],
+    tokenUsage: rec.tokenUsage === undefined ? null : rec.tokenUsage,
+    findings: findings.map(_skeletonFinding),
+    carriedFindings: carried.map(_skeletonFinding),
+    dimensions: dims,
+  }
+}
+
+module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred }
 
 };
 
@@ -697,7 +790,6 @@ const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
-const fencedJson = require('./fenced_json.js')
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
@@ -809,13 +901,15 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
-// load-summary is the read twin of compose-persist: the resume seed comes back as BOUNDED
+// load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
 // per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never the full findings bodies —
+// recurrence, policy, and fix-context need in memory), never full findings bodies —
 // echoing a multi-round evidence-laden file through the courier stdout is the same
-// mega-payload defect as the write side (live 2026-07-02), in reverse.
+// mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
+// the loop's second entry read (last-extras.json) into the same leaf; it comes back as
+// `extras` (null when missing/corrupt — the old readJson-default parity).
 async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -824,39 +918,78 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
   }
 }
 
-// The round-record BODY never rides the courier args (live 2026-07-02: the haiku courier
-// mangled the oversized inline --record-json and every native review leg parked
-// cannot-certify: round-memory-write-failed). Each dimension's slice is staged as its own
-// hash-VERIFIED file (bounded by one reviewer's output); review_memory.py compose-persist
-// then rebuilds + fence-persists the record Python-side from those paths + small scalars,
-// echoing back only {ok, contentHash}. The in-memory merge mirrors Python's (mergeRoundRecords).
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — exactly
+// what load-summary seeds a resume with), persisted in ONE verified CAS leaf for the typical
+// round: the skeleton rides the courier args inline, self-verified by --record-hash =
+// sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
+// corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
+// of persisting silently altered content. A many-finding round whose skeleton outgrows a safe
+// inline arg falls back to a staged file (+1 unverified stage leaf; the same hash check covers
+// it). Python re-applies summarize_record on arrival, so evidence bodies can never land in
+// round-records.json even if the JS twin drifts. Full bodies of the audit targets
+// (dropped/deferred findings) ride the separate BEST-EFFORT round-bodies dump; the final
+// round's bodies live in terminal-record.json.
+const _INLINE_RECORD_BOUND = 6000
+
+// _selfVerifiedHelper: run a review_memory.py write verb whose payload self-verifies in
+// transport (--…-hash = sha256 of the exact text). Retries ONCE on a transport-corrupt
+// payload or an unparseable answer; a real refusal (stale/unreadable/round-missing) is
+// final. The helper side answers ok-idempotently when a prior attempt already persisted
+// this exact write and only its ANSWER was lost — so the retry-after-mangled-answer path
+// converges instead of dying 'stale'.
+async function _selfVerifiedHelper(ioApi, args, stagedPath, stagedText, corruptReason) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (stagedPath) {
+      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) {
+        // a missing parent dir is the common first-attempt failure (fresh run dir); create it
+        // and let the retry re-stage.
+        const dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
+        if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
+        continue
+      }
+    }
+    const out = await ioApi.runHelper('python3', args)
+    let parsed = null
+    try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return parsed
+    if (parsed && parsed.reason && parsed.reason !== corruptReason) return { ok: false, reason: parsed.reason }
+  }
+  return { ok: false, reason: 'helper-failed' }
+}
+
 async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, runId, lease, ioApi) {
-  for (const name of reviewerSet || []) {
-    const dim = (record.dimensions || {})[name] || { dimension: name, status: 'missing', findings: [] }
-    const staged = await fencedJson.writeTextVerified(
-      ioApi, ioApi.join(runDir, `dim-result-${name}-r${record.round}.json`), JSON.stringify(dim))
-    if (!staged.ok) return { ok: false, reason: `dim-result-write-failed:${name}` }
-  }
-  const args = ['plugins/superheroes/lib/review_memory.py', 'compose-persist',
-    '--path', ioApi.join(runDir, 'round-records.json'), '--run-dir', runDir,
-    '--round', String(record.round), '--kind', String(record.kind || 'unknown'),
-    '--dimensions', JSON.stringify(reviewerSet),
-    '--changed-subjects-json', JSON.stringify(record.changedSubjects === undefined ? null : record.changedSubjects),
-    '--coverage-decisions-json', JSON.stringify(record.coverageDecisions || []),
-    '--token-usage-json', JSON.stringify(record.tokenUsage || {}),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
-  if (record.confirmationPending) args.push('--confirmation-pending')
+  const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
+  const inline = recordJson.length <= _INLINE_RECORD_BOUND
+  const stagedPath = inline ? null : ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
+  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
+    '--path', ioApi.join(runDir, 'round-records.json')]
+  args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
+  args.push('--record-hash', ioApi.contentHash(recordJson),
+    '--round', String(record.round), '--dimensions', JSON.stringify(reviewerSet || []),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId)
   if (lease) args.push('--lease', lease)
-  const out = await ioApi.runHelper('python3', args)
+  return _selfVerifiedHelper(ioApi, args, stagedPath, recordJson, 'record-corrupt')
+}
+
+// D3 best-effort forensics: the FULL bodies of this round's dropped + deferred findings — the
+// audit targets (UFR-10 dropped-blocker evidence, receipt trust audits). A fixed finding's
+// evidence is its fix commit, so fixed bodies don't ride. ONE fire-and-forget leaf under the
+// spec's FR-4 best-effort carve-out: nothing advances on this write, so a failed (or
+// courier-mangled) dump degrades the audit trail, never the run.
+async function dumpRoundBodiesBestEffort(runDir, round, verdict, fixReport, ioApi) {
+  const drops = (verdict && Array.isArray(verdict.drops)) ? verdict.drops : []
+  const deferred = (fixReport && Array.isArray(fixReport.deferred)) ? fixReport.deferred : []
+  if (!drops.length && !deferred.length) return
   try {
-    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'helper-failed' }
-  } catch (_) {
-    return { ok: false, reason: 'helper-failed' }
-  }
+    await ioApi.writeFile(ioApi.join(runDir, `round-bodies-r${round}.json`),
+      JSON.stringify({ schemaVersion: 1, round, drops, deferred }))
+  } catch (_) { /* best-effort by contract */ }
 }
 
 // mergeRoundRecords: the in-memory twin of persist_record's merge (dedupe the round, sort) —
-// compose-persist no longer echoes the merged records back through the pipe.
+// persist-skeleton never echoes the merged records back through the pipe, and the in-memory
+// copy keeps the CURRENT session's full-bodied record (richer fix context than the durable
+// skeleton; a resume gets the skeletons, same as before D3).
 function mergeRoundRecords(records, record) {
   const merged = (records || []).filter((r) => r && r.round !== record.round)
   merged.push(record)
@@ -865,23 +998,29 @@ function mergeRoundRecords(records, record) {
 }
 
 // The post-fix update ships only the SMALL delta (confirmation marker, changed subjects,
-// coverage decisions, fix summary) — never the round body — via review_memory.py update-round.
+// coverage decisions, fix summary) — never the round body — via review_memory.py update-round,
+// self-verified in transport like persist-skeleton (--updates-hash; staged-file fallback past
+// the safe inline size — the delta is usually small but coverageDecisions/fixes are unbounded).
+// Deferred entries ride slimmed (identity/severity/reason + skeleton finding): their full
+// bodies go to the round-bodies dump, not through this pipe or into round-records.json.
 async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: recordedCoverageDecisions || [],
-    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: fixResult.deferred || [] },
+    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []) },
   }
   if (legKind && legKind.panel) updates.confirmationPending = true
+  const updatesJson = JSON.stringify(updates)
+  const inline = updatesJson.length <= _INLINE_RECORD_BOUND
+  const stagedPath = inline ? null : ioApi.join(runDir, `round-updates-r${round}.json`)
   const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
-    '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round),
-    '--updates-json', JSON.stringify(updates),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+    '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round)]
+  args.push(...(inline ? ['--updates-json', updatesJson] : ['--updates-path', stagedPath]))
+  args.push('--updates-hash', ioApi.contentHash(updatesJson),
+    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId)
   if (lease) args.push('--lease', lease)
-  const out = await ioApi.runHelper('python3', args)
-  let parsed = null
-  try { parsed = out.ok ? JSON.parse(out.stdout) : null } catch (_) { parsed = null }
-  if (!parsed || !parsed.ok) return { ok: false, reason: (parsed && parsed.reason) || 'helper-failed' }
+  const parsed = await _selfVerifiedHelper(ioApi, args, stagedPath, updatesJson, 'updates-corrupt')
+  if (!parsed.ok) return { ok: false, reason: parsed.reason || 'helper-failed' }
   const records = (recordsForFix || []).map((r) => (r && r.round === round) ? Object.assign({}, r, updates) : r)
   return { ok: true, contentHash: parsed.contentHash, records }
 }
@@ -892,38 +1031,20 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
   return { mode: 'code', path }
 }
 
-function parseDocCoverageDecisions(text) {
-  const out = []
-  const lines = String(text || '').split(/\n/)
-  let inSection = false
-  for (const line of lines) {
-    if (/^##\s+/.test(line)) inSection = line.trim() === '## Review coverage decisions'
-    if (!inSection) continue
-    const jsonMatch = line.match(/review-coverage-decision-json:(\{.*\})`?$/)
-    if (jsonMatch) {
-      try { out.push(JSON.parse(jsonMatch[1])); continue } catch (_) {}
-    }
-    const m = line.match(/^- \*\*([^*]+)\*\* .*class `([^`]+)`\): (.*)$/)
-    if (m) out.push({ id: m[1], classKey: m[2], text: m[3] })
-  }
-  return out
-}
-
+// The coverage read is computed entirely PYTHON-SIDE (coverage_decisions.py load): decisions
+// parsed and the fence hash taken over the exact on-disk bytes. A raw courier readText here
+// poisoned the loop live (2026-07-02, 4 runs): the sandbox io leaf answers PROSE for a
+// missing/odd file, and contentHash(prose) turned every later fenced write into a permanent
+// 'stale' park — courier text must never enter an integrity decision. A mangled helper
+// ANSWER fails JSON.parse and parks fail-closed (never silently-empty decisions).
 async function loadCoverageDecisions(target, ioApi) {
-  const path = target.path
-  let text = ''
-  try { text = await ioApi.readText(path) } catch (err) {
-    if (err && err.code === 'ENOENT') return { ok: true, decisions: [], contentHash: ioApi.contentHash('') }
-    return { ok: false, state: 'unreadable', reason: err && err.message }
-  }
-  if (target.mode === 'doc') return { ok: true, decisions: parseDocCoverageDecisions(text), contentHash: ioApi.contentHash(text) }
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/coverage_decisions.py', 'load',
+    '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
   try {
-    const decisions = JSON.parse(text || '[]')
-    if (!Array.isArray(decisions)) return { ok: false, state: 'corrupt' }
-    return { ok: true, decisions, contentHash: ioApi.contentHash(text) }
-  } catch (_) {
-    return { ok: false, state: 'corrupt' }
-  }
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && typeof parsed === 'object') return parsed
+  } catch (_) { /* fall through to fail-closed */ }
+  return { ok: false, state: 'unreadable', reason: 'coverage-load-helper-failed' }
 }
 
 function collectRoundUsage(roundFindings, round, synthesized) {
@@ -943,17 +1064,19 @@ function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   return leaves
 }
 
-// The telemetry `rounds` come from round-records.json ON DISK (review_telemetry.py
-// write-from-records composes Python-side); only small scalars ride the invocation, and the
-// helper answers with the small summary (payload minus rounds) so finalizeVerdict never
-// re-reads the full file back through the pipe.
-async function writeTelemetry(runDir, expectedLeaves, usage, terminal, expectedHash, runId, lease, ioApi) {
+// The telemetry round scalars (roundCount, dimensionCounts) come from round-records.json ON
+// DISK (review_telemetry.py write-from-records composes Python-side); only small scalars ride
+// the invocation, and the helper answers with the same small summary it wrote (D3: telemetry
+// never embeds rounds) so finalizeVerdict never re-reads the file back through the pipe.
+// No expected-hash: the telemetry file is a single-writer run artifact written once at the
+// terminal — the old pre-read + CAS pair cost a leaf and protected nothing the lease doesn't.
+async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, lease, ioApi) {
   const args = ['plugins/superheroes/lib/review_telemetry.py', 'write-from-records',
     '--path', ioApi.join(runDir, 'review-telemetry.json'),
     '--records-path', ioApi.join(runDir, 'round-records.json'),
     '--expected-leaves-json', JSON.stringify(expectedLeaves || []),
     '--usage-json', JSON.stringify(usage || {}),
-    '--expected-hash', expectedHash || ioApi.contentHash(''), '--run-id', runId]
+    '--run-id', runId]
   if (terminal) args.push('--terminal', String(terminal))
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
@@ -986,7 +1109,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let memoryState = await loadRoundRecords(runDir, reviewerSet || [], ioApi)
   let records = memoryState.ok ? memoryState.records : []
   let round = resumeRound(records)
-  let lastExtras = await ioApi.readJson(`${runDir}/last-extras.json`, null)
+  let lastExtras = memoryState.extras !== undefined ? memoryState.extras : null
   let justMarkedForConfirmation = false
   let fixRanThisRun = false
   const allUsage = {}
@@ -1131,6 +1254,10 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       coverageContentHash = reloaded.contentHash
     }
 
+    // body dump BEFORE the post-fix persist: both must happen, the dump is best-effort
+    // anyway, and this ordering shrinks the crash window in which the audit bodies are
+    // lost while the delta survives (or vice versa) at zero protocol cost.
+    await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
     const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi, legKind)
     if (!postFix.ok) {
       return await finalizeVerdict(
@@ -1148,13 +1275,11 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
 async function finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
   const expectedLeaves = []
   for (let r = 1; r <= round; r += 1) expectedLeaves.push(...expectedUsageLeaves(reviewerSet, r, legKind, fixRan && r === round))
-  const telemPath = ioApi.join(runDir, 'review-telemetry.json')
-  let telemHash = ioApi.contentHash('')
-  try { telemHash = ioApi.contentHash(await ioApi.readText(telemPath)) } catch (_) {}
-  const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, telemHash, runId, lease, ioApi)
-  // Attach the SMALL summary the helper answered with (rounds stay on disk only) — re-reading
-  // the full telemetry file back through the pipe would re-create the mega-payload hop, and a
-  // verdict embedding every round would ride the terminal-record write the same way.
+  const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, runId, lease, ioApi)
+  // Attach the SMALL summary the helper answered with (the round history stays in
+  // round-records.json only) — re-reading the telemetry file back through the pipe would
+  // re-create the mega-payload hop, and a verdict embedding every round would ride the
+  // terminal-record write the same way.
   let telemetry = { benchmarkValid: false, reason: 'telemetry-write-failed' }
   if (telemWrite.ok) {
     telemetry = Object.assign({}, telemWrite)
@@ -1195,10 +1320,13 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
 }
 
 async function verifyAgent(verifyCommand, runDir, round) {
+  // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
+  // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
+  // session model). The preamble strips the marker before the real agent().
   const out = await agent(
     `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
     `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: 'run verify', schema: VERIFY_SCHEMA })
+    { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
   if (!out) return 'fail'
   return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
 }
@@ -3939,11 +4067,13 @@ async function buildPhase(workItem, generation) {
 // Reset ONLY uncommitted/untracked changes; never discard a commit (UFR-12). Returns {ok,error?}
 // so a failed reset parks honestly (UFR-6) rather than spinning to the guard bound.
 async function resetUncommitted(wt, branch) {
+  // dumb pipe (fixed git commands, echo ok): courier:true so the bundle preamble pins it to the
+  // cheapest model (#118 — an unmarked label inherits the session model).
   return agent(
     `In the build worktree at ${wt} (branch ${branch}), reset only uncommitted state: `
     + `git checkout -- . && git clean -fd . — do NOT touch any commit. `
     + `Return JSON {"ok":true} on success or {"ok":false,"error":"<reason>"}.`,
-    { label: 'reset-uncommitted', schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
+    { label: 'reset-uncommitted', courier: true, schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } })
 }
 
 // Record build provenance once over HEAD = X (FR-9), via the existing prov_entry leaf.
@@ -4604,54 +4734,65 @@ module.exports = { gateForTerminal, isUsableDraft, renderRunOutcome }
 __modules["fenced_json"] = function (module, exports, require) {
 const { io } = require('./io_seam.js')
 
-// writeTextVerified: put `text` on disk and PROVE it arrived intact. In the Workflow bundle the
-// io seam is an LLM courier that can mangle a large body in transit (live 2026-07-02), so the
-// write is followed by an on-disk hash read-back (a 64-char echo — too small to mangle) compared
-// against the locally computed hash; one retry, then fail-closed. On node's disk io the verify
-// is a cheap no-op check.
-async function writeTextVerified(ioApi, path, text) {
-  const want = ioApi.contentHash(text)
-  // Ensure the parent dir exists — fenced_json.py's atomic replace used to makedirs for the
-  // whole payload write; the staged file needs the same guarantee (a fresh /tmp run dir).
-  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
-  if (dir) { try { await ioApi.mkdirp(dir) } catch (_) { /* the write below fails closed */ } }
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try { await ioApi.writeFile(path, text) } catch (_) { continue }
-    const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'hash', '--path', path])
-    try {
-      const parsed = JSON.parse((out && out.stdout) || '')
-      if (parsed && parsed.ok && parsed.contentHash === want) return { ok: true, contentHash: want }
-    } catch (_) { /* retry */ }
-  }
-  return { ok: false, reason: 'verified-write-failed' }
-}
-
+// fencedJsonWrite: put a JSON artifact on disk through the courier in TWO leaves — one
+// unverified stage-write of the payload file, then one fenced_json.py write that verifies the
+// staged text's sha256 ITSELF before applying (--payload-hash). A courier that mangles the
+// staged body in transit (live 2026-07-02) fails the Python-side hash check as payload-corrupt
+// and the stage is retried once, then fail-closed — never silently altered content. This folds
+// the old 6-leaf ceremony (pre-read + current-read + mkdir + stage + hash read-back + write)
+// into stage + verify-write.
+//
+// opts: { runId, lease?, expectedHash?, overwrite? } — exactly one of expectedHash (CAS fence
+// against the hash the caller last observed) or overwrite:true. Overwrite is LAST-WRITER-WINS,
+// accepted deliberately for run artifacts the runtime composes fresh and unconditionally
+// replaces (terminal-record.json, the front-half outcome): the cooperative lease serializes
+// live sessions, the lease is stamped into the record (not verified at write time), and the
+// old read-hash-then-CAS pair detected only a competitor writing inside its own read→write
+// window — a zombie that pre-read defeated it too. In overwrite mode --payload-hash is the
+// ONLY integrity guard, so fenced_json.py refuses overwrite writes that arrive without it.
 async function fencedJsonWrite(path, payload, opts) {
   const ioApi = io()
-  if (!opts || !opts.expectedHash) return { ok: false, reason: 'missing-expected-hash' }
-  let current = ''
-  try { current = await ioApi.readText(path) } catch (err) {
-    if (!(err && err.code === 'ENOENT')) return { ok: false, reason: 'unreadable' }
-  }
-  if (ioApi.contentHash(current) !== opts.expectedHash) return { ok: false, reason: 'stale' }
-  if (!opts.runId) return { ok: false, reason: 'missing-run-id' }
+  if (!opts || !opts.runId) return { ok: false, reason: 'missing-run-id' }
+  if (!opts.expectedHash && !opts.overwrite) return { ok: false, reason: 'missing-expected-hash' }
   const next = Object.assign({}, payload || {}, { runId: opts.runId, lease: opts.lease })
-  // Stage the payload as a hash-verified FILE and hand the helper its path — an unbounded
-  // payload must never ride the courier args inline (it gets mangled; live 2026-07-02).
+  const text = JSON.stringify(next)
+  const want = ioApi.contentHash(text)
   const stagedPath = path + '.payload'
-  const staged = await writeTextVerified(ioApi, stagedPath, JSON.stringify(next))
-  if (!staged.ok) return { ok: false, reason: 'payload-stage-failed' }
-  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path, '--payload-path', stagedPath, '--expected-hash', opts.expectedHash, '--run-id', opts.runId]
+  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path,
+    '--payload-path', stagedPath, '--payload-hash', want, '--run-id', opts.runId]
+  if (opts.overwrite) args.push('--allow-overwrite')
+  else args.push('--expected-hash', opts.expectedHash)
   if (opts.lease) args.push('--lease', opts.lease)
-  const out = await ioApi.runHelper('python3', args)
-  try {
-    return out.ok ? JSON.parse(out.stdout) : { ok: false, reason: 'write-failed' }
-  } catch (_) {
-    return { ok: false, reason: 'write-failed' }
+  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
+  let lastReason = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try { await ioApi.writeFile(stagedPath, text) } catch (_) {
+      // a missing parent dir is the common first-attempt failure (fresh run dir); create it
+      // and let the retry re-stage — the leaf cost lands on the failure path only.
+      if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
+      lastReason = 'payload-stage-failed'
+      continue
+    }
+    const out = await ioApi.runHelper('python3', args)
+    let parsed = null
+    try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return parsed
+    // a real refusal (stale, missing-run-id, replace-failed) is final; only a transport-corrupt
+    // stage (or an unparseable answer) earns the one retry.
+    if (parsed && parsed.reason && parsed.reason !== 'payload-corrupt' && parsed.reason !== 'payload-unreadable') {
+      return { ok: false, reason: parsed.reason }
+    }
+    // payload-unreadable can also mean the silent leaf-bash stage failed on a missing dir
+    // (that writeFile reports no error) — same recovery.
+    if (parsed && parsed.reason === 'payload-unreadable' && dir) {
+      try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ }
+    }
+    lastReason = (parsed && parsed.reason) || lastReason
   }
+  return { ok: false, reason: lastReason || 'payload-stage-failed' }
 }
 
-module.exports = { fencedJsonWrite, writeTextVerified }
+module.exports = { fencedJsonWrite }
 
 };
 
@@ -4703,10 +4844,6 @@ const DEFERRED_ITEMS = {
 const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
-}
-const CONFIG_SCHEMA = {
-  type: 'object', required: ['verifyCommand'],
-  properties: { verifyCommand: { type: 'string' }, tiers: { type: 'object' } },
 }
 const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
 const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
@@ -5123,38 +5260,22 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
-async function readContentHashForFence(path) {
-  try {
-    return io().contentHash(await io().readText(path))
-  } catch (err) {
-    if (err && err.code === 'ENOENT') return io().contentHash('')
-    return null
-  }
-}
-
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
-// #115 Task 12: gateForTerminal is now the in-process JS twin; the gate write goes through
-// persistPhase (one exec: set-gate + journal + checkpoint) — not a cmdRunner agent dispatch.
+// #115 Task 12: gateForTerminal is now the in-process JS twin. #118: the gate write rides the
+// per-phase 'save phase progress' tail in runPhases (set-gate chained ahead of journal+checkpoint)
+// — this phase returns the persist spec, it does not dispatch the write itself.
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}
   const runId = opts.runId || `review-${doc}-${workItem}`
   const lease = opts.lease || undefined
   const existing = await readGate(workItem, doc)
   if (existing === 'passed') {
-    // cursor-lost re-entry guard (gate written, recordCursor failed): never re-run the panel and
+    // cursor-lost re-entry guard (gate written, tail persist failed): never re-run the panel and
     // risk overwriting a correct passed (FR-8 passed-gate skip).
     return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
   await io().mkdirp(runDir)
-  let reviewedHash = opts.reviewedHash
-  if (!reviewedHash) {
-    try {
-      reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
-    } catch (_) {
-      reviewedHash = io().contentHash('')
-    }
-  }
   const deferred = new Map()
   const verdict = await runReviewDocPanel({
     workItem,
@@ -5171,46 +5292,45 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
+  // D3 fold: overwrite mode — accepted last-writer-wins on a run artifact the loop composes
+  // fresh (the lease serializes live sessions; the old read-hash-then-CAS pair cost two extra
+  // leaves and detected only same-window interleavings — see fenced_json.js).
   const recPath = `${runDir}/terminal-record.json`
-  const recExpected = await readContentHashForFence(recPath)
-  if (recExpected == null) {
-    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json unreadable for ${doc}`] }, gate: gateForTerminal(verdict && verdict.terminal) }
-  }
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
   if (!recWrite.ok) {
     const gate = gateForTerminal(verdict && verdict.terminal)
     return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
   }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
-  // Re-hash after the revise loop may have edited the doc in place (fenced set-gate refuses stale snapshots).
-  try {
-    reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
-  } catch (_) {
-    reviewedHash = io().contentHash('')
-  }
-  // Record gate + journal + checkpoint in one exec call (persistPhase, FR-4 persist order).
+  // The set-gate fence hash is computed PYTHON-SIDE at write time ('current' sentinel), never
+  // from a courier read: in the sandbox a readText of a missing/odd file answers PROSE (live
+  // 2026-07-02, 4 consecutive runs), and contentHash(prose) poisons the fence into a permanent
+  // 'stale' park. The runtime makes no decision between its old re-read and the write, so the
+  // sentinel loses only same-window concurrent-edit detection (the lease excludes that) —
+  // and definition_doc.py resolves + hashes the SAME file it edits (doc-dir aware), so no
+  // runtime-resolved hash can disagree with the write target.
+  const reviewedHash = 'current'
+  // #118 "Every phase" tail: gate + journal + checkpoint land in ONE 'save phase progress' leaf,
+  // dispatched by runPhases' tail with the REAL step index — NOT persisted here (the old
+  // step:-1 pre-persist plus runPhases' journal/cursor writes was the FR-6 double-journal, and
+  // the transient step:-1 checkpoint could regress a crash-resume to phase 0). This phase hands
+  // the tail its set-gate side-effect command + journal payload; a failed persist parks there
+  // (UFR-5 — the run never advances on an un-recorded gate).
   const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
     `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
-  const pr = await persistPhase(workItem, {
-    sideEffectCmd,
-    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
-    step: -1,   // placeholder: the real step is written by recordCursor in runPhases; -1 signals review-doc context
-    phase: `review-${doc}`,
-  })
-  if (!pr.ok) {
-    // a failed durable gate write must NOT advance on un-recorded state (UFR-5) — park low-confidence,
-    // mirroring reviewCodePhase's provenance-write guard.
-    return {
-      phaseResult: { confidence: 'low', assumptions: [`gate write did not record for ${doc}`] },
-      gate,
-      runtimeDeferredIds: Array.from(deferred.keys()),
-    }
+  return {
+    phaseResult: { confidence: 'high', assumptions: [] },
+    gate,
+    persist: {
+      sideEffectCmd,
+      journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
+    },
+    runtimeDeferredIds: Array.from(deferred.keys()),
   }
-  return { phaseResult: { confidence: 'high', assumptions: [] }, gate, runtimeDeferredIds: Array.from(deferred.keys()) }
 }
 
 // gateForTerminal: pure in-process JS twin. No agent dispatch.
@@ -5305,14 +5425,13 @@ async function frontHalfBoundary(workItem) {
   // recordOk guards UFR-6: if we cannot write the durable readout records, flag it in the reason.
   // (The readout records live in the per-phase run dirs and are written by renderAndPostReadout earlier;
   // the outcome JSON written here is the durable ENVELOPE artifact — a missing write flags UFR-6.)
+  // Overwrite mode with NO lease: this envelope is composed fresh from the durable per-phase
+  // records on every boundary pass, so last-writer-wins between duplicate runs is accepted —
+  // both writers derive near-identical content from the same records (see fenced_json.js).
   const outPath = `/tmp/showrunner-${workItem}-fronthalf-outcome.json`
-  const outcomeExpected = await readContentHashForFence(outPath)
   const runId = `fronthalf-${workItem}`
-  let recordOk = outcomeExpected != null
-  if (recordOk) {
-    const outcomeWrite = await fencedJsonWrite(outPath, outcome, { expectedHash: outcomeExpected, runId })
-    recordOk = !!outcomeWrite.ok
-  }
+  const outcomeWrite = await fencedJsonWrite(outPath, outcome, { overwrite: true, runId })
+  let recordOk = !!outcomeWrite.ok
 
   // exec-backed renderReadout: writes the record to a temp file and execs loop_readout.py --record.
   // Mirrors how renderAndPostReadout runs loop_readout.py (line ~896). Returns the stdout text.
@@ -5321,11 +5440,15 @@ async function frontHalfBoundary(workItem) {
   async function renderReadout(record) {
     const recPath = `/tmp/showrunner-${workItem}-fronthalf-readout-tmp.json`
     try { await io().writeFile(recPath, JSON.stringify(record || {})) } catch (_) { return '' }
-    const text = await agent(
-      `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-      selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
-      { label: 'readout' })
-    return typeof text === 'string' ? text : ''
+    // dumb-pipe render via the courier (pinned cheapest + one-shot retry; rootedCommand = FR-5).
+    try {
+      const text = await courier.runCourierText(
+        'readout',
+        `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`)
+      return typeof text === 'string' ? text : ''
+    } catch (_e) {
+      return ''
+    }
   }
 
   // In-process envelope composition (no agent for the judgment — only the per-phase readout is exec).
@@ -5449,10 +5572,34 @@ async function exec(commands, opts) {
   return _parseExecResult(out, cmds.length)
 }
 
+// execJson/execText: run ONE command via the courier dumb-pipe (label 'exec' — pinned to the
+// cheapest model by the bundle preamble) and parse its stdout. Mirrors build_phase.js's helpers:
+// the courier retries ONCE on a dropped/garbled stdout (FR-8), returns null after the retry so the
+// caller fails closed, and returns a parseable {"ok":false} (a REAL failure) as-is without retry.
+async function execJson(cmd) {
+  try {
+    return await courier.runCourierJson('exec', cmd)
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) return null
+    throw e
+  }
+}
+async function execText(cmd) {
+  try {
+    return (await courier.runCourierText('exec', cmd)).trim()
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) return null
+    throw e
+  }
+}
+
 // persistPhase: one 'save phase progress' courier — the optional side-effect command chained (&&)
 // before phase_progress_entry.py save, which writes journal + checkpoint and read-back-confirms both.
 // Persist order (FR-4): side-effect first (when present), then journal, then checkpoint (cursor last).
 // Every interpolated non-constant arg is shq()-quoted.
+// opts.journalOnly (#118 "save phase progress" on a PARK): record the journal entry (+ chained
+// side-effect) durably but leave the checkpoint cursor untouched — a parked phase did not complete,
+// so advancing lastGoodStep would make the resume skip it. Still ONE courier leaf.
 // Returns {ok: boolean} — ok is false if any command in the batch reported failure.
 async function persistPhase(workItem, opts) {
   opts = opts || {}
@@ -5460,19 +5607,26 @@ async function persistPhase(workItem, opts) {
   const record = opts.record || opts.journalPayload || {}
   const step = opts.step
   const phase = opts.phase
-  const side = opts.sideEffect || null
+  const journalOnly = !!opts.journalOnly
+  const side = journalOnly ? null : (opts.sideEffect || null)
   const sideArg = side ? ` --json ${shq(JSON.stringify(side))}` : ''
+  const joArg = journalOnly ? ' --journal-only' : ''
   const saveCmd =
     `python3 plugins/superheroes/lib/phase_progress_entry.py save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
+  const required = journalOnly
+    ? ['ok', 'journal_confirmed']
+    : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
     const res = await courier.runCourierJson(
       'save phase progress',
       cmd,
-      { require: ['ok', 'journal_confirmed', 'checkpoint_confirmed'], retryRealFailure: false },
+      { require: required, retryRealFailure: false },
     )
-    return res && res.ok && res.journal_confirmed && res.checkpoint_confirmed
+    const confirmed = res && res.ok && res.journal_confirmed &&
+      (journalOnly || res.checkpoint_confirmed)
+    return confirmed
       ? { ok: true, recovered: false }
       : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
   } catch (_e) {
@@ -5486,7 +5640,7 @@ function inWorktree(cmd, worktree) {
 function targetCommandPrompt(prompt, worktree) {
   if (!worktree || typeof prompt !== 'string') return prompt
   if (!prompt.startsWith('Run exactly this')) return prompt
-  // The cmdRunner shape is "Run exactly this …:\n\n<cmd>"; split on the FIRST blank-line boundary
+  // The courier shape is "Run exactly this …:\n\n<cmd>"; split on the FIRST blank-line boundary
   // so a multi-line command (which may itself contain a blank line) is wrapped whole, not just its tail.
   const idx = prompt.indexOf('\n\n')
   if (idx < 0) return prompt
@@ -5507,6 +5661,11 @@ async function withTargetCommandPrompts(worktree, fn) {
 }
 
 // JS<->Python bridge: run a lib command in a leaf, return its stdout JSON (schema-validated).
+// #118 residual: ONLY the test-pilot per-op leaves (testPilotDeps' cli/jsonCommand) still ride this
+// StructuredOutput pipe — every spine site is ported to courier_exec/exec. It is a dumb pipe, so it
+// is pinned to the cheapest model here AND marked courier:true for the bundle preamble's
+// unconditional pin (the live 2026-07-02 run showed unmarked cmdRunner leaves inheriting the
+// session model at ~41k tokens per command echo).
 // FR-5 (cwd-rooting): wrap the command with selfContained() so the courier leaf always runs from
 // the repo root when globalThis.__SR_ROOT is set. selfContained is a no-op when __SR_ROOT is unset
 // (smoke/test backward-compat) and skips commands already starting with `cd ` (no double-cd).
@@ -5520,7 +5679,7 @@ async function cmdRunner(cmd, { schema, label }) {
     `object via StructuredOutput by copying each of its top-level keys to the same-named output field, ` +
     `values exactly as printed. Do NOT put the whole JSON into a single field, do NOT stringify or nest ` +
     `it, and do NOT add commentary or extra fields:\n\n${selfContained(cmd)}`,
-    { label: label || 'lib', schema },
+    { label: label || 'lib', schema, courier: true, model: cheapestModel() },
   )
 }
 
@@ -5587,26 +5746,23 @@ async function showrunner({ workItem }) {
   if (_docDir && typeof globalThis !== 'undefined') {
     globalThis.__SR_DOC_DIRS = Object.assign({}, globalThis.__SR_DOC_DIRS, { [workItem]: _docDir })
   }
-  // #38: load the per-role engine preferences once at startup from core.md's machine block. The
-  // Python CLI prints {"reviewer","implementation"} (both "claude" when absent/unreadable — the safe
-  // degenerate path, exit 0 always). Fail-safe: any exec error or bad JSON yields both-"claude" so the
-  // review/build leaves take the byte-unchanged agent() path.
-  const _epRes = await exec(['python3 plugins/superheroes/lib/engine_pref_load.py'])
+  // #38 engine preferences, #118 startup fold: the per-role engine prefs ride the SAME
+  // 'read startup state' gather (previously a third startup courier leaf, engine_pref_load.py —
+  // the one the #118 matrix does not allow: startup is the deliberately-TWO-leaf stretch).
+  // Fail-safe: an absent/malformed (or courier-stringified) value yields both-"claude" + empty
+  // effort map, so the review/build leaves take the byte-unchanged agent() path.
+  const _epParsed = _coerceObj((startupFacts && startupFacts.engine_prefs) || null)
   let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
-  try {
-    const _p = (_epRes[0] && _epRes[0].stdout) || ''
-    const _parsed = JSON.parse(_p)
-    if (_parsed && typeof _parsed === 'object' && !Array.isArray(_parsed)) {
-      // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
-      // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
-      // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
-      _epMap = {
-        reviewer: _parsed.reviewer || 'claude',
-        implementation: _parsed.implementation || 'claude',
-        effort: (_parsed.effort && typeof _parsed.effort === 'object' && !Array.isArray(_parsed.effort)) ? _parsed.effort : {},
-      }
+  if (_epParsed && typeof _epParsed === 'object' && !Array.isArray(_epParsed)) {
+    // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
+    // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
+    // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+    _epMap = {
+      reviewer: _epParsed.reviewer || 'claude',
+      implementation: _epParsed.implementation || 'claude',
+      effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
-  } catch (_) {}
+  }
   if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
@@ -5676,7 +5832,18 @@ async function readStartupState(workItem) {
     '    overrides = {}',
     'if not isinstance(overrides, dict):',
     '    overrides = {}',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir}))',
+    // #118 startup fold: the engine-prefs read (previously its own engine_pref_load.py exec leaf,
+    // the third startup courier) rides the same gather. Fail-open like engine_pref_load.py: ANY
+    // failure yields the degenerate both-'claude' map.
+    '_ep_degenerate = {"reviewer": "claude", "implementation": "claude", "effort": {}}',
+    'try:',
+    '    import engine_pref',
+    '    engine_prefs = engine_pref.load_engine_prefs(root, root)',
+    '    if not isinstance(engine_prefs, dict):',
+    '        engine_prefs = _ep_degenerate',
+    'except Exception:',
+    '    engine_prefs = _ep_degenerate',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs}))',
   ].join('\n')
   try {
     return await courier.runCourierJson(
@@ -5686,10 +5853,12 @@ async function readStartupState(workItem) {
       // resolution), so an absent field means a mangled courier response — retry rather than
       // silently planting nothing (which would mis-route the NOTIFY ledger + review doc paths
       // to the in-repo fallback on an out-of-repo-calibrated project mid-run).
+      // engine_prefs is NOT required: an older canned response without it degrades to the safe
+      // both-'claude' default (the same fail-open engine_pref_load.py had), never a retry.
       { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] },
     )
   } catch (_) {
-    return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '' }
+    return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', engine_prefs: null }
   }
 }
 
@@ -5986,16 +6155,6 @@ function testPilotDeps(workItem, generation) {
   }
 }
 
-// returns { ok } — a false ok means journal_entry caught a DurableWriteError (UFR-2).
-async function appendPhaseRecord(workItem, phase, gate, phaseResult) {
-  const payload = shq(JSON.stringify({ phase, gate,
-    confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] }))
-  return cmdRunner(
-    `python3 plugins/superheroes/lib/journal_entry.py --work-item ${shq(workItem)} --payload ${payload}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } } },
-  )
-}
-
 async function runPhases(workItem, fromStep, deps) {
   deps = deps || {}
   for (let i = fromStep; i < PHASES.length; i += 1) {
@@ -6013,7 +6172,7 @@ async function runPhases(workItem, fromStep, deps) {
     if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
       return (deps.ship || shipPhase)(workItem, await loadPr(workItem), deps.generation)
     }
-    let phaseResult, gate, sideEffect = null
+    let phaseResult, gate, sideEffect = null, persist = null
     if (phase === 'review-code') {
       const r = await (deps.reviewCode || reviewCodePhase)(workItem); phaseResult = r.phaseResult; gate = r.gate
     } else if (phase === 'workhorse') {
@@ -6026,21 +6185,33 @@ async function runPhases(workItem, fromStep, deps) {
       const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
       const doc = phase === 'review-plan' ? 'plan' : 'tasks'
-      const r = await deps.reviewDoc(doc, workItem); phaseResult = r.phaseResult; gate = r.gate
+      const r = await deps.reviewDoc(doc, workItem); phaseResult = r.phaseResult; gate = r.gate; persist = r.persist || null
     } else if ((phase === 'plan' || phase === 'tasks') && deps.produce) {
       phaseResult = await deps.produce(phase, workItem); gate = null
     } else {
       phaseResult = await (deps.phaseLeaf || defaultPhaseLeaf)(phase, workItem)
       gate = await (deps.gateRead || (async () => null))(phase, workItem)
     }
-    const rec = await appendPhaseRecord(workItem, phase, gate, phaseResult)
-    if (!rec.ok) return { outcome: 'parked', phase, reason: 'durable write failed (DurableWriteError) — UFR-2' }
+    // #118 "Every phase" tail: journal + cursor (+ set-gate at review phases, chained first — FR-4
+    // persist order) land in ONE read-back-confirmed 'save phase progress' leaf. The advance/park
+    // decision is the in-process twin, derived BEFORE the persist; a park still records the journal
+    // entry (and any set-gate side effect) durably but leaves the cursor untouched (journalOnly),
+    // so a resume re-enters the parked phase instead of skipping it.
     const decision = await phaseStep(phaseResult, gate)
-    if (decision.action !== 'proceed') return { outcome: 'parked', phase, reason: decision.reason }
-    // FR-4/FR-3: persist the side effect + cursor BEFORE advancing. If that durable write fails, park
-    // rather than advance — advancing on an unrecorded cursor would lose record-before-advance.
-    const cur = await recordCursor(workItem, i, phase, sideEffect)
-    if (!cur.ok) return { outcome: 'parked', phase, reason: 'cursor not recorded (durable write failed) — FR-4' }
+    const proceed = decision.action === 'proceed'
+    const saved = await persistPhase(workItem, {
+      sideEffectCmd: (persist && persist.sideEffectCmd) || null,
+      journalPayload: (persist && persist.journalPayload) ||
+        { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+      step: i, phase, sideEffect,
+      journalOnly: !proceed,
+    })
+    // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
+    // on unrecorded state) — park naming the durable-write failure.
+    if (!saved.ok) {
+      return { outcome: 'parked', phase, reason: `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4` }
+    }
+    if (!proceed) return { outcome: 'parked', phase, reason: decision.reason }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.
@@ -6057,21 +6228,21 @@ function verdictToGate(verdict) {
 async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   opts = opts || {}
   const recPath = `${runDir}/terminal-record.json`
-  const recExpected = await readContentHashForFence(recPath)
   const runId = opts.runId || `review-code-${workItem}`
   const lease = opts.lease || undefined
-  if (recExpected != null) {
-    const recWrite = await fencedJsonWrite(recPath, verdict || {}, { expectedHash: recExpected, runId, lease })
-    if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
-  } else {
-    return { ok: false, reason: 'terminal-record-unreadable' }
+  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
+  // FR-5 (cwd-rooting): courier_exec's rootedCommand pins the loop_readout.py call to the repo
+  // root when __SR_ROOT is set — same as renderReadout in frontHalfBoundary. The render is a dumb
+  // pipe (run a command, echo stdout), so it rides the courier: pinned cheapest + one-shot retry.
+  let text = ''
+  try {
+    text = await courier.runCourierText(
+      'readout',
+      `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`)
+  } catch (_e) {
+    text = ''   // transport drop: post the bare park reason path below (best-effort render)
   }
-  // FR-5 (cwd-rooting): selfContained() pins the loop_readout.py call to the repo root when
-  // __SR_ROOT is set — same as renderReadout in frontHalfBoundary (line ~431). No-op without __SR_ROOT.
-  const text = await agent(
-    `Run exactly this and return ONLY its stdout, unchanged:\n\n` +
-    selfContained(`python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`),
-    { label: 'readout' })
   try {
     await courier.runCourierJson(
       'post readout',
@@ -6099,6 +6270,9 @@ async function reviewCodePhase(workItem, opts) {
   // fails CLOSED on error — never fall back to reviewing root (that IS the original bug).
   let resolvedWorktree = opts.worktree || null
   let resolvedHead = opts.expectedHead || null
+  let resolvedConfig = null
+  let cwdHeadBefore = null
+  let resolvedViaGather = false
   if (!opts.worktree) {
     const resolver = opts.resolveTarget || resolveBuildTarget
     const resolved = await resolver(workItem)
@@ -6110,9 +6284,18 @@ async function reviewCodePhase(workItem, opts) {
     }
     resolvedWorktree = resolved.worktree
     resolvedHead = resolved.expectedHead
+    // #118 review-code entry fold: 'resolve review target' is the stretch's ONE gather — it also
+    // carries the review config and the CWD head, so no separate config / rev-parse leaves fire on
+    // the production path. A resolver stub that omits them (older seam) falls back below.
+    resolvedConfig = _coerceObj(resolved.config)
+    cwdHeadBefore = resolved.cwdHead || null
+    resolvedViaGather = true
   }
   const initialHead = resolvedHead || null
-  if (resolvedHead) {
+  // The head re-check only fires when the head was supplied EXTERNALLY (opts.expectedHead —
+  // test-pilot stabilization / smokes): it verifies the tree is where the caller believes. When the
+  // gather just read the head itself, re-reading the same value is a redundant leaf (matrix fold).
+  if (resolvedHead && !resolvedViaGather) {
     const actual = await resolveHead(resolvedWorktree || null, opts.ref || 'HEAD')
     if (!actual || actual !== resolvedHead) {
       return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${resolvedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
@@ -6120,14 +6303,17 @@ async function reviewCodePhase(workItem, opts) {
   }
   const targetWorktree = resolvedWorktree || null
   // premortem-002: the fixer is a freeform subagent that receives the target worktree only as a TEXT
-  // hint (withTargetCommandPrompts retargets just the "Run exactly this" cmdRunner prompts). If it
+  // hint (withTargetCommandPrompts retargets just the "Run exactly this" courier prompts). If it
   // commits to the showrunner CWD instead of the target tree, the target HEAD never advances, the
   // expectedHead checks still pass (both = pre-fix HEAD), and a stale `clean` covers-stamp would
-  // publish unmodified code. Snapshot CWD HEAD so we can detect that divergence after the loop.
-  const cwdHeadBefore = (targetWorktree && resolvedHead) ? await resolveHead(null, opts.ref || 'HEAD') : null
-  const cfg = await cmdRunner(
-    inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree),
-    { schema: CONFIG_SCHEMA })
+  // publish unmodified code. Snapshot CWD HEAD so we can detect that divergence after the loop
+  // (carried by the gather on the production path; read here for the explicit-worktree branch).
+  if (cwdHeadBefore == null && targetWorktree && resolvedHead) {
+    cwdHeadBefore = await resolveHead(null, opts.ref || 'HEAD')
+  }
+  const cfg = (resolvedConfig && typeof resolvedConfig === 'object') ? resolvedConfig
+    : await execJson(
+        inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree))
   const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
     target: { worktree: resolvedWorktree, head: resolvedHead },
   })
@@ -6199,16 +6385,16 @@ async function reviewCodePhase(workItem, opts) {
   }
 }
 
+// resolveHead: dumb-pipe git rev-parse via the exec courier (pinned cheapest, one-shot retry).
+// Production review-code resolves heads inside the folded 'resolve review target' gather; this
+// remains for the explicit-worktree branch (test-pilot stabilization) and post-loop head checks.
 async function resolveHead(worktree, ref) {
   const cmd = worktree
     ? `git -C ${shq(worktree)} rev-parse ${shq(ref || 'HEAD')}`
     : `git rev-parse ${shq(ref || 'HEAD')}`
   try {
-    const out = await agent(
-      `Run exactly this command and return ONLY its stdout, unchanged:\n\n${cmd}`,
-      { label: 'lib' })
-    const text = String(out || '').trim()
-    return text || null
+    const out = await execText(cmd)
+    return out || null
   } catch (_) {
     return null
   }
@@ -6224,7 +6410,11 @@ const buildPhase = (workItem, generation) => require('./build_phase.js').buildPh
 // pattern (cheap exec dumb-pipe, NOT a genuine agent) so the call is deterministic + stubbable.
 // Runs build_entry.py WITHOUT --generation (idempotent: reclaim_or_create returns REUSED for an
 // existing clean worktree; lockGeneration is only set when --generation is passed).
-// Returns {worktree: <path>, expectedHead: <sha>} or null on any failure (caller parks on null).
+// #118 review-code entry fold: the same gather also reads the review config (review_code_config.py
+// in the target worktree) and the CWD head — the whole entry stretch is this ONE leaf. Both extras
+// are best-effort (null on failure): config falls back to {verifyCommand:'none'} downstream, and a
+// missing cwdHead only re-adds the explicit-branch rev-parse leaf.
+// Returns {worktree, expectedHead, config, cwdHead} or null on any failure (caller parks on null).
 async function resolveBuildTarget(workItem) {
   const script = [
     'import json, subprocess, sys',
@@ -6253,7 +6443,21 @@ async function resolveBuildTarget(workItem) {
     '        head = r.stdout.strip(); break',
     'if not head:',
     '    print(json.dumps({"ok": False, "error": "missing target head"})); raise SystemExit(0)',
-    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head}))',
+    'cfg = None',
+    'try:',
+    '    r = subprocess.run(["python3", "plugins/superheroes/lib/review_code_config.py", "--root", wt], capture_output=True, text=True, timeout=60, cwd=wt)',
+    '    if r.returncode == 0:',
+    '        cfg = json.loads((r.stdout or "").strip() or "null")',
+    'except Exception:',
+    '    cfg = None',
+    'cwd_head = None',
+    'try:',
+    '    r = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)',
+    '    if r.returncode == 0 and (r.stdout or "").strip():',
+    '        cwd_head = r.stdout.strip()',
+    'except Exception:',
+    '    cwd_head = None',
+    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head}))',
   ].join('\n')
   let setup = null
   try {
@@ -6266,7 +6470,12 @@ async function resolveBuildTarget(workItem) {
     setup = null
   }
   if (!setup || setup.error || !setup.worktree) return null   // fail-closed: no usable worktree
-  return { worktree: setup.worktree, expectedHead: setup.expectedHead }
+  return {
+    worktree: setup.worktree,
+    expectedHead: setup.expectedHead,
+    config: setup.config != null ? setup.config : null,
+    cwdHead: setup.cwdHead || null,
+  }
 }
 
 module.exports.verdictToGate = verdictToGate
@@ -6275,23 +6484,13 @@ module.exports.resolveBuildTarget = resolveBuildTarget
 module.exports.runReviewCodePanel = runReviewCodePanel
 module.exports.buildPhase = buildPhase
 
-const CKPT_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, pr: {} } }
-
-// recordCursor writes lastGoodStep + lastGoodPhase (+ any side effect: { pr } or { ready }) BEFORE the loop
-// advances — so a crash resumes after this phase and never repeats an irreversible action (FR-4).
-async function recordCursor(workItem, step, phase, sideEffect) {
-  const extra = sideEffect ? ` --json ${shq(JSON.stringify(sideEffect))}` : ''
-  return cmdRunner(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)}${extra}`,
-    { schema: CKPT_SCHEMA })
-}
-
+// loadPr: read the checkpointed PR before the ship phase — a dumb-pipe read via the exec courier
+// (pinned cheapest + one-shot retry, #118). The cursor itself is written by the per-phase
+// persistPhase tail; there is no separate checkpoint_entry write leaf anymore.
 async function loadPr(workItem) {
-  const out = await cmdRunner(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`,
-    { schema: { type: 'object', required: ['pr'], properties: { pr: {} } } })
-  return out.pr
+  const out = await execJson(
+    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`)
+  return (out && out.pr !== undefined) ? out.pr : null
 }
 
 // draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}.
@@ -6337,7 +6536,6 @@ async function markReadyPhase(workItem) {
   return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { ready: true } }
 }
 
-module.exports.recordCursor = recordCursor
 module.exports.draftPRPhase = draftPRPhase
 module.exports.markReadyPhase = markReadyPhase
 module.exports.testPilotPhase = testPilotPhase
@@ -6349,9 +6547,9 @@ module.exports.testPilotDeps = testPilotDeps
 // any mutation. Mirrors build_phase.js's fenceOrPark; #118 folds this seam spine-wide.
 async function shipFenceOrPark(workItem, generation) {
   if (generation == null) return false
-  const out = await cmdRunner(
-    `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
-    { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
+  // exec courier (pinned cheapest, one-shot retry on a drop) — mirrors build_phase.js's fenceOrPark.
+  const out = await execJson(
+    `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`)
   return !!(out && out.ok)
 }
 module.exports.shipFenceOrPark = shipFenceOrPark
@@ -6486,9 +6684,8 @@ async function shipPhase(workItem, pr, generation) {
     }
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
-      const rd = await cmdRunner(
-        `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`,
-        { schema: { type: 'object', required: ['ok'], properties: { ok: {}, reason: { type: 'string' } } } })
+      const rd = await execJson(
+        `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`)
       const reverted = !!(rd && rd.ok)
       return shipHandback(workItem, pr, { ready: false, ci: 'red', integrated, reverted,
         reason: reverted

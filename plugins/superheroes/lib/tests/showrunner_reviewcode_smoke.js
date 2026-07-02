@@ -10,15 +10,16 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
   let wtHeadCalls = 0
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    if (label === 'lib' && prompt.includes('git -C')) {
+    // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
+    if (label === 'exec' && prompt.includes('git -C')) {
       wtHeadCalls += 1
       return wtHeadCalls <= 1 ? 'head-1\n' : 'head-2\n'
     }
-    if (label === 'lib' && prompt.includes('git rev-parse')) return 'head-1\n'
+    if (label === 'exec' && prompt.includes('git rev-parse')) return 'head-1\n'
     if (label === 'resume') return '1'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) {
+    if (label === 'exec' && prompt.includes('review_code_config.py')) {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')
-      return { verifyCommand, tiers: {} }
+      return JSON.stringify({ verifyCommand, tiers: {} })
     }
     if (label === 'run verify') {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')

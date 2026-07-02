@@ -29,17 +29,21 @@ if (out !== '2') {
   process.exit(1)
 }
 
-let checkpointPrompt = ''
+// #118: the cursor rides the per-phase 'save phase progress' tail (persistPhase), not a separate
+// checkpoint_entry leaf — assert the tail leaf carries step + phase + the side-effect write.
+let savePrompt = ''
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
-global.agent = async (prompt) => {
-  if (prompt.includes('checkpoint_entry')) checkpointPrompt = prompt
-  return { ok: true, pr: null }
+global.agent = async (prompt, opts) => {
+  if ((opts && opts.label) === 'save phase progress') savePrompt = prompt
+  return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
 }
 
-sr.recordCursor('wi', 3, 'review-tasks', { ready: true }).then(() => {
-  assert.ok(checkpointPrompt.includes("--step '3'"), 'recordCursor passes the numeric cursor')
-  assert.ok(checkpointPrompt.includes("--phase 'review-tasks'"), 'recordCursor passes the phase cursor')
-  assert.ok(checkpointPrompt.includes('--json'), 'recordCursor preserves side-effect writes')
-  console.log('ok: resume_round skips the partial round and recordCursor writes step+phase')
+sr.persistPhase('wi', { journalPayload: { phase: 'review-tasks' }, step: 3, phase: 'review-tasks', sideEffect: { ready: true } }).then((res) => {
+  assert.strictEqual(res.ok, true)
+  assert.ok(savePrompt.includes('phase_progress_entry.py save'), 'tail rides phase_progress_entry.py save')
+  assert.ok(savePrompt.includes("--step '3'"), 'tail passes the numeric cursor')
+  assert.ok(savePrompt.includes("--phase 'review-tasks'"), 'tail passes the phase cursor')
+  assert.ok(savePrompt.includes('--json'), 'tail preserves side-effect writes')
+  console.log('ok: resume_round skips the partial round and the save-phase-progress tail writes step+phase')
 }).catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

@@ -92,4 +92,71 @@ function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, 
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults }
+// skeletonRecord: the JS twin of review_memory.py summarize_record — the bounded durable form
+// of a round record (D3). Findings keep only identity/class/severity (title<=300); dimension
+// records keep their scheduling scalars + skeleton findings. This is what persist-skeleton
+// ships inline (Python re-applies summarize_record on arrival, so a drift here can widen the
+// leaf payload but can never widen the on-disk contract).
+const _SKELETON_FIELDS = ['file', 'line', 'title', 'severity', 'taxonomy', 'dimension',
+                          'classKey', 'carried', 'sourceRound']
+const _MAX_TITLE = 300
+
+function _skeletonFinding(finding) {
+  if (!finding || typeof finding !== 'object') return {}
+  const out = {}
+  for (const k of _SKELETON_FIELDS) if (k in finding) out[k] = finding[k]
+  if (typeof out.title === 'string' && out.title.length > _MAX_TITLE) out.title = out.title.slice(0, _MAX_TITLE)
+  return out
+}
+
+function _summarizeDimension(dim) {
+  if (!dim || typeof dim !== 'object') return {}
+  const findings = Array.isArray(dim.findings) ? dim.findings : []
+  const out = {}
+  for (const k of ['dimension', 'status', 'confidence', 'round', 'subjects',
+                   'carriedFromRound', 'escalated', 'tier']) if (k in dim) out[k] = dim[k]
+  out.findings = findings.map(_skeletonFinding)
+  out.hasFindings = findings.length > 0 || !!dim.hasFindings
+  out.blockingCount = findings.filter((f) => f && typeof f === 'object' && BLOCKING.has(f.severity)).length
+  return out
+}
+
+// skeletonDeferred: the JS twin of _skeleton_deferred — deferred entries ride the update-round
+// delta as identity/severity/reason (+ skeleton finding); the full bodies' durable home is the
+// best-effort round-bodies dump.
+const _MAX_DEFER_REASON = 500
+
+function skeletonDeferred(items) {
+  const out = []
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== 'object') { out.push(item); continue }
+    const slim = {}
+    for (const k of ['identity', 'id', 'severity', 'reason']) if (k in item) slim[k] = item[k]
+    if (typeof slim.reason === 'string' && slim.reason.length > _MAX_DEFER_REASON) slim.reason = slim.reason.slice(0, _MAX_DEFER_REASON)
+    if (item.finding && typeof item.finding === 'object' && !Array.isArray(item.finding)) slim.finding = _skeletonFinding(item.finding)
+    out.push(slim)
+  }
+  return out
+}
+
+function skeletonRecord(record) {
+  const rec = (record && typeof record === 'object') ? record : {}
+  const findings = Array.isArray(rec.findings) ? rec.findings : []
+  const carried = Array.isArray(rec.carriedFindings) ? rec.carriedFindings : []
+  const dims = {}
+  for (const [name, d] of Object.entries(rec.dimensions || {})) dims[name] = _summarizeDimension(d)
+  return {
+    schemaVersion: rec.schemaVersion === undefined ? null : rec.schemaVersion,
+    round: rec.round === undefined ? null : rec.round,
+    kind: rec.kind === undefined ? null : rec.kind,
+    confirmationPending: !!rec.confirmationPending,
+    changedSubjects: rec.changedSubjects === undefined ? null : rec.changedSubjects,
+    coverageDecisions: rec.coverageDecisions || [],
+    tokenUsage: rec.tokenUsage === undefined ? null : rec.tokenUsage,
+    findings: findings.map(_skeletonFinding),
+    carriedFindings: carried.map(_skeletonFinding),
+    dimensions: dims,
+  }
+}
+
+module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred }

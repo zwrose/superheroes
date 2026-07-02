@@ -33,10 +33,11 @@ async function main() {
   global.agent = async (prompt, opts) => {
     seenPrompts.push({ prompt, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
-    // resolveHead for head-mismatch check: return the expected head so it matches.
-    if (label === 'lib' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
+    // resolveHead + config now ride the exec courier (#118); return the expected head so it matches.
+    if (label === 'exec' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
+    if (label === 'exec' && prompt.includes('git rev-parse')) return 'cwd-head-000\n'
     if (label === 'resume') return '1'
-    if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
+    if (label === 'exec' && prompt.includes('review_code_config.py')) return JSON.stringify({ verifyCommand: 'none', tiers: {} })
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
     if (label === 'stamp review coverage') return jsonOut({ ok: true })
@@ -55,7 +56,9 @@ async function main() {
   assert.strictEqual(r.gate, 'passed', 'resolved-worktree path reaches clean -> passed')
 
   // The config command must have run in the resolved worktree (cd '/tmp/resolved-build-wt' &&).
-  const configPrompt = seenPrompts.find((p) => p.label === 'lib' && p.prompt.includes('review_code_config.py'))
+  // (The resolver SEAM here returns no folded config, so the phase falls back to its own exec leaf;
+  // the real resolveBuildTarget carries config inside the one 'resolve review target' gather.)
+  const configPrompt = seenPrompts.find((p) => p.label === 'exec' && p.prompt.includes('review_code_config.py'))
   assert.ok(configPrompt, 'config command was dispatched')
   assert.ok(
     configPrompt.prompt.includes(`cd '${RESOLVED_WT}'`) ||
@@ -99,7 +102,7 @@ async function main() {
   // No reviewer, config, or verify prompts dispatched — the phase parks immediately, never reviews root.
   const reviewerDispatched = nullResolvePrompts.some((p) =>
     p.label.startsWith('branch-reviewer:') ||
-    (p.label === 'lib' && p.prompt.includes('review_code_config.py'))
+    p.prompt.includes('review_code_config.py')
   )
   assert.ok(!reviewerDispatched, 'null resolver: no reviewer or config dispatched — root is NOT reviewed')
 
@@ -124,8 +127,8 @@ async function main() {
   // 'reused' -> resolves the worktree + head
   global.agent = execStubForOutcome('reused')
   const reused = await sr.resolveBuildTarget('wi-real-reused')
-  assert.deepStrictEqual(reused, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef' },
-    `'reused' outcome resolves {worktree, expectedHead} (got: ${JSON.stringify(reused)})`)
+  assert.deepStrictEqual(reused, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef', config: null, cwdHead: null },
+    `'reused' outcome resolves {worktree, expectedHead} (+ folded config/cwdHead, null when absent) (got: ${JSON.stringify(reused)})`)
 
   // 'created' -> fail-closed: returns null (never certifies a fresh empty build worktree)
   global.agent = execStubForOutcome('created')
@@ -135,7 +138,7 @@ async function main() {
   // missing outcome (older build_entry.py) -> permissive, resolves normally
   global.agent = execStubForOutcome(undefined)
   const legacy = await sr.resolveBuildTarget('wi-real-legacy')
-  assert.deepStrictEqual(legacy, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef' },
+  assert.deepStrictEqual(legacy, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef', config: null, cwdHead: null },
     `missing outcome stays permissive (got: ${JSON.stringify(legacy)})`)
 
   console.log('ok: FIX A — resolveTarget seam targets build worktree + null-resolver parks; resolveBuildTarget fail-closes on a created worktree')

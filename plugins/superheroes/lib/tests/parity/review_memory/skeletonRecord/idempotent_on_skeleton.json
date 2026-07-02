@@ -1,0 +1,156 @@
+{
+  "input": [
+    {
+      "schemaVersion": 2,
+      "round": 2,
+      "kind": "targeted",
+      "confirmationPending": true,
+      "changedSubjects": [
+        "Code"
+      ],
+      "coverageDecisions": [
+        {
+          "id": "cd-1",
+          "classKey": "k"
+        }
+      ],
+      "tokenUsage": {
+        "code:r2": {
+          "total": 9
+        }
+      },
+      "findings": [
+        {
+          "file": "a.py",
+          "line": 3,
+          "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+          "severity": "Critical",
+          "taxonomy": "bug",
+          "dimension": "Code",
+          "classKey": "Code::bug::t"
+        },
+        {
+          "file": "b.py",
+          "title": "minor",
+          "severity": "Minor"
+        }
+      ],
+      "carriedFindings": [
+        {
+          "file": "c.py",
+          "title": "carried one",
+          "severity": "Important",
+          "carried": true,
+          "sourceRound": 1
+        }
+      ],
+      "dimensions": {
+        "code-reviewer": {
+          "dimension": "code-reviewer",
+          "status": "run",
+          "confidence": "high",
+          "round": 2,
+          "subjects": [
+            "Code"
+          ],
+          "escalated": true,
+          "tier": "reviewer",
+          "findings": [
+            {
+              "file": "a.py",
+              "line": 3,
+              "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+              "severity": "Critical"
+            }
+          ],
+          "hasFindings": true,
+          "blockingCount": 1
+        },
+        "test-reviewer": {
+          "dimension": "test-reviewer",
+          "status": "skipped",
+          "carriedFromRound": 1,
+          "findings": [],
+          "hasFindings": false,
+          "blockingCount": 0
+        }
+      }
+    }
+  ],
+  "expected": {
+    "schemaVersion": 2,
+    "round": 2,
+    "kind": "targeted",
+    "confirmationPending": true,
+    "changedSubjects": [
+      "Code"
+    ],
+    "coverageDecisions": [
+      {
+        "id": "cd-1",
+        "classKey": "k"
+      }
+    ],
+    "tokenUsage": {
+      "code:r2": {
+        "total": 9
+      }
+    },
+    "findings": [
+      {
+        "file": "a.py",
+        "line": 3,
+        "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+        "severity": "Critical",
+        "taxonomy": "bug",
+        "dimension": "Code",
+        "classKey": "Code::bug::t"
+      },
+      {
+        "file": "b.py",
+        "title": "minor",
+        "severity": "Minor"
+      }
+    ],
+    "carriedFindings": [
+      {
+        "file": "c.py",
+        "title": "carried one",
+        "severity": "Important",
+        "carried": true,
+        "sourceRound": 1
+      }
+    ],
+    "dimensions": {
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 2,
+        "subjects": [
+          "Code"
+        ],
+        "escalated": true,
+        "tier": "reviewer",
+        "findings": [
+          {
+            "file": "a.py",
+            "line": 3,
+            "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+            "severity": "Critical"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 1
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "skipped",
+        "carriedFromRound": 1,
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      }
+    }
+  }
+}

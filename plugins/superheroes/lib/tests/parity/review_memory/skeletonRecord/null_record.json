@@ -1,0 +1,17 @@
+{
+  "input": [
+    null
+  ],
+  "expected": {
+    "schemaVersion": null,
+    "round": null,
+    "kind": null,
+    "confirmationPending": false,
+    "changedSubjects": null,
+    "coverageDecisions": [],
+    "tokenUsage": null,
+    "findings": [],
+    "carriedFindings": [],
+    "dimensions": {}
+  }
+}

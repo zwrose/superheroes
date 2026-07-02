@@ -57,6 +57,8 @@ PARITY_TWINS = [
     ("review_memory", "recurrentClasses", "review_memory", "recurrent_classes"),
     ("review_memory", "promoteRecord", "review_memory", "promote_record"),
     ("review_memory", "recordFromDimensionResults", "review_memory", "record_from_dimension_results"),
+    ("review_memory", "skeletonRecord", "review_memory", "summarize_record"),
+    ("review_memory", "skeletonDeferred", "review_memory", "_skeleton_deferred"),
 ]
 
 # (twin_file_stem, twin_fn) — no Python oracle; goldens are hand-authored

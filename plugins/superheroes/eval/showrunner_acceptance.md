@@ -86,8 +86,9 @@ node -e "require('./plugins/superheroes/lib/showrunner.js')"   # loads clean
   (the phase after the last recorded cursor); front-half resume is unblocked by the
   front-half-aware `recover.reconcile` (skips the content-hash gate pre-branch) — unit-proven
   by `test_recover_front_half.py` (`continue` with no branch; still `gate`s in the back-half).
-- **FR-4 record-before-advance + exactly-once PR / idempotent re-flip.** `recordCursor` writes
-  `lastGoodStep` (+ the `{pr}`/`{ready}` side effect) **before** the loop advances. The draft-PR
+- **FR-4 record-before-advance + exactly-once PR / idempotent re-flip.** The per-phase
+  `persistPhase` tail (one read-back-confirmed `save phase progress` leaf, #118) writes the journal
+  entry + `lastGoodStep` (+ the `{pr}`/`{ready}` side effect) **before** the loop advances. The draft-PR
   decision is the already-tested `recover.pr_action` (adopt an existing open PR / create exactly
   one / gate a merged-or-unknown read) — `test_recover.py`. The mark-ready decision is
   `pr_phase.mark_ready_action`: an already-non-draft PR → `skip` (no re-flip), a missing/None

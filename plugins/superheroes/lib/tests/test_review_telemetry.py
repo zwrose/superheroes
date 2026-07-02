@@ -102,10 +102,12 @@ def test_write_from_records_reads_rounds_from_disk_and_prints_summary(tmp_path):
     assert out["tokenUsage"]["complete"] is True and out["tokenUsage"]["total"] == 3
     assert out["dimensionCounts"]["code"]["run"] == 1
     assert out["benchmarkValid"] is True
-    # the on-disk telemetry record still carries the full payload (incl. rounds)
+    # D3: the on-disk telemetry record is the same small summary — no rounds embed (the round
+    # history's durable home is round-records.json; nothing ever read telemetry rounds back)
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted["terminal"] == "clean"
-    assert len(persisted["rounds"]) == 1
+    assert "rounds" not in persisted, "telemetry must not duplicate the round records on disk"
+    assert persisted["roundCount"] == 1
     assert persisted["runId"] == "run-1"
 
 
@@ -135,7 +137,7 @@ def test_write_from_records_corrupt_records_fail_closed(tmp_path):
     assert not path.exists()
 
 
-def test_write_from_records_missing_records_writes_empty_rounds(tmp_path):
+def test_write_from_records_missing_records_writes_zero_round_summary(tmp_path):
     path = tmp_path / "review-telemetry.json"
     r = _cli("write-from-records", "--path", str(path), "--records-path", str(tmp_path / "absent.json"),
              "--expected-leaves-json", "[]", "--usage-json", "{}", "--terminal", "halted",
@@ -143,4 +145,4 @@ def test_write_from_records_missing_records_writes_empty_rounds(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is True, r.stderr
     assert out["roundCount"] == 0
-    assert json.loads(path.read_text(encoding="utf-8"))["rounds"] == []
+    assert json.loads(path.read_text(encoding="utf-8"))["roundCount"] == 0
