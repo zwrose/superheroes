@@ -154,8 +154,9 @@ async function main() {
   assert.ok(loadCall.stdout.length < onDisk / 5,
     `resume load stdout must be bounded (${loadCall.stdout.length}B vs ${onDisk}B on disk)`)
   assert.ok(!loadCall.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the load stdout')
-  const plainLoad = helperResults.find((h) => h.args.includes('load') && !h.args.includes('load-summary'))
-  assert.ok(!plainLoad, 'the full-echo load verb must not be used by the loop')
+  const plainLoad = helperResults.find((h) =>
+    String(h.args[0] || '').includes('review_memory.py') && h.args.includes('load') && !h.args.includes('load-summary'))
+  assert.ok(!plainLoad, 'the full-echo review_memory load verb must not be used by the loop')
 
   console.log('ok: review-loop persistence ships paths + small scalars only (no mega-JSON through the courier)')
 }

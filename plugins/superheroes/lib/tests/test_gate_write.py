@@ -316,3 +316,21 @@ def test_doc_falls_back_to_in_repo_on_unknown_schema(tmp_path, monkeypatch):
     wi = "wi-fallback"
     assert gate_write._doc(wi, "plan", str(tmp_path)) == \
         definition_doc.doc_path(wi, "plan", str(tmp_path))
+
+
+def test_set_gate_current_sentinel_hashes_at_write_time(tmp_path):
+    """expected_hash='current' stamps the doc as it is on disk NOW — the fence hash is
+    computed Python-side at the point of use, never from a courier read (live 2026-07-02:
+    contentHash(prose-for-missing-file) parked every gate write as 'stale')."""
+    root = _docs_root(tmp_path)
+    path = _write(root, "plan")
+    result = DD.set_gate(path, "passed", expected_hash="current", run_id="run-1")
+    assert result["ok"] is True, result
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    assert "gates: {review: passed}" in text
+    # a real (non-sentinel) stale hash still refuses
+    result = DD.set_gate(path, "changes-requested", expected_hash="wrong", run_id="run-2")
+    assert result == {"ok": False, "reason": "stale"}
+    with open(path, encoding="utf-8") as fh:
+        assert "gates: {review: passed}" in fh.read()

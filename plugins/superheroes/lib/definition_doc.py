@@ -317,6 +317,13 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
     Fenced write: ``expected_hash`` must match the on-disk content hash captured
     for the reviewed artifact snapshot; ``run_id`` is required. Stale or unreadable
     state is refused without touching the doc.
+
+    ``expected_hash="current"`` stamps the doc as it is on disk NOW — for callers in the
+    Workflow sandbox, where every read is an LLM courier and a hash computed from courier
+    prose (e.g. a chatty missing-file answer) poisons the fence. The runtime makes no
+    decision between its doc re-read and this write, so the sentinel loses only the
+    detection of a same-window concurrent edit, which the run lease already excludes
+    (courier text must never enter an integrity decision).
     """
     if not run_id:
         return {"ok": False, "reason": "missing-run-id"}
@@ -329,7 +336,7 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
             text = fh.read()
     except OSError as exc:
         return {"ok": False, "reason": "unreadable", "detail": str(exc)}
-    if content_hash(text) != expected_hash:
+    if expected_hash != "current" and content_hash(text) != expected_hash:
         return {"ok": False, "reason": "stale"}
     lines, end = _frontmatter_bounds(text, path)
     status = _STATUS_FOR_REVIEW[review]

@@ -370,3 +370,24 @@ def test_hash_verb_prints_content_hash(tmp_path):
     assert out == {"ok": True, "contentHash": rm.content_hash('{"a": 1}')}
     out = json.loads(_cli("hash", "--path", str(tmp_path / "absent.json")).stdout)
     assert out == {"ok": True, "contentHash": rm.content_hash("")}
+
+
+def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):
+    """Run dirs are shared across runs of the same work-item+phase: loop entry sweeps a dead
+    run's TRANSIENT staging artifacts while preserving the durable loop state crash-resume
+    depends on."""
+    records_path = tmp_path / "round-records.json"
+    records_path.write_text("[]\n", encoding="utf-8")
+    transient = ["dim-result-code-r1.json", "round-skeleton-r2.json",
+                 "round-updates-r2.json", "terminal-record.json.payload"]
+    durable = ["deferred-set.json", "round-bodies-r1.json", "last-extras.json",
+               "terminal-record.json", "round-state.json"]
+    for name in transient + durable:
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+    r = _cli("load-summary", "--path", str(records_path), "--dimensions", '["code"]',
+             "--sweep-stale-staging")
+    assert json.loads(r.stdout)["ok"] is True, r.stderr
+    for name in transient:
+        assert not (tmp_path / name).exists(), f"transient staging {name} must be swept"
+    for name in durable + ["round-records.json"]:
+        assert (tmp_path / name).exists(), f"durable state {name} must be preserved"

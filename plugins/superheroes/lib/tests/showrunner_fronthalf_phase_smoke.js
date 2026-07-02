@@ -136,17 +136,18 @@ async function main() {
   assert.deepStrictEqual(pp, { ok: true, recovered: false }, 'persistPhase happy path read-back confirmed')
 
   // (f) reviewDocPhase returns the set-gate persist spec (side-effect command + journal payload)
-  // carrying the reviewed snapshot hash, run id, and lease — the runPhases tail chains it ahead of
-  // the phase_progress_entry save inside the ONE 'save phase progress' leaf (#118 fold).
+  // carrying the 'current' fence sentinel, run id, and lease — the runPhases tail chains it ahead
+  // of the phase_progress_entry save inside the ONE 'save phase progress' leaf (#118 fold). The
+  // doc hash is computed PYTHON-SIDE at write time: a runtime contentHash(readText(doc)) fed the
+  // fence courier prose live (2026-07-02) and parked every gate write as 'stale'.
   clean('wi-f')
   ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
   global.agent = ag
-  r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f', reviewedHash: 'hash-f' })
+  r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f' })
   assert.ok(r.persist && r.persist.sideEffectCmd, 'reviewDocPhase returned the set-gate persist spec')
   const gatePrompt = r.persist.sideEffectCmd
   assert.ok(gatePrompt.includes('set-gate'), 'the persist side effect is the fenced set-gate')
-  const postPanelHash = io().contentHash(fs.readFileSync('docs/superheroes/wi-f/plan.md', 'utf8'))
-  assert.match(gatePrompt, new RegExp(`--expected-hash ['"]?${postPanelHash}['"]?`), 'gate write uses post-panel doc hash, not pre-loop snapshot')
+  assert.match(gatePrompt, /--expected-hash ['"]?current['"]?/, 'gate write fences via the Python-side current-hash sentinel (no courier-read hash)')
   assert.match(gatePrompt, /--run-id ['"]?run-f['"]?/)
   assert.match(gatePrompt, /--lease ['"]?lease-f['"]?/)
   assert.deepStrictEqual(r.persist.journalPayload.phase, 'review-plan', 'the journal payload names the review phase')

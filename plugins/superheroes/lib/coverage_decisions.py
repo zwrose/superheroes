@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import tempfile
 
 SECTION = "## Review coverage decisions"
@@ -117,15 +118,74 @@ def record_code_decision(path, decision, expected_hash=None, run_id=None, lease=
     return {"ok": True, "id": decision.get("id")}
 
 
+# the doc-section parse twins the append format _entry() writes (and the retired JS
+# parseDocCoverageDecisions): a JSON trailer line when present, else the markdown line shape.
+_DOC_JSON_RE = re.compile(r"review-coverage-decision-json:(\{.*\})`?$")
+_DOC_LINE_RE = re.compile(r"^- \*\*([^*]+)\*\* .*class `([^`]+)`\): (.*)$")
+
+
+def parse_doc_decisions(text):
+    out = []
+    in_section = False
+    for line in str(text or "").split("\n"):
+        if re.match(r"^##\s+", line):
+            in_section = line.strip() == SECTION
+        if not in_section:
+            continue
+        m = _DOC_JSON_RE.search(line)
+        if m:
+            try:
+                out.append(json.loads(m.group(1)))
+                continue
+            except ValueError:
+                pass
+        m = _DOC_LINE_RE.match(line)
+        if m:
+            out.append({"id": m.group(1), "classKey": m.group(2), "text": m.group(3)})
+    return out
+
+
+def load_decisions(path, mode):
+    """The loop's coverage read, computed entirely PYTHON-SIDE (decisions + the fence hash of
+    the exact on-disk bytes). In the Workflow sandbox a raw courier read of a missing/odd file
+    answers PROSE (live 2026-07-02) — hashing or parsing that prose runtime-side poisons the
+    fence / the decisions. Missing file -> ok with no decisions (the normal first-round case);
+    corrupt/unreadable -> fail closed."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return {"ok": True, "decisions": [], "contentHash": content_hash("")}
+    except OSError as exc:
+        return {"ok": False, "state": "unreadable", "reason": str(exc)}
+    if mode == "doc":
+        return {"ok": True, "decisions": parse_doc_decisions(text), "contentHash": content_hash(text)}
+    try:
+        decisions = json.loads(text or "[]")
+    except ValueError:
+        return {"ok": False, "state": "corrupt"}
+    if not isinstance(decisions, list):
+        return {"ok": False, "state": "corrupt"}
+    return {"ok": True, "decisions": decisions, "contentHash": content_hash(text)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["record-doc", "record-code"])
+    parser.add_argument("cmd", choices=["record-doc", "record-code", "load"])
     parser.add_argument("--path", required=True)
-    parser.add_argument("--decision-json", required=True)
+    parser.add_argument("--decision-json")
+    parser.add_argument("--mode", choices=["doc", "code"], default="code")
     parser.add_argument("--expected-hash")
-    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-id")
     parser.add_argument("--lease")
     args = parser.parse_args(argv)
+    if args.cmd == "load":
+        result = load_decisions(args.path, args.mode)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
+    if args.decision_json is None or not args.run_id:
+        print(json.dumps({"ok": False, "reason": "missing-decision-or-run-id"}))
+        return 1
     decision = json.loads(args.decision_json)
     if args.cmd == "record-doc":
         result = record_doc_decision(args.path, decision, expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)

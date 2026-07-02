@@ -105,6 +105,11 @@ SHOWRUNNER_SMOKES = [
     # budgets (the Labels matrix as fixture), the unconditional cheapest-model pin on every
     # dumb pipe, the one-save-phase-progress tail, and the two-leaf startup stretch.
     "plugins/superheroes/lib/tests/showrunner_stretch_budget_smoke.js",
+    # the misbehaving-courier regression net (live 2026-07-02, 4 runs parked at review-plan):
+    # prose answers for missing-file reads, chatty write acks, one content-mangled staged
+    # write, one mangled persist answer — the canned full run must still reach 'ready' with
+    # correct terminal records written, and no courier text may enter a fence.
+    "plugins/superheroes/lib/tests/showrunner_misbehaving_courier_smoke.js",
 ]
 
 

@@ -100,19 +100,22 @@ async function partReviewReadInner(resolved, legacy) {
     if (label === 'revise-doc') return { fixes: [], deferred: [] }
     return null
   }
-  const r = await sr.reviewDocPhase('plan', 'wi-d', { runId: 'run-d', reviewedHash: 'seed-hash' })
+  const r = await sr.reviewDocPhase('plan', 'wi-d', { runId: 'run-d' })
   assert.strictEqual(r.gate, 'passed', 'clean panel maps to passed')
   // #118: reviewDocPhase RETURNS the set-gate persist spec; runPhases' tail chains it into the ONE
-  // 'save phase progress' leaf. The doc-dir hash contract is asserted on the returned command.
+  // 'save phase progress' leaf. The fence hash is the Python-side 'current' sentinel:
+  // definition_doc.py resolves (doc-dir aware) + hashes the SAME file it edits at write time, so
+  // no runtime-computed hash — which a prose-answering courier read can poison, and which could
+  // disagree with the resolved write target (the old decoy-path hazard) — rides the command.
   const gatePrompt = r.persist && r.persist.sideEffectCmd
   assert.ok(gatePrompt && gatePrompt.includes('set-gate'), 'reviewDocPhase returned the gate write spec')
   const resolvedHash = io().contentHash(fs.readFileSync(`${resolved}/plan.md`, 'utf8'))
   const decoyHash = io().contentHash(fs.readFileSync(`${legacy}/plan.md`, 'utf8'))
   assert.notStrictEqual(resolvedHash, decoyHash, 'fixture sanity: decoy must differ')
-  assert.ok(gatePrompt.includes(`--expected-hash '${resolvedHash}'`),
-    'gate write must hash the doc at the RESOLVED path; got: ' + gatePrompt)
-  assert.ok(!gatePrompt.includes(decoyHash),
-    'gate write must NOT hash the decoy doc at the legacy in-repo path')
+  assert.ok(gatePrompt.includes(`--expected-hash 'current'`),
+    'gate write fences via the Python-side current-hash sentinel; got: ' + gatePrompt)
+  assert.ok(!gatePrompt.includes(resolvedHash) && !gatePrompt.includes(decoyHash),
+    'no runtime-computed doc hash may ride the gate write (courier-read hashes are banned)')
   delete globalThis.__SR_DOC_DIRS
 }
 

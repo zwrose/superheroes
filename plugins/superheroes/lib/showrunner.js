@@ -476,14 +476,6 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
   await io().mkdirp(runDir)
-  let reviewedHash = opts.reviewedHash
-  if (!reviewedHash) {
-    try {
-      reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
-    } catch (_) {
-      reviewedHash = io().contentHash('')
-    }
-  }
   const deferred = new Map()
   const verdict = await runReviewDocPanel({
     workItem,
@@ -511,12 +503,14 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
-  // Re-hash after the revise loop may have edited the doc in place (fenced set-gate refuses stale snapshots).
-  try {
-    reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
-  } catch (_) {
-    reviewedHash = io().contentHash('')
-  }
+  // The set-gate fence hash is computed PYTHON-SIDE at write time ('current' sentinel), never
+  // from a courier read: in the sandbox a readText of a missing/odd file answers PROSE (live
+  // 2026-07-02, 4 consecutive runs), and contentHash(prose) poisons the fence into a permanent
+  // 'stale' park. The runtime makes no decision between its old re-read and the write, so the
+  // sentinel loses only same-window concurrent-edit detection (the lease excludes that) —
+  // and definition_doc.py resolves + hashes the SAME file it edits (doc-dir aware), so no
+  // runtime-resolved hash can disagree with the write target.
+  const reviewedHash = 'current'
   // #118 "Every phase" tail: gate + journal + checkpoint land in ONE 'save phase progress' leaf,
   // dispatched by runPhases' tail with the REAL step index — NOT persisted here (the old
   // step:-1 pre-persist plus runPhases' journal/cursor writes was the FR-6 double-journal, and

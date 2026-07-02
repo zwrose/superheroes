@@ -102,8 +102,8 @@ function __join() { return Array.prototype.slice.call(arguments).join('/').repla
 // divergence parks every live gate write as 'stale'. Byte-array padding (no string escapes),
 // so no control characters appear in this script (the Workflow permission layer rejects them).
 // Lone surrogates encode as U+FFFD, matching node's utf-8 conversion.
-function __contentHash(text) {
-  var str = String(text || ''), bytes = [], i, j, c
+function __utf8Bytes(text) {
+  var str = String(text || ''), bytes = [], i, c
   for (i = 0; i < str.length; i++) {
     c = str.charCodeAt(i)
     if (c < 0x80) bytes.push(c)
@@ -114,6 +114,23 @@ function __contentHash(text) {
     } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
     else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
   }
+  return bytes
+}
+// __b64: base64 over the UTF-8 bytes — the OPAQUE payload encoding for writeFile (an LLM leaf
+// can copy an alphabet-soup blob verbatim or fail visibly; it cannot paraphrase it the way it
+// can rewrite readable JSON — the live 2026-07-02 staged-write mangle class).
+function __b64(text) {
+  var bytes = __utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
+    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
+    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
+    out += (b2 === undefined) ? '=' : A[b2 & 63]
+  }
+  return out
+}
+function __contentHash(text) {
+  var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
   bytes.push(0x80)
   while (bytes.length % 64 !== 56) bytes.push(0)
@@ -151,7 +168,16 @@ function __contentHash(text) {
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
-  async writeFile(p, s) { const b = (typeof s === 'string') ? s : JSON.stringify(s); await __sh('cat > ' + __q(p) + " <<'__SR_EOF__'\\n" + b + '\\n__SR_EOF__') },
+  // writeFile rides an OPAQUE transport: the payload travels base64-encoded inside a python
+  // heredoc and is decoded + written byte-exact Python-side. An LLM leaf can only copy the
+  // blob verbatim or fail visibly — it cannot paraphrase the content the way it can rewrite
+  // readable JSON (live 2026-07-02: a staged dim-write leaf re-wrote the PREVIOUS dimension's
+  // content). Byte-exact also means no heredoc trailing-newline artifact on new writes (the
+  // Python-side staged-hash checks keep the one-newline tolerance for old-bundle compat).
+  async writeFile(p, s) {
+    const b = (typeof s === 'string') ? s : JSON.stringify(s)
+    await __sh("python3 - <<'__SR_EOF__'\\nimport base64\\nwith open(" + JSON.stringify(p) + ", 'wb') as fh:\\n    fh.write(base64.b64decode('" + __b64(b) + "'))\\nprint('ok')\\n__SR_EOF__")
+  },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
   contentHash(text) { return __contentHash(text) },

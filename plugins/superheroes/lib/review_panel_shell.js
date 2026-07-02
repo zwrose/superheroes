@@ -131,7 +131,7 @@ function confirmationReady(records, round, justMarked) {
 // the loop's second entry read (last-extras.json) into the same leaf; it comes back as
 // `extras` (null when missing/corrupt — the old readJson-default parity).
 async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json')])
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -253,38 +253,20 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
   return { mode: 'code', path }
 }
 
-function parseDocCoverageDecisions(text) {
-  const out = []
-  const lines = String(text || '').split(/\n/)
-  let inSection = false
-  for (const line of lines) {
-    if (/^##\s+/.test(line)) inSection = line.trim() === '## Review coverage decisions'
-    if (!inSection) continue
-    const jsonMatch = line.match(/review-coverage-decision-json:(\{.*\})`?$/)
-    if (jsonMatch) {
-      try { out.push(JSON.parse(jsonMatch[1])); continue } catch (_) {}
-    }
-    const m = line.match(/^- \*\*([^*]+)\*\* .*class `([^`]+)`\): (.*)$/)
-    if (m) out.push({ id: m[1], classKey: m[2], text: m[3] })
-  }
-  return out
-}
-
+// The coverage read is computed entirely PYTHON-SIDE (coverage_decisions.py load): decisions
+// parsed and the fence hash taken over the exact on-disk bytes. A raw courier readText here
+// poisoned the loop live (2026-07-02, 4 runs): the sandbox io leaf answers PROSE for a
+// missing/odd file, and contentHash(prose) turned every later fenced write into a permanent
+// 'stale' park — courier text must never enter an integrity decision. A mangled helper
+// ANSWER fails JSON.parse and parks fail-closed (never silently-empty decisions).
 async function loadCoverageDecisions(target, ioApi) {
-  const path = target.path
-  let text = ''
-  try { text = await ioApi.readText(path) } catch (err) {
-    if (err && err.code === 'ENOENT') return { ok: true, decisions: [], contentHash: ioApi.contentHash('') }
-    return { ok: false, state: 'unreadable', reason: err && err.message }
-  }
-  if (target.mode === 'doc') return { ok: true, decisions: parseDocCoverageDecisions(text), contentHash: ioApi.contentHash(text) }
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/coverage_decisions.py', 'load',
+    '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
   try {
-    const decisions = JSON.parse(text || '[]')
-    if (!Array.isArray(decisions)) return { ok: false, state: 'corrupt' }
-    return { ok: true, decisions, contentHash: ioApi.contentHash(text) }
-  } catch (_) {
-    return { ok: false, state: 'corrupt' }
-  }
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && typeof parsed === 'object') return parsed
+  } catch (_) { /* fall through to fail-closed */ }
+  return { ok: false, state: 'unreadable', reason: 'coverage-load-helper-failed' }
 }
 
 function collectRoundUsage(roundFindings, round, synthesized) {

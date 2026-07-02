@@ -2,6 +2,7 @@
 """Pure memory helpers for review-loop recurrence and v2 round records."""
 import re
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -363,6 +364,24 @@ def update_round_record(path, round_no, updates, expected_hash=None, run_id=None
                           run_id=run_id, lease=lease)
 
 
+def sweep_stale_staging(run_dir):
+    """Loop-entry hygiene: run dirs (/tmp/showrunner-<wi>-<phase>) are shared across runs of
+    the same work-item+phase, so a DEAD run's transient staging artifacts (per-dim files from
+    pre-D3 bundles, staged skeletons/updates, fenced .payload files) must not confuse a fresh
+    round. Durable loop state (round-records.json, deferred-set.json, round-bodies-*,
+    last-extras.json, terminal-record.json, round-state.json) is deliberately preserved —
+    crash-resume depends on it. Best-effort: a failed unlink never blocks the load."""
+    swept = 0
+    for pattern in ("dim-result-*.json", "round-skeleton-*.json", "round-updates-*.json", "*.payload"):
+        for path in glob.glob(os.path.join(run_dir, pattern)):
+            try:
+                os.unlink(path)
+                swept += 1
+            except OSError:
+                pass
+    return swept
+
+
 def _strip_records(result):
     """The CLI answer for persist-skeleton/update-round: ok + contentHash only — echoing the
     merged records back through the courier stdout would be the same mega-payload defect."""
@@ -381,6 +400,9 @@ def main(argv=None):
     loads_p.add_argument("--extras-path",
                          help="also read this small side file (last-extras.json) and answer it "
                               "as 'extras' — folds the loop's two entry reads into one leaf")
+    loads_p.add_argument("--sweep-stale-staging", action="store_true",
+                         help="unlink a dead run's transient staging artifacts in the records "
+                              "file's directory before loading (durable loop state preserved)")
     skel_p = sub.add_parser("persist-skeleton")
     skel_p.add_argument("--path", required=True)
     skel_p.add_argument("--record-json",
@@ -486,6 +508,8 @@ def main(argv=None):
         return 0 if result.get("ok") else 1
     dimensions = json.loads(args.dimensions)
     if args.cmd == "load-summary":
+        if args.sweep_stale_staging:
+            sweep_stale_staging(os.path.dirname(os.path.abspath(args.path)))
         result = load_records_state(args.path, dimensions)
         result["records"] = [summarize_record(r) for r in result.get("records") or []]
         if args.extras_path:
