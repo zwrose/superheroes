@@ -4922,8 +4922,9 @@ function ensureReviewerShape(out, opts = {}) {
       // REVIEWER_RESULT_INSTRUCTION already tells leaves that "no evidence" means confidence:low —
       // trust that contract instead of fabricating canned evidence to paper over a leaf that
       // skipped it. Downstream, low confidence forces cannot-certify (an honest "not verified"),
-      // never a silently-passed round.
-      out = Object.assign({}, out, { confidence: 'low' })
+      // never a silently-passed round. usage still defaults (as the old fabrication path did) so a
+      // receipt-less leaf isn't also invisible to telemetry.
+      out = Object.assign({}, out, { confidence: 'low', usage: out.usage || { total: 1 } })
     }
   }
   return out
