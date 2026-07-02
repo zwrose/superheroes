@@ -1,0 +1,10 @@
+{
+  "input": [{
+    "code": {
+      "status": "skipped",
+      "carriedFromRound": 1,
+      "findings": [{"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}]
+    }
+  }],
+  "expected": [{"file": "a.py", "line": 1, "title": "bug", "severity": "Important", "dimension": "code", "carried": true, "sourceRound": 1, "classification": "mechanical"}]
+}

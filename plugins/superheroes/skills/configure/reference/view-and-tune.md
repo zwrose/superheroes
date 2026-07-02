@@ -42,6 +42,9 @@ action that owns it, leaving the rest of the calibration untouched:
   route already sends to `fix`; optional heroes (test-pilot) never force a repair — they surface
   here as an offer. A hero the owner declines (here or at set-up) is recorded so it is not re-offered.
 - **Switch the storage mode** → the confirmed switch below.
+- **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
+  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing
+  `enginePreferences` through `core_md`. Set a role back to `claude` (or clear it) to fall fully open.
 
 ## 3 — Switch the storage mode (FR-10), always showing what will move
 

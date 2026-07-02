@@ -22,10 +22,12 @@ path (the conformance test) still resolves `identifiers`.
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -271,6 +273,28 @@ def read_frontmatter(path):
     return fm, "\n".join(lines[end + 1:])
 
 
+def content_hash(text):
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
+def _atomic_replace(path, text):
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".definition-doc-", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        return {"ok": True}
+    except OSError as exc:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "reason": "replace-failed", "detail": str(exc)}
+
+
 def read_gate(path):
     """Return the definition-doc's gates.review value, parsed from the frontmatter.
 
@@ -287,17 +311,26 @@ def read_gate(path):
     raise ValueError(f"{path}: no parseable 'gates: {{review: …}}' line in frontmatter")
 
 
-def set_gate(path, review):
+def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
     """Set gates.review in place (and derive status, bump updated) — §3.1.
 
-    The lib owns the frontmatter shape, so the gate flip lives here rather than a
-    skill hand-editing YAML. In the Phase-1 degraded mode (no review-spec), the
-    owner's recorded terminal approval is what calls this with review=passed.
+    Fenced write: ``expected_hash`` must match the on-disk content hash captured
+    for the reviewed artifact snapshot; ``run_id`` is required. Stale or unreadable
+    state is refused without touching the doc.
     """
+    if not run_id:
+        return {"ok": False, "reason": "missing-run-id"}
+    if not expected_hash:
+        return {"ok": False, "reason": "missing-expected-hash"}
     if review not in REVIEW_STATES:
         raise ValueError(f"unknown review state {review!r}; expected one of {REVIEW_STATES}")
-    with open(path, encoding="utf-8") as fh:
-        text = fh.read()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return {"ok": False, "reason": "unreadable", "detail": str(exc)}
+    if content_hash(text) != expected_hash:
+        return {"ok": False, "reason": "stale"}
     lines, end = _frontmatter_bounds(text, path)
     status = _STATUS_FOR_REVIEW[review]
     today = datetime.date.today().isoformat()
@@ -312,9 +345,13 @@ def set_gate(path, review):
             lines[i] = f'updated: "{today}"'
     if not found:
         raise ValueError(f"{path}: no 'gates: {{review: …}}' line to update")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(lines))
-    return {"review": review, "status": status}
+    result = _atomic_replace(path, "\n".join(lines))
+    if not result.get("ok"):
+        return result
+    out = {"ok": True, "review": review, "status": status, "runId": run_id}
+    if lease:
+        out["lease"] = lease
+    return out
 
 
 # --- CLI -------------------------------------------------------------------
@@ -346,11 +383,17 @@ def _build_parser():
     f.add_argument("--created", default=None)
     f.add_argument("--updated", default=None)
 
+    ch = sub.add_parser("content-hash", help="SHA-256 content hash of a file (empty file if absent)")
+    ch.add_argument("--path", required=True)
+
     sg = sub.add_parser("set-gate", help="record gates.review on a definition-doc (derives status)")
     sg.add_argument("--work-item", required=True)
     sg.add_argument("--doc", required=True, choices=DOC_TYPES)
     sg.add_argument("--review", required=True, choices=list(REVIEW_STATES))
     sg.add_argument("--root", default=".")
+    sg.add_argument("--expected-hash", required=True)
+    sg.add_argument("--run-id", required=True)
+    sg.add_argument("--lease", default=None)
 
     rg = sub.add_parser("read-gate", help="print a definition-doc's gates.review value")
     rg.add_argument("--work-item", required=True)
@@ -372,6 +415,17 @@ def main(argv):
     args = _build_parser().parse_args(argv[1:])
     if args.cmd == "mint":
         sys.stdout.write(mint_work_item(args.title, args.nonce) + "\n")
+        return 0
+    if args.cmd == "content-hash":
+        try:
+            with open(args.path, encoding="utf-8") as fh:
+                text = fh.read()
+        except FileNotFoundError:
+            text = ""
+        except OSError as exc:
+            sys.stderr.write(f"definition_doc error: {exc}\n")
+            return 1
+        sys.stdout.write(content_hash(text) + "\n")
         return 0
     if args.cmd == "resolve-write":
         import mode_registry
@@ -406,9 +460,11 @@ def main(argv):
                 sys.stdout.write(d + "\n")
                 return 0
             if args.cmd == "set-gate":
-                result = set_gate(os.path.join(d, f"{args.doc}.md"), args.review)
+                result = set_gate(
+                    os.path.join(d, f"{args.doc}.md"), args.review,
+                    expected_hash=args.expected_hash, run_id=args.run_id, lease=args.lease)
                 sys.stdout.write(json.dumps(result) + "\n")
-                return 0
+                return 0 if result.get("ok") else 1
             if args.cmd == "read-gate":
                 review = read_gate(os.path.join(d, f"{args.doc}.md"))
                 if getattr(args, "json", False):   # the cmdRunner JSON bridge (errors stay stderr/non-zero)

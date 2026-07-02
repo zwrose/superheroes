@@ -18,6 +18,12 @@ global.log = () => {}
 // reviewPanel uses parallel() — stub it to run all functions sequentially.
 global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
 function makeAgent(routes) {
+  function routeMatches(label, needle) {
+    if (label === needle) return true
+    if (needle === 'verify:r' && label.startsWith('verify:r')) return true
+    if (String(needle).endsWith(':') && label.startsWith(needle)) return true
+    return false
+  }
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label.startsWith('branch-reviewer:')) {
@@ -38,9 +44,11 @@ function makeAgent(routes) {
         }
       }
     }
-    // Exact-label first (labels are unique), so a short needle never shadows a longer script name
-    // via substring; then a prompt-substring fallback. A function resp receives the prompt (capture).
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    // Exact/prefix label match first (labels are unique; `needle:` prefixes route per-round labels),
+    // then a prompt-substring fallback. A function resp receives the prompt (capture).
+    for (const [needle, resp] of routes) {
+      if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''
   }
@@ -90,7 +98,7 @@ const SMART_STUBS = [
   ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
-  ['branch-reviewer:r1', { findings: [] }],
+  ['branch-reviewer:', { findings: [] }],
   ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
   ['run verify', { command: 'none', returncode: 0, timedOut: false }],
 ]

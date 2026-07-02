@@ -120,3 +120,71 @@ def test_append_rejects_unknown_event_type(tmp_path):
         journal.append(e, "ci_fix_attemp", root=str(tmp_path))   # typo
     import os
     assert not os.path.exists(e)          # raised before any I/O — nothing written
+
+
+def test_external_dispatch_event_appends_and_reads(tmp_path):
+    import journal
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "external_dispatch",
+                   payload={"engine": "codex", "effort": "high", "roleKind": "build",
+                            "verify": "passed", "outcome": "ok"},
+                   root=str(tmp_path))
+    evs = journal.read_events(p)
+    assert len(evs) == 1
+    ev = evs[0]
+    assert ev["type"] == "external_dispatch"
+    # payload is written AS-IS (non-secret; the plan's §4.6)
+    assert ev["payload"] == {"engine": "codex", "effort": "high", "roleKind": "build",
+                              "verify": "passed", "outcome": "ok"}
+
+
+def test_unknown_event_type_still_raises_durable_write_error(tmp_path):
+    import journal
+    import pytest
+    p = str(tmp_path / "events.jsonl")
+    with pytest.raises(journal.DurableWriteError):
+        journal.append(p, "not_a_real_event", root=str(tmp_path))
+
+
+def test_journal_entry_cli_writes_external_dispatch_type(tmp_path, monkeypatch):
+    # The JS seam (Task 10) shells journal_entry.py --event-type external_dispatch; the written
+    # line's `type` must be external_dispatch (not the hardcoded phase_record).
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    import journal
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)   # journal_entry.py uses os.getcwd() for the control-plane paths
+    out = _sp.run(
+        [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+         "--work-item", "wi-x", "--event-type", "external_dispatch",
+         "--payload", _json.dumps({"engine": "codex", "effort": "high", "roleKind": "build",
+                                   "verify": "pending", "outcome": "ok"})],
+        capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert _json.loads(out.stdout) == {"ok": True}
+    events = control_plane.paths(str(tmp_path), "wi-x")["events"]
+    evs = journal.read_events(events)
+    assert evs[-1]["type"] == "external_dispatch"
+    assert evs[-1]["payload"]["engine"] == "codex"
+
+
+def test_journal_entry_cli_defaults_to_phase_record(tmp_path, monkeypatch):
+    # Back-compat: NO --event-type -> phase_record (the existing behavior is byte-preserved).
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    import journal
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    out = _sp.run(
+        [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+         "--work-item", "wi-y", "--payload", _json.dumps({"phase": "build", "ok": True})],
+        capture_output=True, text=True)
+    assert out.returncode == 0 and _json.loads(out.stdout) == {"ok": True}
+    evs = journal.read_events(control_plane.paths(str(tmp_path), "wi-y")["events"])
+    assert evs[-1]["type"] == "phase_record"

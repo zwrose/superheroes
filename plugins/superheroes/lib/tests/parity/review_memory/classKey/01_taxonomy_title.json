@@ -1,0 +1,4 @@
+{
+  "input": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing acceptance test"}],
+  "expected": "Test::coverage::missing acceptance test"
+}

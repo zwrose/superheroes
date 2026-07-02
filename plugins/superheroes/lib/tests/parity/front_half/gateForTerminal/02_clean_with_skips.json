@@ -1,1 +1,4 @@
-{"input": ["clean-with-skips"], "expected": "passed"}
+{
+  "input": ["clean-with-skips"],
+  "expected": "changes-requested"
+}

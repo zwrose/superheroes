@@ -534,3 +534,30 @@ def test_hook_allows_edit_to_ordinary_file_is_silent(capsys, tmp_path):
     assert rc == 0 and capsys.readouterr().out.strip() == ""
 
 
+# --- #38 DoD: owner-authority boundary holds for external-engine-dispatched commands ---
+def test_external_engine_paths_still_gate_owner_authority():
+    # #38: an external producer is CONFINED, not policed — the enforcer fires on the HOST's Bash
+    # invocation regardless of whether the command was authored for a codex/cursor dispatch. The
+    # owner-authority set (merge / release / force-push / push-to-default / run-workflow) stays gated,
+    # so an external engine can never autonomously merge/force-push/push-to-default.
+    for cmd in (
+        "gh pr merge 42 --squash",
+        "gh api -X PUT repos/o/r/pulls/42/merge",
+        "gh release create v1.0.0",
+        "git push --force origin superheroes/x",
+        "git push origin HEAD:main",
+        "gh workflow run deploy.yml",
+    ):
+        # Codex host: gated -> deny (ask is not honored -> fail-safe deny + allowance flow).
+        assert enforcer.classify_command(cmd, host="codex", in_scope=True)[0] == "deny", cmd
+        # Claude host: gated -> ask (a native human prompt the agent cannot answer itself).
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "ask", cmd
+
+
+def test_external_engine_own_feature_branch_push_is_allowed():
+    # The producer's OWN feature-branch push (no :main / force) is allowed — the named residual is
+    # contained by the single-owner threat model (the engine is the owner's own signed-in tool).
+    assert enforcer.classify_command("git push origin superheroes/x-abc", host="codex")[0] == "allow"
+    assert enforcer.classify_command("cursor-agent -f -m composer", host="codex")[0] == "allow"
+
+

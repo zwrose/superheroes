@@ -1,0 +1,365 @@
+// plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js
+// #38: engine_dispatch.js dispatchExternal spine leaf wrapper. Mirrors build_phase_setup_smoke.js's
+// makeAgent(routes)/execRoute idiom (route by exact label, then prompt substring), plus an ordered
+// execLog so the stdin-redirect / audit-event assertions can inspect the exact dispatch-run command.
+const assert = require('assert')
+const logs = []
+global.log = (m) => logs.push(m)
+
+// Route an agent() call by the first matching needle found in its prompt OR its label.
+function makeAgent(routes) {
+  return async (prompt, opts) => {
+    const label = (opts && opts.label) || ''
+    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    return ''
+  }
+}
+
+;(async () => {
+  // ---------------------------------------------------------------------
+  // Review (read-only) happy path.
+  // ---------------------------------------------------------------------
+  const execLog = []
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      execLog.push(prompt)
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [{ file: 'a.py', line: 3, title: 'x', severity: 'Minor', evidence: 'e' }] }) }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return [{ index: 0, ok: true, stdout: '{"raw":"external review output"}' }]
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+
+  const d = require('../engine_dispatch.js')
+  const r = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300 })
+
+  assert.deepStrictEqual(r.findings, [{ file: 'a.py', line: 3, title: 'x', severity: 'Minor', evidence: 'e' }])
+  assert.ok(!execLog.some((c) => c.includes('git') && c.includes('rev-parse')), 'no preSHA capture for a read role')
+  assert.ok(!execLog.some((c) => c.includes('engine_adapter.py commit')), 'no commit for a read role')
+  const runCmd = execLog.find((c) => c.includes('--sandbox') && c.includes(' < '))
+  assert.ok(runCmd && /\.prompt/.test(runCmd), 'run must redirect the staged prompt file into stdin')
+  // FIX 2: the CLI invocation must be wrapped in the portable perl-alarm OS-level kill guard so a
+  // stall is actually killed (not just unwaited-on by the JS race).
+  assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' \d+ 'codex' 'exec'/.test(runCmd),
+    'FIX 2: run command must wrap the CLI with the perl-alarm kill guard: ' + runCmd)
+
+  console.log('OK: engine_dispatch review-path')
+
+  // ---------------------------------------------------------------------
+  // Write (build) happy path.
+  // ---------------------------------------------------------------------
+  const execLog2 = []
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      execLog2.push(prompt)
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }) }]
+      }
+      if (prompt.includes('engine_adapter.py commit')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+
+  const r2 = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+
+  assert.strictEqual(r2.ok, true)
+  assert.strictEqual(r2.signal, 'ok')
+  assert.strictEqual(r2.evidence.testPassed, true)
+  assert.ok(execLog2.some((c) => c.includes('git') && c.includes('rev-parse HEAD')), 'preSHA must be captured for a write role')
+  assert.ok(execLog2.some((c) => c.includes('engine_adapter.py commit')), 'commit must be invoked on write success')
+  const runCmd2 = execLog2.find((c) => c.includes('--sandbox') && c.includes(' < '))
+  assert.ok(runCmd2 && /\.prompt/.test(runCmd2), 'run must redirect the staged prompt file into stdin')
+  assert.ok(execLog2.some((c) => c.includes('journal_entry.py') && c.includes('--event-type external_dispatch')),
+    'FR-6: the journal call must carry the first-class external_dispatch event type')
+  // FR-8: a WRITE dispatch's exec command must be confined to the target cwd via a `cd <cwd> &&`
+  // prefix — cursor's argv carries no -C flag of its own, so without this the run would execute at
+  // __SR_ROOT (the repo root) instead of the per-task build worktree.
+  assert.ok(/(^|\n)\d+\.\s*cd '\/tmp\/wt' && /.test(runCmd2), 'write dispatch must confine the run to cwd via cd <cwd> &&: ' + runCmd2)
+  // FIX 2: the perl-alarm kill guard must ALSO wrap a write-role dispatch, threaded with the same
+  // timeoutSeconds (300) used to bound the JS race for this call.
+  assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 300 'codex' 'exec'/.test(runCmd2),
+    'FIX 2: write dispatch run command must wrap the CLI with the perl-alarm kill guard using the same timeout: ' + runCmd2)
+
+  console.log('OK: engine_dispatch write-path')
+
+  // ---------------------------------------------------------------------
+  // UFR-5 timeout / UFR-6 unauditable / sec-101 commit-failure audit.
+  // ---------------------------------------------------------------------
+
+  // (a) UFR-5: the argv-run hangs forever -> the wrapper's own timeout fires.
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        // Simulate a hang: resolve far later than the wrapper's own timeout, via an unref'd timer
+        // so the never-taken branch doesn't pin the node process alive after the test moves on.
+        return new Promise((resolve) => {
+          const t = setTimeout(() => resolve([{ index: 0, ok: true, stdout: '{"raw":"late"}' }]), 3600000)
+          if (t.unref) t.unref()
+        })
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rTimeout = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 0.01, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rTimeout.reason, 'timeout')
+
+  // (b) UFR-6: write happy path but the journal append fails -> unauditable (fail-closed), even
+  // though the commit already landed.
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      }
+      if (prompt.includes('engine_adapter.py commit')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rUnauditable = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rUnauditable.reason, 'unauditable')
+
+  // (c) sec-101: write happy path through the argv-run + parse-result, but the adapter commit fails
+  // -> the engine DID run and edit the worktree, so this outcome must ALSO leave exactly one audit
+  // line (FR-6/UFR-6 symmetry) even though the overall result is a failure.
+  const execLog3 = []
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      execLog3.push(prompt)
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      }
+      if (prompt.includes('engine_adapter.py commit')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, error: 'nothing to commit' }) }]
+      }
+      if (prompt.includes('pr_comment.py scrub')) {
+        return [{ index: 0, ok: true, stdout: 'nothing to commit' }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rCommitFail = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rCommitFail.ok, false)
+  assert.ok(execLog3.some((c) => c.includes('journal_entry.py') && c.includes('--event-type external_dispatch') && c.includes('commit-failed')),
+    'sec-101: commit-failure must still leave exactly one external_dispatch audit line')
+
+  console.log('OK: engine_dispatch timeout + unauditable + commit-failure audit')
+
+  // ---------------------------------------------------------------------
+  // FIX 3: a synchronous throw from an internal step must fall open, never throw out of
+  // dispatchExternal — callers' fall-open-to-Claude path relies on a RETURNED {ok:false}.
+  // ---------------------------------------------------------------------
+  global.agent = () => { throw new Error('boom: synchronous internal failure') }
+  let threw = false
+  let rSyncThrow
+  try {
+    rSyncThrow = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300 })
+  } catch (_e) {
+    threw = true
+  }
+  assert.strictEqual(threw, false, 'FIX 3: dispatchExternal must not throw when an internal step throws synchronously')
+  assert.strictEqual(rSyncThrow.ok, false, 'FIX 3: a synchronous internal throw resolves to {ok:false}')
+  assert.strictEqual(rSyncThrow.reason, 'dispatch-error', 'FIX 3: the fall-open reason is dispatch-error')
+
+  console.log('OK: engine_dispatch falls open (does not throw) on a synchronous internal error')
+
+  // ---------------------------------------------------------------------
+  // FIX 4a: _execJson courier-drop retry — a single empty/garbled stdout on a durable command is
+  // retried ONCE (mirrors build_phase.js's canonical execJson contract); a PERSISTENT empty stdout
+  // still fails closed after the retry.
+  // ---------------------------------------------------------------------
+
+  // (a1) build-argv drops its stdout ONCE (empty string, ok:true — a courier drop, not a real
+  // failure) then succeeds on retry -> the dispatch completes fine (proves the retry fired).
+  {
+    let buildArgvCalls = 0
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          buildArgvCalls += 1
+          if (buildArgvCalls === 1) return [{ index: 0, ok: true, stdout: '' }]
+          return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        }
+        if (prompt.includes('journal_entry.py')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rRetryOk = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300 })
+    assert.strictEqual(buildArgvCalls, 2, 'FIX 4a: a single empty-stdout courier drop is retried exactly once')
+    assert.deepStrictEqual(rRetryOk.findings, [], 'FIX 4a: the retry succeeding lets the dispatch complete normally')
+  }
+
+  // (a2) build-argv drops its stdout on EVERY call (persistent empty) -> _execJson gives up after
+  // the retry and the dispatch fails closed with build-argv-failed (never a bare throw/hang).
+  {
+    let buildArgvCalls2 = 0
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          buildArgvCalls2 += 1
+          return [{ index: 0, ok: true, stdout: '' }]
+        }
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rRetryFail = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300 })
+    assert.strictEqual(buildArgvCalls2, 2, 'FIX 4a: a persistent empty stdout is tried exactly twice (one retry) before giving up')
+    assert.strictEqual(rRetryFail.ok, false, 'FIX 4a: a persistent courier drop fails closed')
+  }
+
+  console.log('OK: engine_dispatch _execJson courier-drop retry (transient recovers, persistent fails closed)')
+
+  // ---------------------------------------------------------------------
+  // FIX 4b: dispatchExternal early-failure branches — each must return {ok:false} and must NOT
+  // commit or journal a success.
+  // ---------------------------------------------------------------------
+
+  // (b1) empty/unparseable build-argv (a REAL failure, not a courier drop — ok:false from the exec
+  // itself) -> {ok:false}, and no commit/success-journal call is ever made.
+  {
+    const execLogB1 = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogB1.push(prompt)
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          return [{ index: 0, ok: false, stdout: '' }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rBadArgv = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300 })
+    assert.strictEqual(rBadArgv.ok, false, 'FIX 4b: an unparseable/failing build-argv fails closed')
+    assert.ok(!execLogB1.some((c) => c.includes('engine_adapter.py commit')), 'FIX 4b: no commit is attempted when build-argv fails')
+    assert.ok(!execLogB1.some((c) => c.includes('--sandbox') || c.includes(' < ')), 'FIX 4b: the CLI itself is never run when build-argv fails')
+  }
+
+  // (b2) preSHA git rev-parse fails for a WRITE role -> {ok:false} before any argv/CLI/commit work.
+  {
+    const execLogB2 = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogB2.push(prompt)
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+          return [{ index: 0, ok: false, stdout: '' }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rBadPreSha = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T9', workItem: 'wi-abc' })
+    assert.strictEqual(rBadPreSha.ok, false, 'FIX 4b: a failed preSHA capture fails closed')
+    assert.strictEqual(rBadPreSha.reason, 'could-not-capture-preSHA', 'FIX 4b: the reason names the preSHA-capture failure')
+    assert.ok(!execLogB2.some((c) => c.includes('engine_adapter.py build-argv')), 'FIX 4b: build-argv is never reached when preSHA capture fails')
+    assert.ok(!execLogB2.some((c) => c.includes('engine_adapter.py commit')), 'FIX 4b: no commit is attempted when preSHA capture fails')
+  }
+
+  // (b3) staging the prompt/schema to disk fails -> {ok:false} before ANY other dispatch work
+  // (preSHA/build-argv/CLI/commit never run).
+  {
+    const execLogB3 = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogB3.push(prompt)
+        if (prompt.includes('base64 -d >')) return [{ index: 0, ok: false, stdout: '' }]
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rBadStage = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T9', workItem: 'wi-abc' })
+    assert.strictEqual(rBadStage.ok, false, 'FIX 4b: a failed input-staging write fails closed')
+    assert.strictEqual(rBadStage.reason, 'could-not-stage-external-inputs', 'FIX 4b: the reason names the staging failure')
+    assert.ok(!execLogB3.some((c) => c.includes('git') && c.includes('rev-parse HEAD')), 'FIX 4b: preSHA is never captured when staging fails')
+    assert.ok(!execLogB3.some((c) => c.includes('engine_adapter.py commit')), 'FIX 4b: no commit is attempted when staging fails')
+  }
+
+  console.log('OK: engine_dispatch early-failure branches fail closed without committing or journaling success')
+
+  // ---------------------------------------------------------------------
+  // FIX 5: read-role UFR-6 fail-closed symmetry — the review/read role must ALSO fail closed when
+  // the external_dispatch journal append fails (only the write role's UFR-6 was previously tested).
+  // ---------------------------------------------------------------------
+  {
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [{ file: 'a.py', line: 1, title: 'x', severity: 'Minor' }] }) }]
+        }
+        if (prompt.includes('journal_entry.py')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
+        }
+        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{"raw":"external review output"}' }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rReadUnauditable = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-abc' })
+    assert.strictEqual(rReadUnauditable.ok, false, 'FIX 5: a read-role dispatch fails closed when the external_dispatch journal append fails')
+    assert.strictEqual(rReadUnauditable.reason, 'unauditable', 'FIX 5: the read-role failure reason is unauditable, mirroring the write-role UFR-6 contract')
+  }
+
+  console.log('OK: engine_dispatch UFR-6 fail-closed symmetry (read role also fails closed on a failed journal append)')
+})()
+

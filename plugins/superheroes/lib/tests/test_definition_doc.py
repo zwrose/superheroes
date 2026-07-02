@@ -228,9 +228,14 @@ def test_read_gate_default_is_pending(tmp_path):
     assert DD.read_gate(_write_spec(tmp_path)) == "pending"
 
 
+def _set_gate_file(path, review, run_id="test-run"):
+    text = open(path, encoding="utf-8").read()
+    return DD.set_gate(path, review, expected_hash=DD.content_hash(text), run_id=run_id)
+
+
 def test_set_gate_passed_derives_approved_and_revalidates(tmp_path):
     p = _write_spec(tmp_path)
-    assert DD.set_gate(p, "passed") == {"review": "passed", "status": "approved"}
+    assert _set_gate_file(p, "passed") == {"ok": True, "review": "passed", "status": "approved", "runId": "test-run"}
     assert DD.read_gate(p) == "passed"
     parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
     jsonschema.validate(parsed, SCHEMA)  # still schema-valid after the in-place edit
@@ -239,14 +244,14 @@ def test_set_gate_passed_derives_approved_and_revalidates(tmp_path):
 
 def test_set_gate_changes_requested_derives_in_review(tmp_path):
     p = _write_spec(tmp_path)
-    DD.set_gate(p, "changes-requested")
+    _set_gate_file(p, "changes-requested")
     parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
     assert parsed["gates"]["review"] == "changes-requested" and parsed["status"] == "in-review"
 
 
 def test_set_gate_rejects_non_review_state(tmp_path):
     with pytest.raises(ValueError):  # 'approved' is a status, not a review state
-        DD.set_gate(_write_spec(tmp_path), "approved")
+        _set_gate_file(_write_spec(tmp_path), "approved")
 
 
 def test_read_gate_fails_closed_without_frontmatter(tmp_path):
@@ -261,9 +266,12 @@ def test_cli_set_then_read_gate(tmp_path, capsys):
     fm = DD.frontmatter("spec", WI, size="small", created="2026-06-14", updated="2026-06-14")
     d = tmp_path / "docs" / "superheroes" / WI
     d.mkdir(parents=True)
-    (d / "spec.md").write_text(DD.render_frontmatter(fm) + "\n# t\n", encoding="utf-8")
+    spec_path = d / "spec.md"
+    spec_path.write_text(DD.render_frontmatter(fm) + "\n# t\n", encoding="utf-8")
+    spec_hash = DD.content_hash(spec_path.read_text(encoding="utf-8"))
     rc = DD.main(["definition_doc.py", "set-gate", "--doc", "spec", "--work-item", WI,
-                  "--review", "passed", "--root", str(tmp_path)])
+                  "--review", "passed", "--root", str(tmp_path),
+                  "--expected-hash", spec_hash, "--run-id", "cli-test"])
     assert rc == 0
     capsys.readouterr()
     rc = DD.main(["definition_doc.py", "read-gate", "--doc", "spec", "--work-item", WI,
@@ -285,9 +293,12 @@ def test_cli_set_then_read_gate_for_autonomous_doctypes(tmp_path, capsys, doc_ty
     d = tmp_path / "docs" / "superheroes" / wi
     d.mkdir(parents=True)
     (d / "spec.md").write_text("x")
-    (d / (doc_type + ".md")).write_text(DD.render_frontmatter(fm) + "\n# t\n", encoding="utf-8")
+    doc_file = d / (doc_type + ".md")
+    doc_file.write_text(DD.render_frontmatter(fm) + "\n# t\n", encoding="utf-8")
+    doc_hash = DD.content_hash(doc_file.read_text(encoding="utf-8"))
     rc = DD.main(["definition_doc.py", "set-gate", "--doc", doc_type, "--work-item", wi,
-                  "--review", "passed", "--root", str(tmp_path)])
+                  "--review", "passed", "--root", str(tmp_path),
+                  "--expected-hash", doc_hash, "--run-id", "cli-test"])
     assert rc == 0
     capsys.readouterr()
     rc = DD.main(["definition_doc.py", "read-gate", "--doc", doc_type, "--work-item", wi,

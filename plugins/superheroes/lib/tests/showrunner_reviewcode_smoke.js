@@ -53,10 +53,11 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     promptLog.push(prompt)
     return firstStub(prompt, opts)
   }
+  const runDir1 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-1-'))
   const r = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: '/tmp/showrunner-wi-targeted-review-code-test-pilot-1-head-1',
+    runDir: runDir1,
   })
   assert.strictEqual(r.gate, 'passed')
   assert.ok(promptLog.some((p) => p.includes('Target worktree: /tmp/build-worktree') && p.includes('Expected head: head-1')),
@@ -70,10 +71,11 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     promptLog.push(prompt)
     return changedStub(prompt, opts)
   }
+  const runDir2 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-2-'))
   const changed = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDirSuffix: 'test-pilot-2-head-1',
+    runDir: runDir2,
   })
   assert.strictEqual(changed.gate, 'passed')
   assert.strictEqual(changed.head, 'head-2')

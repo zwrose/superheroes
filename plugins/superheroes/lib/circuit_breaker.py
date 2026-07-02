@@ -11,6 +11,8 @@ import os
 import re
 import sys
 
+from review_memory import class_key
+
 BLOCKING = {"Critical", "Important"}
 
 _NON_WORD = re.compile(r"[^\w\s]", re.ASCII)   # JS \w is ASCII-only — match it
@@ -28,8 +30,31 @@ def finding_identity(finding):
     return f"{finding.get('file') or ''}::{normalize_title(finding.get('title') or '')}"
 
 
+def recurrence_key(finding):
+    if finding.get("classKey"):
+        return finding["classKey"]
+    key = class_key(finding)
+    if finding.get("dimension") or finding.get("taxonomy"):
+        return key
+    return finding_identity(finding)
+
+
 def _blocking(round_findings):
     return [f for f in round_findings["findings"] if f["severity"] in BLOCKING]
+
+
+def _generalize_keys(round_rec):
+    return {g.get("classKey") for g in round_rec.get("generalizeRequired", [])
+            if isinstance(g, dict) and g.get("classKey")}
+
+
+def _blocking_count_excluding_generalize(round_rec):
+    """Count blocking findings not covered by this round's coverage-decision grace."""
+    generalize = _generalize_keys(round_rec)
+    blocking = _blocking(round_rec)
+    if not generalize:
+        return len(blocking)
+    return len([f for f in blocking if recurrence_key(f) not in generalize])
 
 
 def check_circuit_breaker(rounds, max_rounds):
@@ -49,29 +74,38 @@ def check_circuit_breaker(rounds, max_rounds):
                        f"fixes are committed but not yet re-reviewed)."),
         }
 
-    # Criterion 1: recurring finding across the two most recent rounds.
-    if n >= 2:
-        prev_ids = {finding_identity(f) for f in _blocking(rounds[n - 2])}
-        recurring = [f for f in latest_blocking if finding_identity(f) in prev_ids]
-        if recurring:
-            ids = "; ".join(finding_identity(f) for f in recurring)
-            return {
-                "halt": True,
-                "reason": "recurring-finding",
-                "detail": f"{len(recurring)} blocking finding(s) recurred after a fix was committed: {ids}",
-            }
-
     # Criterion 2: no net progress across two consecutive round-transitions.
+    # Exclude generalize-pending classKeys from each round's count so grace at round 3
+    # is not preempted by a flat single-class recurrence (Criterion 1's job).
     if n >= 3:
-        c_n = len(_blocking(rounds[n - 1]))
-        c_n1 = len(_blocking(rounds[n - 2]))
-        c_n2 = len(_blocking(rounds[n - 3]))
+        c_n = _blocking_count_excluding_generalize(rounds[n - 1])
+        c_n1 = _blocking_count_excluding_generalize(rounds[n - 2])
+        c_n2 = _blocking_count_excluding_generalize(rounds[n - 3])
         if c_n > 0 and c_n >= c_n1 and c_n1 >= c_n2:
             return {
                 "halt": True,
                 "reason": "no-net-progress",
                 "detail": f"Blocking-finding count did not decrease over two rounds ({c_n2} → {c_n1} → {c_n}).",
             }
+
+    # Criterion 1: recurring finding across the two most recent rounds.
+    if n >= 2:
+        latest_rec = rounds[n - 1]
+        latest_generalize = {g.get("classKey") for g in latest_rec.get("generalizeRequired", []) if isinstance(g, dict)}
+        challenged = {d.get("classKey") for d in latest_rec.get("coverageDecisions", []) if isinstance(d, dict) and d.get("challengedBy")}
+        latest_blocking = _blocking(latest_rec)
+        prev_ids = {recurrence_key(f) for f in _blocking(rounds[n - 2])}
+        recurring = [f for f in latest_blocking if recurrence_key(f) in prev_ids]
+        challenged_recurring = [f for f in recurring if recurrence_key(f) in challenged]
+        if challenged_recurring:
+            ids = "; ".join(recurrence_key(f) for f in challenged_recurring)
+            return {"halt": True, "reason": "challenged-principle-recurring", "detail": f"{len(challenged_recurring)} challenged coverage decision class recurred after being recorded: {ids}"}
+        if recurring:
+            keys = {recurrence_key(f) for f in recurring}
+            if keys & latest_generalize:
+                return {"halt": False, "reason": None, "detail": "recurrence pending coverage decision"}
+            ids = "; ".join(sorted(keys))
+            return {"halt": True, "reason": "recurring-finding", "detail": f"{len(recurring)} blocking finding(s) recurred after a fix was committed: {ids}"}
 
     return {"halt": False, "reason": None, "detail": "progressing"}
 

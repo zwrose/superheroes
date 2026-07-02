@@ -40,7 +40,7 @@ async function main() {
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
     if (label === 'stamp review coverage') return jsonOut({ ok: true })
-    if (label.startsWith('branch-reviewer:')) return { findings: [] }
+    if (/^(architecture|code|security|test|premortem)-reviewer:/.test(label)) return { findings: [] }
     return { findings: [] }
   }
   // exec is used by the exec-based dumb-pipe (recordDeferred). Wire a no-op.
@@ -64,7 +64,7 @@ async function main() {
   )
 
   // The reviewers' targetSuffix must name the resolved worktree + head.
-  const reviewerPrompt = seenPrompts.find((p) => p.label.startsWith('branch-reviewer:'))
+  const reviewerPrompt = seenPrompts.find((p) => /^(architecture|code|security|test|premortem)-reviewer:/.test(p.label))
   assert.ok(reviewerPrompt, 'a reviewer was dispatched')
   assert.ok(
     reviewerPrompt.prompt.includes(RESOLVED_WT),

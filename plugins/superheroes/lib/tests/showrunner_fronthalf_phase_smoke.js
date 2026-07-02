@@ -9,6 +9,7 @@
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
+const { io } = require('../io_seam.js')
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
@@ -22,26 +23,29 @@ const BLOCKER = [{ file: 'docs/superheroes/wi/plan.md', line: 1, title: 'gap', s
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
 // setGateFails / journalWriteFails: shape the save phase progress courier response.
-function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, journalWriteFails }) {
+function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, setGateStale, journalWriteFails }) {
   let panelRuns = 0
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
     if (label === 'save phase progress') {
-      if (setGateFails || journalWriteFails) {
-        return jsonOut({ ok: false, reason: setGateFails ? 'set-gate failed' : 'durable write failed' })
+      if (setGateFails || setGateStale || journalWriteFails) {
+        // setGateStale: the fenced set-gate refuses a stale snapshot (exits non-zero inside the
+        // batched sideEffectCmd) — the courier reports ok:false and persistPhase fails closed.
+        return jsonOut({ ok: false, reason: setGateFails ? 'set-gate failed' : (setGateStale ? 'stale' : 'durable write failed') })
       }
       return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
     }
     if (label === 'save round state') return jsonOut({ ok: true })
     if (label === 'exec') {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
+      // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
       if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as exec — must use JS twin')
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     // gate-for-terminal must NOT be dispatched as a cmdRunner agent either.
     if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as cmdRunner — must use JS twin')
-    if (label.endsWith('-reviewer')) { panelRuns += 1; return { findings: reviewerFindings } }
+    if (label.endsWith('-reviewer')) { panelRuns += 1; return { findings: reviewerFindings, confidence: 'high' } }
     if (label.startsWith('synthesis')) return { verdicts: [] }         // keep all merged findings
     if (label === 'revise-doc') return reviserFails ? null : { fixes: [], deferred: [] }
     return null
@@ -51,8 +55,16 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
 }
 
 // reviewDocPhase reuses /tmp/showrunner-<wi>-review-<doc>; clear it so the durable accumulator from a
-// prior scenario/run never leaks into this one.
-function clean(wi) { try { fs.rmSync(`/tmp/showrunner-${wi}-review-plan`, { recursive: true, force: true }) } catch (_) {} }
+// prior scenario/run never leaks into this one. Also seed a minimal plan doc so the panel's doc-mode
+// coverage-decision reader (review_panel_shell) can load an empty decision set instead of cannot-certify.
+function clean(wi) {
+  try { fs.rmSync(`/tmp/showrunner-${wi}-review-plan`, { recursive: true, force: true }) } catch (_) {}
+  const dir = `docs/superheroes/${wi}`
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(`${dir}/plan.md`, '# Plan\n## Review coverage decisions\n')
+  } catch (_) {}
+}
 
 async function main() {
   // (a) gate already passed -> skip the panel entirely, return passed.
@@ -120,6 +132,33 @@ async function main() {
   }
   pp = await sr.persistPhase('wi-e3', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
   assert.deepStrictEqual(pp, { ok: true, recovered: false }, 'persistPhase happy path read-back confirmed')
+
+  // (f) direct reviewDocPhase gate writes include the reviewed snapshot hash, run id, and lease.
+  clean('wi-f')
+  const execPrompts = []
+  ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
+  global.agent = async (prompt, opts) => {
+    // the fenced set-gate rides inside persistPhase's 'save phase progress' courier prompt (#118 fold)
+    const l = (opts && opts.label) || ''
+    if (l === 'exec' || l === 'save phase progress') execPrompts.push(prompt)
+    return ag(prompt, opts)
+  }
+  r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f', reviewedHash: 'hash-f' })
+  const gatePrompt = execPrompts.find((p) => p.includes('set-gate') || p.includes('gate_write.py'))
+  assert.ok(gatePrompt, 'reviewDocPhase emitted a gate write command')
+  const postPanelHash = io().contentHash(fs.readFileSync('docs/superheroes/wi-f/plan.md', 'utf8'))
+  assert.match(gatePrompt, new RegExp(`--expected-hash ['"]?${postPanelHash}['"]?`), 'gate write uses post-panel doc hash, not pre-loop snapshot')
+  assert.match(gatePrompt, /--run-id ['"]?run-f['"]?/)
+  assert.match(gatePrompt, /--lease ['"]?lease-f['"]?/)
+  assert.strictEqual(r.phaseResult.confidence, 'high')
+
+  // (g) stale reviewed hash parks and leaves the already-recorded gate unchanged.
+  clean('wi-g')
+  ag = makeAgent({ gate: 'changes-requested', reviewerFindings: [], setGateStale: true })
+  global.agent = ag
+  r = await sr.reviewDocPhase('plan', 'wi-g', { runId: 'run-g', lease: 'lease-g', reviewedHash: 'stale-hash' })
+  assert.strictEqual(r.gate, 'passed', 'terminal still maps to passed before persistence')
+  assert.strictEqual(r.phaseResult.confidence, 'low', 'stale/failed gate write parks instead of advancing')
 
   console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard + durable-write fail-close (C1)')
 }

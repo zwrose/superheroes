@@ -1,0 +1,7 @@
+{
+  "input": [[
+    {"round": 1, "findings": [{"file": "a.py", "title": "missing", "severity": "Important", "dimension": "test", "taxonomy": "coverage"}]},
+    {"round": 2, "findings": [{"file": "b.py", "title": "missing", "severity": "Important", "dimension": "test", "taxonomy": "coverage"}], "generalizeRequired": [{"classKey": "test::coverage::missing"}]}
+  ], 7],
+  "expected": {"halt": false, "reason": null, "detail": "recurrence pending coverage decision"}
+}

@@ -1,8 +1,11 @@
 const assert = require('assert')
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
 const sr = require('../showrunner.js')
 
 global.log = () => {}
-global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
+global.parallel = async (fns) => { const out = []; for (const f of (fns || [])) out.push(await f()); return out }
 
 ;(async () => {
   const labels = []
@@ -15,11 +18,11 @@ global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
     }
     if (label === 'lib' && prompt.includes('rev-parse')) return 'abc123'
     if (label === 'lib' && prompt.includes('review_code_config.py')) return { verifyCommand: 'none', tiers: {} }
-    if (label === 'branch-reviewer:r1') {
+    if (/^(architecture|code|security|test|premortem)-reviewer:r/.test(label)) {
       reviewerCalls += 1
       return { findings: reviewerCalls === 1 ? [{ id: 'X', file: 'a.js', title: 'bug', severity: 'Important' }] : [] }
     }
-    if (label === 'fix-code') return { fixed: ['X'] }
+    if (label.startsWith('fix-code')) return { fixed: ['X'], deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label === 'stamp review coverage') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
@@ -28,11 +31,12 @@ global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
     return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
   }
 
-  const out = await sr.reviewCodePhase('wi')
+  // fresh runDir per run: the default derived dir persists round-records.json across runs (stale-state trap)
+  const out = await sr.reviewCodePhase('wi', { runDir: fs.mkdtempSync(path.join(os.tmpdir(), 'rc-budget-')) })
   assert.strictEqual(out.gate, 'passed')
   assert.ok(labels.includes('resolve review target'))
   assert.ok(labels.includes('run verify'))
-  assert.ok(labels.includes('branch-reviewer:r1'))
+  assert.ok(labels.some((l) => /^(architecture|code|security|test|premortem)-reviewer:r1$/.test(l)))
   assert.ok(labels.includes('stamp review coverage'))
   assert.ok(labels.filter((l) => l === 'run verify').length >= 1)
   console.log('ok: review-code leaf budget folds')

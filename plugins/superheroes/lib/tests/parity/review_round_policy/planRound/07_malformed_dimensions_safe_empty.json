@@ -1,0 +1,13 @@
+{
+  "input": [{
+    "round": 2,
+    "dimensions": "test-reviewer",
+    "changedSubjects": ["Test"],
+    "previous": []
+  }],
+  "expected": {
+    "roundKind": "intermediate",
+    "dimensions": {},
+    "escalationPolicy": "cheap-first"
+  }
+}
