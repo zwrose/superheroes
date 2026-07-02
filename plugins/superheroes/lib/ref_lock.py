@@ -118,9 +118,36 @@ def _pid_dead(lease):
         return False                             # alive (owned by another user)
 
 
+def _provably_dead_here(lease):
+    """True iff the lease was taken on THIS host + THIS boot and its pid is provably gone.
+    Deliberately narrower than _pid_dead: a different host, a reboot, or a missing bootId
+    means liveness is NOT provable from here, and the TTL stays the only safety net (a live
+    run elsewhere must never be stolen early)."""
+    if not isinstance(lease, dict) or lease.get("host") != _host():
+        return False
+    bid = lease.get("bootId")
+    cur = hostinfo.boot_id()
+    if bid is None or cur is None or bid != cur:
+        return False
+    pid = lease.get("pid")
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return False                             # alive
+    except (ProcessLookupError, ValueError, OverflowError):
+        return True                              # provably gone on this boot
+    except PermissionError:
+        return False                             # alive (owned by another user)
+
+
 def is_stale(lease, ttl, now=None):
-    """Stale iff EXPIRED *and* the holder pid is dead-on-this-boot (§4.4)."""
+    """Stale iff EXPIRED *and* the holder pid is dead-on-this-boot (§4.4), OR the holder is
+    PROVABLY dead on this host+boot (a parked/crashed run's lease must not cost a TTL lockout
+    before relaunch — reclaim rides the same atomic CAS as the expiry path)."""
     if not isinstance(lease, dict):
+        return True
+    if _provably_dead_here(lease):
         return True
     return _expired(lease.get("acquiredAt"), ttl, now) and _pid_dead(lease)
 

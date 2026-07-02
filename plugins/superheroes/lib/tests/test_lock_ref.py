@@ -70,3 +70,52 @@ def test_renew_keeps_lease_but_fails_when_superseded(tmp_path):
     lock._force_lease(s, "wi", {"pid": 1, "host": lock._host(), "acquiredAt": "x",
                                 "bootId": None, "generation": gen + 1, "ttl": 1})
     assert lock.renew(s, "wi", gen) is False                # superseded -> cannot renew
+
+
+# --- dead-pid reclaim BEFORE ttl expiry (a parked run must not cost a 30-min lockout) ---
+import pytest
+import hostinfo
+
+
+def _fresh_lease(pid, host, boot_id):
+    # acquiredAt = now (NOT expired) — only the provably-dead-here path can reclaim this.
+    return {"pid": pid, "host": host, "acquiredAt": lock._stamp(),
+            "bootId": boot_id, "generation": 1, "ttl": lock.DEFAULT_TTL}
+
+
+@pytest.mark.skipif(hostinfo.boot_id() is None, reason="no boot id on this platform")
+def test_dead_pid_same_host_boot_reclaims_before_ttl(tmp_path):
+    # The holder pid is provably dead on THIS host+boot: reclaim immediately (gen bump via CAS),
+    # even though the lease has not TTL-expired. Live 2026-07-02: every park cost 30 minutes.
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", _fresh_lease(999999, lock._host(), hostinfo.boot_id()))
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is True and gen == 2 and reason == "stolen"
+
+
+def test_dead_pid_other_host_still_held_until_ttl(tmp_path):
+    # A different host's pid is NOT provable from here — TTL stays the only safety net
+    # (a live run elsewhere must never be stolen early).
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", _fresh_lease(999999, "some-other-host", "other-boot"))
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is False and reason == "held"
+
+
+def test_dead_pid_unknown_boot_still_held_until_ttl(tmp_path):
+    # Same host but no recorded bootId: liveness is not PROVABLE (the pid may simply have been
+    # recycled across a reboot) — keep the TTL guard for the unexpired lease.
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", _fresh_lease(999999, lock._host(), None))
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is False and reason == "held"
+
+
+@pytest.mark.skipif(hostinfo.boot_id() is None, reason="no boot id on this platform")
+def test_live_pid_same_host_boot_still_held(tmp_path):
+    # Our own (alive) pid on this host+boot: NOT reclaimable.
+    s = _store(tmp_path)
+    import os
+    lock._force_lease(s, "wi", _fresh_lease(os.getpid(), lock._host(), hostinfo.boot_id()))
+    ok, gen, reason = lock.acquire(s, "wi")
+    assert ok is False and reason == "held"
