@@ -42,6 +42,27 @@ def test_ensure_store_creates_git_repo_and_meta(tmp_path):
     assert os.path.isfile(os.path.join(d, "meta.json"))
 
 
+def test_ensure_store_records_source_path_provenance(tmp_path):
+    import json
+    _git_init(str(tmp_path))
+    d = cp.ensure_store(str(tmp_path), root=str(tmp_path / "store"))
+    meta = json.load(open(os.path.join(d, "meta.json")))
+    assert meta["sourcePath"] == os.path.realpath(str(tmp_path))
+    assert meta["schemaVersion"] == cp.SCHEMA_VERSION
+
+
+def test_ensure_store_never_rewrites_existing_meta(tmp_path):
+    import json
+    _git_init(str(tmp_path))
+    root = str(tmp_path / "store")
+    d = os.path.join(root, "checkouts", cp.checkout_key(str(tmp_path)))
+    os.makedirs(d)
+    cp.atomic_write(os.path.join(d, "meta.json"), json.dumps({"schemaVersion": 1}))
+    assert cp.ensure_store(str(tmp_path), root=root) == d
+    meta = json.load(open(os.path.join(d, "meta.json")))
+    assert meta == {"schemaVersion": 1}  # pre-provenance meta stays byte-identical
+
+
 def test_atomic_write_roundtrip(tmp_path):
     f = str(tmp_path / "sub" / "x.json")
     cp.atomic_write(f, '{"a":1}')
