@@ -7,6 +7,26 @@ const sr = require('../showrunner.js')
 global.log = () => {}
 global.parallel = async (fns) => { const out = []; for (const f of (fns || [])) out.push(await f()); return out }
 
+// A genuinely clean/complete review needs a real verificationReceipt matching the round's
+// receiptArtifact + coverageDecisionIds (else the receipt-fabrication fix downgrades it to
+// confidence:low, which fails the round -- and, on the post-fix confirmation round, an
+// artifact/coverage mismatch fails cannot-certify even with a receipt present).
+function receiptFor(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = prompt.match(/Prompt context: (\{.*\})$/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return {
+    artifact: ctx.receiptArtifact || 'stub',
+    chain: [
+      { step: 'citation', evidence: 'reviewed citations' },
+      { step: 'reachability', evidence: 'validated call path' },
+      { step: 'missing-check', evidence: 'checked missing FRs' },
+      { step: 'tooling', evidence: 'smoke passed' },
+    ],
+    coverageDecisionIds: ctx.receiptCoverageDecisionIds || [],
+  }
+}
+
 ;(async () => {
   const labels = []
   let reviewerCalls = 0
@@ -24,7 +44,11 @@ global.parallel = async (fns) => { const out = []; for (const f of (fns || [])) 
     if (label === 'exec' && prompt.includes('git rev-parse')) return 'cwd000'
     if (/^(architecture|code|security|test|premortem)-reviewer:r/.test(label)) {
       reviewerCalls += 1
-      return { findings: reviewerCalls === 1 ? [{ id: 'X', file: 'a.js', title: 'bug', severity: 'Important' }] : [] }
+      return {
+        findings: reviewerCalls === 1 ? [{ id: 'X', file: 'a.js', title: 'bug', severity: 'Important' }] : [],
+        confidence: 'high',
+        verificationReceipt: receiptFor(prompt),
+      }
     }
     if (label.startsWith('fix-code')) return { fixed: ['X'], deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }

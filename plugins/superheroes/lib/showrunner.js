@@ -105,21 +105,21 @@ function ensureReviewerShape(out, opts = {}) {
     out = Object.assign({}, out, { confidence: 'high' })
   }
   if (out.confidence === 'high' && !out.verificationReceipt) {
-    const artifact = opts.receiptArtifact || `smoke:round-${opts.round || 0}`
-    const ids = ((opts.coverageDecisions || []).map((d) => d.id).filter(Boolean))
-    out = Object.assign({}, out, {
-      verificationReceipt: {
-        artifact,
-        chain: [
-          { step: 'citation', evidence: 'reviewed citations' },
-          { step: 'reachability', evidence: 'validated call path' },
-          { step: 'missing-check', evidence: 'checked missing FRs' },
-          { step: 'tooling', evidence: 'smoke passed' },
-        ],
-        coverageDecisionIds: ids,
-      },
-      usage: out.usage || { total: 1 },
-    })
+    if (opts.external) {
+      // External-engine reviews (#38) have no native chain-of-verification receipt to offer — the
+      // adapter returns findings, not a citation/reachability/missing-check/tooling evidence chain.
+      // Mark the result as externally reviewed (real evidence: an independent engine actually ran)
+      // instead of fabricating a receipt shape it never produced. panel_tally's final-confirmation
+      // check treats externalReview as an alternate, honestly-labeled confirmation path.
+      out = Object.assign({}, out, { externalReview: opts.externalEngine || true, usage: out.usage || { total: 1 } })
+    } else {
+      // A genuine reviewer leaf claimed high confidence but supplied no verification receipt.
+      // REVIEWER_RESULT_INSTRUCTION already tells leaves that "no evidence" means confidence:low —
+      // trust that contract instead of fabricating canned evidence to paper over a leaf that
+      // skipped it. Downstream, low confidence forces cannot-certify (an honest "not verified"),
+      // never a silently-passed round.
+      out = Object.assign({}, out, { confidence: 'low' })
+    }
   }
   return out
 }
@@ -161,7 +161,8 @@ function reviewCodeLeaves(tiers, opts) {
         schema: FINDINGS_SCHEMA,
       })
       if (res && Array.isArray(res.findings)) {
-        const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' }, Object.assign({}, opts, { round }))
+        const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
+          Object.assign({}, opts, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
       const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))

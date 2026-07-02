@@ -123,6 +123,11 @@ function roundGateFromDimensionResults(results, expectedRoster, finalConfirmatio
   if (finalConfirmation) {
     for (const name of expectedRoster) {
       const result = (results || {})[name] || {}
+      // externalReview (#38/receipt-fabrication fix): an external-engine reviewer has no native
+      // chain-of-verification receipt to offer, but it IS a real independent review — accept it as
+      // an alternate, honestly-labeled confirmation path instead of demanding a receipt shape it
+      // structurally can't produce.
+      if (result.externalReview) continue
       if (!_validFinalReceipt(result, receiptContext)) {
         return { gate: 'cannot-certify', confidence: 'low', incomplete: base.incomplete }
       }

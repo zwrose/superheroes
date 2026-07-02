@@ -34,7 +34,9 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     if (label.startsWith('branch-reviewer:')) return { findings: [] }
     if (label === 'readout') return '## Review loop — done'
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
-    return { findings: [] }
+    // reviewer-panel dimensions (architecture-reviewer:r1, code-reviewer:r1, ...): a genuinely clean
+    // review needs a real verificationReceipt to avoid the receipt-fabrication fix's downgrade to low.
+    return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
   }
 }
 

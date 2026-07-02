@@ -218,7 +218,9 @@ async function partB() {
     const label = opts && opts.label
     if (label && /^(architecture|code|security|test|premortem)-reviewer/.test(label)) {
       nativeReviewerFired = true
-      return { findings: [] }
+      // a genuinely clean fall-open review needs a real verificationReceipt (else the
+      // receipt-fabrication fix downgrades it to confidence:low -> cannot-certify).
+      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
     }
     return { findings: [] }
   }
