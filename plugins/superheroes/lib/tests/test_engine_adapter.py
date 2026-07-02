@@ -28,6 +28,7 @@ def test_build_argv_codex_review_read_only():
     assert "model_reasoning_effort=high" in argv
     assert "--output-schema" in argv and argv[argv.index("--output-schema") + 1] == "/tmp/s.json"
     assert "-m" in argv  # explicit model, never ambient default
+    assert argv[argv.index("-m") + 1] == "gpt-5.5"  # gpt-5-codex is rejected under ChatGPT-account auth
     assert argv[-1] == "-"  # codex reads the prompt from stdin (fed by the Task-10 JS runner)
 
 
@@ -48,14 +49,18 @@ def test_build_argv_cursor_review_plan_mode():
     argv = EA.build_argv("cursor", "review", "composer", {"cwd": "/wt"})
     assert argv[0] == "cursor-agent"
     assert "--mode" in argv and argv[argv.index("--mode") + 1] == "plan"
-    assert "-m" in argv and argv[argv.index("-m") + 1] == "composer"
+    # cursor-agent 2026.06.26: --model (not -m); -p (headless) + --trust (clear the trust gate) required.
+    assert "--model" in argv and argv[argv.index("--model") + 1] == "composer-2.5-fast"
+    assert "-p" in argv and "--trust" in argv
+    assert "-m" not in argv                  # the old short flag is rejected by this cursor-agent
 
 
 def test_build_argv_cursor_build_force_write():
     argv = EA.build_argv("cursor", "build", "composer", {"cwd": "/wt"})
     assert argv[0] == "cursor-agent"
     assert "-f" in argv                      # workspace-write / force
-    assert argv[argv.index("-m") + 1] == "composer"
+    assert "-p" in argv and "--trust" in argv
+    assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
 
 
 def test_build_argv_cli(capsys):

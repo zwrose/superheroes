@@ -2,7 +2,8 @@
 """The deterministic engine argv/parse/commit core (kept out of the model-driven JS layer so
 it is unit-testable). Named engine_adapter (NOT engine_cli — that is test-pilot's). Every
 external free-text surface is scrubbed at THIS trust boundary (parse_result). Flags verified
-live in the #38 spike (codex 0.141.0, cursor-agent 2026.06.19)."""
+live 2026-07-01 against codex 0.141.0 (model gpt-5.5 — gpt-5.5-codex/gpt-5-codex are rejected
+under ChatGPT-account auth) and cursor-agent 2026.06.26 (--model / -p / --trust; -m is gone)."""
 import argparse
 import json
 import os
@@ -20,8 +21,10 @@ import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
 TASK_ID_TRAILER = "Task-Id"
 
 # Explicit model per engine (Config-determinism NFR — never the developer's ambient default).
-_CODEX_MODEL = "gpt-5-codex"
-_CURSOR_MODEL = "composer"
+# codex: gpt-5.5 (there is NO gpt-5.5-codex variant; gpt-5-codex is rejected under ChatGPT-account
+# auth). cursor: the current composer model id. Both verified live 2026-07-01.
+_CODEX_MODEL = "gpt-5.5"
+_CURSOR_MODEL = "composer-2.5-fast"
 
 
 def build_argv(engine, role_kind, effort, opts):
@@ -51,7 +54,11 @@ def build_argv(engine, role_kind, effort, opts):
     if engine == "cursor":
         # No positional prompt argument: cursor-agent reads the prompt from stdin, which the
         # Task-10 JS runner redirects from the staged prompt file (`<argv> < promptPath`).
-        argv = ["cursor-agent", "-m", _CURSOR_MODEL]
+        # cursor-agent 2026.06.26: model flag is --model (not -m); -p/--print is REQUIRED for a
+        # headless run (without it it goes interactive and --output-format is a no-op); --trust
+        # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
+        # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
+        argv = ["cursor-agent", "--model", _CURSOR_MODEL, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]     # read-only planning mode
         else:

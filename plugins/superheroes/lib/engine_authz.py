@@ -62,12 +62,14 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
     probe_file = os.path.join(cwd, ".superheroes-authz-probe")
     # A harmless throwaway write, but run as the ENGINE's own workspace-write dispatch command so the
     # host's autoMode classifier decides allow vs deny against the SAME grant a real build would hit.
-    # `codex exec --sandbox workspace-write -C <cwd> "<prompt>"` / `cursor-agent -f "<prompt>"`.
+    # `codex exec --sandbox workspace-write -C <cwd> "<prompt>"` / `cursor-agent -p -f "<prompt>"`.
     write_prompt = "write an empty file named .superheroes-authz-probe and exit"
     if engine == "codex":
         argv = ["codex", "exec", "--sandbox", "workspace-write", "-C", cwd, write_prompt]
     else:  # cursor
-        argv = ["cursor-agent", "-f", write_prompt]
+        # -p/--print is required for a headless run (without it cursor-agent goes interactive and
+        # the probe hangs to the timeout, always reporting the engine not-ready); -f forces/trusts.
+        argv = ["cursor-agent", "-p", "-f", write_prompt]
     timeout = _probe_timeout(overrides)
     try:
         proc = run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
