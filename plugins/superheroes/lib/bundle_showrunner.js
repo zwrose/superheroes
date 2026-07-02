@@ -183,10 +183,19 @@ globalThis.io = {
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
     var parts = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
-    var out = await __sh(parts + ' 2>&1; echo __SR_EXIT:$?')
-    var m = String(out || '').match(/__SR_EXIT:(\\d+)\\s*$/)
-    var status = m ? Number(m[1]) : 1
-    var stdout = m ? String(out).slice(0, m.index).replace(/\\n$/, '') : String(out || '')
+    var s = String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || '')
+    // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in \`\`\` fences (live
+    // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
+    // end-anchored match misses and a clean exit-0 helper is falsely read as FAILED (coverage-
+    // decisions-unreadable / telemetry-write-failed / memory degraded — the review-plan park class).
+    // Find the LAST marker anywhere, slice stdout up to it, then strip one wrapping fence pair from
+    // that slice. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
+    // payload is arbitrary text that may legitimately contain fences).
+    var re = /__SR_EXIT:(\\d+)/g, m, last = null
+    while ((m = re.exec(s)) !== null) last = m
+    var status = last ? Number(last[1]) : 1
+    var stdout = last ? s.slice(0, last.index) : s
+    stdout = stdout.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').replace(/\\n$/, '')
     return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
   },
 }
