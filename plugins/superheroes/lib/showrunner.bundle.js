@@ -4606,6 +4606,10 @@ const { io } = require('./io_seam.js')
 // is a cheap no-op check.
 async function writeTextVerified(ioApi, path, text) {
   const want = ioApi.contentHash(text)
+  // Ensure the parent dir exists — fenced_json.py's atomic replace used to makedirs for the
+  // whole payload write; the staged file needs the same guarantee (a fresh /tmp run dir).
+  const dir = String(path).slice(0, String(path).lastIndexOf('/'))
+  if (dir) { try { await ioApi.mkdirp(dir) } catch (_) { /* the write below fails closed */ } }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try { await ioApi.writeFile(path, text) } catch (_) { continue }
     const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'hash', '--path', path])
