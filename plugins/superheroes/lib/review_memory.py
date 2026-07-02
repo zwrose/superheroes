@@ -364,6 +364,110 @@ def update_round_record(path, round_no, updates, expected_hash=None, run_id=None
                           run_id=run_id, lease=lease)
 
 
+def _terminal_fields_from_records(records_path):
+    """Compose the readout's fixes / deferred / coverageDecisions from the DURABLE round records
+    on disk. These are the unbounded synthesis outputs — a verdict carrying every fix + deferred
+    reason + coverage decision inline is exactly the blob that outgrows the courier (live
+    2026-07-02: the terminal-record write parked payload-stage-failed). They ride round-records.json
+    (Python-written, never the courier), so finalize re-derives them here instead of pushing them
+    through. Missing/unreadable/corrupt -> empty lists (an early terminal has no rounds yet; the
+    loop that could not read its own records already parked upstream)."""
+    state = load_records_state(records_path, [])
+    records = state.get("records") or []
+    fixes, deferred, coverage = [], [], []
+    seen_cov = set()
+    for rec in sorted(records, key=lambda r: r.get("round") or 0):
+        if not isinstance(rec, dict):
+            continue
+        fix = rec.get("fix") if isinstance(rec.get("fix"), dict) else {}
+        fixes.extend(fix.get("fixes") or [])
+        deferred.extend(fix.get("deferred") or [])
+        for cd in rec.get("coverageDecisions") or []:
+            key = cd.get("id") if isinstance(cd, dict) else cd
+            if key in seen_cov:
+                continue
+            seen_cov.add(key)
+            coverage.append(cd)
+    return fixes, deferred, coverage
+
+
+def _terminal_telemetry(telemetry_path):
+    """Read the SMALL telemetry summary from review-telemetry.json (written Python-side just before
+    finalize). runId/lease are transport stamps, not readout content, so they are stripped.
+    Missing/unreadable -> None (the caller keeps whatever small telemetry the verdict carried)."""
+    if not telemetry_path:
+        return None
+    try:
+        with open(telemetry_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {k: v for k, v in data.items() if k not in ("runId", "lease")}
+
+
+# The evidence-bodied fields + transport stamps a terminal record must never carry: findings hold
+# full evidence bodies and NO terminal-record consumer reads them (the readout renders
+# terminal/reason/telemetry/fixes/deferred/drops/coverage); runId/lease are re-stamped below.
+_TERMINAL_STRIP = ("findings", "carriedFindings", "runId", "lease")
+
+
+def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=None,
+                            telemetry_path=None, run_id=None, lease=None):
+    """Compose + atomically OVERWRITE the loop's terminal record from state already on disk
+    (#136 compose-persist pattern). Only the small verdict scalars (terminal/reason/round/gate/
+    drops/…) ride inline and self-verify: the caller ships sha256(verdict_json) and a courier that
+    mangles the scalars cannot also recompute the hash, so transport corruption fails closed here
+    instead of persisting silently altered content. The unbounded synthesis outputs (fixes/
+    deferred/coverageDecisions) come from round-records.json and the telemetry summary from
+    review-telemetry.json — never through the courier. Overwrite is finalize's job: the record is
+    durable for crash-resume, not append-only, so a stale prior-run record is replaced."""
+    if not run_id:
+        return {"ok": False, "reason": "missing-run-id"}
+    if verdict_hash is not None and not _sent_hash_ok(verdict_json, verdict_hash):
+        return {"ok": False, "reason": "verdict-corrupt"}
+    try:
+        verdict = json.loads(verdict_json)
+    except ValueError as exc:
+        return {"ok": False, "reason": "verdict-corrupt", "detail": str(exc)}
+    if not isinstance(verdict, dict):
+        return {"ok": False, "reason": "verdict-corrupt", "detail": "not a dict"}
+    record = {k: v for k, v in verdict.items() if k not in _TERMINAL_STRIP}
+    if records_path:
+        record["fixes"], record["deferred"], record["coverageDecisions"] = \
+            _terminal_fields_from_records(records_path)
+    else:
+        record.setdefault("fixes", [])
+        record.setdefault("deferred", [])
+        record.setdefault("coverageDecisions", [])
+    telemetry = _terminal_telemetry(telemetry_path)
+    if telemetry is not None:
+        record["telemetry"] = telemetry
+    record["runId"] = run_id
+    if lease:
+        record["lease"] = lease
+    text = json.dumps(record, indent=2, sort_keys=True) + "\n"
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    tmp = None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".terminal-record-", dir=directory, text=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError as exc:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return {"ok": False, "reason": "write-failed", "detail": str(exc)}
+    return {"ok": True, "contentHash": content_hash(text)}
+
+
 def sweep_stale_staging(run_dir):
     """Loop-entry hygiene: run dirs (/tmp/showrunner-<wi>-<phase>) are shared across runs of
     the same work-item+phase, so a DEAD run's transient staging artifacts (per-dim files from
@@ -439,9 +543,32 @@ def main(argv=None):
     update_p.add_argument("--expected-hash")
     update_p.add_argument("--run-id", required=True)
     update_p.add_argument("--lease")
+    term_p = sub.add_parser("compose-terminal")
+    term_p.add_argument("--path", required=True)
+    term_p.add_argument("--records-path",
+                        help="round-records.json — the durable home of fixes/deferred/coverage; "
+                             "composed Python-side so the unbounded synthesis outputs never ride "
+                             "the courier")
+    term_p.add_argument("--telemetry-path",
+                        help="review-telemetry.json — the small telemetry summary read from disk")
+    term_p.add_argument("--verdict-json", required=True,
+                        help="the small verdict scalars inline (terminal/reason/round/gate/drops/…), "
+                             "self-verified by --verdict-hash; findings are stripped")
+    term_p.add_argument("--verdict-hash",
+                        help="sha256 of --verdict-json exactly as sent — the transport self-check")
+    term_p.add_argument("--run-id", required=True)
+    term_p.add_argument("--lease")
     hash_p = sub.add_parser("hash")
     hash_p.add_argument("--path", required=True)
     args = parser.parse_args(argv)
+    if args.cmd == "compose-terminal":
+        result = compose_terminal_record(args.path, args.verdict_json,
+                                         verdict_hash=args.verdict_hash,
+                                         records_path=args.records_path,
+                                         telemetry_path=args.telemetry_path,
+                                         run_id=args.run_id, lease=args.lease)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
     if args.cmd == "hash":
         try:
             with open(args.path, encoding="utf-8") as fh:

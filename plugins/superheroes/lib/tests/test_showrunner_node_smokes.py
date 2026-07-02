@@ -115,6 +115,11 @@ SHOWRUNNER_SMOKES = [
     # write, one mangled persist answer — the canned full run must still reach 'ready' with
     # correct terminal records written, and no courier text may enter a fence.
     "plugins/superheroes/lib/tests/showrunner_misbehaving_courier_smoke.js",
+    # the terminal-record compose-persist regression (live 2026-07-02, run wf_94c879e0-747):
+    # the full ~14KB verdict staged through one courier writeFile was byte-dropped and the phase
+    # parked payload-stage-failed; the record is now composed Python-side from on-disk state so no
+    # oversized blob crosses the courier, and it survives a byte-dropping courier fake.
+    "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
 ]
 
 

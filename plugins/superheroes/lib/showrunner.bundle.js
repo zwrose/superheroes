@@ -4913,7 +4913,58 @@ async function fencedJsonWrite(path, payload, opts) {
   return { ok: false, reason: lastReason || 'payload-stage-failed' }
 }
 
-module.exports = { fencedJsonWrite }
+// writeTerminalRecord: persist the review loop's terminal record WITHOUT ever staging the full
+// verdict through the courier (live 2026-07-02, run wf_94c879e0-747: the ~14KB evidence-bodied
+// verdict, base64-staged via one haiku writeFile, was byte-dropped in transit; the Python
+// --payload-hash correctly refused the mangled stage and the phase parked payload-stage-failed).
+//
+// Instead — same shape as #136 compose-persist — review_memory.py compose-terminal composes the
+// record PYTHON-SIDE from state already on disk: the unbounded synthesis outputs (fixes / deferred
+// / coverageDecisions) come from round-records.json, the telemetry summary from
+// review-telemetry.json, and the evidence-bodied `findings` are dropped entirely (no
+// terminal-record consumer reads them). Only the small verdict scalars ride inline, self-verified
+// by --verdict-hash so a courier that mangles them fails closed instead of persisting altered
+// content. Overwrite is finalize's job: the record is durable for crash-resume, not append-only.
+async function writeTerminalRecord(recPath, verdict, opts) {
+  const ioApi = io()
+  if (!opts || !opts.runId) return { ok: false, reason: 'missing-run-id' }
+  const p = String(recPath)
+  const runDir = opts.runDir || p.slice(0, p.lastIndexOf('/'))
+  // strip the fields the record must never carry (the evidence-bodied ones) or re-derives from
+  // disk (the unbounded synthesis outputs) — what remains is the small, self-verifying scalar set.
+  const slim = Object.assign({}, verdict || {})
+  delete slim.findings
+  delete slim.carriedFindings
+  delete slim.fixes
+  delete slim.deferred
+  delete slim.coverageDecisions
+  const verdictJson = JSON.stringify(slim)
+  const verdictHash = ioApi.contentHash(verdictJson)
+  const args = ['plugins/superheroes/lib/review_memory.py', 'compose-terminal',
+    '--path', recPath,
+    '--records-path', ioApi.join(runDir, 'round-records.json'),
+    '--telemetry-path', ioApi.join(runDir, 'review-telemetry.json'),
+    '--verdict-json', verdictJson, '--verdict-hash', verdictHash,
+    '--run-id', opts.runId]
+  if (opts.lease) args.push('--lease', opts.lease)
+  let lastReason = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const out = await ioApi.runHelper('python3', args)
+    let parsed = null
+    try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return parsed
+    // a real refusal (missing-run-id, write-failed) is final; only a courier that mangled the
+    // small inline verdict in transit (verdict-corrupt) or an unparseable answer earns the one
+    // retry — the same self-verify-then-retry contract fencedJsonWrite uses for its staged payload.
+    if (parsed && parsed.reason && parsed.reason !== 'verdict-corrupt') {
+      return { ok: false, reason: parsed.reason }
+    }
+    lastReason = (parsed && parsed.reason) || 'terminal-record-write-failed'
+  }
+  return { ok: false, reason: lastReason || 'terminal-record-write-failed' }
+}
+
+module.exports = { fencedJsonWrite, writeTerminalRecord }
 
 };
 
@@ -4927,7 +4978,7 @@ __modules["showrunner"] = function (module, exports, require) {
 const { reviewPanel, gatherReviewSetup } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
-const { fencedJsonWrite } = require('./fenced_json.js')
+const { fencedJsonWrite, writeTerminalRecord } = require('./fenced_json.js')
 const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
@@ -5436,11 +5487,13 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  // D3 fold: overwrite mode — accepted last-writer-wins on a run artifact the loop composes
-  // fresh (the lease serializes live sessions; the old read-hash-then-CAS pair cost two extra
-  // leaves and detected only same-window interleavings — see fenced_json.js).
+  // The record is composed PYTHON-SIDE from the run's on-disk state (round-records.json +
+  // review-telemetry.json); only the small verdict scalars ride inline (self-verified), so the
+  // ~14KB evidence-bodied verdict never crosses a courier writeFile — the payload-stage-failed
+  // park class (live 2026-07-02, run wf_94c879e0-747). Overwrite is finalize's job: the record
+  // is durable for crash-resume, not append-only (the lease serializes live sessions).
   const recPath = `${runDir}/terminal-record.json`
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
   if (!recWrite.ok) {
     const gate = gateForTerminal(verdict && verdict.terminal)
     return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
@@ -6382,7 +6435,9 @@ async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   const recPath = `${runDir}/terminal-record.json`
   const runId = opts.runId || `review-code-${workItem}`
   const lease = opts.lease || undefined
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  // Composed Python-side from the run's on-disk state (round-records.json + review-telemetry.json)
+  // so the evidence-bodied verdict never crosses a courier writeFile (payload-stage-failed class).
+  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
   if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
   // FR-5 (cwd-rooting): courier_exec's rootedCommand pins the loop_readout.py call to the repo
   // root when __SR_ROOT is set — same as renderReadout in frontHalfBoundary. The render is a dumb

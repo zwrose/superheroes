@@ -372,6 +372,118 @@ def test_hash_verb_prints_content_hash(tmp_path):
     assert out == {"ok": True, "contentHash": rm.content_hash("")}
 
 
+def _round_record(round_no, fixes, deferred, coverage, findings_n=40):
+    return {"schemaVersion": 2, "round": round_no, "kind": "baseline",
+            "confirmationPending": False, "changedSubjects": ["Code"],
+            "coverageDecisions": coverage, "tokenUsage": {"code:r%d" % round_no: {"total": 3}},
+            "findings": _big_findings("code", findings_n), "carriedFindings": [],
+            "fix": {"fixes": fixes, "deferred": deferred},
+            "dimensions": {"code": {"dimension": "code", "status": "run", "round": round_no}}}
+
+
+def _telemetry_file(tmp_path):
+    path = tmp_path / "review-telemetry.json"
+    path.write_text(json.dumps({"schemaVersion": 1, "terminal": "clean", "roundCount": 2,
+                                "tokenUsage": {"complete": True, "total": 42, "missing": []},
+                                "dimensionCounts": {"code": {"run": 2}},
+                                "benchmarkValid": True, "runId": "telem-run", "lease": "L"}),
+                    encoding="utf-8")
+    return str(path)
+
+
+def test_compose_terminal_builds_the_readout_record_from_disk(tmp_path):
+    """The terminal record is composed PYTHON-SIDE from state already on disk: the unbounded
+    fixes/deferred/coverageDecisions ride round-records.json (not the courier), telemetry rides
+    review-telemetry.json, and only small verdict scalars ride inline. The evidence-bodied
+    `findings` (which no terminal-record consumer reads) never lands in the record."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    with open(records_path, "w", encoding="utf-8") as fh:
+        json.dump([
+            _round_record(1, ["a.py::f0"],
+                          [{"identity": "a.py::f0", "severity": "Critical", "reason": "out of scope"}],
+                          [{"id": "cd-1", "classKey": "k1"}]),
+            _round_record(2, ["b.py::f1"], [], [{"id": "cd-1", "classKey": "k1"}, {"id": "cd-2", "classKey": "k2"}]),
+        ], fh)
+    telemetry_path = _telemetry_file(tmp_path)
+    target = str(tmp_path / "terminal-record.json")
+    verdict = {"schemaVersion": 1, "terminal": "clean", "reason": "all good", "round": 2,
+               "gate": "clean", "drops": [{"id": "c.py::f9", "title": "spurious", "reason": "unsubstantiated"}],
+               "findings": _big_findings("code", 40)}
+    verdict_json = json.dumps(verdict)
+    r = _cli("compose-terminal", "--path", target, "--records-path", records_path,
+             "--telemetry-path", telemetry_path, "--verdict-json", verdict_json,
+             "--verdict-hash", rm.content_hash(verdict_json), "--run-id", "run-x", "--lease", "L2")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stderr
+    text = open(target, encoding="utf-8").read()
+    assert out["contentHash"] == rm.content_hash(text)
+    assert "records" not in out, "compose-terminal must answer only {ok, contentHash} (no mega echo)"
+    rec = json.loads(text)
+    # small verdict scalars survive
+    assert rec["terminal"] == "clean" and rec["reason"] == "all good" and rec["round"] == 2
+    assert rec["gate"] == "clean"
+    assert rec["drops"][0]["title"] == "spurious"
+    # the unbounded evidence bodies never land in the terminal record
+    assert "findings" not in rec, "the terminal record must not carry the evidence-bodied findings"
+    assert "evidence" not in text, "no evidence body may ride into the terminal record"
+    # fixes/deferred/coverageDecisions are composed from the durable round records
+    assert rec["fixes"] == ["a.py::f0", "b.py::f1"], "fixes are the union across rounds, from disk"
+    assert [d["identity"] for d in rec["deferred"]] == ["a.py::f0"]
+    assert [c["id"] for c in rec["coverageDecisions"]] == ["cd-1", "cd-2"], "coverage deduped by id"
+    # telemetry is the on-disk summary (not the courier-transported blob)
+    assert rec["telemetry"]["roundCount"] == 2 and rec["telemetry"]["tokenUsage"]["total"] == 42
+    assert rec["runId"] == "run-x" and rec["lease"] == "L2"
+
+
+def test_compose_terminal_verdict_hash_mismatch_fails_closed(tmp_path):
+    """A courier that mangles the inline verdict scalars must fail closed here (it cannot also
+    recompute the sha256) — never persist silently altered content."""
+    rm = load_memory()
+    target = str(tmp_path / "terminal-record.json")
+    verdict_json = json.dumps({"schemaVersion": 1, "terminal": "clean", "round": 1})
+    r = _cli("compose-terminal", "--path", target,
+             "--verdict-json", verdict_json, "--verdict-hash", rm.content_hash("something-else"),
+             "--run-id", "run-x")
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["reason"] == "verdict-corrupt"
+    assert not os.path.exists(target), "a corrupt verdict must not be written"
+
+
+def test_compose_terminal_overwrites_stale_prior_run(tmp_path):
+    """Finalize composes the record fresh and unconditionally replaces a stale prior-run
+    terminal-record.json — the file is durable for crash-resume, not append-only."""
+    rm = load_memory()
+    target = tmp_path / "terminal-record.json"
+    target.write_text(json.dumps({"terminal": "halted", "reason": "STALE prior run"}), encoding="utf-8")
+    verdict_json = json.dumps({"schemaVersion": 1, "terminal": "clean", "reason": "fresh", "round": 1})
+    r = _cli("compose-terminal", "--path", str(target),
+             "--verdict-json", verdict_json, "--verdict-hash", rm.content_hash(verdict_json),
+             "--run-id", "run-fresh")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stderr
+    rec = json.loads(target.read_text(encoding="utf-8"))
+    assert rec["terminal"] == "clean" and rec["reason"] == "fresh"
+    assert "STALE prior run" not in target.read_text(encoding="utf-8")
+
+
+def test_compose_terminal_missing_records_still_writes(tmp_path):
+    """Absent round-records.json (an early terminal before any round persisted) degrades to an
+    empty fixes/deferred list — the record still writes so the readout + gate can proceed."""
+    rm = load_memory()
+    target = str(tmp_path / "terminal-record.json")
+    verdict_json = json.dumps({"schemaVersion": 1, "terminal": "cannot-certify", "round": 1})
+    r = _cli("compose-terminal", "--path", target, "--records-path", str(tmp_path / "absent.json"),
+             "--telemetry-path", str(tmp_path / "absent-telem.json"),
+             "--verdict-json", verdict_json, "--verdict-hash", rm.content_hash(verdict_json),
+             "--run-id", "run-x")
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stderr
+    rec = json.loads(open(target, encoding="utf-8").read())
+    assert rec["terminal"] == "cannot-certify"
+    assert rec["fixes"] == [] and rec["deferred"] == [] and rec["coverageDecisions"] == []
+
+
 def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):
     """Run dirs are shared across runs of the same work-item+phase: loop entry sweeps a dead
     run's TRANSIENT staging artifacts while preserving the durable loop state crash-resume

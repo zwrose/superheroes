@@ -6,7 +6,7 @@
 const { reviewPanel, gatherReviewSetup } = require('./review_panel_shell.js')
 const { testPilotPhase } = require('./test_pilot_phase.js')
 const { io, joinPath } = require('./io_seam.js')
-const { fencedJsonWrite } = require('./fenced_json.js')
+const { fencedJsonWrite, writeTerminalRecord } = require('./fenced_json.js')
 const phaseStepTwin = require('./phase_step.js')
 const recoverTwin = require('./recover.js')
 const frontHalfTwin = require('./front_half.js')
@@ -515,11 +515,13 @@ async function reviewDocPhase(doc, workItem, opts) {
     runDir,
   )
   // persist the #104 terminal record so the front-half boundary can embed its readout (FR-7).
-  // D3 fold: overwrite mode — accepted last-writer-wins on a run artifact the loop composes
-  // fresh (the lease serializes live sessions; the old read-hash-then-CAS pair cost two extra
-  // leaves and detected only same-window interleavings — see fenced_json.js).
+  // The record is composed PYTHON-SIDE from the run's on-disk state (round-records.json +
+  // review-telemetry.json); only the small verdict scalars ride inline (self-verified), so the
+  // ~14KB evidence-bodied verdict never crosses a courier writeFile — the payload-stage-failed
+  // park class (live 2026-07-02, run wf_94c879e0-747). Overwrite is finalize's job: the record
+  // is durable for crash-resume, not append-only (the lease serializes live sessions).
   const recPath = `${runDir}/terminal-record.json`
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
   if (!recWrite.ok) {
     const gate = gateForTerminal(verdict && verdict.terminal)
     return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
@@ -1461,7 +1463,9 @@ async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   const recPath = `${runDir}/terminal-record.json`
   const runId = opts.runId || `review-code-${workItem}`
   const lease = opts.lease || undefined
-  const recWrite = await fencedJsonWrite(recPath, verdict || {}, { overwrite: true, runId, lease })
+  // Composed Python-side from the run's on-disk state (round-records.json + review-telemetry.json)
+  // so the evidence-bodied verdict never crosses a courier writeFile (payload-stage-failed class).
+  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
   if (!recWrite.ok) return { ok: false, reason: recWrite.reason || 'terminal-record-write-failed' }
   // FR-5 (cwd-rooting): courier_exec's rootedCommand pins the loop_readout.py call to the repo
   // root when __SR_ROOT is set — same as renderReadout in frontHalfBoundary. The render is a dumb
