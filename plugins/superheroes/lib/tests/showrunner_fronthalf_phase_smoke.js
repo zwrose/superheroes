@@ -9,6 +9,7 @@
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
+const { io } = require('../io_seam.js')
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
@@ -144,7 +145,8 @@ async function main() {
   r = await sr.reviewDocPhase('plan', 'wi-f', { runId: 'run-f', lease: 'lease-f', reviewedHash: 'hash-f' })
   const gatePrompt = execPrompts.find((p) => p.includes('set-gate') || p.includes('gate_write.py'))
   assert.ok(gatePrompt, 'reviewDocPhase emitted a gate write command')
-  assert.match(gatePrompt, /--expected-hash ['"]?hash-f['"]?/)
+  const postPanelHash = io().contentHash(fs.readFileSync('docs/superheroes/wi-f/plan.md', 'utf8'))
+  assert.match(gatePrompt, new RegExp(`--expected-hash ['"]?${postPanelHash}['"]?`), 'gate write uses post-panel doc hash, not pre-loop snapshot')
   assert.match(gatePrompt, /--run-id ['"]?run-f['"]?/)
   assert.match(gatePrompt, /--lease ['"]?lease-f['"]?/)
   assert.strictEqual(r.phaseResult.confidence, 'high')

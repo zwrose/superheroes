@@ -443,6 +443,7 @@ The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate p
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
 # REVIEW is "passed" or "changes-requested" per the verdict above.
+REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$PLAN_PATH")
 GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
   --work-item "$WORK_ITEM" --reviewed-path "$PLAN_PATH" --review "$REVIEW" \
   --parent-doc spec --root "$ROOT" \

@@ -419,6 +419,12 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
+  // Re-hash after the revise loop may have edited the doc in place (fenced set-gate refuses stale snapshots).
+  try {
+    reviewedHash = io().contentHash(await io().readText(docPathFor(workItem, doc)))
+  } catch (_) {
+    reviewedHash = io().contentHash('')
+  }
   // Record gate + journal + checkpoint in one exec call (persistPhase, FR-4 persist order).
   const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =

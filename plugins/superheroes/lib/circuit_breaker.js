@@ -21,6 +21,15 @@ function recurrenceKey(finding) {
   return findingIdentity(finding)
 }
 function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _generalizeKeys(roundRec) {
+  return new Set((roundRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
+}
+function _blockingCountExcludingGeneralize(roundRec) {
+  const generalize = _generalizeKeys(roundRec)
+  const blocking = _blocking(roundRec)
+  if (!generalize.size) return blocking.length
+  return blocking.filter((f) => !generalize.has(recurrenceKey(f))).length
+}
 function checkCircuitBreaker(rounds, maxRounds) {
   const n = rounds.length
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
@@ -30,9 +39,9 @@ function checkCircuitBreaker(rounds, maxRounds) {
       detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
   }
   if (n >= 3) {
-    const cN = _blocking(rounds[n - 1]).length
-    const cN1 = _blocking(rounds[n - 2]).length
-    const cN2 = _blocking(rounds[n - 3]).length
+    const cN = _blockingCountExcludingGeneralize(rounds[n - 1])
+    const cN1 = _blockingCountExcludingGeneralize(rounds[n - 2])
+    const cN2 = _blockingCountExcludingGeneralize(rounds[n - 3])
     if (cN > 0 && cN >= cN1 && cN1 >= cN2) {
       return { halt: true, reason: 'no-net-progress',
         detail: `Blocking-finding count did not decrease over two rounds (${cN2} → ${cN1} → ${cN}).` }

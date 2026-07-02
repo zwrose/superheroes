@@ -452,6 +452,7 @@ rest and **never grants `passed`** (it can only reset `passed`→`pending` or no
 ```bash
 if [ "$REVISED" = yes ]; then
   ROOT=$(git rev-parse --show-toplevel)
+  REVIEWED_HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$SPEC_PATH")
   GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode reset --doc spec \
     --work-item "$WORK_ITEM" --reviewed-path "$SPEC_PATH" --root "$ROOT" \
     --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")

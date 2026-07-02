@@ -43,6 +43,20 @@ def _blocking(round_findings):
     return [f for f in round_findings["findings"] if f["severity"] in BLOCKING]
 
 
+def _generalize_keys(round_rec):
+    return {g.get("classKey") for g in round_rec.get("generalizeRequired", [])
+            if isinstance(g, dict) and g.get("classKey")}
+
+
+def _blocking_count_excluding_generalize(round_rec):
+    """Count blocking findings not covered by this round's coverage-decision grace."""
+    generalize = _generalize_keys(round_rec)
+    blocking = _blocking(round_rec)
+    if not generalize:
+        return len(blocking)
+    return len([f for f in blocking if recurrence_key(f) not in generalize])
+
+
 def check_circuit_breaker(rounds, max_rounds):
     n = len(rounds)
     if n == 0:
@@ -61,10 +75,12 @@ def check_circuit_breaker(rounds, max_rounds):
         }
 
     # Criterion 2: no net progress across two consecutive round-transitions.
+    # Exclude generalize-pending classKeys from each round's count so grace at round 3
+    # is not preempted by a flat single-class recurrence (Criterion 1's job).
     if n >= 3:
-        c_n = len(_blocking(rounds[n - 1]))
-        c_n1 = len(_blocking(rounds[n - 2]))
-        c_n2 = len(_blocking(rounds[n - 3]))
+        c_n = _blocking_count_excluding_generalize(rounds[n - 1])
+        c_n1 = _blocking_count_excluding_generalize(rounds[n - 2])
+        c_n2 = _blocking_count_excluding_generalize(rounds[n - 3])
         if c_n > 0 and c_n >= c_n1 and c_n1 >= c_n2:
             return {
                 "halt": True,

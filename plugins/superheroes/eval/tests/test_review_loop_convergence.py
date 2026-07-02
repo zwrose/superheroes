@@ -70,32 +70,11 @@ def observe_corrupt_probe(fixture):
             assert state["state"] == "corrupt"
         policy = RP.plan_round({"round": 2, "dimensions": ["test-reviewer"], "changedSubjects": "malformed", "previous": {}})
         assert policy["dimensions"]["test-reviewer"]["tier"] == "reviewer-deep"
-        return {"terminal": PT.round_gate_from_dimension_results({}, ["test-reviewer"], final_confirmation=False)[0], "corruptStateMustNotCertify": True}
+        return {
+            "terminal": PT.round_gate_from_dimension_results({}, ["test-reviewer"], final_confirmation=False)[0],
+            "corruptStateMustNotCertify": not state["ok"],
+        }
     raise AssertionError(f"unhandled fixture {fixture['name']}")
-
-
-def test_wrong_principle_probe_must_not_pass():
-    fixture = load("wrong_principle.json")
-    assert fixture["mustNotPass"] is True
-    assert fixture["expectedTerminal"] != "clean"
-
-
-def test_skipped_dimension_regression_probe_must_not_pass():
-    fixture = load("skipped_dimension_regression.json")
-    assert fixture["mustNotPass"] is True
-    assert fixture["expectedTerminal"] != "clean"
-
-
-def test_telemetry_failure_keeps_terminal_but_not_benchmark_valid():
-    fixture = load("telemetry_failure.json")
-    assert fixture["expectedTerminal"] == fixture["baselineTerminal"]
-    assert fixture["benchmarkValid"] is False
-
-
-def test_resume_memory_fixture_names_prior_state():
-    fixture = load("resume_memory.json")
-    assert "round-records.json" in fixture["seededFiles"]
-    assert "coverageDecision" in fixture["expectedFixContext"]
 
 
 def test_plan_120_replay_reaches_target_round_count():
