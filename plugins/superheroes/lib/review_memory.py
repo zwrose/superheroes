@@ -149,6 +149,59 @@ def load_records(path, dimensions):
     return load_records_state(path, dimensions)["records"]
 
 
+# The resume summary: everything the loop needs IN MEMORY to seed a resume, bounded.
+# Findings keep only their small identity/class/severity skeleton — the circuit breaker
+# (file+title identity), recurrence (classKey/severity/carried), the round policy
+# (per-dimension status/confidence/subjects/hasFindings), and the fix-context all stay
+# functional — while the unbounded evidence bodies and reviewer receipts stay on disk
+# (the read twin of the compose-persist write-side fix; live 2026-07-02 defect class).
+_SKELETON_FIELDS = ("file", "line", "title", "severity", "taxonomy", "dimension",
+                    "classKey", "carried", "sourceRound")
+_MAX_TITLE = 300
+
+
+def _skeleton_finding(finding):
+    if not isinstance(finding, dict):
+        return {}
+    out = {k: finding[k] for k in _SKELETON_FIELDS if k in finding}
+    title = out.get("title")
+    if isinstance(title, str) and len(title) > _MAX_TITLE:
+        out["title"] = title[:_MAX_TITLE]
+    return out
+
+
+def _summarize_dimension(dim):
+    if not isinstance(dim, dict):
+        return {}
+    findings = dim.get("findings") if isinstance(dim.get("findings"), list) else []
+    out = {k: dim[k] for k in ("dimension", "status", "confidence", "round", "subjects",
+                               "carriedFromRound", "escalated", "tier") if k in dim}
+    out["findings"] = [_skeleton_finding(f) for f in findings]
+    out["hasFindings"] = bool(findings) or bool(dim.get("hasFindings"))
+    out["blockingCount"] = sum(1 for f in findings
+                               if isinstance(f, dict) and f.get("severity") in BLOCKING)
+    return out
+
+
+def summarize_record(record):
+    rec = record if isinstance(record, dict) else {}
+    findings = rec.get("findings") if isinstance(rec.get("findings"), list) else []
+    carried = rec.get("carriedFindings") if isinstance(rec.get("carriedFindings"), list) else []
+    return {
+        "schemaVersion": rec.get("schemaVersion"),
+        "round": rec.get("round"),
+        "kind": rec.get("kind"),
+        "confirmationPending": bool(rec.get("confirmationPending")),
+        "changedSubjects": rec.get("changedSubjects"),
+        "coverageDecisions": rec.get("coverageDecisions") or [],
+        "tokenUsage": rec.get("tokenUsage"),
+        "findings": [_skeleton_finding(f) for f in findings],
+        "carriedFindings": [_skeleton_finding(f) for f in carried],
+        "dimensions": {name: _summarize_dimension(d)
+                       for name, d in (rec.get("dimensions") or {}).items()},
+    }
+
+
 def persist_record(path, records, record, expected_hash=None, run_id=None, lease=None):
     state = load_records_state(path, [])
     if expected_hash and state.get("contentHash") != expected_hash:
@@ -244,6 +297,9 @@ def main(argv=None):
     load_p = sub.add_parser("load")
     load_p.add_argument("--path", required=True)
     load_p.add_argument("--dimensions", required=True)
+    loads_p = sub.add_parser("load-summary")
+    loads_p.add_argument("--path", required=True)
+    loads_p.add_argument("--dimensions", required=True)
     persist_p = sub.add_parser("persist")
     persist_p.add_argument("--path", required=True)
     persist_p.add_argument("--dimensions", required=True)
@@ -311,6 +367,11 @@ def main(argv=None):
         print(json.dumps(_strip_records(result)))
         return 0 if result.get("ok") else 1
     dimensions = json.loads(args.dimensions)
+    if args.cmd == "load-summary":
+        result = load_records_state(args.path, dimensions)
+        result["records"] = [summarize_record(r) for r in result.get("records") or []]
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
     if args.cmd == "load":
         result = load_records_state(args.path, dimensions)
         print(json.dumps(result))

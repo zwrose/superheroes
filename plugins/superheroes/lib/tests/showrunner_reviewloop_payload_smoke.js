@@ -36,12 +36,15 @@ function receipt(runId, round) {
     coverageDecisionIds: [] }
 }
 
-// Wrap the disk io: real behavior, but capture every runHelper invocation's args.
+// Wrap the disk io: real behavior, but capture every runHelper invocation's args + stdout size.
 const helperCalls = []
+const helperResults = []
 globalThis.io = Object.assign({}, defaultIo, {
   async runHelper(cmd, args) {
     helperCalls.push([cmd].concat(args || []))
-    return defaultIo.runHelper(cmd, args)
+    const out = await defaultIo.runHelper(cmd, args)
+    helperResults.push({ args: args || [], stdout: out.stdout || '' })
+    return out
   },
 })
 
@@ -101,6 +104,35 @@ async function main() {
   assert.ok(!fjCall.includes('--payload-json'), 'fencedJsonWrite must not pass --payload-json')
   for (const arg of fjCall) assert.ok(String(arg).length <= ARG_BOUND, 'fenced write arg too large')
   assert.ok(!fs.existsSync(recPath + '.payload'), 'staged payload file consumed on success')
+
+  // (d) the RESUME read is bounded too: a large on-disk history loads as summaries via
+  // load-summary — the evidence bodies never ride the courier stdout back (the read twin
+  // of the compose-persist fix).
+  const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resume-'))
+  const bigRecs = [1, 2].map((rnd) => ({
+    schemaVersion: 2, round: rnd, kind: 'baseline', confirmationPending: false,
+    changedSubjects: ['Code'], coverageDecisions: [], tokenUsage: {},
+    findings: BIG_FINDINGS, carriedFindings: [],
+    dimensions: { code: { dimension: 'code', status: 'run', confidence: 'high', round: rnd, findings: BIG_FINDINGS, subjects: ['Code'] } },
+  }))
+  fs.writeFileSync(`${rdir}/round-records.json`, JSON.stringify(bigRecs))
+  const onDisk = fs.statSync(`${rdir}/round-records.json`).size
+  helperResults.length = 0
+  globalThis.reviewerAgent = async (_r, _c, _rub, runDir, r) =>
+    ({ findings: [], confidence: 'high', verificationReceipt: receipt(runDir, r), usage: { total: 1 } })
+  const rv = await reviewPanel({
+    reviewerSet: ['code'], context: {}, rubric: 'r', runKey: rdir, runDir: rdir,
+    fixStep: async () => ({ fixed: [], changedSubjects: ['Code'], coverageDecisions: [] }),
+    maxRounds: 7, legKind: { panel: true, code: false },
+  })
+  assert.ok(rv && typeof rv.terminal === 'string', 'resume run reaches a terminal')
+  const loadCall = helperResults.find((h) => h.args.includes('load-summary'))
+  assert.ok(loadCall, 'the resume seed goes through load-summary')
+  assert.ok(loadCall.stdout.length < onDisk / 5,
+    `resume load stdout must be bounded (${loadCall.stdout.length}B vs ${onDisk}B on disk)`)
+  assert.ok(!loadCall.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the load stdout')
+  const plainLoad = helperResults.find((h) => h.args.includes('load') && !h.args.includes('load-summary'))
+  assert.ok(!plainLoad, 'the full-echo load verb must not be used by the loop')
 
   console.log('ok: review-loop persistence ships paths + small scalars only (no mega-JSON through the courier)')
 }

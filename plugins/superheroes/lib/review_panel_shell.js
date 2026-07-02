@@ -124,8 +124,13 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
+// load-summary is the read twin of compose-persist: the resume seed comes back as BOUNDED
+// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
+// recurrence, policy, and fix-context need in memory), never the full findings bodies —
+// echoing a multi-round evidence-laden file through the courier stdout is the same
+// mega-payload defect as the write side (live 2026-07-02), in reverse.
 async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)

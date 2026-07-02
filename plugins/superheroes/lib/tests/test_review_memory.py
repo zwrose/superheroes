@@ -158,6 +158,60 @@ def test_update_round_missing_round_fails_closed(tmp_path):
     assert out["ok"] is False and out["reason"] == "round-missing"
 
 
+def test_load_summary_bounds_large_records(tmp_path):
+    """The resume read mirrors the write-side fix: a large on-disk records file loads as a
+    BOUNDED summary — findings keep only their small identity/class/severity skeleton (the
+    breaker, recurrence, and fix-context inputs); the unbounded evidence bodies and receipts
+    never ride the courier stdout."""
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    recs = []
+    for rnd in (1, 2):
+        findings = _big_findings("code", 50)   # ~100KB of evidence per round
+        recs.append({"schemaVersion": 2, "round": rnd, "kind": "baseline",
+                     "confirmationPending": rnd == 2, "changedSubjects": ["Code"],
+                     "coverageDecisions": [{"id": "cd-%d" % rnd, "classKey": "k"}],
+                     "tokenUsage": {"code:r%d" % rnd: {"total": 3}},
+                     "findings": findings, "carriedFindings": [],
+                     "dimensions": {"code": {"dimension": "code", "status": "run",
+                                             "confidence": "high", "round": rnd,
+                                             "findings": findings, "subjects": ["Code"],
+                                             "verificationReceipt": {"chain": ["y" * 5000]}}}})
+    with open(records_path, "w", encoding="utf-8") as fh:
+        json.dump(recs, fh)
+    on_disk = os.path.getsize(records_path)
+    r = _cli("load-summary", "--path", records_path, "--dimensions", '["code"]')
+    out = json.loads(r.stdout)
+    assert out["ok"] is True, r.stderr
+    assert len(r.stdout) < on_disk / 5, (
+        "the resume summary must be a small fraction of the on-disk file "
+        "(%d vs %d on disk)" % (len(r.stdout), on_disk))
+    assert "evidence" not in r.stdout, "findings bodies must never ride the load stdout"
+    assert "verificationReceipt" not in r.stdout, "reviewer receipts must never ride the load stdout"
+    assert out["contentHash"] == rm.content_hash(open(records_path, encoding="utf-8").read())
+    s1, s2 = out["records"]
+    # everything the loop needs in memory to seed a resume survives:
+    assert s1["round"] == 1 and s1["kind"] == "baseline"
+    assert s2["confirmationPending"] is True
+    assert s2["changedSubjects"] == ["Code"]
+    assert s2["coverageDecisions"][0]["id"] == "cd-2"
+    f = s1["findings"][0]
+    assert f["severity"] == "Critical" and f["file"] == "a.py" and f["title"]
+    assert f["classKey"] if "classKey" in f else True
+    dim = s1["dimensions"]["code"]
+    assert dim["status"] == "run" and dim["confidence"] == "high"
+    assert dim["hasFindings"] is True and dim["blockingCount"] == 50
+    assert dim["subjects"] == ["Code"]
+
+
+def test_load_summary_corrupt_reports_corrupt(tmp_path):
+    p = tmp_path / "round-records.json"
+    p.write_text("{corrupt", encoding="utf-8")
+    r = _cli("load-summary", "--path", str(p), "--dimensions", '["code"]')
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["state"] == "corrupt"
+
+
 def test_hash_verb_prints_content_hash(tmp_path):
     rm = load_memory()
     p = tmp_path / "f.json"

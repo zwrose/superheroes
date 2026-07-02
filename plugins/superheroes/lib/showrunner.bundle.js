@@ -809,8 +809,13 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
+// load-summary is the read twin of compose-persist: the resume seed comes back as BOUNDED
+// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
+// recurrence, policy, and fix-context need in memory), never the full findings bodies —
+// echoing a multi-round evidence-laden file through the courier stdout is the same
+// mega-payload defect as the write side (live 2026-07-02), in reverse.
 async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet)])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -5539,12 +5544,28 @@ async function reconcile(workItem) {
   return Object.assign({}, decision, { generation: snap.generation })
 }
 
+// releaseLease: CAS-release the work-item ref-lease at EVERY terminal exit of the run — parks
+// and hand-backs alike — so a relaunch never waits out DEFAULT_TTL (live 2026-07-02: each park
+// cost 30 minutes). Only fires when THIS run acquired (generation threaded from reconcile; a
+// lease-held park carries none). Best-effort: a failed release leaves the TTL as the backstop,
+// and the generation precondition means a superseded holder's lease is never deleted.
+async function releaseLease(workItem, generation) {
+  if (generation == null) return
+  try {
+    await exec([
+      `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
+      `--generation ${shq(String(generation))} --release`,
+    ])
+  } catch (_) { /* TTL backstop */ }
+}
+
 async function showrunner({ workItem }) {
   // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
   // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   const r = await reconcile(workItem)
   if (r.action === 'park_gate' || r.action === 'gate') {
+    await releaseLease(workItem, r.generation)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
   // UFR-1: refuse to run if the spec hasn't been approved.
@@ -5552,6 +5573,7 @@ async function showrunner({ workItem }) {
   const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
   const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
   if (startup.action !== 'proceed') {
+    await releaseLease(workItem, r.generation)
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
   const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
@@ -5607,7 +5629,14 @@ async function showrunner({ workItem }) {
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
     if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park
   }
-  return runPhases(workItem, fromStep, deps)
+  try {
+    return await runPhases(workItem, fromStep, deps)
+  } finally {
+    // Every runPhases exit is terminal for THIS run — phaseStep park, boundary park, or the
+    // ship hand-back ('ready') — and a crash unwinds through here too. Release the lease so
+    // the relaunch (or the owner's next run) never waits out the TTL.
+    await releaseLease(workItem, r.generation)
+  }
 }
 
 // readGate: IO read via exec (definition-doc on disk). A missing/malformed doc returns the
@@ -5653,10 +5682,14 @@ async function readStartupState(workItem) {
     return await courier.runCourierJson(
       'read startup state',
       `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
-      { require: ['ok', 'spec_gate', 'model_overrides'] },
+      // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed
+      // resolution), so an absent field means a mangled courier response — retry rather than
+      // silently planting nothing (which would mis-route the NOTIFY ledger + review doc paths
+      // to the in-repo fallback on an out-of-repo-calibrated project mid-run).
+      { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] },
     )
   } catch (_) {
-    return { ok: true, spec_gate: 'unreadable', model_overrides: {} }
+    return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '' }
   }
 }
 

@@ -7,7 +7,7 @@ global.agent = async (_prompt, opts) => {
   labels.push(opts.label)
   if (opts.label === 'read world-snapshot') return [{ ok: true, stdout: JSON.stringify({ ok: true, snapshot: {} }) }]
   if (opts.label === 'read startup state') {
-    return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} }) }]
+    return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
   }
   return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
 }

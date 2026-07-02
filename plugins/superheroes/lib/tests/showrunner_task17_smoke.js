@@ -35,7 +35,7 @@ async function partA() {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' } }) }]
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' }, doc_dir: '' }) }]
     }
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
@@ -94,7 +94,7 @@ async function partA() {
   globalThis.agent = async function(prompt, opts) {
     const label = (opts && opts.label) || ''
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: 'bad' }) }]
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: 'bad', doc_dir: '' }) }]
     }
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {

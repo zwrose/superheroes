@@ -160,12 +160,33 @@ async function partStartupPlants() {
   delete globalThis.__SR_DOC_DIRS
 }
 
+// (f) contract: a startup response MISSING doc_dir is a mangled courier response — the Python
+// side ALWAYS emits it ('' on failed resolution) — so the courier must retry, then fall back
+// fail-safe, never silently plant nothing while the spec gate read "passes".
+async function partMissingDocDirRetries() {
+  let calls = 0
+  globalThis.agent = async (prompt, opts) => {
+    const label = (opts && opts.label) || ''
+    if (label === 'read startup state') {
+      calls += 1
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} }) }]
+    }
+    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{}' }]
+    return null
+  }
+  const facts = await sr.readStartupState('wi-m')
+  assert.strictEqual(calls, 2, 'a doc_dir-less startup response must be retried (mangled courier output)')
+  assert.strictEqual(facts.spec_gate, 'unreadable', 'both attempts missing doc_dir -> the fail-safe fallback')
+  assert.strictEqual(facts.doc_dir, '', 'the fallback carries the empty doc_dir shape')
+}
+
 async function main() {
   partFallback()
   partPlanted()
   await partAppendNotify()
   await partReviewRead()
   await partStartupPlants()
+  await partMissingDocDirRetries()
   console.log('ok: front-half doc/marker/ledger paths are storage-mode-aware (planted dir + legacy fallback)')
 }
 
