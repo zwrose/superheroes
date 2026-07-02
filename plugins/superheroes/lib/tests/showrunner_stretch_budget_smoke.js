@@ -76,6 +76,7 @@ const COURIER_ALLOW = [
   /^prepare CI fix$/,
   /^push CI fix \+ recheck$/,
   /^post readout$/,
+  /^release lease$/,               // the dedicated hardened lease-release courier (BUG C — was 'exec')
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -119,7 +120,8 @@ const PHASE_BUDGETS = {
   // mark PR ready + save phase progress
   'mark-ready': 2,
   // read PR (checkpoint_entry --read-pr) + resolve review target + renew fence + check
-  // ship-readiness (the folded green path) + post readout (hand-back) + lease release
+  // ship-readiness (the folded green path) + post readout (hand-back) + lease release (the
+  // dedicated hardened 'release lease' courier, BUG C — still ONE leaf, was label 'exec')
   ship: 6,
 }
 

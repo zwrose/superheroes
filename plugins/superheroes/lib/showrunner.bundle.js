@@ -146,10 +146,19 @@ globalThis.io = {
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
     var parts = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
-    var out = await __sh(parts + ' 2>&1; echo __SR_EXIT:$?')
-    var m = String(out || '').match(/__SR_EXIT:(\d+)\s*$/)
-    var status = m ? Number(m[1]) : 1
-    var stdout = m ? String(out).slice(0, m.index).replace(/\n$/, '') : String(out || '')
+    var s = String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || '')
+    // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in ``` fences (live
+    // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
+    // end-anchored match misses and a clean exit-0 helper is falsely read as FAILED (coverage-
+    // decisions-unreadable / telemetry-write-failed / memory degraded — the review-plan park class).
+    // Find the LAST marker anywhere, slice stdout up to it, then strip one wrapping fence pair from
+    // that slice. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
+    // payload is arbitrary text that may legitimately contain fences).
+    var re = /__SR_EXIT:(\d+)/g, m, last = null
+    while ((m = re.exec(s)) !== null) last = m
+    var status = last ? Number(last[1]) : 1
+    var stdout = last ? s.slice(0, last.index) : s
+    stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
     return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
   },
 }
@@ -1477,8 +1486,18 @@ function rootedCommand(command) {
   return "cd '" + root.replace(/'/g, "'\\''") + "' && " + command
 }
 
-function promptFor(command) {
-  return 'Run exactly this command and return ONLY stdout, unchanged:\n\n' + rootedCommand(command)
+// promptFor: the courier command prompt. opts.strict adds an explicit no-improvising clause for
+// state-changing single-command leaves (e.g. the lease release — live 2026-07-02 the park-path
+// release courier freestyled unscripted Bash and manually released the lease). The lead ALWAYS
+// begins 'Run exactly this command' (targetCommandPrompt keys off that prefix) and the command
+// always follows the FIRST blank line unchanged, so the strict clause rides the prefix only.
+function promptFor(command, opts) {
+  const lead = (opts && opts.strict)
+    ? 'Run exactly this command and return ONLY stdout, unchanged. Run ONLY this single command — ' +
+      'do not run any other command, do not test, verify, explore, or re-run it, just execute the ' +
+      'one command below and return its stdout verbatim:'
+    : 'Run exactly this command and return ONLY stdout, unchanged:'
+  return lead + '\n\n' + rootedCommand(command)
 }
 
 function firstResult(raw) {
@@ -1509,15 +1528,29 @@ function missingRequired(value, required) {
 // _parseExecResult (showrunner.js). A haiku courier sometimes wraps correct output in ```json
 // fences or prose (observed live 2026-07-02 on 'read startup state'; both attempts failed the
 // bare JSON.parse and the run parked 'unreadable'). Candidates, in order: (a) the FIRST fenced
-// block anywhere (prose-prefixed fences included), (b) the whole trimmed string. Each candidate:
-// direct JSON.parse, then a brace-slice from first '{' to last '}' (prose around a bare object).
-// First candidate yielding an object/array wins; otherwise null (the caller retries fail-closed).
+// block anywhere (prose-prefixed fences included), (b) the whole trimmed string, (c) each
+// individual line, LAST-to-first. Each candidate: direct JSON.parse, then a brace-slice from
+// first '{' to last '}' (prose around a bare object). First candidate yielding an object/array
+// wins; otherwise null (the caller retries fail-closed).
+//
+// The per-line pass (c) handles a `side-effect && save` chain whose answer is TWO top-level JSON
+// objects on two lines — the set-gate line then the save line (live 2026-07-02, persistPhase
+// parked review-plan on a healthy state). Neither the whole-string parse nor the first-{…-last-}
+// slice can read two objects, so fall to the lines and take the LAST parseable one (the SAVE
+// result — the caller's require() then validates THAT object). Ordered AFTER the whole-string
+// candidates so a single (possibly pretty-printed) object/array is parsed whole and never
+// mis-sliced into one of its own inner lines (e.g. a pretty-printed array's last element).
 function extractJson(text) {
   const trimmed = String(text == null ? '' : text).trim()
   const candidates = []
   const fenceMatch = trimmed.match(/```(?:[a-zA-Z0-9]+)?\s*([\s\S]*?)```/)
   if (fenceMatch) candidates.push(fenceMatch[1].trim())
   candidates.push(trimmed)
+  const lines = trimmed.split('\n')
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].trim()
+    if (line) candidates.push(line)
+  }
   for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate)
@@ -1535,10 +1568,10 @@ function extractJson(text) {
   return null
 }
 
-async function callOnce(label, command) {
+async function callOnce(label, command, promptOpts) {
   // `courier: true` marks this a dumb pipe for the bundle preamble's unconditional cheapest-model
   // pinning (same treatment as label 'exec'/'io'); the preamble strips it before the real agent().
-  return currentAgent()(promptFor(command), { label, courier: true })
+  return currentAgent()(promptFor(command, promptOpts), { label, courier: true })
 }
 
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
@@ -1560,9 +1593,10 @@ async function runCourierText(label, command) {
 
 async function runCourierJson(label, command, opts) {
   const options = opts || {}
+  const promptOpts = options.strict ? { strict: true } : undefined
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const raw = await callOnce(label, command)
+    const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
     if (!commandOk(raw)) {
       return { ok: false, error: out.trim() || 'command failed' }
@@ -5715,13 +5749,21 @@ async function reconcile(workItem) {
 // cost 30 minutes). Only fires when THIS run acquired (generation threaded from reconcile; a
 // lease-held park carries none). Best-effort: a failed release leaves the TTL as the backstop,
 // and the generation precondition means a superseded holder's lease is never deleted.
+// This is a state-changing single command, so it rides a DEDICATED hardened courier (NOT the
+// permissive batch exec): a strict prompt forbidding extra commands + require(['ok']) so a
+// freestyling courier's chatty answer is rejected and retried rather than accepted. Live
+// 2026-07-02 the park-path release rode the batch exec and the courier improvised ~10 unscripted
+// Bash calls, "manually" releasing the lease itself — the misbehaving-courier class #138 hardened
+// for WRITES, now closed for this exec leaf too.
 async function releaseLease(workItem, generation) {
   if (generation == null) return
   try {
-    await exec([
+    await courier.runCourierJson(
+      'release lease',
       `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
       `--generation ${shq(String(generation))} --release`,
-    ])
+      { require: ['ok'], retryRealFailure: false, strict: true },
+    )
   } catch (_) { /* TTL backstop */ }
 }
 

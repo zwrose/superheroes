@@ -44,6 +44,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
+    # BUG B: persistPhase resolves the SAVE result from a two-JSON-line side-effect && save chain.
+    "plugins/superheroes/lib/tests/showrunner_persist_sideeffect_smoke.js",
     # #115: the two new in-memory review-panel smokes.
     "plugins/superheroes/lib/tests/showrunner_review_crash_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_review_round_state_smoke.js",

@@ -368,11 +368,16 @@ def sweep_stale_staging(run_dir):
     """Loop-entry hygiene: run dirs (/tmp/showrunner-<wi>-<phase>) are shared across runs of
     the same work-item+phase, so a DEAD run's transient staging artifacts (per-dim files from
     pre-D3 bundles, staged skeletons/updates, fenced .payload files) must not confuse a fresh
-    round. Durable loop state (round-records.json, deferred-set.json, round-bodies-*,
-    last-extras.json, terminal-record.json, round-state.json) is deliberately preserved —
-    crash-resume depends on it. Best-effort: a failed unlink never blocks the load."""
+    round. Durable loop state that crash-resume actually READS (round-records.json,
+    deferred-set.json, round-bodies-*, last-extras.json, terminal-record.json) is deliberately
+    preserved. round-state.json is swept too: it is a WRITE-ONLY per-run diagnostic (saved by
+    saveRoundStateBestEffort, never read back for resume), so a dead run's copy is pure
+    cross-run contamination — live 2026-07-02 run 7's stale round-state.json survived into run 8
+    in the shared /tmp dir, the same class that poisoned run 6. Best-effort: a failed unlink
+    never blocks the load."""
     swept = 0
-    for pattern in ("dim-result-*.json", "round-skeleton-*.json", "round-updates-*.json", "*.payload"):
+    for pattern in ("dim-result-*.json", "round-skeleton-*.json", "round-updates-*.json",
+                    "*.payload", "round-state.json"):
         for path in glob.glob(os.path.join(run_dir, pattern)):
             try:
                 os.unlink(path)

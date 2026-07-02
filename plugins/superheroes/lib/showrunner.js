@@ -910,13 +910,21 @@ async function reconcile(workItem) {
 // cost 30 minutes). Only fires when THIS run acquired (generation threaded from reconcile; a
 // lease-held park carries none). Best-effort: a failed release leaves the TTL as the backstop,
 // and the generation precondition means a superseded holder's lease is never deleted.
+// This is a state-changing single command, so it rides a DEDICATED hardened courier (NOT the
+// permissive batch exec): a strict prompt forbidding extra commands + require(['ok']) so a
+// freestyling courier's chatty answer is rejected and retried rather than accepted. Live
+// 2026-07-02 the park-path release rode the batch exec and the courier improvised ~10 unscripted
+// Bash calls, "manually" releasing the lease itself — the misbehaving-courier class #138 hardened
+// for WRITES, now closed for this exec leaf too.
 async function releaseLease(workItem, generation) {
   if (generation == null) return
   try {
-    await exec([
+    await courier.runCourierJson(
+      'release lease',
       `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
       `--generation ${shq(String(generation))} --release`,
-    ])
+      { require: ['ok'], retryRealFailure: false, strict: true },
+    )
   } catch (_) { /* TTL backstop */ }
 }
 

@@ -375,13 +375,17 @@ def test_hash_verb_prints_content_hash(tmp_path):
 def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):
     """Run dirs are shared across runs of the same work-item+phase: loop entry sweeps a dead
     run's TRANSIENT staging artifacts while preserving the durable loop state crash-resume
-    depends on."""
+    depends on. round-state.json is a WRITE-ONLY per-run diagnostic (never read back for
+    resume), so a dead run's copy must be swept too — it leaked across runs live (2026-07-02,
+    run 7's copy survived into run 8), the same cross-run contamination class as the staging
+    files."""
     records_path = tmp_path / "round-records.json"
     records_path.write_text("[]\n", encoding="utf-8")
     transient = ["dim-result-code-r1.json", "round-skeleton-r2.json",
-                 "round-updates-r2.json", "terminal-record.json.payload"]
+                 "round-updates-r2.json", "terminal-record.json.payload",
+                 "round-state.json"]
     durable = ["deferred-set.json", "round-bodies-r1.json", "last-extras.json",
-               "terminal-record.json", "round-state.json"]
+               "terminal-record.json"]
     for name in transient + durable:
         (tmp_path / name).write_text("{}", encoding="utf-8")
     r = _cli("load-summary", "--path", str(records_path), "--dimensions", '["code"]',

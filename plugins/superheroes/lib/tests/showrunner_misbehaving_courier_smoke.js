@@ -14,6 +14,15 @@
 //       Python-side hash verify must refuse it and the retry must recover.
 //   (4) MANGLED HELPER ANSWER — one persist helper's stdout comes back as prose after the
 //       write applied. The retry must converge (idempotent stale-probe), not park.
+//   (5) FENCED runHelper ANSWER — a haiku courier STOCHASTICALLY wraps a runHelper answer in ```
+//       fences (live 2026-07-02: 3 of 4 runHelper leaves fenced), pushing ``` after the exit
+//       marker. The bundle's io.runHelper must find the marker anyway — else a clean exit-0
+//       helper is falsely read as failed (coverage-decisions-unreadable / telemetry-write-failed
+//       / memory degraded), the exact review-plan park class the live run-8 hit.
+//   (6) IMPROVISING RELEASE COURIER — the park-path lease release freestyled unscripted Bash and
+//       narrated instead of returning the scripted command's JSON. The hardened release leaf
+//       (dedicated single-command courier + require + a prompt forbidding extra commands) must
+//       reject the chatty answer and retry, converging on the scripted JSON.
 // Assertions: the run still reaches 'ready', AND the review phase's terminal-record.json is
 // WRITTEN with the correct verdict (the live failure mode was a phase that completed its
 // panel but died in persistence, leaving no terminal record).
@@ -32,7 +41,8 @@ const CHATTY_ACK = 'Done! I successfully wrote the file as requested.'
 
 const files = Object.create(null)
 const usableCalls = Object.create(null)
-const counters = { proseReads: 0, chattyAcks: 0, sabotagedWrites: 0, mangledAnswers: 0 }
+const counters = { proseReads: 0, chattyAcks: 0, sabotagedWrites: 0, mangledAnswers: 0,
+                   fencedHelpers: 0, releaseImprovised: 0, releaseCalls: 0 }
 
 function runHelperResponse(cmdline) {
   const m = cmdline.match(/'python3' '([^']+)'((?: '[^']*')*)/)
@@ -109,8 +119,17 @@ function shellResponse(cmd) {
   }
   if (cmd.includes("'python3'")) {
     const out = runHelperResponse(cmd)
-    if (out != null) return out + '\n__SR_EXIT:0'
-    return '{}\n__SR_EXIT:0'
+    const body = (out != null ? out : '{}') + '\n__SR_EXIT:0'
+    // (5) FENCED runHelper ANSWER — wrap the whole answer (stdout + exit marker) in one ``` fence
+    // for the read/summary helpers whose failure poisoned the live loop (coverage load, telemetry
+    // write, round-memory load-summary). io.runHelper must locate the marker despite the trailing
+    // fence; on the pre-fix bundle the end-anchored match misses -> status 1 -> the helper reads as
+    // failed -> cannot-certify at review-plan.
+    if (/review_memory\.py' 'load-summary'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
+      counters.fencedHelpers += 1
+      return '```\n' + body + '\n```'
+    }
+    return body
   }
   if (cmd.includes('recover_entry.py')) return JSON.stringify({ checkpoint: null, world: {}, generation: 5 })
   if (cmd.includes('front_half_usable.py')) {
@@ -218,6 +237,19 @@ async function cannedAgent(prompt, opts) {
     if (re.test(label)) return fn(prompt)
   }
   if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
+  if (label === 'release lease') {
+    // (6) an IMPROVISING release courier: the first answer is chatty prose (as if it ran extra
+    // unscripted Bash and narrated). The hardened leaf must reject it (require:['ok']) and retry,
+    // converging on the scripted JSON. The prompt must forbid extra commands.
+    assert.ok(/do not run any other command/i.test(String(prompt)),
+      'the release prompt forbids extra commands (no improvising)')
+    counters.releaseCalls += 1
+    if (counters.releaseCalls === 1) {
+      counters.releaseImprovised += 1
+      return 'I ran a couple of checks first, then released the lease manually — all good!'
+    }
+    return JSON.stringify({ ok: true, reason: 'lease released' })
+  }
   if (COURIER_JSON[label]) return COURIER_JSON[label](String(prompt))
   return answerCommandPrompt(String(prompt))
 }
@@ -244,6 +276,8 @@ async function main() {
   assert.ok(counters.chattyAcks >= 1, 'the chatty-write-ack mode must be exercised')
   assert.strictEqual(counters.sabotagedWrites, 1, 'the content-mangled write mode must fire exactly once')
   assert.ok(counters.mangledAnswers >= 2, 'the mangled persist answer must be retried (>=2 helper calls)')
+  assert.ok(counters.fencedHelpers >= 1, 'the fenced-runHelper answer mode must be exercised')
+  assert.ok(counters.releaseImprovised >= 1, 'the improvising release courier mode must be exercised')
 
   // the live failure mode: the phase completed its panel but no terminal record was written.
   // Both review phases must end with a WRITTEN terminal-record carrying the correct verdict —
@@ -257,7 +291,8 @@ async function main() {
   }
 
   console.log(`ok: misbehaving-courier full run reaches ready with written terminal records ` +
-    `(proseReads=${counters.proseReads} chattyAcks=${counters.chattyAcks} sabotaged=${counters.sabotagedWrites} mangledAnswers=${counters.mangledAnswers})`)
+    `(proseReads=${counters.proseReads} chattyAcks=${counters.chattyAcks} sabotaged=${counters.sabotagedWrites} ` +
+    `mangledAnswers=${counters.mangledAnswers} fencedHelpers=${counters.fencedHelpers} releaseImprovised=${counters.releaseImprovised})`)
 }
 
 main().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })
