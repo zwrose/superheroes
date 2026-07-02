@@ -16,11 +16,19 @@ function agentFor(generation, releaseCalls) {
       if (prompt.includes('recover_entry')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ checkpoint: null, world: WORLD, generation }) }]
       }
-      if (prompt.includes('fence_cli.py') && prompt.includes('--release')) {
-        releaseCalls.push(prompt)
-        return [{ index: 0, ok: true, stdout: '{"ok":true,"reason":"lease released"}' }]
-      }
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"pending"}' }]
+    }
+    // BUG C: the lease release rides a DEDICATED single-command hardened courier (label
+    // 'release lease'), NOT the permissive batch exec that let a haiku improvise unscripted Bash
+    // and manually release the lease live (2026-07-02). Its prompt must forbid extra commands and
+    // it returns a require()-validated JSON object.
+    if (label === 'release lease') {
+      assert.ok(prompt.includes('fence_cli.py') && prompt.includes('--release'),
+        'the release runs the scripted release command')
+      assert.ok(/do not run any other command/i.test(prompt),
+        'the release prompt forbids extra commands (no improvising)')
+      releaseCalls.push(prompt)
+      return [{ ok: true, stdout: '{"ok":true,"reason":"lease released"}' }]
     }
     if (label === 'read startup state') {
       return jsonOut({ ok: true, spec_gate: 'pending', model_overrides: {}, doc_dir: '' })
@@ -39,7 +47,7 @@ const { showrunner } = require('../showrunner.js')
   assert.strictEqual(out.outcome, 'parked')
   assert.strictEqual(out.phase, 'startup')
   assert.ok(/pending/.test(out.reason))
-  assert.strictEqual(releaseCalls.length, 0, 'no lease held -> no release exec')
+  assert.strictEqual(releaseCalls.length, 0, 'no lease held -> no release courier')
 
   // (b) same park with a HELD lease (generation 3) -> exactly one CAS release at the exit.
   releaseCalls = []
