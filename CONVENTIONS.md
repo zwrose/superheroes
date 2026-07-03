@@ -103,7 +103,7 @@ band-wide storage mode**.
   (`init` / the profile-management skill) — not `the-architect` (which owns definition-docs).
   Because `core.md` is project-keyed and shared across a project's checkouts (§4.2), the
   writer **serializes its writes under the project-scoped config lock** (§4.4) — a
-  machine-local lock distinct from the per-checkout runtime locks; the "applied only on
+  machine-local lock distinct from the per-clone runtime lease refs; the "applied only on
   confirmation" rule (§2.4) gates *intent*, not concurrent physical writes. (In in-repo
   mode, cross-machine config writes are additionally git-mediated, since config is
   committed.)
@@ -178,8 +178,9 @@ would strand every already-written calibration file and definition-doc.)
   sharing needs (see §4.2 and §6.2):
   - **Config key = per-project** (`<config-key>`, §6.2), with self-healing pointers —
     deliberately unifies a project's clones/worktrees so they share calibration.
-  - **Control-plane key = per-checkout** (`<absolute-git-dir-key>`, §6.2), **without**
-    the remote-keyed self-healing — so parallel loops stay isolated (§4.2).
+  - **Control-plane key = per-clone** (`<common-dir-key>`, §6.2), **without** the
+    remote-keyed self-healing — shared identically across a clone's worktrees so the
+    one-live-run-per-work-item lease coordinates them, never unified across clones (§4.2, #170).
 - **No-remote repositories.** When `git remote get-url origin` is empty (common for the
   owner *before the first push*, while Discovery is already producing definition-docs), the
   config key is `<common-dir-key>` rather than `<remote-key>` (§6.2), which makes config
@@ -318,11 +319,11 @@ config-vs-state line, because the two have opposite sharing needs:
   a project's worktrees and clones on a machine (same project ⇒ same
   threat-model/patterns, one mode record). Holds calibration, global-mode definition-docs,
   the authoritative `registry.json`, and the config lock.
-- **Control-plane store = per-checkout**, keyed by `<absolute-git-dir-key>` (§6.2) —
-  **distinct per linked worktree and per clone**. Holds the runtime: queue, checkpoints,
-  per-issue state. Each checkout gets its **own** control-plane store.
+- **Control-plane store = per-clone**, keyed by `<common-dir-key>` (§6.2) — **shared
+  identically across a clone's main checkout and every linked worktree**, distinct across
+  clones. Holds the runtime: checkpoints, per-issue state, and the work-item lease refs.
 
-> **Implemented by the resilience slice** (workhorse `control_plane.py`). The control-plane key must differ from the config key: `store_core` uses `--git-common-dir` for the config key (shared across a clone's linked worktrees — correct for config) and `--absolute-git-dir` for the control-plane key (distinct per worktree — correct for state). The control-plane resolver therefore (a) derives its key from raw `--absolute-git-dir`, and (b) does **not** route through the remote-keyed self-healing pointer — remote-key healing deliberately unifies a project's checkouts (right for config), which would funnel two parallel loops onto one queue/state dir: exactly the uncoordinated-write hazard the vision forbids.
+> **Implemented by the resilience slice** (workhorse `control_plane.py`). Coordination MUST be shared across a clone's worktrees: the one-live-run-per-work-item lease refs (§4.4) live in this store, so keying it to the git **common dir** (`--path-format=absolute --git-common-dir`, identical from all of a clone's worktrees) is what refuses a duplicate launch of the same work item from any worktree — a per-worktree `--absolute-git-dir` key would let it run twice = split-brain on one branch/PR (#170). State isolation is per-work-item WITHIN the store (`issues/<work-item>/…`), not per-worktree. The resolver still does **not** route through the remote-keyed self-healing pointer (that unifies distinct clones — right for config, wrong for machine-local runtime). Zero-migration: for the main checkout the common dir IS the absolute git dir, so existing stores keep their key.
 
 ```
 <global-store>/
@@ -333,7 +334,7 @@ config-vs-state line, because the two have opposite sharing needs:
     config.lock                         # the project-scoped config-write lock (§4.4)
     config/                             # core.md, <plugin>.md, patterns.md, review-decisions.json   (global mode only; in-repo → in the repo)
     docs/<work-item>/{spec,plan,tasks}.md   # definition-docs                          (global mode only; in-repo → in the repo)
-  checkouts/<absolute-git-dir-key>/     # CONTROL-PLANE STORE — a git repo; ONE per worktree/clone
+  checkouts/<common-dir-key>/           # CONTROL-PLANE STORE — a git repo; ONE per clone, shared across its worktrees
     .git/
     meta.json                           # { schemaVersion, sourcePath }  (mode lives in registry.json, not here — §6.3)
     queue.json                          # producer-owned ordered work-list (schema in §4.3)
@@ -347,7 +348,7 @@ config-vs-state line, because the two have opposite sharing needs:
 
 The project store exists in **both** modes (it is the machine-local home of
 `registry.json` and `config.lock`); in in-repo mode its `config/` and `docs/` content
-lives in the repo instead. (`<config-key>` and `<absolute-git-dir-key>` derivations are
+lives in the repo instead. (`<config-key>` and `<common-dir-key>` derivations are
 in §6.2.)
 
 ### 4.3 Runtime schemas
@@ -398,7 +399,8 @@ explicit (`order`), not array position. Item lifecycle is
 ### 4.4 Coordination = git refs and a config lock, not file polling
 
 **Work-item lock — a leased git ref**, `refs/superheroes/locks/<work-item>`, valued
-`{ holder, host, acquiredAt, generation }`, in the per-checkout control-plane store:
+`{ holder, host, acquiredAt, generation }`, in the per-clone control-plane store (so the
+lease is visible identically from every worktree of the clone, §4.2):
 
 - The holder **renews** the ref (bumps `acquiredAt`) on a heartbeat interval **≪ TTL**
   while it works.
@@ -415,11 +417,11 @@ explicit (`order`), not array position. Item lifecycle is
   or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
   full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
-- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/ref_lock.py`, §4.5 adds the startup per-checkout lock). The file-based `lib/file_lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
+- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/ref_lock.py`) and the **sole** work-item mutex — the old §4.5 per-checkout `startup.lock` was removed in #170 (it never serialized anything: its holder pid was the ephemeral acquiring leaf, dead seconds after acquire). The file-based `lib/file_lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
 
 **Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
-shared across a project's checkouts (§4.2), so it is **not** guarded by the per-checkout
-locks above. Config writes acquire an advisory **`flock` on `projects/<config-key>/config.lock`**
+shared across a project's checkouts (§4.2), so it is **not** guarded by the per-clone
+lease refs above. Config writes acquire an advisory **`flock` on `projects/<config-key>/config.lock`**
 in the machine-local project store (present in both modes), which serializes them across
 the project's checkouts on that machine. In in-repo mode, cross-machine config writes are
 additionally mediated by git (config is committed). Config write cadence is owner-driven
@@ -443,13 +445,15 @@ it is only at-least-once under `gh` eventual consistency.)
 
 ### 4.5 Concurrency model (two layers)
 
-- **Per-checkout isolation (local).** Each worktree/clone loop has its own control-plane
-  store, queue, and lock refs. **`init`/the producer acquires a per-checkout lock at
-  startup**, so a second loop launched in the *same* checkout **fails closed** — turning
-  "one active loop per checkout" from an assumption into an enforced gate. (atomic file
-  writes prevent torn files, not lost updates; the startup lock is what prevents the
-  within-checkout read-modify-write race on `queue.json`/`checkpoint.json`.) **Parallelism
-  = more checkouts.**
+- **Per-clone coordination (local).** A clone's worktrees **share** one common-dir
+  control-plane store and its lock refs (§4.2). The hard rule is **one live run per work
+  item per clone**, enforced by the per-work-item ref-lease (§4.4): a duplicate launch of an
+  in-flight work item — from *any* worktree — is refused with the lease reason. (The old
+  per-checkout `startup.lock` was removed in #170: its holder pid was an ephemeral leaf, so
+  it never serialized anything — the lease is the real mutex.) Read-modify-write of the shared
+  `worktrees.json` build-registry is guarded by an `fcntl.flock` sidecar (atomic writes prevent
+  torn files; the flock prevents lost updates). **Parallelism = more worktrees running
+  different work items.**
 - **Cross-loop backstop = the target repo's remote.** The genuinely shared write targets
   are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4) and the
   shared **config store** (serialized by the project-scoped config lock, §4.4, and
@@ -457,13 +461,14 @@ it is only at-least-once under `gh` eventual consistency.)
   machinery lives on the target remote, so it is inherently cross-process and
   cross-machine.
 
-**Residual edge (named, not fixed now):** per-checkout work-item locks won't stop two
-*different* checkout-loops from both grabbing the *same* work-item if it is mis-queued
-into both. Worst case is **wasted duplicate work, not corruption** — the target-remote
-backstop (§4.4) still prevents a double-merge, and shared config writes are serialized by
-the config lock. If cross-loop work-item overlap ever becomes a real pattern, the
-escalation is to host the work-item lock ref on the *shared target remote* instead of
-the per-checkout store (correct, but a network round-trip per lock — so not the default).
+**Residual edge (named, not fixed now):** the common-dir lease coordinates a clone's
+worktrees, but two *different clones* (or machines) of one repo won't see each other's
+per-work-item lease if the same work item is launched in both. Worst case is **wasted
+duplicate work, not corruption** — the target-remote backstop (§4.4) still prevents a
+double-merge, and shared config writes are serialized by the config lock. If cross-clone
+overlap ever becomes a real pattern, the escalation is to host the work-item lock ref on
+the *shared target remote* (a network round-trip per lock — so not the default).
+Cross-machine coordination is explicitly out of scope for #170.
 
 ### 4.6 `events.jsonl` and `resume-brief.md` schemas (authored — resilience slice)
 
@@ -569,7 +574,7 @@ recorded — remains deferred to §7, Phase 2a-plus.)
 | Calibration (`core`/`<plugin>`/`patterns`) | `.claude/superheroes/` (committed) | project store `config/` | project (`<config-key>`) |
 | Definition-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | project store `docs/` | project (`<config-key>`) |
 | `registry.json` + `config.lock` | machine-local project store | machine-local project store | project (`<config-key>`) |
-| Runtime (queue, checkpoints, briefs, events) | machine-local control-plane store | machine-local control-plane store | checkout (`<absolute-git-dir-key>`) |
+| Runtime (checkpoints, briefs, events, lease refs) | machine-local control-plane store | machine-local control-plane store | clone (`<common-dir-key>`) |
 | Work items + rendered index | GitHub issues | GitHub issues | — |
 
 ---
@@ -604,14 +609,19 @@ The normative spec is implemented in `lib/store_core.py`. **Hash:** `sha256(...)
 - **`<remote-key>`** = `short_hash(normalize_remote(origin))`, where `normalize_remote`
   lowercases the host and strips scheme/userinfo/port and a trailing `.git`.
 - **`<common-dir-key>`** = `short_hash(realpath(git rev-parse --path-format=absolute --git-common-dir))`
-  — shared across a clone's linked worktrees; the no-remote fallback (§2.4).
+  — shared across a clone's linked worktrees. Serves as **both** the no-remote config
+  fallback (§2.4) **and** the control-plane key (§4.2, #170). `--path-format=absolute` is
+  required: a bare `--git-common-dir` is a relative `.git` from the main checkout, which
+  `realpath` would resolve against the process cwd; the fallback for git < 2.31 joins the
+  relative result onto the target cwd, else `--absolute-git-dir`, else `realpath(cwd)`.
 - **`<config-key>`** (the project-store key) = `<remote-key>` when a remote exists,
   else `<common-dir-key>`. On first push, `init` rebinds `<common-dir-key>` →
   `<remote-key>` (§2.4).
-- **`<absolute-git-dir-key>`** (the control-plane key) =
-  `short_hash(realpath(git rev-parse --absolute-git-dir))` — distinct per linked
-  worktree and per clone (§4.2). Note `--absolute-git-dir` ≠ `--git-common-dir` for a
-  linked worktree, so this is **never** equal to `<common-dir-key>`.
+- **`<absolute-git-dir-key>`** = `short_hash(realpath(git rev-parse --absolute-git-dir))` —
+  distinct per linked worktree. **Retired as the control-plane key in #170** (the control
+  plane now uses `<common-dir-key>` so a clone's worktrees coordinate); still the identity a
+  per-worktree derivation would produce, kept here for reference. For the **main checkout**
+  it equals `<common-dir-key>` (common dir == absolute git dir) — the zero-migration hinge.
 
 ### 6.3 `<content-hash>` — the exactly-once key
 
