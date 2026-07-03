@@ -4690,6 +4690,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   return { terminal: verdict && verdict.terminal }
 }
 
+// Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
