@@ -167,24 +167,12 @@ def resolve_profile_path(cwd=None):
 
 
 def _resolve_profile_path(cwd=None):
-    """Auto-resolve the project's review-crew profile path when no --profile was given.
-
-    Uses the same sibling resolver review-crew uses (review_store.resolve --kind profile);
-    returns the resolved path only when one actually exists on disk, else None. Fail-SAFE:
-    ANY error (import failure, resolver exception, location:none, missing file) yields None
-    so the caller degrades to {} — this MUST NOT crash startup, and a throwaway run with no
-    profile correctly stays a no-op. An explicit --profile bypasses this entirely.
-    """
+    """Auto-resolve the review-crew layer (unified) or legacy profile path."""
     try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        import review_store  # sibling lib; in-process resolve (no extra subprocess/exec)
-        info = review_store.resolve(cwd or os.getcwd(), "profile", review_store.store_root())
-        path = info.get("path")
-        if path and info.get("exists") and os.path.isfile(path):
-            return path
+        import calibration_resolve
+        return calibration_resolve.resolve_profile_path(cwd or os.getcwd())
     except Exception:
         return None
-    return None
 
 
 def main(argv):

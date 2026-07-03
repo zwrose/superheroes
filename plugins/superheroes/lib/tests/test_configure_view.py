@@ -54,9 +54,8 @@ def test_render_shows_effective_model_tiers(tmp_path):
                     core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
                                          "threatModel": "single-user", "patterns": ""},
                                         "confirmed", "2026-06-27", "2026-06-27"))
-    sc.atomic_write(os.path.join(cdir, "review-crew.md"), "<!-- review-crew: v1 -->\nscope\n")
-    sc.atomic_write(os.path.join(str(tmp_path), ".claude", "review-profile.md"),
-                    "## Model tiers\nreviewer: fable\n")
+    sc.atomic_write(os.path.join(cdir, "review-crew.md"),
+                    "<!-- review-crew: v1 -->\nscope\n\n## Model tiers\nreviewer: fable\n")
     screen = cv.render(str(tmp_path), root=root)
     assert "## Model tiers" in screen
     assert "reviewer: fable" in screen

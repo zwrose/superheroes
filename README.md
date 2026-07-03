@@ -81,10 +81,10 @@ re-reviews until nothing Critical or Important remains.
 
 Two things make it more than a clever prompt:
 
-- **Calibrated to your project.** [`/superheroes:configure`](#getting-set-up) generates a
-  `.claude/review-profile.md` — your threat model, verify command, scope, and
-  canonical patterns — so reviews match *your* codebase instead of generic best
-  practices. Severity rules, diff-scope discipline, and "cite `file:line` or drop
+- **Calibrated to your project.** [`/superheroes:configure`](#getting-set-up) generates
+  `core.md` plus `.claude/superheroes/review-crew.md` (in-repo) or their global
+  store equivalents — your threat model, verify command, scope, and canonical
+  patterns — so reviews match *your* codebase instead of generic best practices. Severity rules, diff-scope discipline, and "cite `file:line` or drop
   the finding" are enforced when findings are compiled, not left to hope. You can
   also run the panel on a **different model family** — set the reviewer engine to
   Codex or Cursor in `configure` — for a cross-family safety net; findings flow
