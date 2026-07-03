@@ -167,6 +167,38 @@ async function main() {
   assert.ok(calls.reviewerModels.some((call) => call.round === 2 && call.model === 'sonnet'),
     'a cheap-scheduled round-2 reviewer must dispatch with an explicit Sonnet-tier model')
 
+  const rawRunDir = fresh()
+  const rawCalls = []
+  const rawLeaves = {
+    reviewerAgent: async (reviewer, context, rubric, runDir, round, opts) => {
+      rawCalls.push({ reviewer, round, tier: opts && opts.tier })
+      if (round === 1 && reviewer === 'code-reviewer') return reviewerPayload(BLOCKER, runDir, round)
+      return reviewerPayload([], runDir, round)
+    },
+    synthesisLeaf: async () => ({ verdicts: [], usage: { total: 1 } }),
+    fixStep: async () => ({ fixed: [], changedSubjects: ['src/raw-path.js'], coverageDecisions: [] }),
+    recordDeferred: async () => {},
+  }
+  r = await sr.runReviewCodePanel({
+    runDir: rawRunDir,
+    context: { workItem: 'wi-raw-paths' },
+    rubric: 'review-base',
+    verifyCommand: 'none',
+    leaves: rawLeaves,
+  })
+  assert.strictEqual(r.terminal, 'clean', 'raw-path defensive scheduling still converges')
+  const rawExtras = JSON.parse(fs.readFileSync(path.join(rawRunDir, 'last-extras.json'), 'utf8'))
+  assert.deepStrictEqual(rawExtras.changedSubjects, [],
+    'unnormalized top-level changedSubjects must not be trusted as policy subjects')
+  assert.deepStrictEqual(rawExtras.changedSubjectDetails, ['src/raw-path.js'],
+    'raw top-level changedSubjects remain available only as details')
+  const rawRecords = JSON.parse(fs.readFileSync(path.join(rawRunDir, 'round-records.json'), 'utf8'))
+  const rawRoundTwoCode = rawRecords.find((rec) => rec.round === 2).dimensions['code-reviewer']
+  assert.notStrictEqual(rawRoundTwoCode.status, 'skipped',
+    'a dimension with prior findings must not be skipped when raw paths normalize to no policy subjects')
+  assert.ok(rawCalls.some((call) => call.round === 2 && call.reviewer === 'code-reviewer'),
+    'the prior-finding dimension actually ran on the intermediate round')
+
   console.log('ok: reviewCodePhase clean/skips/halted/cannot-certify + UFR-2 + continue/fix/clean')
 }
 

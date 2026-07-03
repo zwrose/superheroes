@@ -907,6 +907,7 @@ const reviewMemory = require('./review_memory.js')
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
 const _VERIFY_OK = new Set(['pass', 'skipped'])
+const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 function _usable(v) { return v && typeof v.terminal === 'string' }
 function _failClosed() {
@@ -1413,7 +1414,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
 
     let verifyResult = null
     if (legKind.code) {
-      try { verifyResult = await verifyAgent(verifyCommand, runDir, round) }
+      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
     }
 
@@ -1564,16 +1565,47 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
-async function verifyAgent(verifyCommand, runDir, round) {
+async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
   // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
   // session model). The preamble strips the marker before the real agent().
+  ioApi = ioApi || io()
+  const outPath = ioApi.join(runDir, 'verify-result.json')
+  const command = `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
   const out = await agent(
-    `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
-    `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
+    `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
+    `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
+    `(the Bash tool accepts a timeout parameter up to 600000 ms). Do NOT background it. ` +
+    `Do NOT answer until the command prints its final JSON.\n\n` +
+    command,
     { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  if (!out) return 'fail'
-  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
+  const direct = verifyResultFromPayload(verifyCommand, out)
+  if (direct) return direct
+  const readBack = await ioApi.readJson(outPath, null)
+  return verifyResultFromPayload(verifyCommand, readBack) || 'fail'
+}
+
+function own(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+function _integerString(value) {
+  const s = String(value).trim()
+  return /^-?\d+$/.test(s) ? s : null
+}
+
+function verifyResultFromPayload(verifyCommand, payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  if (typeof payload.result === 'string' && _VERIFY_OK.has(payload.result)) return payload.result
+  if (payload.result === 'fail' || payload.result === 'timeout') return payload.result
+  const command = own(payload, 'command') ? payload.command : (verifyCommand || 'none')
+  if (!command || String(command).trim().toLowerCase() === 'none') return 'skipped'
+  const timedOut = payload.timedOut === true || String(payload.timedOut).toLowerCase() === 'true'
+  if (timedOut) return 'timeout'
+  const rc = own(payload, 'returncode') ? payload.returncode : (own(payload, 'code') ? payload.code : undefined)
+  const rcStr = _integerString(rc)
+  if (!rcStr) return null
+  return verifyGateTwin.classify({ command, returncode: rcStr, timedOut: false })
 }
 
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
@@ -1675,10 +1707,11 @@ function fixSchedulingExtras(fixResult) {
   if (!fixResult || typeof fixResult !== 'object' || Array.isArray(fixResult)) return null
   const out = {}
   if (Array.isArray(fixResult.changedSubjects)) {
-    out.changedSubjects = fixResult.changedSubjects
+    out.changedSubjects = fixResult.changedSubjects.filter((s) => POLICY_SUBJECTS.has(s))
     out.needsConfirmation = true
   }
   if (Array.isArray(fixResult.changedSubjectDetails)) out.changedSubjectDetails = fixResult.changedSubjectDetails
+  else if (Array.isArray(fixResult.changedSubjects)) out.changedSubjectDetails = fixResult.changedSubjects
   const extras = plainExtras(fixResult.extras)
   if (extras && Object.prototype.hasOwnProperty.call(extras, 'needsConfirmation')) {
     out.needsConfirmation = extras.needsConfirmation
@@ -1702,8 +1735,8 @@ const VERDICT_SCHEMA = {
 }
 const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
   properties: { findings: { type: 'array' }, drops: { type: 'array' } } }
-const VERIFY_SCHEMA = { type: 'object', required: ['command'],
-  properties: { command: {}, returncode: {}, timedOut: {} } }
+const VERIFY_SCHEMA = { type: 'object', required: ['result'],
+  properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
