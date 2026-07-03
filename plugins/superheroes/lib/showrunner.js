@@ -520,7 +520,14 @@ async function producePhase(phase, workItem) {
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
-  const model = authorModel()
+  const model = authorModel(doc)
+  // planAuthor engine route: ONLY the plan doc reads the enginePreferences.planAuthor key (tasks
+  // always authors native). The resolved model tier rides along so cursor can map it to its own
+  // model id (author-plan: fable + planAuthor: cursor = Fable via Cursor). External failure falls
+  // open to the native author within the same attempt — the usableDraft post-check is unchanged.
+  const aEngine = doc === 'plan'
+    ? enginePrefTwin.resolveEngine('author-plan', _enginePrefs())
+    : 'claude'
   // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
@@ -558,10 +565,23 @@ async function producePhase(phase, workItem) {
   for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
     // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
     // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-    const authored = await agent(
-      _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `author-${doc}`, model,
-        schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    const prompt = _authorPrompt(attempt > 0 ? lastSignal : null)
+    let authored = null
+    if (aEngine !== 'claude') {
+      const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt,
+        cwd: procCwd(), model,
+      })
+      if (res && res.ok) authored = { status: 'ok', notify: res.notify || [] }
+      // dispatch failure -> authored stays null -> native author below (same attempt)
+    }
+    if (authored == null) {
+      authored = await agent(
+        prompt,
+        { label: `author-${doc}`, model,
+          schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    }
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
     }
@@ -738,9 +758,11 @@ async function usableDraft(workItem, doc) {
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
 // Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS.author = 'opus').
-function authorModel() {
+// The plan doc resolves the split `author-plan` role (own override, e.g. fable, else exactly
+// `author`); tasks stays on `author` — plan authoring alone can be raised without moving tasks.
+function authorModel(doc) {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
-  return modelTierTwin.resolveModel('author', overrides, null)
+  return modelTierTwin.resolveModel(doc === 'plan' ? 'author-plan' : 'author', overrides, null)
 }
 
 // #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).

@@ -3722,10 +3722,14 @@ __modules["engine_pref"] = function (module, exports, require) {
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
 
-const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation' }
+// `author-plan` (the front-half plan-author leaf) reads its OWN key — plan authoring routes
+// independently of review/build; tasks authoring has no key on purpose and always runs native.
+const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation',
+  'author-plan': 'planAuthor' }
 // Depth-aware review: deep reviewers (security/architecture — reviewer-deep tier) -> 'review-deep'
 // (xhigh); regular review -> 'review' (high). Mirrors engine_pref.py._CODEX_EFFORT.
-const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low' }
+const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low',
+  'author-plan': 'xhigh' }
 const _CURSOR_EFFORT = 'composer'
 
 // Own-key membership (mirror model_tier.js): JS `in`/bracket walk the prototype chain,
@@ -3898,10 +3902,15 @@ async function _scrubReason(reason) {
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
 // path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
+  // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
+  // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
+  // Its acceptance gate is the caller's deterministic usableDraft post-check, not this dispatch.
+  const isAuthor = (roleKind === 'author-plan')
 
   // 1. Stage prompt + schema to disk (via exec). The PROMPT file is fed to the external process
   //    stdin by _runArgv (both engines read the prompt from stdin); the SCHEMA path is passed to
@@ -3936,7 +3945,8 @@ async function _dispatchExternalInner(o) {
     const argvObj = await _execJson(
       `python3 ${LIB}/engine_adapter.py build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
-      `--schema-path ${shq(schemaPath)}`)
+      `--schema-path ${shq(schemaPath)}` +
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
 
@@ -3974,6 +3984,16 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
+  // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
+  // back; the caller's usableDraft post-check decides acceptance and falls open on failure.
+  if (isAuthor) {
+    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
+    return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
+  }
 
   // 4. Read role: return findings straight through (no commit). Failure -> caller falls open to Claude.
   // FIX 5 (UFR-6 symmetry): a read role is JUST as unauditable as a write role when the journal
@@ -4807,6 +4827,10 @@ const DEFAULT_TIERS = {
 
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
 
+// Split roles (mirror model_tier.py._ROLE_FALLBACK): own override wins, else resolve as the base
+// role. `author-plan` lets plan authoring alone move (e.g. to fable) without moving tasks authoring.
+const _ROLE_FALLBACK = { 'author-plan': 'author' }
+
 // Python `k in dict` / `dict.get(k, default)` test OWN keys only; JS `in`/bracket walk the prototype
 // chain (so `'constructor' in {}` is true). Use own-key membership everywhere a twin mirrors Python
 // dict membership, so a prototype-named role/identity ('constructor', 'toString', '…::hasOwnProperty')
@@ -4816,6 +4840,15 @@ function hasOwn(o, k) {
 }
 
 function resolveModel(role, overrides, context) {
+  if (hasOwn(_ROLE_FALLBACK, role)) {
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, role)) {
+      const v = overrides[role]
+      if (v === null) return null
+      if (typeof v === 'string' && v.trim()) return v.trim()
+      // malformed own-override -> resolve as the base role (fail-open)
+    }
+    return resolveModel(_ROLE_FALLBACK[role], overrides, context)
+  }
   if (!hasOwn(DEFAULT_TIERS, role)) role = 'reviewer'   // safe capable default for an unknown role
   let def = DEFAULT_TIERS[role]
   if (role === 'fixer' && hasOwn(_FIXER_BY_CONTEXT, context)) def = _FIXER_BY_CONTEXT[context]
@@ -5725,7 +5758,14 @@ async function producePhase(phase, workItem) {
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
-  const model = authorModel()
+  const model = authorModel(doc)
+  // planAuthor engine route: ONLY the plan doc reads the enginePreferences.planAuthor key (tasks
+  // always authors native). The resolved model tier rides along so cursor can map it to its own
+  // model id (author-plan: fable + planAuthor: cursor = Fable via Cursor). External failure falls
+  // open to the native author within the same attempt — the usableDraft post-check is unchanged.
+  const aEngine = doc === 'plan'
+    ? enginePrefTwin.resolveEngine('author-plan', _enginePrefs())
+    : 'claude'
   // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
@@ -5763,10 +5803,23 @@ async function producePhase(phase, workItem) {
   for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
     // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
     // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-    const authored = await agent(
-      _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `author-${doc}`, model,
-        schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    const prompt = _authorPrompt(attempt > 0 ? lastSignal : null)
+    let authored = null
+    if (aEngine !== 'claude') {
+      const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt,
+        cwd: procCwd(), model,
+      })
+      if (res && res.ok) authored = { status: 'ok', notify: res.notify || [] }
+      // dispatch failure -> authored stays null -> native author below (same attempt)
+    }
+    if (authored == null) {
+      authored = await agent(
+        prompt,
+        { label: `author-${doc}`, model,
+          schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    }
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
     }
@@ -5943,9 +5996,11 @@ async function usableDraft(workItem, doc) {
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
 // Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS.author = 'opus').
-function authorModel() {
+// The plan doc resolves the split `author-plan` role (own override, e.g. fable, else exactly
+// `author`); tasks stays on `author` — plan authoring alone can be raised without moving tasks.
+function authorModel(doc) {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
-  return modelTierTwin.resolveModel('author', overrides, null)
+  return modelTierTwin.resolveModel(doc === 'plan' ? 'author-plan' : 'author', overrides, null)
 }
 
 // #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).

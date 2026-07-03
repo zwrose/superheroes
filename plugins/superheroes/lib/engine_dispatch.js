@@ -123,10 +123,15 @@ async function _scrubReason(reason) {
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
 // path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
+  // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
+  // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
+  // Its acceptance gate is the caller's deterministic usableDraft post-check, not this dispatch.
+  const isAuthor = (roleKind === 'author-plan')
 
   // 1. Stage prompt + schema to disk (via exec). The PROMPT file is fed to the external process
   //    stdin by _runArgv (both engines read the prompt from stdin); the SCHEMA path is passed to
@@ -161,7 +166,8 @@ async function _dispatchExternalInner(o) {
     const argvObj = await _execJson(
       `python3 ${LIB}/engine_adapter.py build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
-      `--schema-path ${shq(schemaPath)}`)
+      `--schema-path ${shq(schemaPath)}` +
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
 
@@ -199,6 +205,16 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
+  // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
+  // back; the caller's usableDraft post-check decides acceptance and falls open on failure.
+  if (isAuthor) {
+    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
+    return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
+  }
 
   // 4. Read role: return findings straight through (no commit). Failure -> caller falls open to Claude.
   // FIX 5 (UFR-6 symmetry): a read role is JUST as unauditable as a write role when the journal
