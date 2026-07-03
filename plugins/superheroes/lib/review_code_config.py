@@ -11,23 +11,41 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import model_tier            # noqa: E402
 import model_tier_overrides  # noqa: E402
-import review_store          # noqa: E402
 import core_md               # noqa: E402  (sibling)
 
 
 def resolve_verify_command(profile_path):
     """The profile's `## Verify` `command:` value (first wins), or 'none' when absent/unreadable."""
+    _mode, cmd = resolve_verify_from_profile(profile_path)
+    return cmd
+
+
+def resolve_verify_from_profile(profile_path):
+    """Return (verify_mode, verify_command). verify_mode is None, 'unverified', or 'review-only'."""
     if not profile_path or not os.path.exists(profile_path):
-        return "none"
+        return None, "none"
     try:
+        in_verify = False
         with open(profile_path, encoding="utf-8") as fh:
             for raw in fh:
                 line = raw.strip()
+                if line.startswith("## Verify"):
+                    in_verify = True
+                    continue
+                if in_verify and line.startswith("## "):
+                    break
+                if not in_verify:
+                    continue
+                if line.startswith("mode: unverified"):
+                    return "unverified", "none"
+                if line.startswith("mode: review-only"):
+                    return "review-only", "none"
                 if line.startswith("command:"):
-                    return line.split(":", 1)[1].strip() or "none"
+                    cmd = line.split(":", 1)[1].strip() or "none"
+                    return None, cmd
     except OSError:
-        return "none"
-    return "none"
+        return None, "none"
+    return None, "none"
 
 
 def resolve_tiers(overrides):
@@ -43,23 +61,38 @@ def resolve_tiers(overrides):
 
 
 def resolve(cwd, root=None):
-    # core.md first (FR-2): resolve_shared also fires migrate-on-read at this hero-acting seam.
     verify = None
+    verify_mode = None
+    profile = None
+    overrides = {}
     try:
         shared = core_md.resolve_shared(cwd, root=root)
         if shared and shared.get("verifyCommand"):
             verify = shared["verifyCommand"]
     except Exception:
-        verify = None  # fail-open: fall back to the legacy profile parse
-    import calibration_resolve
-    cal = calibration_resolve.resolve(cwd, root=root)
-    profile = cal.get("layer_path") or cal.get("legacy_path")
-    if profile and not os.path.isfile(profile):
+        verify = None
+    try:
+        import calibration_resolve
+        cal = calibration_resolve.resolve(cwd, root=root)
+        profile = cal.get("dispatch_layer") or cal.get("legacy_path")
+        if profile and not os.path.isfile(profile):
+            profile = None
+        if verify is None:
+            verify_mode, verify = resolve_verify_from_profile(profile)
+    except Exception:
         profile = None
-    overrides = model_tier_overrides.load_overrides(profile)
+        verify_mode = None
+    try:
+        overrides = model_tier_overrides.load_overrides(profile)
+    except Exception:
+        overrides = {}
     if verify is None:
-        verify = resolve_verify_command(profile)
-    return {"verifyCommand": verify, "tiers": resolve_tiers(overrides)}
+        verify = "none"
+    try:
+        tiers = resolve_tiers(overrides)
+    except Exception:
+        tiers = resolve_tiers({})
+    return {"verifyCommand": verify, "verifyMode": verify_mode, "tiers": tiers}
 
 
 def main(argv):

@@ -88,19 +88,19 @@ ESC_WRAPPER="$ROOT_DIR/lib/escalation_resolve.py"   # absolute; embed the expand
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
 ```
 
-**Resolve calibration paths (resolver-driven).** `calibration_resolve.py` returns core + layer paths (or legacy profile). Capture `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS` before staleness check and bootstrap:
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
-  || { echo "calibration_resolve failed — continuing with strict fallback"; CAL='{"location":"none","exists":false,"core_path":null,"layer_path":null,"legacy_path":null}'; }
+  || CAL='{"location":"none","exists":false}'
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
 PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
 LOCATION=$(printf '%s' "$CAL" | jq -r .location)
 EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
-  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+  || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
 NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
@@ -178,23 +178,15 @@ When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQues
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-VERIFY_CMD=$(python3 "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null | jq -r '.verifyCommand // empty')
+VERIFY_JSON=$(python3 "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || VERIFY_JSON='{}'
+VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
+VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
 [ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
 ```
 
-When empty after resolve: `mode: unverified` skips the gate; `mode: review-only` degrades to one pass + presentation.
+When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
 
-**Refresh dispatch paths before specialists.** `review_code_config.py` (above) and bootstrap may migrate legacy → unified mid-run — re-resolve once:
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
-  || CAL='{"dispatch_core":null,"dispatch_layer":null,"exists":false}'
-CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
-LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
-PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
-EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
-```
+**Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.
 
 **PR mode:**
 

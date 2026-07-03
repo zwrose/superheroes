@@ -64,3 +64,32 @@ def test_resolve_none_on_greenfield(tmp_path):
     out = cr.resolve(str(tmp_path))
     assert out["exists"] is False
     assert out["location"] == "none"
+
+
+def test_dispatch_core_falls_back_to_layer_without_core_md(tmp_path):
+    """Headless bootstrap: layer exists without core.md — dispatch_core must not be null."""
+    _init_repo(tmp_path)
+    layer = tmp_path / ".claude" / "superheroes" / "review-crew.md"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("## Threat model\npublic\n## Focus hints\n- code: x\n")
+    out = cr.resolve(str(tmp_path))
+    assert out["dispatch_core"] == str(layer)
+    assert out["dispatch_layer"] == str(layer)
+
+
+def test_migrated_unified_dispatch_core_carries_threat_model(tmp_path):
+    """Migrated layout: specialists must receive core.md (threat model + patterns), not layer-only."""
+    _init_repo(tmp_path)
+    layer = tmp_path / ".claude" / "superheroes" / "review-crew.md"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("## Focus hints\n- security: x\n")
+    core = tmp_path / ".claude" / "superheroes" / "core.md"
+    core.write_text(cm.render_core(
+        {"verifyCommand": "npm test", "stackTags": [], "threatModel": "multi-tenant",
+         "patterns": "- auth: src/a:1"},
+        "confirmed", "2026-01-01", "2026-01-01"))
+    out = cr.resolve(str(tmp_path))
+    assert out["dispatch_core"] == str(core)
+    assert out["dispatch_layer"] == str(layer)
+    assert "multi-tenant" in core.read_text()
+    assert out["dispatch_core"] != out["dispatch_layer"]

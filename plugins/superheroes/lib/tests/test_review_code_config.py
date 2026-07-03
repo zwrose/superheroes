@@ -27,6 +27,22 @@ def test_verify_command_none_when_absent_or_unreadable(tmp_path):
     assert RC.resolve_verify_command(None) == "none"
 
 
+def test_resolve_verify_from_profile_review_only(tmp_path):
+    p = tmp_path / "p.md"
+    p.write_text("## Verify\nmode: review-only\n")
+    mode, cmd = RC.resolve_verify_from_profile(str(p))
+    assert mode == "review-only"
+    assert cmd == "none"
+
+
+def test_resolve_verify_from_profile_unverified(tmp_path):
+    p = tmp_path / "p.md"
+    p.write_text("## Verify\nmode: unverified\n")
+    mode, cmd = RC.resolve_verify_from_profile(str(p))
+    assert mode == "unverified"
+    assert cmd == "none"
+
+
 def test_tiers_default_policy():
     assert RC.resolve_tiers({}) == {
         "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
@@ -57,9 +73,24 @@ def test_resolve_composes_verify_and_tiers(tmp_path, monkeypatch):
 
 
 def test_resolve_failopen_when_no_profile(tmp_path, monkeypatch):
-    monkeypatch.setattr(RC.review_store, "store_root", lambda: str(tmp_path))
-    monkeypatch.setattr(RC.review_store, "resolve",
-                        lambda cwd, kind, root: {"path": None, "exists": False})
+    import calibration_resolve as cr
+    monkeypatch.setattr(cr, "resolve",
+                        lambda cwd, root=None, **kw: {"exists": False, "dispatch_layer": None,
+                                                      "legacy_path": None})
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
     assert out["tiers"] == {"reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
+
+
+def test_resolve_failopen_on_calibration_error(tmp_path, monkeypatch):
+    import calibration_resolve as cr
+    import mode_registry as mr
+
+    def boom(*a, **k):
+        raise mr.UnknownSchemaVersion(99)
+
+    monkeypatch.setattr(cr, "resolve", boom)
+    out = RC.resolve(str(tmp_path))
+    assert out["verifyCommand"] == "none"
+    assert out["verifyMode"] is None
+    assert out["tiers"]["fixer"] == "sonnet"

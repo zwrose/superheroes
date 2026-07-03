@@ -144,8 +144,6 @@ _HERO_LAYER_INREPO = {
     "review-crew": os.path.join(".claude", "superheroes", "review-crew.md"),
     "test-pilot": os.path.join(".claude", "superheroes", "test-pilot.md"),
 }
-# Back-compat alias: core_md._legacy_path reads this map.
-_HERO_INREPO = _HERO_LEGACY_INREPO
 _HERO_GLOBAL_FILENAME = {"review-crew": "review-profile.md", "test-pilot": "profile.md"}
 _HERO_LAYER_FILENAME = {"review-crew": "review-crew.md", "test-pilot": "test-pilot.md"}
 

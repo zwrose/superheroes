@@ -319,24 +319,34 @@ def _soft_fail():
 
 
 def _parse_layer_provenance(text):
-    """Parse nudge-ack from a unified layer's provenance comment, if present."""
-    m = re.search(r"nudge-ack=(\{.*?\})", text or "")
-    if not m:
-        return {}
-    try:
-        val = json.loads(m.group(1).replace("'", '"'))
-        return val if isinstance(val, dict) else {}
-    except (ValueError, TypeError):
-        return {}
+    """Parse provenance fields from a unified layer's §2.2 comment."""
+    out = {"nudge-ack": {}, "rubric-version": None}
+    m = re.search(r"<!--\s*[\w-]+:", text or "")
+    prov = ""
+    if m:
+        end = text.find("-->", m.start())
+        if end != -1:
+            prov = text[m.start():end + 3]
+    if not prov:
+        prov = text or ""
+    m_rv = re.search(r"rubric-version=(\d+)", prov)
+    if m_rv:
+        out["rubric-version"] = int(m_rv.group(1))
+    m_na = re.search(r"nudge-ack=(\{[^}]*\})", prov)
+    if m_na:
+        out["nudge-ack"] = _parse_ack_map(m_na.group(1))
+    return out
 
 
 def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
     """Staleness check for unified layout (core.md + layer) without legacy provenance."""
+    prov = _parse_layer_provenance(layer_text)
+    layer_rubric = prov.get("rubric-version")
     prof = {
         "schema": SUPPORTED_SCHEMA,
         "plugin": plugin_ver,
-        "rubric-version": rubric_ver,
-        "nudge-ack": _parse_layer_provenance(layer_text),
+        "rubric-version": layer_rubric if layer_rubric is not None else rubric_ver,
+        "nudge-ack": prov.get("nudge-ack") or {},
         "dep-set": None,  # unified layers carry no dep baseline — skip dep drift
         "default-branch": None,
         "forge": None,
@@ -382,9 +392,10 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
     except Exception:
         return _soft_fail()
 
+    if _is_unified_layer(text):
+        return _doctor_unified(root, plugin_ver, rubric_ver, env, text)
+
     if "schema:" not in text:
-        if _is_unified_layer(text):
-            return _doctor_unified(root, plugin_ver, rubric_ver, env, text)
         return _soft_fail()
 
     try:

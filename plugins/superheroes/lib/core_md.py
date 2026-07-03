@@ -368,11 +368,12 @@ def _layer_path(cwd, hero, root=None):
     return layer_path(cwd, hero, root)
 
 
-def _render_layer(layer_text, hero, status, stamp):
+def _render_layer(layer_text, hero, status, stamp, rubric_version=None):
     """Wrap the split hero sections in the §2.2 provenance line for a layer file. Always ends in a
     single trailing newline (#121 Part I — never write a "No newline at end of file" layer)."""
-    rendered = ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
-                % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+    rubric_part = (" rubric-version=%d" % rubric_version) if rubric_version is not None else ""
+    rendered = ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s%s nudge-ack={} -->\n\n%s"
+                % (hero, SCHEMA_VERSION, status, stamp, stamp, rubric_part, layer_text))
     return rendered if rendered.endswith("\n") else rendered + "\n"
 
 
@@ -608,7 +609,7 @@ def resolve_shared(cwd, *, root=None):
     return read(cwd, root)
 
 
-def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
+def write_layer(cwd, hero, layer_text, status, *, root=None, now=None, rubric_version=None):
     """Lock-guarded atomic write of a hero LAYER file (FR-3 create path), co-located with
     core.md and wrapped in the §2.2 layer provenance line. Returns a structured result:
       - written  → {action: "written", "path": layer_p}
@@ -621,7 +622,8 @@ def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
             return {"action": "deferred"}
         layer_p = _layer_path(cwd, hero, root)
         try:
-            store_core.atomic_write(layer_p, _render_layer(layer_text, hero, status, stamp))
+            store_core.atomic_write(
+                layer_p, _render_layer(layer_text, hero, status, stamp, rubric_version))
         except OSError:
             return {"action": "deferred"}
         return {"action": "written", "path": layer_p}
@@ -752,6 +754,7 @@ def main(argv):
     lp.add_argument("--root", default=None)
     lp.add_argument("--hero", choices=_HEROES, required=True)
     lp.add_argument("--status", choices=("provisional", "confirmed"), default="provisional")
+    lp.add_argument("--rubric-version", type=int, default=None)
     cp = sub.add_parser("confirm")  # FR-18 owner-confirm: core + every present hero layer
     cp.add_argument("--cwd", default=".")
     cp.add_argument("--root", default=None)
@@ -780,7 +783,8 @@ def main(argv):
             out = {"action": "deferred", "record": None, "proposals": []}
     elif args.cmd == "write-layer":
         try:
-            out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status, root=args.root)
+            out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status,
+                              root=args.root, rubric_version=args.rubric_version)
         except Exception:
             out = {"action": "deferred"}
     else:  # confirm

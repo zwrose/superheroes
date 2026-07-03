@@ -48,34 +48,6 @@ def _repo_root(cwd):
     return os.path.realpath(top) if top else os.path.realpath(cwd)
 
 
-def _unified_in_repo(cwd):
-    layer = os.path.join(_repo_root(cwd), UNIFIED_DIR, UNIFIED_LAYER)
-    return layer if os.path.isfile(layer) else None
-
-
-def _legacy_in_repo(cwd):
-    path = os.path.join(_repo_root(cwd), ".claude", FILENAMES["profile"])
-    return path if os.path.isfile(path) else None
-
-
-def _unified_global(cwd, registry_root=None):
-    """Unified global layer lives in the control-plane store, never review-crew's store."""
-    import mode_registry
-    path = os.path.join(
-        mode_registry.project_store_dir(cwd, registry_root), "config", UNIFIED_LAYER)
-    return path if os.path.isfile(path) else None
-
-
-def _legacy_global(cwd, legacy_root):
-    g = resolve_global(cwd, legacy_root, _consumer="review_store")
-    if g is None:
-        return None, g
-    legacy = os.path.join(g["dir"], FILENAMES["profile"])
-    if os.path.isfile(legacy):
-        return legacy, g
-    return None, g
-
-
 def _legacy_global_decisions(cwd, legacy_root):
     g = resolve_global(cwd, legacy_root, heal=False)
     if g is None:
@@ -84,36 +56,23 @@ def _legacy_global_decisions(cwd, legacy_root):
     return path if os.path.isfile(path) else None
 
 
-def _profile_anchor(cwd, legacy_root, registry_root=None):
-    """Return (path, location, healed, entry_id) for the profile anchor, or Nones."""
-    layer = _unified_in_repo(cwd)
-    if layer:
-        return layer, "in-repo", False, None
-    legacy = _legacy_in_repo(cwd)
-    if legacy:
-        return legacy, "in-repo", False, None
-    layer = _unified_global(cwd, registry_root)
-    if layer:
-        return layer, "global", False, None
-    legacy, g = _legacy_global(cwd, legacy_root)
-    if legacy:
-        return legacy, "global", g["healed"], g["entry_id"]
-    healed = g["healed"] if g else False
-    eid = g["entry_id"] if g else None
-    return None, "none", healed, eid
-
-
-def _decisions_path(cwd, profile_path, location, legacy_root, registry_root=None):
+def _decisions_path(cwd, cal, legacy_root, registry_root=None):
     """Decisions: in-repo at .claude/; global prefers legacy-store copy, else co-locates."""
+    location = cal["location"]
+    anchor = cal.get("dispatch_layer") or cal.get("legacy_path")
     if location == "in-repo":
         return os.path.join(_repo_root(cwd), ".claude", FILENAMES["decisions"])
     legacy_dec = _legacy_global_decisions(cwd, legacy_root)
     if legacy_dec:
         return legacy_dec
-    unified = _unified_global(cwd, registry_root)
-    if unified:
+    if anchor:
+        return os.path.join(os.path.dirname(anchor), FILENAMES["decisions"])
+    import mode_registry
+    unified = os.path.join(
+        mode_registry.project_store_dir(cwd, registry_root), "config", UNIFIED_LAYER)
+    if os.path.isfile(unified):
         return os.path.join(os.path.dirname(unified), FILENAMES["decisions"])
-    return os.path.join(os.path.dirname(profile_path), FILENAMES["decisions"])
+    return None
 
 
 def create(cwd, kind, location, legacy_root=None, registry_root=None):
@@ -122,12 +81,13 @@ def create(cwd, kind, location, legacy_root=None, registry_root=None):
     keys.json. Global unified profiles use the control-plane store (registry_root);
     legacy global decisions use the review-crew store (legacy_root)."""
     legacy_root = legacy_root or store_root()
+    repo = _repo_root(cwd)
     if location == "in-repo":
         if kind == "profile":
-            d = os.path.join(cwd, UNIFIED_DIR)
+            d = os.path.join(repo, UNIFIED_DIR)
             os.makedirs(d, exist_ok=True)
             return os.path.join(d, UNIFIED_LAYER)
-        d = os.path.join(cwd, ".claude")
+        d = os.path.join(repo, ".claude")
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, FILENAMES[kind])
     if location != "global":
@@ -142,11 +102,14 @@ def create(cwd, kind, location, legacy_root=None, registry_root=None):
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, UNIFIED_LAYER)
 
-    unified = _unified_global(cwd, registry_root)
-    if unified:
+    import calibration_resolve
+    cal = calibration_resolve.resolve(cwd, root=registry_root, legacy_root=legacy_root)
+    unified = cal.get("dispatch_layer")
+    if unified and cal.get("location") == "global":
         d = os.path.dirname(unified)
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, FILENAMES["decisions"])
+
     import mode_registry
     store_dir = mode_registry.ensure_project_store(cwd, registry_root)
     if store_dir:
@@ -169,19 +132,22 @@ def create(cwd, kind, location, legacy_root=None, registry_root=None):
 def resolve(cwd, kind, legacy_root=None, registry_root=None):
     """Resolve `kind`'s path. Profile location follows unified layer, then legacy profile."""
     legacy_root = legacy_root or store_root()
-    g = resolve_global(cwd, legacy_root, _consumer="review_store")
-    anchor, location, healed, entry_id = _profile_anchor(cwd, legacy_root, registry_root)
-    if anchor is None:
+    import calibration_resolve
+    cal = calibration_resolve.resolve(
+        cwd, root=registry_root, legacy_root=legacy_root, heal=False)
+    if not cal["exists"]:
         return {"kind": kind, "path": None, "location": "none", "exists": False,
-                "healed": g["healed"] if g else False,
-                "entry_id": g["entry_id"] if g else None}
+                "healed": cal.get("healed", False),
+                "entry_id": cal.get("entry_id")}
 
     if kind == "profile":
-        path = anchor
+        path = cal.get("dispatch_layer") or cal.get("legacy_path")
     else:
-        path = _decisions_path(cwd, anchor, location, legacy_root, registry_root)
-    return {"kind": kind, "path": path, "location": location,
-            "exists": os.path.exists(path), "healed": healed, "entry_id": entry_id}
+        path = _decisions_path(cwd, cal, legacy_root, registry_root)
+    return {"kind": kind, "path": path, "location": cal["location"],
+            "exists": path is not None and os.path.exists(path),
+            "healed": cal.get("healed", False),
+            "entry_id": cal.get("entry_id")}
 
 
 def decide_location(env_value, interactive, cwd=None, root=None):

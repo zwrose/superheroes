@@ -427,3 +427,37 @@ def test_cli_decide_location(tmp_path):
     r = subprocess.run([sys.executable, mod, "decide-location", "--interactive", "true"],
                        cwd=repo, env=env, capture_output=True, text=True)
     assert r.stdout.strip() == "in-repo"
+
+
+def test_create_and_resolve_from_subdirectory(tmp_path):
+    """create()/resolve() anchor at repo root, not cwd — subdirectory runs must match."""
+    repo = _init_repo(tmp_path / "r")
+    sub = os.path.join(repo, "packages", "app")
+    os.makedirs(sub)
+    path = rs.create(sub, "profile", "in-repo")
+    expected = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    assert path == expected
+    os.makedirs(os.path.dirname(expected), exist_ok=True)
+    open(expected, "w").write("## Focus hints\n- code: x\n")
+    out = rs.resolve(sub, "profile")
+    assert out["location"] == "in-repo"
+    assert out["path"] == expected
+    assert out["exists"] is True
+
+
+def test_resolve_in_repo_skips_global_store_io(tmp_path, monkeypatch):
+    """In-repo fast path must not touch the global store on read-only resolve."""
+    repo = _init_repo(tmp_path / "r")
+    layer = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    os.makedirs(os.path.dirname(layer), exist_ok=True)
+    open(layer, "w").write("layer\n")
+    called = []
+
+    def track(cwd, legacy_root, heal=False, _consumer=None):
+        called.append(heal)
+        return None
+
+    monkeypatch.setattr(sc, "resolve_global", track)
+    out = rs.resolve(repo, "profile")
+    assert out["location"] == "in-repo"
+    assert called == []
