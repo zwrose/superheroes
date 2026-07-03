@@ -29,10 +29,21 @@ import circuit_breaker
 
 _TIERS = ("Critical", "Important", "Minor", "Nit")
 _BLOCKING = ("Critical", "Important")
+_DEFAULT_BLOCKING_SEVERITY = "Important"
 
 
 def _identity(f):
     return circuit_breaker.finding_identity(f)
+
+
+def _kept_severity(f, v):
+    verdict_severity = v.get("severity") if isinstance(v, dict) else None
+    if verdict_severity in _TIERS:
+        return verdict_severity
+    finding_severity = f.get("severity")
+    if finding_severity in _TIERS:
+        return finding_severity
+    return _DEFAULT_BLOCKING_SEVERITY
 
 
 def consume(merged, leaf_verdicts):
@@ -56,9 +67,7 @@ def consume(merged, leaf_verdicts):
                           "was_blocking_tagged": f.get("severity") in _BLOCKING})
             continue
         kept = dict(f)
-        sev = v.get("severity") if isinstance(v, dict) else None
-        if sev in _TIERS:
-            kept["severity"] = sev  # normalize iff a valid tier; else keep original
+        kept["severity"] = _kept_severity(f, v)
         survivors.append(kept)
     return {"findings": survivors, "drops": drops}
 

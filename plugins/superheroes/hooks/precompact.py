@@ -28,14 +28,16 @@ def main():
         import control_plane
         import checkpoint as ck
         import journal
-        wi = control_plane.get_current(cwd)
-        if not wi:
-            return 0
-        p = control_plane.paths(cwd, wi)
-        c = ck.read(p["checkpoint"])
-        if c is None:
-            return 0
-        journal.render_brief(p["resume_brief"], c, {}, p["events"], root=cwd)
+        import ref_lock
+        # #170: the active work item(s) come from the common-dir store's live leases (the retired
+        # current.json is gone). Refresh each live run's brief — under two parallel runs sharing
+        # the clone's store, both get an up-to-date brief; with none, this is a no-op.
+        for wi in ref_lock.active_work_items(control_plane.checkout_dir(cwd)):
+            p = control_plane.paths(cwd, wi)
+            c = ck.read(p["checkpoint"])
+            if c is None:
+                continue
+            journal.render_brief(p["resume_brief"], c, {}, p["events"], root=cwd)
     except Exception as exc:
         # Best-effort + non-fatal (always exit 0 — a crashing hook must not fail the
         # session; the cold reconcile is the fallback). But emit a one-line stderr

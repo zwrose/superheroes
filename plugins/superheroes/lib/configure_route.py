@@ -71,15 +71,20 @@ def route(cwd, *, interactive, root=None):
     return {"path": "view", "reasons": ["configured and healthy"], "signals": signals}
 
 
-def _current_work(cwd, root):
-    """The current control-plane work-item dict, or None. Fail-open."""
+def _active_work_items(cwd, root):
+    """Work items holding a live (non-stale) lease in this clone's common-dir control-plane
+    store. Fail-open: [] on any error."""
     try:
-        return control_plane.get_current(cwd, root)
+        import ref_lock
+        return ref_lock.active_work_items(control_plane.checkout_dir(cwd, root))
     except Exception:
-        return None
+        return []
 
 
 def work_in_flight(cwd, *, root=None):
-    """UFR-3: True when a piece of work is mid-flight (its documents would move under a switch),
-    so the conductor can warn before a storage-mode switch. A tested condition, not prose."""
-    return bool(_current_work(cwd, root))
+    """UFR-3: True when a piece of work is mid-flight in this clone (its documents would move
+    under a storage-mode switch), so the conductor can warn before a storage-mode switch. A
+    tested condition, not prose. Signal: any live work-item lease in the common-dir store
+    (#170 — the honest replacement for the vacuous current.json pointer the native spine never
+    wrote). Fail-open (a warning, never a hard block)."""
+    return bool(_active_work_items(cwd, root))

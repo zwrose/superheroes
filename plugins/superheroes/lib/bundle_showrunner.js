@@ -18,7 +18,10 @@ const LIB = __dirname
 // deps (circuit_breaker + loop_state) are already first in the array, worker_recovery is pure.
 // #38 Task 10: engine_pref + engine_dispatch — external-engine resolver + dispatch leaf (before
 // build_phase.js/showrunner.js, which require them in-process).
-const MODULES = ['circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
+// #170: lib_root.js first — it has no deps and is required by the compose modules (showrunner /
+// build_phase / engine_dispatch / review_panel_shell / fenced_json) to resolve __SR_LIB at call time.
+const MODULES = ['lib_root.js',
+                 'circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
                  'review_round_policy.js',
                  'ci_status.js', 'verify_gate.js',
                  'review_memory.js',
@@ -276,6 +279,13 @@ if (globalThis.__SR_RUN !== false) {
   // the haiku leaf's cwd. Callers pass args.root = <abs repo root> to opt in; absent in production
   // (where the leaf cwd is the correct repo) the guard is unset and selfContained() is a no-op.
   if (__a && __a.root) globalThis.__SR_ROOT = __a.root
+  // #170: thread the spine CODE root — where every python3 <lib>/<cli>.py compose points, DISTINCT
+  // from __SR_ROOT (the target repo git/build/docs operate on). The launching skill passes an
+  // absolute plugin-cache lib dir (CLAUDE_PLUGIN_ROOT + /lib — immutable + versioned) so the run is
+  // pinned to its launch-time code version and portable to any repo. The relative default IS the
+  // pre-#170 behavior (resolves under the leaf's cd <root>), so a no-args / no-libRoot launch stays
+  // byte-identical. lib_root.js reads this at call time.
+  globalThis.__SR_LIB = (__a && typeof __a.libRoot === 'string' && __a.libRoot) ? __a.libRoot : 'plugins/superheroes/lib'
   // args-based front-half selector (Task 13a, #115): args.frontHalf==='native' opts into a
   // front-half-only run (parks at the workhorse boundary). This drives the sandbox selector
   // because the env path (SUPERHEROES_FRONT_HALF) is unavailable in the Workflow sandbox (FR-8).

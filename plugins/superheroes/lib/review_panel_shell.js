@@ -12,10 +12,12 @@ const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
+const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
 const _VERIFY_OK = new Set(['pass', 'skipped'])
+const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 function _usable(v) { return v && typeof v.terminal === 'string' }
 function _failClosed() {
@@ -148,7 +150,7 @@ function confirmationReady(records, round, justMarked) {
 // the loop's second entry read (last-extras.json) into the same leaf; it comes back as
 // `extras` (null when missing/corrupt — the old readJson-default parity).
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -158,7 +160,7 @@ async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
 }
 
 async function probeRoundRecords(runDir, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
   try {
     const parsed = JSON.parse((out && out.stdout) || '')
     if (parsed && typeof parsed === 'object') return parsed
@@ -227,7 +229,7 @@ async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, run
   const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
   const inline = recordJson.length <= _INLINE_RECORD_BOUND
   const stagedPath = inline ? null : ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
+  const args = [libPath('review_memory.py'), 'persist-skeleton',
     '--path', ioApi.join(runDir, 'round-records.json')]
   args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
   args.push('--record-hash', ioApi.contentHash(recordJson),
@@ -283,7 +285,7 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   const updatesJson = JSON.stringify(updates)
   const inline = updatesJson.length <= _INLINE_RECORD_BOUND
   const stagedPath = inline ? null : ioApi.join(runDir, `round-updates-r${round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
+  const args = [libPath('review_memory.py'), 'update-round',
     '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round)]
   args.push(...(inline ? ['--updates-json', updatesJson] : ['--updates-path', stagedPath]))
   args.push('--updates-hash', ioApi.contentHash(updatesJson),
@@ -308,7 +310,7 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
 // 'stale' park — courier text must never enter an integrity decision. A mangled helper
 // ANSWER fails JSON.parse and parks fail-closed (never silently-empty decisions).
 async function loadCoverageDecisions(target, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/coverage_decisions.py', 'load',
+  const out = await ioApi.runHelper('python3', [libPath('coverage_decisions.py'), 'load',
     '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
   try {
     const parsed = JSON.parse((out && out.stdout) || '')
@@ -365,7 +367,7 @@ function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
 // No expected-hash: the telemetry file is a single-writer run artifact written once at the
 // terminal — the old pre-read + CAS pair cost a leaf and protected nothing the lease doesn't.
 async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, lease, ioApi) {
-  const args = ['plugins/superheroes/lib/review_telemetry.py', 'write-from-records',
+  const args = [libPath('review_telemetry.py'), 'write-from-records',
     '--path', ioApi.join(runDir, 'review-telemetry.json'),
     '--records-path', ioApi.join(runDir, 'round-records.json'),
     '--expected-leaves-json', JSON.stringify(expectedLeaves || []),
@@ -383,7 +385,7 @@ async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, le
 
 async function recordCoverageDecision(targetPath, decision, expectedHash, mode, runId, lease, ioApi) {
   const cmd = mode === 'code' ? 'record-code' : 'record-doc'
-  const args = ['plugins/superheroes/lib/coverage_decisions.py', cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
+  const args = [libPath('coverage_decisions.py'), cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
   try {
@@ -403,7 +405,7 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi }) {
   const api = ioApi || io()
   const target = await coverageDecisionTarget(runDir, context, legKind || {}, api)
-  const args = ['plugins/superheroes/lib/review_setup_gather.py', 'gather',
+  const args = [libPath('review_setup_gather.py'), 'gather',
     '--run-dir', runDir,
     '--records-path', api.join(runDir, 'round-records.json'),
     '--dimensions', JSON.stringify(reviewerSet || []),
@@ -518,11 +520,12 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       if (!synthesized) {
         try { log(`review-panel r${round}: synthesis produced no result — falling back to raw compile (no findings dropped)`) } catch (_) {}
       }
+      graftSynthesizedFindings(roundFindings, synthesized)
     }
 
     let verifyResult = null
     if (legKind.code) {
-      try { verifyResult = await verifyAgent(verifyCommand, runDir, round) }
+      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
     }
 
@@ -637,12 +640,25 @@ function _validReviewerResult(out) {
   return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
+function normalizeReviewerFindings(findings) {
+  return (findings || []).map((finding) => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding
+    if ((finding.title === undefined || finding.title === null || finding.title === '') &&
+        typeof finding.summary === 'string' && finding.summary) {
+      return Object.assign({}, finding, { title: finding.summary })
+    }
+    return finding
+  })
+}
+
 function _shapeReviewerResult(out, opts) {
   if (Array.isArray(out)) {
     const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    return { findings: out, confidence: conf, legacyArray: true }
+    return { findings: normalizeReviewerFindings(out), confidence: conf, legacyArray: true }
   }
-  return _stripZeroUsage(out)
+  const shaped = _stripZeroUsage(out)
+  if (!shaped || !Array.isArray(shaped.findings)) return shaped
+  return Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) })
 }
 
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
@@ -673,16 +689,101 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
-async function verifyAgent(verifyCommand, runDir, round) {
+function graftSynthesizedFindings(roundFindings, synthesized) {
+  if (!synthesized || typeof synthesized !== 'object' || !Array.isArray(synthesized.findings)) return
+  const keptById = Object.create(null)
+  for (const kept of synthesized.findings) {
+    if (!kept || typeof kept !== 'object' || Array.isArray(kept)) continue
+    keptById[circuitBreaker.findingIdentity(kept)] = kept
+  }
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (!result || typeof result !== 'object' || !Array.isArray(result.findings)) continue
+    const findings = []
+    for (const finding of result.findings) {
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) continue
+      const kept = keptById[circuitBreaker.findingIdentity(finding)]
+      if (!kept) {
+        if (finding.file === null || finding.file === undefined || finding.line === null || finding.line === undefined) {
+          findings.push(finding)
+        }
+        continue
+      }
+      const enriched = Object.assign({}, finding)
+      if ((enriched.title === undefined || enriched.title === null || enriched.title === '') &&
+          kept.title !== undefined && kept.title !== null && kept.title !== '') {
+        enriched.title = kept.title
+      }
+      if (kept.severity !== undefined && kept.severity !== null && kept.severity !== '') enriched.severity = kept.severity
+      if (!enriched.classKey && kept.classKey) enriched.classKey = kept.classKey
+      findings.push(enriched)
+    }
+    roundFindings[name] = Object.assign({}, result, { findings })
+  }
+}
+
+async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
   // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
   // session model). The preamble strips the marker before the real agent().
-  const out = await agent(
-    `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
-    `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  if (!out) return 'fail'
-  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
+  ioApi = ioApi || io()
+  const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
+  const command = `python3 ${libPath('verify_gate.py')} --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
+  const prompt =
+    `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
+    `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
+    `(the Bash tool accepts a timeout parameter up to 600000 ms). Do NOT background it. ` +
+    `Do NOT answer until the command prints its final JSON. Your structured output fields must be the JSON object's own fields ` +
+    `(result/code/tail); do not nest the JSON as a string.\n\n` +
+    command
+  const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
+  const out = await runCourier()
+  const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
+  if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
+  const readBack = await ioApi.readJson(outPath, null)
+  const fromFile = verifyResultFromPayload(verifyCommand, readBack, { allowPass: true })
+  if (fromFile) return fromFile
+  const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
+  if (fromDirect) return fromDirect
+  const retryOut = await runCourier()
+  const retryReadBack = await ioApi.readJson(outPath, null)
+  const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
+  if (fromRetryFile) return fromRetryFile
+  return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
+}
+
+function own(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+function _integerString(value) {
+  const s = String(value).trim()
+  return /^-?\d+$/.test(s) ? s : null
+}
+
+function verifyResultFromPayload(verifyCommand, payload, opts) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  opts = opts || {}
+  if (typeof payload.result === 'string') {
+    try {
+      const nested = JSON.parse(payload.result)
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        return verifyResultFromPayload(verifyCommand, nested, opts)
+      }
+    } catch (_) { /* fall through to normal result handling */ }
+  }
+  const command = verifyCommand || (own(payload, 'command') ? payload.command : 'none')
+  const commandSkipped = !command || String(command).trim().toLowerCase() === 'none'
+  if (payload.result === 'pass') return opts.allowPass ? 'pass' : null
+  if (payload.result === 'skipped') return commandSkipped ? 'skipped' : null
+  if (payload.result === 'fail' || payload.result === 'timeout') return payload.result
+  if (commandSkipped) return 'skipped'
+  const timedOut = payload.timedOut === true || String(payload.timedOut).toLowerCase() === 'true'
+  if (timedOut) return 'timeout'
+  const rc = own(payload, 'returncode') ? payload.returncode : (own(payload, 'code') ? payload.code : undefined)
+  const rcStr = _integerString(rc)
+  if (!rcStr) return null
+  const classified = verifyGateTwin.classify({ command, returncode: rcStr, timedOut: false })
+  return classified === 'pass' && !opts.allowPass ? null : classified
 }
 
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
@@ -765,12 +866,35 @@ async function runFixStep(fixStep, fixContext, verdict, runDir) {
   try {
     const fixResult = await fixStep(fixContext, verdict, runDir)
     if (!fixResult) return { ok: false, extras: null, fixResult: null }
+    const schedulingExtras = fixSchedulingExtras(fixResult)
     await recordDeferred(fixResult, verdict, runDir)
-    return { ok: true, extras: fixResult.extras || null, fixResult }
+    const detailExtras = plainExtras(fixResult.extras)
+    const extras = Object.assign({}, detailExtras || {}, schedulingExtras || {})
+    return { ok: true, extras: Object.keys(extras).length ? extras : null, fixResult }
   } catch (e) {
     try { log(`review-panel: fix step failed, treating as fix failure -> halted: ${e && e.message ? e.message : e}`) } catch (_) {}
     return { ok: false, extras: null, fixResult: null }
   }
+}
+
+function plainExtras(value) {
+  return (value && typeof value === 'object' && !Array.isArray(value)) ? value : null
+}
+
+function fixSchedulingExtras(fixResult) {
+  if (!fixResult || typeof fixResult !== 'object' || Array.isArray(fixResult)) return null
+  const out = {}
+  if (Array.isArray(fixResult.changedSubjects)) {
+    out.changedSubjects = fixResult.changedSubjects.filter((s) => POLICY_SUBJECTS.has(s))
+    out.needsConfirmation = true
+  }
+  if (Array.isArray(fixResult.changedSubjectDetails)) out.changedSubjectDetails = fixResult.changedSubjectDetails
+  else if (Array.isArray(fixResult.changedSubjects)) out.changedSubjectDetails = fixResult.changedSubjects
+  const extras = plainExtras(fixResult.extras)
+  if (extras && Object.prototype.hasOwnProperty.call(extras, 'needsConfirmation')) {
+    out.needsConfirmation = extras.needsConfirmation
+  }
+  return Object.keys(out).length ? out : null
 }
 
 const VERDICT_SCHEMA = {
@@ -789,8 +913,8 @@ const VERDICT_SCHEMA = {
 }
 const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
   properties: { findings: { type: 'array' }, drops: { type: 'array' } } }
-const VERIFY_SCHEMA = { type: 'object', required: ['command'],
-  properties: { command: {}, returncode: {}, timedOut: {} } }
+const VERIFY_SCHEMA = { type: 'object', required: ['result'],
+  properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 

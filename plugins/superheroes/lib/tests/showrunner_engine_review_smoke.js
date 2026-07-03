@@ -134,6 +134,8 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
       return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} })
     }
     if (label && (label.startsWith('verify') || label === 'run verify')) {
+      const m = String(prompt).match(/--out '([^']+)'/)
+      if (m) fs.writeFileSync(m[1], JSON.stringify({ result: 'pass', code: 0, tail: '' }))
       return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }
     }
     if (label && label.startsWith('synthesis')) {

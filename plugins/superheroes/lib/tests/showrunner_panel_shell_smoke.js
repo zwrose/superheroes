@@ -97,6 +97,8 @@ async function main() {
     const prevAgent = global.agent
     global.agent = async (prompt, opts) => {
       if (opts && opts.label === 'run verify') {
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'),
+          JSON.stringify({ command: 'run-tests', returncode: '0', timedOut: 'false' }))
         return { command: 'run-tests', returncode: '0', timedOut: 'false' }  // courier-stringified
       }
       return null
@@ -438,6 +440,80 @@ async function main() {
     assert.ok((captured.find((x) => x.round === 2).ctx.generalizeRequired || []).some((d) => String(d.classKey).includes('Test::coverage')))
     assert.strictEqual(v.terminal, 'clean')
   }
+
+  {
+    const dir = freshDir()
+    const modernFinding = {
+      file: 'plugins/superheroes/lib/showrunner.js',
+      line: 1493,
+      summary: 'verify courier result is nested as a JSON string',
+      failure_scenario: 'The verify courier wraps verify_gate stdout under result, making the pass unreadable.',
+    }
+    const expectedId = 'plugins/superheroes/lib/showrunner.js::verify courier result is nested as a json string'
+    let fixCalls = 0
+    global.reviewerAgent = async (_reviewer, _context, _rubric, runDir, round, opts) => {
+      if (round === 1) return { findings: [modernFinding], confidence: 'high', verificationReceipt: receipt(runDir, round, opts), usage: { total: 3 } }
+      return cleanResult(runDir, round, opts)
+    }
+    global.synthesisLeaf = async (merged) => ({
+      verdicts: merged.map((f) => ({
+        id: expectedId,
+        action: 'keep',
+        severity: 'Critical',
+        reason: `kept ${f.file}`,
+      })),
+      usage: { total: 1 },
+    })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], fixStep: async () => {
+      fixCalls += 1
+      return { fixed: [expectedId], changedSubjects: ['Code'], coverageDecisions: [] }
+    } })
+    assert.strictEqual(fixCalls, 1,
+      'modern reviewer finding + Critical synthesis verdict must trigger the fix leg')
+    assert.strictEqual(v.terminal, 'clean')
+    const recs = JSON.parse(fs.readFileSync(path.join(dir, 'round-records.json'), 'utf8'))
+    const first = recs.find((r) => r.round === 1).findings[0]
+    assert.strictEqual(first.title, modernFinding.summary,
+      'round-record finding title must be normalized from summary')
+    assert.strictEqual(first.severity, 'Critical',
+      'round-record finding severity must include the synthesis verdict severity')
+    assert.strictEqual(first.summary, undefined,
+      'round-record skeleton remains bounded and does not persist full modern-shape bodies')
+  }
+
+  {
+    const dir = freshDir()
+    const modernFinding = {
+      file: 'plugins/superheroes/lib/review_panel_shell.js',
+      line: 671,
+      summary: 'kept synthesis finding has no severity',
+      failure_scenario: 'A synthesis keep with no severity must not become certification-neutral.',
+    }
+    const expectedId = 'plugins/superheroes/lib/review_panel_shell.js::kept synthesis finding has no severity'
+    let fixCalls = 0
+    global.reviewerAgent = async (_reviewer, _context, _rubric, runDir, round, opts) => {
+      if (round === 1) return { findings: [modernFinding], confidence: 'high', verificationReceipt: receipt(runDir, round, opts), usage: { total: 3 } }
+      return cleanResult(runDir, round, opts)
+    }
+    global.synthesisLeaf = async () => ({
+      verdicts: [{ id: expectedId, action: 'keep', reason: 'still applies' }],
+      usage: { total: 1 },
+    })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], fixStep: async () => {
+      fixCalls += 1
+      return { fixed: [expectedId], changedSubjects: ['Code'], coverageDecisions: [] }
+    } })
+    assert.strictEqual(fixCalls, 1,
+      'a kept finding with no severity anywhere must still block and run the fix leg')
+    assert.strictEqual(v.terminal, 'clean')
+    const recs = JSON.parse(fs.readFileSync(path.join(dir, 'round-records.json'), 'utf8'))
+    const first = recs.find((r) => r.round === 1).findings[0]
+    assert.strictEqual(first.title, modernFinding.summary)
+    assert.strictEqual(first.severity, 'Important',
+      'severity-less kept findings default to Important before persistence')
+  }
+
+  global.synthesisLeaf = async () => ({ verdicts: [], usage: { total: 1 } })
 
   console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator + verify-coercion + policy/memory/coverage')
 }

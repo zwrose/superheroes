@@ -6,9 +6,11 @@ devserver.py (pure helpers + idempotent, never-raising effectful ops). All destr
 logic lives in the pure decision functions; the effectful shell only executes a
 pre-computed decision.
 """
+import fcntl
 import json
 import os
 import subprocess
+from contextlib import contextmanager
 
 import control_plane
 
@@ -29,9 +31,11 @@ def branch_name(work_item, content_hash):
 
 def worktree_path(cwd, work_item, content_hash, *, root=None):
     """The deterministic FR-1 path: <managed_root>/<checkout-key>/<work-item>-<hash>.
-    The checkout-key (control_plane.checkout_key — the --absolute-git-dir hash) makes
-    two distinct checkouts of one repo resolve to distinct paths (FR-1 no-collision).
-    Total — never raises (checkout_key falls back to realpath(cwd))."""
+    The checkout-key (control_plane.checkout_key — the git COMMON-dir hash) is identical
+    across a clone's worktrees, so a work item's build worktree + its durable record live in
+    ONE place regardless of which worktree launched the run (no split-brain); distinct clones
+    of one repo still resolve to distinct paths. Total — never raises (checkout_key falls back
+    to realpath(cwd))."""
     key = control_plane.checkout_key(cwd)
     return os.path.join(managed_root(root), key, "%s-%s" % (work_item, content_hash))
 
@@ -74,17 +78,44 @@ def record_write(record_file, worktrees):
         {"schemaVersion": RECORD_SCHEMA, "worktrees": worktrees}))
 
 
+def _lock_path(record_file):
+    return record_file + ".lock"
+
+
+@contextmanager
+def _registry_lock(record_file):
+    """Exclusive fcntl.flock on a sidecar `<record>.lock`, so a read→modify→write of the shared
+    worktrees.json serializes across processes and never loses updates (#170). Because the store
+    is common-dir keyed, one clone's parallel runs share ONE registry — the previously unlocked
+    read-modify-write in record_add/record_remove could drop a concurrent writer's entry and
+    orphan a build-worktree record. The lock is a STABLE sidecar file, never the record itself:
+    record_write swaps the record inode via os.replace, which would drop a lock held on the old
+    inode. Closing the fd releases the flock. Per-work-item record files were rejected — the sweep
+    (plan_sweep/reap) enumerates the whole registry, so one file is the right shape."""
+    d = os.path.dirname(os.path.abspath(record_file)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd = os.open(_lock_path(record_file), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def record_add(record_file, entry):
-    """Idempotent add, deduped by path."""
-    kept = [w for w in record_read(record_file) if w.get("path") != entry.get("path")]
-    kept.append(entry)
-    record_write(record_file, kept)
+    """Idempotent add, deduped by path. The read→modify→write runs under the registry lock and
+    RE-READS inside it, so concurrent adds/removes on the shared registry never lose updates."""
+    with _registry_lock(record_file):
+        kept = [w for w in record_read(record_file) if w.get("path") != entry.get("path")]
+        kept.append(entry)
+        record_write(record_file, kept)
 
 
 def record_remove(record_file, path):
-    """Idempotent remove by path."""
-    record_write(record_file,
-                 [w for w in record_read(record_file) if w.get("path") != path])
+    """Idempotent remove by path. Locked read→modify→write (re-reads inside the lock)."""
+    with _registry_lock(record_file):
+        record_write(record_file,
+                     [w for w in record_read(record_file) if w.get("path") != path])
 
 
 def _record_add_safe(rec_file, entry):

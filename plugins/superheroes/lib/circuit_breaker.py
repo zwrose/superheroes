@@ -26,8 +26,12 @@ def normalize_title(title):
     return t.strip()
 
 
+def finding_label(finding):
+    return finding.get("title") or finding.get("summary") or ""
+
+
 def finding_identity(finding):
-    return f"{finding.get('file') or ''}::{normalize_title(finding.get('title') or '')}"
+    return f"{finding.get('file') or ''}::{normalize_title(finding_label(finding))}"
 
 
 def recurrence_key(finding):

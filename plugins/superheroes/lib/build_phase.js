@@ -24,7 +24,9 @@ const circuitBreaker = require('./circuit_breaker.js')
 const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 
-const LIB = 'plugins/superheroes/lib'
+// #170: compose the spine CODE root (plugin-cache lib dir, or the repo-relative default) at
+// CALL time — never a module-load const, since the bundle ENTRY plants __SR_LIB after factories.
+const { libPath, libRoot } = require('./lib_root.js')
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
@@ -132,7 +134,7 @@ async function gatherState(workItem, branch, validIds, wt) {
   try {
     parsed = await courier.runCourierJson(
       'gather build state',
-      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+      `python3 ${libPath('build_state_cli.py')} gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
       {},
     )
   } catch (_) {
@@ -167,14 +169,14 @@ async function buildPhase(workItem, generation) {
   // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
   // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
   const gate = await execText(
-    `python3 ${LIB}/definition_doc.py read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
     'read gate',
   )
   if (gate == null) return park('could not read the tasks gate — failing closed')
   if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
-    `python3 ${LIB}/build_entry.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    `python3 ${libPath('build_entry.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
     'prepare build',
   )
   if (setup == null) return park('build setup failed: no branch')
@@ -186,7 +188,7 @@ async function buildPhase(workItem, generation) {
   // UFR-8: zero executable tasks -> finish without building.
   // With exec+JSON.parse the BUG-2 string-recovery is structurally moot, but KEEP the
   // typeof===string JSON.parse recovery + Array.isArray guard as defense-in-depth (BUG-3).
-  const _taskResult = await execJson(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`, 'read tasks')
+  const _taskResult = await execJson(`python3 ${libPath('task_list_cli.py')} --work-item ${shq(workItem)}`, 'read tasks')
   if (_taskResult == null) return park('task-list command did not run — failing closed')
   let tasks = _taskResult.tasks
   if (typeof tasks === 'string') {
@@ -340,7 +342,7 @@ async function resetUncommitted(wt, branch) {
 async function writeProvenance(workItem) {
   // execJson retries the courier ONCE on a dropped/garbled stdout; null -> the SAME fail-closed
   // fallback as today ({ok:false} -> caller parks). A parseable {ok:false} is returned as-is (no retry).
-  const r = await execJson(`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`, 'write provenance')
+  const r = await execJson(`python3 ${libPath('prov_entry.py')} --step build --work-item ${shq(workItem)}`, 'write provenance')
   if (r == null) return { ok: false, error: 'provenance leaf did not run' }
   return r
 }
@@ -350,7 +352,7 @@ async function recordFinalReviewClean(workItem) {
   try {
     return await courier.runCourierJson(
       'stamp build coverage',
-      `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
+      `python3 ${libPath('build_state_cli.py')} record-final-review --work-item ${shq(workItem)} --clean true`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -369,7 +371,7 @@ async function fenceOrPark(workItem, generation) {
   const root = _checkoutRoot()
   if (!root) return false
   const f = await execJson(
-    `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))} --root ${shq(root)}`,
+    `python3 ${libPath('fence_cli.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))} --root ${shq(root)}`,
     'fence lease',
   )
   return !!(f && f.ok)
@@ -379,7 +381,7 @@ async function recordTaskBuilt(workItem, taskId) {
   try {
     return await courier.runCourierJson(
       'record task built',
-      `python3 ${LIB}/build_state_cli.py record-built --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      `python3 ${libPath('build_state_cli.py')} record-built --work-item ${shq(workItem)} --task ${shq(taskId)}`,
       { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -391,7 +393,7 @@ async function recordTaskReviewed(workItem, taskId) {
   try {
     return await courier.runCourierJson(
       'record task reviewed',
-      `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      `python3 ${libPath('build_state_cli.py')} record-reviewed --work-item ${shq(workItem)} --task ${shq(taskId)}`,
       { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -407,7 +409,7 @@ let _writeAuthNotified = false
 async function _implWriteAuthorized(engine, wt) {
   if (_writeAuthOk !== null) return _writeAuthOk
   const v = await execJson(
-    `python3 ${LIB}/engine_authz.py test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`, 'check write auth')
+    `python3 ${libPath('engine_authz.py')} test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`, 'check write auth')
   _writeAuthOk = !!(v && v.ok === true)
   if (!_writeAuthOk && !_writeAuthNotified) {
     _writeAuthNotified = true
@@ -472,7 +474,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
       // can't run / returns unparseable output must NOT read as a clean trailer state — park (UFR-7).
       const chk = await execJson(
-        `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+        `python3 ${libPath('build_state_cli.py')} gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
         'check trailers',
       )
       if (chk == null) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
@@ -610,7 +612,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
         // append the carried-forward Minors (result unused — best-effort accumulator write). Route
         // through execJson so a dropped/garbled courier stdout is retried once (the write is idempotent).
         await execJson(
-          `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
+          `python3 ${libPath('minor_rollup_cli.py')} --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
           'append minors',
         )
       }
@@ -661,7 +663,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   try {
     folded = await courier.runCourierJson(
       'read verify + minors',
-      `python3 -c ${shq(script)} ${shq(LIB)} ${shq(workItem)}`,
+      `python3 -c ${shq(script)} ${shq(libRoot())} ${shq(workItem)}`,
       { require: ['ok', 'verify_command', 'minors'] },
     )
   } catch (_) {
@@ -741,7 +743,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
-module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

@@ -43,12 +43,17 @@ def decide(probes, work_item):
         blocking.append(_fail("github-access", status, gh.get("remediation")))
 
     active = probes.get("active_run")
-    # active = none | parked | stale | finished  -> pass; any other value = a live run for another
-    # work-item (or this one already live) -> block (the spec's "no conflicting active run").
+    # active = none | parked | stale | finished  -> pass; any other value ("live") = THIS work
+    # item already has a live, non-stale lease in the common-dir store -> block (the hard rule:
+    # one live run per work item per clone). The holder, when known, is named in the remediation.
     if active in (None, "none", "parked", "stale", "finished"):
         blocking.append({"check": "no-active-run", "status": "pass"})
     else:
-        blocking.append(_fail("no-active-run", "fail", _REM["no-active-run"]))
+        holder = probes.get("active_run_holder")
+        rem = _REM["no-active-run"]
+        if holder:
+            rem = "this work item is already running (%s) — %s" % (holder, rem)
+        blocking.append(_fail("no-active-run", "fail", rem))
 
     for key, check in (("repo_ready", "repo-ready"), ("verify_resolves", "verify-resolves"),
                        ("config_resolves", "config-resolves")):
@@ -71,21 +76,28 @@ def decide(probes, work_item):
     return {"ok": ok, "blocking": blocking, "advisory": advisory}
 
 
-def _lease_state(cwd, other_work_item, root):
-    """The string "live" iff `other_work_item` holds a fresh (non-stale) ref_lock lease,
-    else "stale" (fail-closed: any error -> "stale", so the relaunch is never falsely blocked).
-    Resolve the control-plane store FIRST (the dir ref_lock reads leases from) — passing cwd
-    as the store would make every lease read come back absent."""
+def _lease_state(cwd, work_item, root):
+    """(state, holder) for `work_item`'s lease in the common-dir control-plane store.
+    state is "live" iff the work item holds a fresh (non-stale) ref_lock lease — a run whose
+    holder is not provably dead-on-this-boot — else "stale". `holder` is a short "pid P on
+    host H" description when live, else None. Fail-closed: any error -> ("stale", None), so a
+    relaunch is never falsely blocked. Resolve the control-plane store FIRST (the dir ref_lock
+    reads leases from) — passing cwd as the store would make every lease read come back absent.
+
+    Reads the TARGET work item's lease directly (#170): a live lease => a second run of THIS
+    work item is already in progress. absent/expired/pid-dead => "stale" => pass. Relaunch-
+    after-park keeps passing because a terminal park releases the lease (ref_lock.release)."""
     try:
         import control_plane
         import ref_lock
         store = control_plane.checkout_dir(cwd, root)
-        _sha, lease = ref_lock.read_lease(store, other_work_item)
+        _sha, lease = ref_lock.read_lease(store, work_item)
         if isinstance(lease, dict) and not ref_lock.is_stale(lease, ref_lock.DEFAULT_TTL):
-            return "live"
-        return "stale"
+            holder = "pid %s on %s" % (lease.get("pid", "?"), lease.get("host", "?"))
+            return ("live", holder)
+        return ("stale", None)
     except Exception:
-        return "stale"
+        return ("stale", None)
 
 
 def _repo_ready(root):
@@ -182,7 +194,7 @@ def probe(work_item, root):
     """Best-effort world-read -> probes dict. NEVER raises; an unreadable check stays unknown
     (-> fail-closed in decide)."""
     import subprocess
-    import gh_preflight, control_plane, detect
+    import gh_preflight, detect
     p = {}
     try:
         # definition_doc exposes read_gate(path) + a `read-gate` CLI; shell the CLI (the verified
@@ -202,9 +214,9 @@ def probe(work_item, root):
     except Exception as exc:
         p["gh"] = {"ok": False, "cause": "indeterminate", "remediation": "verify GitHub is reachable and retry"}
     try:
-        cur = control_plane.get_current(os.getcwd(), root)
-        # current run is this work-item or none -> not a conflict; another work-item -> check its lease.
-        p["active_run"] = "none" if (cur is None or cur == work_item) else _lease_state(os.getcwd(), cur, root)
+        # #170: no more current.json pointer — read the TARGET work item's lease directly.
+        # A live lease => this exact work item is already running (block); absent/stale => pass.
+        p["active_run"], p["active_run_holder"] = _lease_state(os.getcwd(), work_item, root)
     except Exception:
         p["active_run"] = None
     p["repo_ready"] = _repo_ready(root)

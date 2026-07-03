@@ -1,7 +1,8 @@
 # plugins/superheroes/lib/recover_entry.py
-"""Leaf entry: Step-0 guards (enforcer armed + store lease, UFR-3), then ensure the store,
-read checkpoint + a world snapshot, print recover.reconcile(...) as JSON. Gathers IO here so
-recover stays pure."""
+"""Leaf entry: Step-0 guards (enforcer armed + the §4.4 work-item lease, UFR-3), then ensure
+the store, read checkpoint + a world snapshot, print recover.reconcile(...) as JSON. Gathers
+IO here so recover stays pure. (The per-work-item lease is the sole mutex; the old §4.5
+per-checkout startup.lock was removed in #170 — it never serialized anything.)"""
 import argparse
 import json
 import os
@@ -104,9 +105,10 @@ def main():
         armed = False                                       # a hung self-check -> fail closed
     if not armed:
         return _park("enforcer hook not armed — refusing to run (fail closed)")
-    # Step-0 guard B: the §4.4 startup + work-item leases (UFR-3 — a live holder fails the 2nd run).
-    if not ref_lock.acquire_startup(store)[0]:
-        return _park("another run holds the per-checkout startup lock")
+    # Step-0 guard B: the §4.4 work-item lease (UFR-3 — a live holder fails the 2nd run). This
+    # is the sole mutex; because the store is common-dir keyed, the lease is visible from every
+    # worktree of the clone, so a duplicate launch of the same work item is refused wherever it
+    # was launched from.
     ok, generation, reason = ref_lock.acquire(store, args.work_item)
     if not ok:
         return _park("work-item lease %s — another run is in progress (UFR-3)" % reason)
