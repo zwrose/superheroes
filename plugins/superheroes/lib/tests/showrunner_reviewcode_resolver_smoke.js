@@ -34,10 +34,10 @@ async function main() {
     seenPrompts.push({ prompt, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
     // resolveHead + config now ride the exec courier (#118); return the expected head so it matches.
-    if (label === 'exec' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
-    if (label === 'exec' && prompt.includes('git rev-parse')) return 'cwd-head-000\n'
+    if (label === 'resolve head' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
+    if (label === 'resolve head' && prompt.includes('git rev-parse')) return 'cwd-head-000\n'
     if (label === 'resume') return '1'
-    if (label === 'exec' && prompt.includes('review_code_config.py')) return JSON.stringify({ verifyCommand: 'none', tiers: {} })
+    if (label === 'read review config') return JSON.stringify({ verifyCommand: 'none', tiers: {} })
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
     if (label === 'stamp review coverage') return jsonOut({ ok: true })
@@ -62,7 +62,7 @@ async function main() {
   // The config command must have run in the resolved worktree (cd '/tmp/resolved-build-wt' &&).
   // (The resolver SEAM here returns no folded config, so the phase falls back to its own exec leaf;
   // the real resolveBuildTarget carries config inside the one 'resolve review target' gather.)
-  const configPrompt = seenPrompts.find((p) => p.label === 'exec' && p.prompt.includes('review_code_config.py'))
+  const configPrompt = seenPrompts.find((p) => p.label === 'read review config' && p.prompt.includes('review_code_config.py'))
   assert.ok(configPrompt, 'config command was dispatched')
   assert.ok(
     configPrompt.prompt.includes(`cd '${RESOLVED_WT}'`) ||

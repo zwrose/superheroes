@@ -30,7 +30,7 @@ global.agent = async (p, opts) => {
     }
     return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
   }
-  if (label === 'exec') {
+  if (opts && opts.courier) {
     if (p.includes('emit-checks')) {
       return [{ index: 0, ok: true, stdout: JSON.stringify([{ name: 'ci', bucket: 'pass', state: 'success' }]) }]
     }

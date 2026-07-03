@@ -39,9 +39,10 @@ const GENUINE = [
   /^(architecture|code|security|test|premortem)-reviewer(:r\d+)?$/,
   /^synthesis:r\d+$/,
   /^revise-doc$/,
-  /^implement-task$/,
-  /^task-reviewer:r\d+$/,
-  /^fix-(task|branch|code|ci|app-bug)$/,
+  /^implement task .+ of \d+$/,
+  /^review task .+:r\d+$/,
+  /^fix task /,
+  /^fix-(branch|code|ci|app-bug)$/,
   /^branch-reviewer:r\d+$/,
   /^plan-tests$/,
   /^browser-pass$/,
@@ -78,6 +79,17 @@ const COURIER_ALLOW = [
   /^push CI fix \+ recheck$/,
   /^post readout$/,
   /^release lease$/,               // the dedicated hardened lease-release courier (BUG C — was 'exec')
+  // #151: the descriptive exec-courier labels that replaced the bare 'exec' dumb pipe. Same leaves,
+  // same per-phase counts — only the display purpose changed (routing still rides courier:true).
+  /^gather snapshot$/,             // reconcile: recover_entry.py --snapshot
+  /^check draft$/,                 // producePhase: front_half_usable.py --emit-signals
+  /^prepare build$/,               // buildPhase: build_entry.py
+  /^read tasks$/,                  // buildPhase: task_list_cli.py
+  /^fence lease$/,                 // build/ship fence: fence_cli.py
+  /^check trailers$/,              // buildPhase per-task: build_state_cli.py gather (trailer check)
+  /^write provenance$/,            // buildPhase: prov_entry.py
+  /^resolve head$/,                // resolveHead: git rev-parse
+  /^read pr$/,                     // loadPr: checkpoint_entry.py --read-pr
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -369,8 +381,8 @@ const GENUINE_RESPONSES = [
   [/^author-(plan|tasks)$/, () => ({ status: 'ok', notify: [] })],
   [/^(architecture|code|security|test|premortem)-reviewer(:r\d+)?$/, (p) => ({ findings: [], confidence: 'high', verificationReceipt: receiptFor(p) })],
   [/^synthesis:r\d+$/, () => ({ verdicts: [] })],
-  [/^implement-task$/, () => ({ ok: true, signal: 'ok', evidence: { testPassed: true, testFailed: false } })],
-  [/^task-reviewer:r\d+$/, () => ({ verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] })],
+  [/^implement task .+ of \d+$/, () => ({ ok: true, signal: 'ok', evidence: { testPassed: true, testFailed: false } })],
+  [/^review task .+:r\d+$/, () => ({ verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] })],
   [/^branch-reviewer:r\d+$/, () => ({ findings: [] })],
   [/^plan-tests$/, () => ({ records: [{ branch: 'superheroes/wi-x', steps: [{ id: 's1', instruction: 'i', expected: 'e', scenarioIds: [] }] }], coverageRationale: 'r' })],
   [/^browser-pass$/, () => ({ source: 'browser', baseUrl: 'http://x', steps: [{ id: 's1', status: 'passed', browserExecuted: true }] })],

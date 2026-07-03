@@ -15,7 +15,7 @@ const WORLD = { store_ok: true, current_content_hash: null, pr: null, seeded_emp
 function agentFor(generation, releaseCalls) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('recover_entry')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({
           checkpoint: null, world: WORLD, generation, root: CHECKOUT_ROOT,

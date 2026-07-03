@@ -22,6 +22,7 @@ require('./_smoke_checkout_root.js')
 'use strict'
 const assert = require('assert')
 const fs = require('fs'); const os = require('os'); const path = require('path')
+const { routeMatches } = require('./_task_leaf_route.js')
 
 global.log = () => {}
 global.parallel = async (thunks) => Promise.all((thunks || []).map((t) => t()))
@@ -30,23 +31,22 @@ global.parallel = async (thunks) => Promise.all((thunks || []).map((t) => t()))
 function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt, opts) : resp
-    // #118 fold: named courier leaves (record/gather/stamp) carry one command each — feed the
-    // command through the scenario's exec map so per-scenario variations keep working.
-    const COURIER_LABELS = new Set(['record task built', 'record task reviewed', 'stamp build coverage', 'gather build state'])
-    if (COURIER_LABELS.has(label)) {
-      for (const [needle, resp] of routes) {
-        if (needle === 'exec' && typeof resp === 'function') {
-          const cmd = prompt.split('\n\n').slice(1).join('\n\n')
-          return resp(cmd, opts)
-        }
-      }
-    }
-    // #118 relabel: the per-task reviewer is 'task-reviewer:rN' — scenarios route it as 'review'.
-    if (label.startsWith('task-reviewer:')) {
+    for (const [needle, resp] of routes) if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt, opts) : resp
+    // #150: per-task reviewer labels are "review task <id>:rN" — scenarios route it as 'review'.
+    if (/^review task .+:r\d+$/.test(label)) {
       for (const [needle, resp] of routes) if (needle === 'review') return typeof resp === 'function' ? resp(prompt, opts) : resp
     }
     if (label === 'read verify + minors') return JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] })
+    // #118 fold: a dumb-pipe leaf (record/gather/stamp + the descriptively-labelled exec helpers like
+    // 'read gate'/'fence lease') carries opts.courier and one command — route it by that command. A
+    // dedicated script route (needle containing '.py', e.g. 'verify_gate.py' for the 'run verify' leaf)
+    // wins; otherwise it feeds the scenario's generic exec map. Handled BEFORE the substring loop so a
+    // generic English needle ('review') never mis-grabs a courier command ('record-reviewed').
+    if (opts && opts.courier) {
+      const cmd = prompt.split('\n\n').slice(1).join('\n\n')
+      for (const [needle, resp] of routes) if (needle !== 'exec' && needle.includes('.py') && cmd.includes(needle)) return typeof resp === 'function' ? resp(cmd, opts) : resp
+      for (const [needle, resp] of routes) if (needle === 'exec' && typeof resp === 'function') return resp(cmd, opts)
+    }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt, opts) : resp
     return ''
   }
@@ -113,7 +113,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ])
     const bp = require('../build_phase.js')
-    const r = await bp.buildOneTask('wi', 5, { id: '1', title: 'One' }, 'br', '1', '/tmp/wt')
+    const r = await bp.buildOneTask('wi', 5, { id: '1', title: 'One' }, 'br', '1', '/tmp/wt', 1)
     assert.strictEqual(r.parked, false, 'a clean external build+review completes (not parked)')
     assert.strictEqual(workerFired, 0, 'the native worker agent() must NOT fire when the impl engine is external')
     const buildCall = dispatchCalls.find((o) => o.roleKind === 'build')
@@ -128,7 +128,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       ['implement-task', () => { workerFired += 1; return { ok: true, signal: 'ok', evidence: {} } }],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ])
-    await bp.buildOneTask('wi', 5, { id: '2', title: 'Two' }, 'br', '1,2', '/tmp/wt')
+    await bp.buildOneTask('wi', 5, { id: '2', title: 'Two' }, 'br', '1,2', '/tmp/wt', 2)
     assert.ok(gatherFired, 'the write-time trailer gather (build_state_cli.py gather) ran unchanged')
     // UFR-4 preflight is cached for the run — exactly ONE test-dispatch call across BOTH buildOneTask
     // invocations above (same process-level bp module instance, no require.cache reset yet).
@@ -166,7 +166,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       ['implement-task', () => { workerFired2 += 1; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ])
-    const r2 = await bp.buildOneTask('wi', 5, { id: '3', title: 'Three' }, 'br', '3', '/tmp/wt')
+    const r2 = await bp.buildOneTask('wi', 5, { id: '3', title: 'Three' }, 'br', '3', '/tmp/wt', 1)
     assert.strictEqual(r2.parked, false, 'a failed external dispatch falls open to Claude and still completes')
     assert.strictEqual(resetFired, 1, 'UFR-2: a failed external write discards uncommitted edits (resetUncommitted)')
     assert.strictEqual(workerFired2, 1, 'the native worker agent() runs after the external dispatch fails (fall open, loop not blocked)')
@@ -277,7 +277,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
         }
       })()],
     ])
-    const r = await bp.buildOneTask('wi', 5, { id: '5', title: 'Five' }, 'br', '5', '/tmp/wt')
+    const r = await bp.buildOneTask('wi', 5, { id: '5', title: 'Five' }, 'br', '5', '/tmp/wt', 1)
     assert.strictEqual(r.parked, false, 'a denied preflight still completes the run (fall open, not parked)')
     assert.ok(dispatchCalls.every((o) => o.roleKind !== 'build' && o.roleKind !== 'fix'),
       'dispatchExternal is NEVER called for a write role once the preflight is denied')
