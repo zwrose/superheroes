@@ -15,6 +15,7 @@ import control_plane
 import docload
 import journal
 import ref_lock
+import review_memory
 import task_list
 
 REVIEW_ROOT = "/tmp"
@@ -102,9 +103,13 @@ def _read_checkpoint(root, work_item):
 
 
 def _review_dir_for(work_item, phase):
+    def _with_round_records(paths):
+        return [p for p in paths
+                if os.path.isfile(os.path.join(p, "round-records.json"))]
+
     if not phase or phase == "unknown":
         pattern = os.path.join(REVIEW_ROOT, "showrunner-%s-*" % glob.escape(work_item))
-        candidates = [p for p in glob.glob(pattern) if os.path.isdir(p)]
+        candidates = _with_round_records([p for p in glob.glob(pattern) if os.path.isdir(p)])
     else:
         prefix = "showrunner-%s-%s" % (work_item, phase)
         pattern = os.path.join(REVIEW_ROOT, glob.escape(prefix) + "*")
@@ -115,6 +120,11 @@ def _review_dir_for(work_item, phase):
             base = os.path.basename(path)
             if base == prefix or base.startswith(prefix + "-"):
                 candidates.append(path)
+        candidates = _with_round_records(candidates)
+    if not candidates:
+        review_prefix = "showrunner-%s-review-" % work_item
+        pattern = os.path.join(REVIEW_ROOT, glob.escape(review_prefix) + "*")
+        candidates = _with_round_records([p for p in glob.glob(pattern) if os.path.isdir(p)])
     if not candidates:
         return None
     return max(candidates, key=lambda p: os.path.getmtime(p))
@@ -146,7 +156,12 @@ def _read_review(root, work_item, phase):
         run_dir = _review_dir_for(work_item, phase)
         if not run_dir:
             return {"available": False}
-        records = _read_json(os.path.join(run_dir, "round-records.json"), [])
+        records_state = review_memory.load_records_state(
+            os.path.join(run_dir, "round-records.json"), [])
+        records = []
+        if records_state.get("ok"):
+            records = [review_memory.summarize_record(r)
+                       for r in records_state.get("records") or []]
         telemetry = _read_json(os.path.join(run_dir, "review-telemetry.json"), {})
         terminal = _read_json(os.path.join(run_dir, "terminal-record.json"), {})
         last_round = {}
@@ -168,6 +183,33 @@ def _read_review(root, work_item, phase):
         }
     except Exception:
         return {"available": False}
+
+
+def _active_phase_from_events(events, checkpoint_updated):
+    checkpoint_epoch = _parse_iso_epoch(checkpoint_updated) or 0
+    for event in reversed(events or []):
+        event_epoch = _parse_iso_epoch(event.get("ts")) or 0
+        if event_epoch and checkpoint_epoch and event_epoch < checkpoint_epoch:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        phase = payload.get("phase")
+        if isinstance(phase, str) and phase in checkpoint.CURRENT_PHASES:
+            return phase
+        step = event.get("step")
+        if isinstance(step, str) and step in checkpoint.CURRENT_PHASES:
+            return step
+    return None
+
+
+def _with_active_phase(phase_info, events, checkpoint_updated):
+    active = _active_phase_from_events(events, checkpoint_updated)
+    if not active:
+        return phase_info
+    out = dict(phase_info)
+    out["value"] = active
+    out["available"] = True
+    out["step"] = checkpoint.CURRENT_PHASES.index(active) + 1
+    return out
 
 
 def _task_total(root, work_item):
@@ -247,6 +289,7 @@ def gather(root, work_item):
         events = journal.read_events(paths["events"])
     except Exception:
         events = []
+    phase_info = _with_active_phase(phase_info, events, checkpoint_updated)
     latest_ts = checkpoint_updated
     if events:
         latest_ts = events[-1].get("ts") or latest_ts
@@ -374,9 +417,13 @@ def diff(prev_snapshot, curr_snapshot):
         curr_dims = curr_review.get("dimensions") if isinstance(curr_review.get("dimensions"), dict) else {}
         for name, dim in curr_dims.items():
             prev_dim = prev_dims.get(name, {})
-            if _safe_int((dim or {}).get("blocking_count")) > 0 and (
-                    _safe_int((prev_dim or {}).get("blocking_count")) != _safe_int((dim or {}).get("blocking_count"))
-                    or (prev_dim or {}).get("status") != (dim or {}).get("status")):
+            blocker_changed = (
+                _safe_int((prev_dim or {}).get("blocking_count")) != _safe_int((dim or {}).get("blocking_count"))
+                or (prev_dim or {}).get("status") != (dim or {}).get("status")
+                or (prev_dim or {}).get("finding_titles") != (dim or {}).get("finding_titles")
+                or curr_round != prev_review.get("round")
+            )
+            if _safe_int((dim or {}).get("blocking_count")) > 0 and blocker_changed:
                 lines.append(_blocking_line(prefix, curr_round, name, dim))
         terminal = curr_review.get("terminal")
         if terminal and terminal != prev_review.get("terminal"):

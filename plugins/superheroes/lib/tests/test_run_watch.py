@@ -3,6 +3,8 @@ import os
 import time
 
 import control_plane
+import hostinfo
+import ref_lock
 import run_watch
 
 
@@ -36,8 +38,9 @@ def _make_review_dir(tmp_path, monkeypatch, phase="review-code"):
     run_dir = review_root / f"showrunner-{WI}-{phase}-abc123"
     run_dir.mkdir(parents=True)
     _write_json(run_dir / "round-records.json", [
-        {"round": 1, "dimensions": {"code": {"status": "clean"}}},
+        {"schemaVersion": 2, "round": 1, "dimensions": {"code": {"status": "clean"}}},
         {
+            "schemaVersion": 2,
             "round": 2,
             "dimensions": {
                 "code": {"status": "clean", "blockingCount": 0},
@@ -111,6 +114,67 @@ def test_gather_reads_all_sources_and_keeps_shape(tmp_path, monkeypatch):
     assert snap["run"]["state"] == "parked"
     assert snap["run"]["last_park"] == "needs owner"
     assert snap["events"][-1]["type"] == "parked"
+
+
+def test_gather_uses_journal_phase_for_suffixed_review_code_dirs(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _make_tasks_doc(root, WI, count=1)
+    paths = control_plane.paths(str(root), WI)
+    _write_json(paths["checkpoint"], {
+        "schemaVersion": 2,
+        "workItem": WI,
+        "phase": "test-pilot",
+        "gates": {"review": "passed"},
+        "lastGoodStep": 6,
+        "lastGoodPhase": "draft-PR",
+        "updatedAt": "2026-07-03T14:39:00Z",
+    })
+    _write_events(paths["events"], [
+        {"ts": "2026-07-03T14:40:00Z", "seq": 1, "type": "phase_record",
+         "payload": {"phase": "test-pilot", "confidence": "low"}},
+    ])
+    _make_review_dir(tmp_path, monkeypatch, phase="review-code-test-pilot-1-head")
+
+    snap = run_watch.gather(str(root), WI)
+
+    assert snap["phase"]["value"] == "test-pilot"
+    assert snap["review"]["available"] is True
+    assert "showrunner-live-watch-152-review-code-test-pilot-1-head" in snap["review"]["run_dir"]
+    assert snap["review"]["dimensions"]["security"]["blocking_count"] == 1
+
+
+def test_gather_reports_lease_state_when_store_has_lease(tmp_path, monkeypatch):
+    root = _seed_happy_run(tmp_path, monkeypatch)
+    store = control_plane.ensure_store(str(root))
+    ref_lock._force_lease(store, WI, {
+        "pid": os.getpid(),
+        "host": ref_lock._host(),
+        "bootId": hostinfo.boot_id(),
+        "acquiredAt": ref_lock._stamp(),
+        "generation": 1,
+        "ttl": ref_lock.DEFAULT_TTL,
+    })
+
+    snap = run_watch.gather(str(root), WI)
+
+    assert snap["run"]["state"] == "active"
+    assert snap["run"]["detail"] == "lease held, fresh"
+    assert snap["run"]["holder"].endswith(":%s" % os.getpid())
+
+    ref_lock._force_lease(store, WI, {
+        "pid": 999999,
+        "host": ref_lock._host(),
+        "bootId": hostinfo.boot_id(),
+        "acquiredAt": "1970-01-01T00:00:00Z",
+        "generation": 2,
+        "ttl": 1,
+    })
+
+    stale = run_watch.gather(str(root), WI)
+
+    assert stale["run"]["state"] == "stale"
+    assert stale["run"]["detail"] == "lease held, stale"
 
 
 def test_gather_degrades_each_bad_source_without_crashing(tmp_path, monkeypatch):
@@ -205,6 +269,44 @@ def test_diff_reports_review_and_build_facts_that_journal_does_not_carry():
         "14:36:05  → round 2 verdict: unclean",
         "14:36:05  · build task 2/3 reviewed",
         "14:36:05  · build task 1/3 built",
+    ]
+
+
+def test_diff_reports_same_count_blockers_when_round_or_titles_change():
+    prev = {
+        "clock": "14:35:12",
+        "phase": {"value": "review-code"},
+        "review": {
+            "available": True,
+            "round": 1,
+            "terminal": None,
+            "dimensions": {"security": {
+                "status": "findings",
+                "blocking_count": 1,
+                "finding_titles": ["old-blocker"],
+            }},
+        },
+        "build": {"available": True, "reviewed": 1, "built": 0, "total": 3},
+    }
+    curr = {
+        "clock": "14:36:05",
+        "phase": {"value": "review-code"},
+        "review": {
+            "available": True,
+            "round": 2,
+            "terminal": None,
+            "dimensions": {"security": {
+                "status": "findings",
+                "blocking_count": 1,
+                "finding_titles": ["new-blocker"],
+            }},
+        },
+        "build": {"available": True, "reviewed": 1, "built": 0, "total": 3},
+    }
+
+    assert run_watch.diff(prev, curr) == [
+        "14:36:05  → review-code round 2 started",
+        "14:36:05  · round 2 security ✗ 1 blocking (new-blocker)",
     ]
 
 
