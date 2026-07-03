@@ -78,6 +78,17 @@ const COURIER_ALLOW = [
   /^push CI fix \+ recheck$/,
   /^post readout$/,
   /^release lease$/,               // the dedicated hardened lease-release courier (BUG C — was 'exec')
+  // #151: the descriptive exec-courier labels that replaced the bare 'exec' dumb pipe. Same leaves,
+  // same per-phase counts — only the display purpose changed (routing still rides courier:true).
+  /^gather snapshot$/,             // reconcile: recover_entry.py --snapshot
+  /^check draft$/,                 // producePhase: front_half_usable.py --emit-signals
+  /^prepare build$/,               // buildPhase: build_entry.py
+  /^read tasks$/,                  // buildPhase: task_list_cli.py
+  /^fence lease$/,                 // build/ship fence: fence_cli.py
+  /^check trailers$/,              // buildPhase per-task: build_state_cli.py gather (trailer check)
+  /^write provenance$/,            // buildPhase: prov_entry.py
+  /^resolve head$/,                // resolveHead: git rev-parse
+  /^read pr$/,                     // loadPr: checkpoint_entry.py --read-pr
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 

@@ -75,14 +75,19 @@ const { reconcile } = require('../showrunner.js')
   assert.strictEqual(rMissing.action, 'park_gate')
   assert.ok(/missing checkout root/.test(rMissing.reason))
 
-  // (e) the exec label must be 'exec' (not 'lib') — confirm reconcile does NOT use cmdRunner
+  // (e) reconcile must ride the dumb-pipe exec courier (descriptive label 'gather snapshot' +
+  // courier:true), NOT a cmdRunner 'lib' leaf. The courier marker is what pins it to the cheapest
+  // model; the label is the cosmetic display purpose.
   let agentLabel = null
+  let agentCourier = null
   global.agent = async (prompt, opts) => {
     agentLabel = (opts && opts.label) || ''
+    agentCourier = !!(opts && opts.courier)
     return [{ index: 0, ok: true, stdout: snapshots.world_derive }]
   }
   await reconcile('wi')
-  assert.strictEqual(agentLabel, 'exec', 'reconcile uses exec (label=exec), NOT cmdRunner (label=lib)')
+  assert.strictEqual(agentLabel, 'gather snapshot', "reconcile's exec leaf carries the descriptive 'gather snapshot' label, NOT 'lib'")
+  assert.strictEqual(agentCourier, true, 'reconcile rides the dumb-pipe courier (courier:true -> cheapest model)')
 
   console.log('OK: reconcile uses exec+JS twin, not cmdRunner; generation threaded correctly')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

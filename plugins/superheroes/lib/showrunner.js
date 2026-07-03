@@ -308,7 +308,7 @@ function reviewCodeLeaves(tiers, opts) {
     const out = await exec([
       `python3 plugins/superheroes/lib/record_deferred.py --run-dir ${shq(runDir)} ` +
       `--report ${shq(JSON.stringify(report || {}))}`,
-    ])
+    ], 'record deferred')
     // Attach the computed extras to the fix report so #104's shared shell threads it
     // (report.extras -> tally -> readout). FR-6. Parse the cheap pipe's stdout (best-effort).
     let parsed = null
@@ -408,7 +408,7 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
   const results = await exec([
     `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
-  ])
+  ], 'record deferred')
   for (const item of (report && report.deferred) || []) {
     const id = item && (item.identity || item.id)
     if (!id) continue
@@ -694,7 +694,7 @@ async function usableDraft(workItem, doc) {
   const results = await exec([
     `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
     `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)" --emit-signals`,
-  ])
+  ], 'check draft')
   let signals = null
   try { signals = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
@@ -733,7 +733,7 @@ async function appendNotify(workItem, entries) {
   const results = await exec([
     `python3 plugins/superheroes/lib/front_half.py append-notify ` +
     `--ledger ${shq(notifyLedgerFor(workItem))} --entries ${shq(JSON.stringify(entries || []))}`,
-  ])
+  ], 'append notify')
   let out = null
   try { out = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
   return !!(out && out.ok)   // false on a failed durable write — the caller must not silently lose it
@@ -913,8 +913,12 @@ function _parseExecResult(out, n) {
 // commands and asks the leaf to run each and return a JSON array of {index, ok, stdout}.
 // The model is UNCONDITIONALLY forced to cheapestModel() — overriding __SR_LEAF_MODEL or any
 // caller-supplied opts.model. This is a side-effect executor, not a genuine-LLM agent.
+// `label` is a purely-cosmetic display purpose (e.g. 'read gate', 'prepare build') so the progress
+// view names each leaf by what it does; it defaults to 'exec'. Dumb-pipe routing rides the structural
+// `courier: true` marker (the bundle preamble's __isDumb pins cheapest off it, independent of the
+// label), so a descriptive label never loosens the cheapest-model contract.
 // FR-8 sandbox-safe: no fs, no child_process, no time/random globals, no process/bare-global refs.
-async function exec(commands, opts) {
+async function exec(commands, label) {
   var cmds = commands || []
   const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + selfContained(c) }).join('\n')
   const prompt =
@@ -927,26 +931,27 @@ async function exec(commands, opts) {
     'it, pretty-print it, or change it in any way — even when the stdout is itself a JSON object, return ' +
     'that object byte-for-byte as the string value, never a parsed/abbreviated version of it.\n\n' +
     cmdList
-  const o = Object.assign({}, opts || {}, { model: cheapestModel(), label: 'exec' })
+  const o = { model: cheapestModel(), label: label || 'exec', courier: true }
   const out = await globalThis.agent(prompt, o)
   return _parseExecResult(out, cmds.length)
 }
 
-// execJson/execText: run ONE command via the courier dumb-pipe (label 'exec' — pinned to the
-// cheapest model by the bundle preamble) and parse its stdout. Mirrors build_phase.js's helpers:
-// the courier retries ONCE on a dropped/garbled stdout (FR-8), returns null after the retry so the
-// caller fails closed, and returns a parseable {"ok":false} (a REAL failure) as-is without retry.
-async function execJson(cmd) {
+// execJson/execText: run ONE command via the courier dumb-pipe (pinned to the cheapest model by the
+// bundle preamble via the `courier: true` marker) and parse its stdout. Mirrors build_phase.js's
+// helpers: the courier retries ONCE on a dropped/garbled stdout (FR-8), returns null after the retry
+// so the caller fails closed, and returns a parseable {"ok":false} (a REAL failure) as-is without
+// retry. `label` is the cosmetic display purpose (defaults to 'exec'); routing rides `courier: true`.
+async function execJson(cmd, label) {
   try {
-    return await courier.runCourierJson('exec', cmd)
+    return await courier.runCourierJson(label || 'exec', cmd)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
   }
 }
-async function execText(cmd) {
+async function execText(cmd, label) {
   try {
-    return (await courier.runCourierText('exec', cmd)).trim()
+    return (await courier.runCourierText(label || 'exec', cmd)).trim()
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -1051,7 +1056,7 @@ async function reconcile(workItem) {
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
   const results = await exec([
     `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)} --snapshot${rootFlag}`,
-  ])
+  ], 'gather snapshot')
   let snap = null
   try { snap = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
   if (!snap) {
@@ -1189,7 +1194,7 @@ async function readGate(workItem, doc) {
     const results = await exec([
       `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
       `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
-    ])
+    ], 'read gate')
     let out = null
     try { out = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
     return (out && out.review) || 'unreadable'
@@ -1714,7 +1719,7 @@ async function reviewCodePhase(workItem, opts) {
   }
   const cfg = (resolvedConfig && typeof resolvedConfig === 'object') ? resolvedConfig
     : await execJson(
-        inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree))
+        inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree), 'read review config')
   const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
     target: { worktree: resolvedWorktree, head: resolvedHead },
   })
@@ -1795,7 +1800,7 @@ async function resolveHead(worktree, ref) {
     ? `git -C ${shq(worktree)} rev-parse ${shq(ref || 'HEAD')}`
     : `git rev-parse ${shq(ref || 'HEAD')}`
   try {
-    const out = await execText(cmd)
+    const out = await execText(cmd, 'resolve head')
     return out || null
   } catch (_) {
     return null
@@ -1891,7 +1896,7 @@ module.exports.buildPhase = buildPhase
 // persistPhase tail; there is no separate checkpoint_entry write leaf anymore.
 async function loadPr(workItem) {
   const out = await execJson(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`)
+    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`, 'read pr')
   return (out && out.pr !== undefined) ? out.pr : null
 }
 
@@ -1951,7 +1956,7 @@ async function shipFenceOrPark(workItem, generation, root) {
   if (generation == null) return false
   const cmd = fenceCliCmd(workItem, generation, root)
   if (!cmd) return false
-  const out = await execJson(cmd)
+  const out = await execJson(cmd, 'fence lease')
   return !!(out && out.ok)
 }
 module.exports.shipFenceOrPark = shipFenceOrPark
@@ -2090,7 +2095,7 @@ async function shipPhase(workItem, pr, generation) {
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation, storeRoot))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await execJson(
-        `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`)
+        `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`, 'revert draft')
       const reverted = !!(rd && rd.ok)
       return shipHandback(workItem, pr, { ready: false, ci: 'red', integrated, reverted,
         reason: reverted

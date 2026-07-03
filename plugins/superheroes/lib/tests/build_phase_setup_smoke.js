@@ -13,6 +13,7 @@ function makeAgent(routes) {
     // Exact-label first (unique labels) so a short needle never shadows a longer script name.
     for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    if (opts && opts.courier) { for (const [needle, resp] of routes) if (needle === 'exec') return typeof resp === 'function' ? resp(prompt) : resp }
     return ''
   }
 }
