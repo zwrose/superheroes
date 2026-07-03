@@ -96,6 +96,12 @@
       "Runs a deterministic pre-flight gate",
       "drives the native front-half → build → review → ship pipeline to a ready-for-review PR",
       "It NEVER merges — that is always yours"
+    ],
+    "superheroes/acceptance": [
+      "run the standalone showrunner acceptance harness",
+      "Takes NO free-form input",
+      "one plain-language pass/fail verdict",
+      "It NEVER merges and refuses to nest inside a run"
     ]
   }
 }
