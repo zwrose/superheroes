@@ -1,0 +1,1 @@
+acceptance-harness fixture target — the run appends one dated line below.
