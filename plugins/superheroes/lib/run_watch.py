@@ -4,6 +4,7 @@ import calendar
 import glob
 import json
 import os
+import re
 import shlex
 import sys
 import time
@@ -131,6 +132,30 @@ def _review_dir_for(work_item, phase):
     return max(candidates, key=lambda p: os.path.getmtime(p))
 
 
+def _phase_of_run_dir(run_dir, work_item):
+    if not run_dir:
+        return None
+    rest = os.path.basename(run_dir)
+    prefix = "showrunner-%s-" % work_item
+    if not rest.startswith(prefix):
+        return None
+    rest = rest[len(prefix):]
+    for phase in sorted(checkpoint.CURRENT_PHASES, key=len, reverse=True):
+        if rest == phase or rest.startswith(phase + "-"):
+            return phase
+    return None
+
+
+def _stale_review_phase(run_dir, work_item, phase):
+    # When the active phase has no review dir of its own, _review_dir_for falls back to any
+    # prior review dir. Flag that mismatch so the render can annotate the block as belonging
+    # to an earlier phase instead of silently presenting stale review facts as current.
+    if not phase or phase not in checkpoint.CURRENT_PHASES:
+        return None
+    dir_phase = _phase_of_run_dir(run_dir, work_item)
+    return dir_phase if dir_phase and dir_phase != phase else None
+
+
 def _normalize_dimension(info):
     info = info if isinstance(info, dict) else {}
     findings = info.get("findings") if isinstance(info.get("findings"), list) else []
@@ -176,6 +201,7 @@ def _read_review(root, work_item, phase):
         return {
             "available": True,
             "run_dir": run_dir,
+            "from_phase": _stale_review_phase(run_dir, work_item, phase),
             "round": terminal.get("round") or last_round.get("round") or telemetry.get("roundCount"),
             "terminal": terminal.get("terminal") or telemetry.get("terminal"),
             "gate": terminal.get("gate"),
@@ -189,6 +215,8 @@ def _read_review(root, work_item, phase):
 def _active_phase_from_events(events, checkpoint_updated):
     checkpoint_epoch = _parse_iso_epoch(checkpoint_updated) or 0
     for event in reversed(events or []):
+        if not isinstance(event, dict):
+            continue
         event_epoch = _parse_iso_epoch(event.get("ts")) or 0
         if event_epoch and checkpoint_epoch and event_epoch < checkpoint_epoch:
             continue
@@ -240,7 +268,7 @@ def _read_build(root, work_item):
 def _last_event(events, *types):
     wanted = set(types)
     for event in reversed(events or []):
-        if event.get("type") in wanted:
+        if isinstance(event, dict) and event.get("type") in wanted:
             return event
     return None
 
@@ -287,7 +315,11 @@ def gather(root, work_item):
     phase_info, gates, checkpoint_updated = _read_checkpoint(root, work_item)
     paths = control_plane.paths(root, work_item)
     try:
-        events = journal.read_events(paths["events"])
+        # journal.read_events yields whatever each line parses to; a valid-JSON but
+        # non-object line (a bare number, a list) would slip past its parse guard and
+        # crash every downstream `.get()`. Filter to dicts here so the fail-soft contract
+        # holds — a corrupt events line degrades the run line, it does not crash the watch.
+        events = [e for e in journal.read_events(paths["events"]) if isinstance(e, dict)]
     except Exception:
         events = []
     phase_info = _with_active_phase(phase_info, events, checkpoint_updated)
@@ -321,18 +353,21 @@ def _dimension_is_clean(dim):
     status = str((dim or {}).get("status") or "").lower()
     if _safe_int((dim or {}).get("blocking_count")) > 0:
         return False
-    if status in ("clean", "passed", "pass", "ok", "skipped"):
+    if status in ("clean", "passed", "pass", "ok"):
         return True
     return not bool((dim or {}).get("has_findings"))
 
 
 def _dimension_snapshot(name, dim):
-    if _dimension_is_clean(dim):
-        return "%s ✓" % name
+    # Blocking always wins — even a carried/skipped dimension that still holds a blocking
+    # finding must read as ✗, never as a reassuring ✓ or a neutral dash.
     blocking = _safe_int((dim or {}).get("blocking_count"))
     if blocking:
-        label = "blocking" if blocking == 1 else "blocking"
-        return "%s ✗(%d %s)" % (name, blocking, label)
+        return "%s ✗(%d blocking)" % (name, blocking)
+    if str((dim or {}).get("status") or "").lower() == "skipped":
+        return "%s –" % name          # not run this round — distinct from a genuine ✓
+    if _dimension_is_clean(dim):
+        return "%s ✓" % name
     return "%s ✗" % name
 
 
@@ -368,8 +403,10 @@ def render_snapshot(snapshot):
         dims = review.get("dimensions") if isinstance(review.get("dimensions"), dict) else {}
         parts = [_dimension_snapshot(name, dim) for name, dim in dims.items()]
         round_text = "round %s" % (review.get("round") or "?")
+        stale = "  (from %s)" % review["from_phase"] if review.get("from_phase") else ""
         suffix = "   → %s" % review.get("terminal") if review.get("terminal") else ""
-        lines.append("  review  %s    %s%s" % (round_text, " · ".join(parts) if parts else "—", suffix))
+        lines.append("  review  %s%s    %s%s" % (
+            round_text, stale, " · ".join(parts) if parts else "—", suffix))
 
     build = snap.get("build") or {}
     if not build.get("available"):
@@ -445,6 +482,23 @@ def _detail_suffix(evt):
     return " · %s" % detail if detail else ""
 
 
+def _step_label(step, detail=None):
+    # A phase-name string renders as the phase; a numeric index renders as "step N"
+    # (the journal's step-index base is not guaranteed, so don't guess a phase name and
+    # risk mislabeling); otherwise fall back to the event detail.
+    if isinstance(step, str) and step in checkpoint.CURRENT_PHASES:
+        return step
+    if isinstance(step, bool):
+        step = None
+    if isinstance(step, int):
+        return "step %d" % step
+    if isinstance(step, str) and step.strip().lstrip("-+").isdigit():
+        return "step %s" % step.strip()
+    if isinstance(step, str) and step:
+        return step
+    return detail or "step"
+
+
 def format_journal_event(evt):
     evt = evt or {}
     typ = evt.get("type") or "event"
@@ -454,9 +508,9 @@ def format_journal_event(evt):
     if typ == "run_started":
         return "%s  ▶ run started%s" % (clock, _detail_suffix(evt))
     if typ == "step_entered":
-        return "%s  → %s" % (clock, step or detail or "step")
+        return "%s  → %s" % (clock, _step_label(step, detail))
     if typ == "step_completed":
-        return "%s  ✓ %s" % (clock, step or detail or "step completed")
+        return "%s  ✓ %s" % (clock, _step_label(step, detail))
     if typ == "gate":
         gate = detail or ((evt.get("payload") or {}).get("gate") if isinstance(evt.get("payload"), dict) else None)
         if gate == "passed":
@@ -475,6 +529,21 @@ def format_journal_event(evt):
     return "%s  · %s%s" % (clock, typ.replace("_", " "), _detail_suffix(evt))
 
 
+def _poll_lines(prev, curr, seen):
+    """Pure tail step: given the previous and current snapshots and the highest event seq
+    already shown, return (lines, new_seen) — the journal-cadence lines for events past
+    `seen` followed by the snapshot-diff content lines, plus the advanced cursor. Each
+    event is emitted at most once; a poll with nothing new returns no lines."""
+    lines = []
+    new_events = [e for e in curr.get("events") or []
+                  if isinstance(e, dict) and _safe_int(e.get("seq")) > seen]
+    for event in sorted(new_events, key=lambda e: _safe_int(e.get("seq"))):
+        lines.append(format_journal_event(event))
+        seen = max(seen, _safe_int(event.get("seq")))
+    lines.extend(diff(prev, curr))
+    return lines, seen
+
+
 def _dq(value):
     value = os.path.abspath(value)
     if any(ch in value for ch in "$`!\\"):
@@ -482,11 +551,16 @@ def _dq(value):
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+_SAFE_ARG = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+
+
 def _arg(value):
+    # Quote anything that isn't an unambiguously safe token, so the printed command stays
+    # paste-safe even if a work-item ever carries a shell metacharacter (; & | * ( ) < > …).
     text = str(value)
-    if any(ch.isspace() or ch in "$`!\\\"'" for ch in text):
-        return shlex.quote(text)
-    return text
+    if text and _SAFE_ARG.match(text):
+        return text
+    return shlex.quote(text)
 
 
 def watch_command(lib_dir, root, work_item):
@@ -522,16 +596,14 @@ def main(argv):
     if not args.follow:
         return 0
 
-    seen = max([_safe_int(e.get("seq")) for e in prev.get("events") or []] or [0])
+    seen = max([_safe_int(e.get("seq")) for e in prev.get("events") or []
+                if isinstance(e, dict)] or [0])
     try:
         while True:
             time.sleep(max(0.1, args.interval))
             curr = gather(args.root, args.work_item)
-            new_events = [e for e in curr.get("events") or [] if _safe_int(e.get("seq")) > seen]
-            for event in sorted(new_events, key=lambda e: _safe_int(e.get("seq"))):
-                _print(format_journal_event(event))
-                seen = max(seen, _safe_int(event.get("seq")))
-            for line in diff(prev, curr):
+            lines, seen = _poll_lines(prev, curr, seen)
+            for line in lines:
                 _print(line)
             prev = curr
     except KeyboardInterrupt:

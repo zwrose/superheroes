@@ -356,3 +356,189 @@ def test_watch_command_shell_quotes_expansion_characters(tmp_path):
     assert "'%s'" % (lib_dir / "run_watch.py") in command
     assert "'%s'" % root in command
     assert "'wi $(bad)'" in command
+
+
+def test_watch_command_quotes_shell_metacharacters_in_work_item(tmp_path):
+    lib_dir = tmp_path / "lib"
+    root = tmp_path / "repo"
+    lib_dir.mkdir()
+    root.mkdir()
+
+    command = run_watch.watch_command(str(lib_dir), str(root), "wi;bad")
+
+    assert "'wi;bad'" in command
+
+
+def test_gather_survives_non_dict_events_line(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(run_watch, "REVIEW_ROOT", str(tmp_path / "review-root"))
+    paths = control_plane.paths(str(root), WI)
+    os.makedirs(paths["issue_dir"], exist_ok=True)
+    with open(paths["events"], "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": "2026-07-03T14:32:01Z", "seq": 1, "type": "run_started"}) + "\n")
+        fh.write("5\n")                          # valid JSON, not an object
+        fh.write(json.dumps([1, 2, 3]) + "\n")   # valid JSON array, not an object
+        fh.write(json.dumps({"ts": "2026-07-03T14:37:00Z", "seq": 2,
+                             "type": "parked", "detail": "why"}) + "\n")
+
+    snap = run_watch.gather(str(root), WI)       # must not raise
+
+    assert [e["type"] for e in snap["events"]] == ["run_started", "parked"]
+    assert snap["run"]["state"] == "parked"
+    assert snap["run"]["last_park"] == "why"
+    assert isinstance(run_watch.render_snapshot(snap), str)
+
+
+def test_gather_degrades_on_valid_json_wrong_types(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    review_root = tmp_path / "review-root"
+    monkeypatch.setattr(run_watch, "REVIEW_ROOT", str(review_root))
+    paths = control_plane.paths(str(root), WI)
+    os.makedirs(paths["issue_dir"], exist_ok=True)
+    _write_json(paths["checkpoint"], [])                                   # list, not object
+    _write_json(os.path.join(paths["issue_dir"], "build-state.json"), [])  # list, not object
+    run_dir = review_root / f"showrunner-{WI}-review-code"
+    run_dir.mkdir(parents=True)
+    _write_json(run_dir / "round-records.json", {})                        # object, not list
+
+    snap = run_watch.gather(str(root), WI)
+
+    assert snap["phase"]["value"] == "unknown"
+    assert snap["review"]["available"] is False
+    assert snap["build"]["available"] is True
+    assert snap["build"]["reviewed"] == 0
+    assert isinstance(run_watch.render_snapshot(snap), str)
+
+
+def test_render_skipped_dimension_shows_dash_not_check():
+    snap = {
+        "work_item": WI,
+        "phase": {"value": "review-code", "step": 6, "total": 10},
+        "gates": {},
+        "review": {"available": True, "round": 2, "terminal": None, "dimensions": {
+            "premortem": {"status": "skipped", "blocking_count": 0, "finding_titles": []},
+            "code": {"status": "clean", "blocking_count": 0, "finding_titles": []},
+        }},
+        "build": {"available": False},
+        "run": {"state": "active"},
+        "updated": "1s ago",
+    }
+    text = run_watch.render_snapshot(snap)
+
+    assert "premortem –" in text
+    assert "premortem ✓" not in text
+    assert "code ✓" in text
+
+
+def test_dimension_snapshot_skipped_but_carried_blocking_shows_blocking():
+    dim = {"status": "skipped", "blocking_count": 1, "finding_titles": ["carried"]}
+    assert run_watch._dimension_snapshot("security", dim) == "security ✗(1 blocking)"
+
+
+def test_gather_blocking_count_is_recomputed_from_severities(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _make_tasks_doc(root, WI, count=1)
+    review_root = tmp_path / "review-root"
+    monkeypatch.setattr(run_watch, "REVIEW_ROOT", str(review_root))
+    paths = control_plane.paths(str(root), WI)
+    _write_json(paths["checkpoint"], {
+        "schemaVersion": 2, "workItem": WI, "phase": "review-code",
+        "lastGoodStep": 5, "lastGoodPhase": "review-code",
+        "updatedAt": "2026-07-03T14:39:00Z", "gates": {},
+    })
+    run_dir = review_root / f"showrunner-{WI}-review-code"
+    run_dir.mkdir(parents=True)
+    _write_json(run_dir / "round-records.json", [{
+        "schemaVersion": 2, "round": 1, "dimensions": {"security": {
+            "status": "findings",
+            "blockingCount": 5,   # deliberately WRONG; must be ignored in favour of recompute
+            "findings": [
+                {"title": "buffer-overflow", "severity": "Important"},
+                {"taxonomy": "style", "severity": "Minor"},   # no title -> falls back to taxonomy
+            ],
+        }},
+    }])
+
+    snap = run_watch.gather(str(root), WI)
+    sec = snap["review"]["dimensions"]["security"]
+
+    assert sec["blocking_count"] == 1                  # recomputed: only the Important finding
+    assert "buffer-overflow" in sec["finding_titles"]
+    assert "style" in sec["finding_titles"]            # title fell back to taxonomy
+
+
+def test_diff_detects_intra_round_blocker_and_verdict_without_round_change():
+    prev = {"clock": "14:35:00", "phase": {"value": "review-code"},
+            "review": {"available": True, "round": 2, "terminal": None,
+                       "dimensions": {"security": {"status": "clean", "blocking_count": 0,
+                                                   "finding_titles": []}}},
+            "build": {"available": False}}
+    curr = {"clock": "14:36:00", "phase": {"value": "review-code"},
+            "review": {"available": True, "round": 2, "terminal": "unclean",
+                       "dimensions": {"security": {"status": "findings", "blocking_count": 1,
+                                                   "finding_titles": ["boom"]}}},
+            "build": {"available": False}}
+
+    lines = run_watch.diff(prev, curr)
+
+    assert "14:36:00  · round 2 security ✗ 1 blocking (boom)" in lines
+    assert "14:36:00  → round 2 verdict: unclean" in lines
+    assert not any("started" in ln for ln in lines)   # round unchanged -> no "round started"
+
+
+def test_poll_lines_no_duplicate_and_no_drop_across_polls():
+    def ev(seq, typ, **k):
+        return dict(ts="2026-07-03T14:%02d:00Z" % seq, seq=seq, type=typ, **k)
+
+    base = {"review": {"available": False}, "build": {"available": False},
+            "phase": {"value": "workhorse"}}
+    prev = dict(base, events=[ev(1, "run_started"), ev(2, "step_entered", step="workhorse")])
+    curr = dict(base, events=prev["events"] + [ev(3, "parked", detail="x"), ev(4, "resumed")])
+
+    lines, seen = run_watch._poll_lines(prev, curr, 2)
+
+    assert seen == 4
+    assert sum("parked" in ln for ln in lines) == 1
+    assert sum("resumed" in ln for ln in lines) == 1
+    assert not any("run started" in ln for ln in lines)   # seq 1 already seen -> not replayed
+
+    lines2, seen2 = run_watch._poll_lines(curr, curr, seen)
+
+    assert lines2 == []                                    # nothing new -> no output
+    assert seen2 == 4
+
+
+def test_format_journal_event_numeric_and_named_steps():
+    assert run_watch.format_journal_event(
+        {"ts": "2026-07-03T14:35:12Z", "type": "step_entered", "step": 1}) == "14:35:12  → step 1"
+    assert run_watch.format_journal_event(
+        {"ts": "2026-07-03T14:36:12Z", "type": "step_completed", "step": 2}) == "14:36:12  ✓ step 2"
+    assert run_watch.format_journal_event(
+        {"ts": "2026-07-03T14:37:12Z", "type": "step_entered", "step": "review-code"}) == "14:37:12  → review-code"
+
+
+def test_review_from_prior_phase_is_annotated(tmp_path, monkeypatch):
+    root = tmp_path / "repo"
+    root.mkdir()
+    review_root = tmp_path / "review-root"
+    monkeypatch.setattr(run_watch, "REVIEW_ROOT", str(review_root))
+    paths = control_plane.paths(str(root), WI)
+    _write_json(paths["checkpoint"], {
+        "schemaVersion": 2, "workItem": WI, "phase": "test-pilot",
+        "lastGoodStep": 7, "lastGoodPhase": "test-pilot",
+        "updatedAt": "2026-07-03T14:39:00Z", "gates": {},
+    })
+    # only a stale review-plan dir exists while the current phase is test-pilot
+    run_dir = review_root / f"showrunner-{WI}-review-plan"
+    run_dir.mkdir(parents=True)
+    _write_json(run_dir / "round-records.json", [
+        {"schemaVersion": 2, "round": 1, "dimensions": {"code": {"status": "clean"}}}])
+    _write_json(run_dir / "terminal-record.json", {"terminal": "clean", "round": 1})
+
+    snap = run_watch.gather(str(root), WI)
+
+    assert snap["review"]["from_phase"] == "review-plan"
+    assert "(from review-plan)" in run_watch.render_snapshot(snap)
