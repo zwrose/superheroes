@@ -10,8 +10,8 @@ function setup(checks, options) {
     if (label === 'resolve review target') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/wt', expectedHead: 'head0' }) }]
     }
-    if (label === 'exec' && _prompt.includes('fence_cli.py')) return JSON.stringify({ ok: true })
-    if (label === 'exec' && _prompt.includes('rev-parse')) return [{ index: 0, ok: true, stdout: 'head0' }]
+    if (opts && opts.courier && _prompt.includes('fence_cli.py')) return JSON.stringify({ ok: true })
+    if (opts && opts.courier && _prompt.includes('rev-parse')) return [{ index: 0, ok: true, stdout: 'head0' }]
     if (label === 'check ship-readiness') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, reconcile: { ok: true }, freshness: { decision: 'up_to_date' }, fence: { ok: true }, integrated: false, checks }) }]
     }

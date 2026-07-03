@@ -42,7 +42,7 @@ function shipReadinessStub(capturedCmds) {
     }
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
     if (label === 'lib') return { ok: true }
-    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
     return null
   }
 }

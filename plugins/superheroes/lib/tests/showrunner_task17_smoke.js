@@ -39,7 +39,9 @@ async function partA() {
     if (label === 'read startup state') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' }, doc_dir: '' }) }]
     }
-    if (label === 'exec') {
+    if (opts && opts.courier) {
+      // Dumb-pipe leaves now carry descriptive labels ('gather snapshot'/'read gate'/…); route them
+      // by the command in the prompt rather than the old bare 'exec' label.
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         // reconcile: return empty snapshot -> world_derive -> proceed
         return [{ index: 0, ok: true, stdout: JSON.stringify({
@@ -57,7 +59,7 @@ async function partA() {
         // The startup overrides read — return a concrete override so we can verify authorModel.
         return [{ index: 0, ok: true, stdout: '{"author":"haiku"}' }]
       }
-      // Any other exec: ok
+      // Any other dumb pipe: ok
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     // Park everything else (workhorse, etc.)
@@ -103,7 +105,7 @@ async function partA() {
     if (label === 'read startup state') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: 'bad', doc_dir: '' }) }]
     }
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({
           checkpoint: null,
@@ -241,7 +243,22 @@ async function partB() {
     `FAIL (b7): exec with no prior model in opts must still get cheapest ('${cheapest}'), got '${received[0].model}'`,
   )
 
-  console.log('OK (b): bundle wrapper — exec/io always cheapest regardless of __SR_LEAF_MODEL; non-dumb gets __SR_LEAF_MODEL')
+  // (b8) The NEW routing contract: a descriptively-labelled dumb pipe (e.g. 'read gate') marked
+  // courier:true is pinned to the cheapest model too — the marker, not the bare 'exec' string, is
+  // what identifies a dumb pipe — and __SR_LEAF_MODEL never overrides it.
+  sandbox.globalThis.__SR_LEAF_MODEL = 'sonnet'
+  received.length = 0
+  try { await sandbox.globalThis.agent('read gate cmd', { label: 'read gate', courier: true, model: 'opus' }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b8): no call to underlying agent for a descriptive courier leaf')
+  assert.strictEqual(
+    received[0].model,
+    cheapest,
+    `FAIL (b8): a descriptive courier leaf must get cheapest ('${cheapest}'), got '${received[0].model}' — courier:true pins it regardless of label/__SR_LEAF_MODEL`,
+  )
+  assert.strictEqual(received[0].label, 'read gate', 'FAIL (b8): the descriptive label is preserved for display (not relabelled)')
+  assert.ok(!('courier' in received[0]), 'FAIL (b8): the courier marker is stripped before the real agent() call')
+
+  console.log('OK (b): bundle wrapper — exec/io + courier:true always cheapest regardless of __SR_LEAF_MODEL; non-dumb gets __SR_LEAF_MODEL')
 }
 
 ;(async () => {

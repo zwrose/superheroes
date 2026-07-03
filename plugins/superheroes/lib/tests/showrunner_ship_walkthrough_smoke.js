@@ -8,8 +8,8 @@ function run(script) {
     if (label === 'resolve review target') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/wt', expectedHead: 'head0' }) }]
     }
-    if (label === 'exec' && _prompt.includes('fence_cli.py')) return JSON.stringify({ ok: true })
-    if (label === 'exec' && _prompt.includes('rev-parse')) return [{ index: 0, ok: true, stdout: 'head0' }]
+    if (opts && opts.courier && _prompt.includes('fence_cli.py')) return JSON.stringify({ ok: true })
+    if (opts && opts.courier && _prompt.includes('rev-parse')) return [{ index: 0, ok: true, stdout: 'head0' }]
     if (label === 'check ship-readiness') {
       const checks = script.checks[Math.min(checksIndex, script.checks.length - 1)]
       return [{ ok: true, stdout: JSON.stringify({ ok: true, reconcile: { ok: true }, freshness: { decision: 'up_to_date' }, fence: { ok: true }, integrated: true, checks }) }]
@@ -21,7 +21,7 @@ function run(script) {
       const checks = script.checks[Math.min(checksIndex, script.checks.length - 1)]
       return [{ ok: true, stdout: JSON.stringify({ ok: true, pushed: true, read_back: true, checks }) }]
     }
-    if (label === 'exec' && _prompt.includes('revert-draft')) return JSON.stringify({ ok: true, reason: 'reverted to draft' })
+    if (opts && opts.courier && _prompt.includes('revert-draft')) return JSON.stringify({ ok: true, reason: 'reverted to draft' })
     if (label === 'post readout') return [{ ok: true, stdout: JSON.stringify({ posted: true, recorded: false }) }]
     throw new Error('unexpected label=' + label)
   }

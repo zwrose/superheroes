@@ -60,10 +60,8 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
     // #115 Task 16: verifyAgent emits raw run data; JS twin classifies in-process
     if (label === 'run verify') return { command: 'run-tests', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis')) return { verdicts: [], usage: { total: 1 } }
-    if (label === 'exec') {                                       // the cheap recordDeferred pipe
-      if (prompt.includes('record_deferred.py')) return [{ index: 0, ok: true, stdout: runRecordDeferred(prompt) }]
-      return []
-    }
+    // the cheap recordDeferred pipe (a dumb courier leaf; routed by its command, not its label)
+    if (opts && opts.courier && prompt.includes('record_deferred.py')) return [{ index: 0, ok: true, stdout: runRecordDeferred(prompt) }]
     if (label.startsWith('fix-code')) {
       calls.fix += 1
       const f = nextFindings() || []
@@ -87,13 +85,17 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
       return jsonOut({ ok: provOk, error: provOk ? undefined : 'disk full' })
     }
     // #118: the config fallback rides the exec courier (raw stdout), not cmdRunner 'lib'
-    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+    if (opts && opts.courier && prompt.includes('review_code_config.py')) {
       return JSON.stringify({ verifyCommand: 'none', tiers: { reviewer: 'sonnet', reviewerDeep: 'opus', synthesis: 'opus', fixer: 'sonnet' } })
     }
-    if (label === 'exec' && prompt.includes('git rev-parse')) return 'stub-head\n'
+    if (opts && opts.courier && prompt.includes('git rev-parse')) return 'stub-head\n'
     if (label === 'lib') {
       return { ok: true }
     }
+    // any other cheap dumb-pipe leaf — routed AFTER the named courier branches AND the 'lib' cmdRunner
+    // branch (cmdRunner 'lib' leaves also carry courier:true), so it never swallows 'post readout'/
+    // 'stamp review coverage' or a courier-marked 'lib' StructuredOutput leaf.
+    if (opts && opts.courier) return []
     const m = label.match(/^(architecture|code|security|test|premortem)-reviewer:r(\d+)/)
     if (m) {
       const round = Number(m[2]) || 1

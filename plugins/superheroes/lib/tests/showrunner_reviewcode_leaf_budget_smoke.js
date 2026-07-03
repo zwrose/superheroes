@@ -70,8 +70,11 @@ function receiptFor(prompt) {
   assert.ok(labels.includes('stamp review coverage'))
   assert.ok(labels.filter((l) => l === 'run verify').length >= 1)
   const schemaText = JSON.stringify(reviewerSchema || {})
-  assert.ok(schemaText.includes('"if"') && schemaText.includes('"then"') &&
-    schemaText.includes('"required":["verificationReceipt"]'),
-    'high-confidence reviewer StructuredOutput must require verificationReceipt at the leaf')
+  for (const comb of ['allOf', 'oneOf', 'anyOf']) {
+    assert.ok(!Object.prototype.hasOwnProperty.call(reviewerSchema || {}, comb),
+      `reviewer StructuredOutput schema must not use top-level ${comb} (Anthropic input_schema rejects it)`)
+  }
+  assert.ok(schemaText.includes('verificationReceipt'),
+    'reviewer StructuredOutput keeps verificationReceipt as an optional property; decider downgrades missing receipts')
   console.log('ok: review-code leaf budget folds')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

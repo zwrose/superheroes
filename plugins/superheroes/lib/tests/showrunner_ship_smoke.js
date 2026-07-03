@@ -7,7 +7,7 @@ function run(checksOrError) {
   global.agent = async (p, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resolve review target') return jsonOut({ ok: true, worktree: '/wt', expectedHead: '/wt-head-sha' })
-    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: true })
+    if (opts && opts.courier && p.includes('fence_cli')) return JSON.stringify({ ok: true })
     if (label === 'check ship-readiness') {
       if (checksOrError === 'error') return jsonOut({ ok: false, reconcile: { ok: false }, freshness: {}, checks: {} })
       if (checksOrError === 'sentinel') {
@@ -31,7 +31,7 @@ function run(checksOrError) {
       })
     }
     if (label === 'prepare CI fix') return jsonOut({ action: 'revert_and_gate', round: 5, reason: 'cap', ok: true, read_back: true })
-    if (label === 'exec' && p.includes('--step revert-draft')) return JSON.stringify({ ok: true, reason: 'reverted to draft' })
+    if (opts && opts.courier && p.includes('--step revert-draft')) return JSON.stringify({ ok: true, reason: 'reverted to draft' })
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
     throw new Error('unexpected agent: label=' + label + ' prompt=' + p.slice(0, 80))
   }
