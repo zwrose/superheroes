@@ -164,6 +164,30 @@ async function main() {
 
   {
     const dir = freshDir()
+    global.reviewerAgent = async () => ({ findings: [], confidence: 'low', receiptMissing: true })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
+    assert.notStrictEqual(v.terminal, 'clean')
+    const recs = JSON.parse(fs.readFileSync(path.join(dir, 'round-records.json'), 'utf8'))
+    assert.strictEqual(recs[0].dimensions['code-reviewer'].status, 'run',
+      'a shaped low-confidence reviewer result ran; only null/malformed results are missing')
+    assert.strictEqual(recs[0].dimensions['code-reviewer'].confidence, 'low')
+  }
+
+  {
+    const dir = freshDir()
+    let calls = 0
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => {
+      calls += 1
+      if (calls === 1) return { findings: [], confidence: 'low', receiptMissing: true }
+      return cleanResult(runDir, round, opts)
+    }
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
+    assert.strictEqual(v.terminal, 'clean')
+    assert.strictEqual(calls, 2, 'a deep-tier receipt miss gets one deep retry before recording')
+  }
+
+  {
+    const dir = freshDir()
     const seen = []
     let first = true
     global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => {
@@ -179,6 +203,17 @@ async function main() {
     assert.ok(seen.some((x) => x.tier === 'reviewer'))
     assert.ok(seen.some((x) => x.tier === 'reviewer-deep'))
     assert.strictEqual(v.terminal, 'clean')
+  }
+
+  {
+    const dir = freshDir()
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) =>
+      ({ findings: [], confidence: 'high', verificationReceipt: receipt(runDir, round, opts), usage: { input: 0, output: 0, total: 0 } })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
+    assert.strictEqual(v.terminal, 'clean')
+    assert.ok(v.telemetry.tokenUsage.missing.includes('code-reviewer:r1'),
+      'zero usage stubs are omitted instead of counted as real telemetry')
+    assert.ok(!v.telemetry.tokenUsage.present.includes('code-reviewer:r1'))
   }
 
   {
@@ -207,6 +242,40 @@ async function main() {
     v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'] })
     assert.notStrictEqual(v.terminal, 'clean')
     assert.match(v.reason || '', /round-memory/)
+  }
+
+  {
+    const dir = freshDir()
+    await io().writeFile(io().join(dir, 'round-records.json'), JSON.stringify([{
+      schemaVersion: 2,
+      round: 5,
+      kind: 'confirmation',
+      dimensions: { 'test-reviewer': { status: 'run', confidence: 'high', findings: [], hasFindings: false, subjects: ['Test'] } },
+      findings: [],
+      changedSubjects: ['Test'],
+      coverageDecisions: [],
+    }]))
+    const oldIo = global.io
+    const baseIo = io()
+    let loadCalls = 0
+    let reviewerCalls = 0
+    global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
+      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('load-summary')) {
+        loadCalls += 1
+        return { ok: true, stdout: 'courier wrapped a non-json answer' }
+      }
+      return baseIo.runHelper(cmd, args)
+    } })
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => {
+      reviewerCalls += 1
+      return cleanResult(runDir, round, opts)
+    }
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'] })
+    global.io = oldIo
+    assert.strictEqual(v.reason, 'round-memory-unreadable',
+      'unreadable existing round memory parks by name instead of starting a fresh round')
+    assert.strictEqual(loadCalls, 2, 'round-memory load gets one retry before parking')
+    assert.strictEqual(reviewerCalls, 0, 'unreadable existing memory must not burn a redundant panel')
   }
 
   {

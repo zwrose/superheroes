@@ -164,6 +164,21 @@ function runHelperResponse(cmdline) {
       if (recordJson.includes('"evidence"')) throw new Error('persist-skeleton shipped finding bodies (D3 skeleton contract)')
       return JSON.stringify({ ok: true, contentHash: 'ch-round' })
     }
+    if (args[0] === 'compose-terminal') {
+      const p = args[args.indexOf('--path') + 1]
+      const verdictJson = args[args.indexOf('--verdict-json') + 1]
+      if (sha256(verdictJson) !== args[args.indexOf('--verdict-hash') + 1]) {
+        throw new Error('compose-terminal --verdict-hash does not match --verdict-json')
+      }
+      const record = JSON.parse(verdictJson)
+      record.fixes = []
+      record.deferred = []
+      record.coverageDecisions = []
+      record.runId = args[args.indexOf('--run-id') + 1]
+      if (args.includes('--lease')) record.lease = args[args.indexOf('--lease') + 1]
+      files[p] = JSON.stringify(record)
+      return JSON.stringify({ ok: true, contentHash: sha256(files[p]) })
+    }
     if (args[0] === 'compose-persist') {
       throw new Error('compose-persist rode a leaf — the D3 skeleton persist replaced the staging ceremony')
     }

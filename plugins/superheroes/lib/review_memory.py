@@ -413,6 +413,46 @@ def _terminal_telemetry(telemetry_path):
 _TERMINAL_STRIP = ("findings", "carriedFindings", "runId", "lease")
 
 
+def probe_records_path(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        return {"ok": True, "exists": True, "state": "present", "contentHash": content_hash(text)}
+    except FileNotFoundError:
+        return {"ok": True, "exists": False, "state": "missing", "contentHash": content_hash("")}
+    except OSError as exc:
+        return {"ok": False, "exists": os.path.exists(path), "state": "unreadable", "reason": str(exc)}
+
+
+_TRANSPORT_FAILURE_REASONS = {
+    "round-memory-unreadable",
+    "round-memory-write-failed",
+    "coverage-decisions-unreadable",
+    "coverage-decision-write-failed",
+    "terminal-record-write-failed",
+}
+
+
+def _number(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _should_preserve_clean_terminal(prior, incoming):
+    if not isinstance(prior, dict) or prior.get("terminal") != "clean":
+        return False
+    if not isinstance(incoming, dict) or incoming.get("terminal") == "clean":
+        return False
+    prior_round = _number(prior.get("round"))
+    incoming_round = _number(incoming.get("round"))
+    if prior_round is not None and incoming_round is not None and incoming_round < prior_round:
+        return True
+    # Transport-class failure verdicts are not stronger evidence than an existing clean terminal.
+    return incoming.get("reason") in _TRANSPORT_FAILURE_REASONS
+
+
 def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=None,
                             telemetry_path=None, run_id=None, lease=None):
     """Compose + atomically OVERWRITE the loop's terminal record from state already on disk
@@ -433,6 +473,21 @@ def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=
         return {"ok": False, "reason": "verdict-corrupt", "detail": str(exc)}
     if not isinstance(verdict, dict):
         return {"ok": False, "reason": "verdict-corrupt", "detail": "not a dict"}
+    if verdict.get("terminal") != "clean":
+        try:
+            with open(path, encoding="utf-8") as fh:
+                prior_text = fh.read()
+            prior = json.loads(prior_text)
+        except (OSError, ValueError):
+            prior = None
+            prior_text = ""
+        if _should_preserve_clean_terminal(prior, verdict):
+            return {
+                "ok": True,
+                "contentHash": content_hash(prior_text),
+                "preserved": True,
+                "reason": "existing-clean-terminal",
+            }
     record = {k: v for k, v in verdict.items() if k not in _TERMINAL_STRIP}
     if records_path:
         record["fixes"], record["deferred"], record["coverageDecisions"] = \
@@ -558,6 +613,8 @@ def main(argv=None):
                         help="sha256 of --verdict-json exactly as sent — the transport self-check")
     term_p.add_argument("--run-id", required=True)
     term_p.add_argument("--lease")
+    probe_p = sub.add_parser("probe")
+    probe_p.add_argument("--path", required=True)
     hash_p = sub.add_parser("hash")
     hash_p.add_argument("--path", required=True)
     args = parser.parse_args(argv)
@@ -567,6 +624,10 @@ def main(argv=None):
                                          records_path=args.records_path,
                                          telemetry_path=args.telemetry_path,
                                          run_id=args.run_id, lease=args.lease)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
+    if args.cmd == "probe":
+        result = probe_records_path(args.path)
         print(json.dumps(result))
         return 0 if result.get("ok") else 1
     if args.cmd == "hash":

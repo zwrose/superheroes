@@ -30,6 +30,7 @@ function receiptFor(prompt) {
 ;(async () => {
   const labels = []
   let reviewerCalls = 0
+  let reviewerSchema = null
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     labels.push(label)
@@ -43,6 +44,7 @@ function receiptFor(prompt) {
     if (label === 'exec' && prompt.includes('git -C') && prompt.includes('rev-parse')) return 'abc123'
     if (label === 'exec' && prompt.includes('git rev-parse')) return 'cwd000'
     if (/^(architecture|code|security|test|premortem)-reviewer:r/.test(label)) {
+      reviewerSchema = opts && opts.schema
       reviewerCalls += 1
       return {
         findings: reviewerCalls === 1 ? [{ id: 'X', file: 'a.js', title: 'bug', severity: 'Important' }] : [],
@@ -67,5 +69,9 @@ function receiptFor(prompt) {
   assert.ok(labels.some((l) => /^(architecture|code|security|test|premortem)-reviewer:r1$/.test(l)))
   assert.ok(labels.includes('stamp review coverage'))
   assert.ok(labels.filter((l) => l === 'run verify').length >= 1)
+  const schemaText = JSON.stringify(reviewerSchema || {})
+  assert.ok(schemaText.includes('"if"') && schemaText.includes('"then"') &&
+    schemaText.includes('"required":["verificationReceipt"]'),
+    'high-confidence reviewer StructuredOutput must require verificationReceipt at the leaf')
   console.log('ok: review-code leaf budget folds')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

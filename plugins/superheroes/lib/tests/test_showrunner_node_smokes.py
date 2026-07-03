@@ -28,6 +28,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
     # mega-JSON regression: loop persistence ships paths + small scalars, never the record body.
     "plugins/superheroes/lib/tests/showrunner_reviewloop_payload_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_defer_confirmation_fence_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
@@ -111,8 +112,8 @@ SHOWRUNNER_SMOKES = [
     # dumb pipe, the one-save-phase-progress tail, and the two-leaf startup stretch.
     "plugins/superheroes/lib/tests/showrunner_stretch_budget_smoke.js",
     # the misbehaving-courier regression net (live 2026-07-02, 4 runs parked at review-plan):
-    # prose answers for missing-file reads, chatty write acks, one content-mangled staged
-    # write, one mangled persist answer — the canned full run must still reach 'ready' with
+    # prose answers for missing-file reads, chatty write acks, one mangled persist answer,
+    # and terminal-record compose — the canned full run must still reach 'ready' with
     # correct terminal records written, and no courier text may enter a fence.
     "plugins/superheroes/lib/tests/showrunner_misbehaving_courier_smoke.js",
     # the terminal-record compose-persist regression (live 2026-07-02, run wf_94c879e0-747):

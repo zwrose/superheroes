@@ -104,6 +104,45 @@ async function main() {
   assertEveryModel(calls.reviewer, 'fable', 'overridden doc reviewer')
   assertEveryModel(calls.synth, 'fable', 'overridden doc synthesis')
   assertEveryModel(calls.revise, 'fable', 'overridden doc reviser')
+
+  {
+    const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-fh-panel-policy-'))
+    const reviewerCalls = []
+    let sentArchitectureBlocker = false
+    global.agent = async (prompt, opts) => {
+      const label = (opts && opts.label) || ''
+      if (label === 'resume') return '1'
+      if (label.startsWith('architecture') || label.endsWith('-reviewer')) {
+        const raw = (String(prompt).match(/Prompt context: (\{.*\})/s) || [])[1]
+        let ctx = {}
+        try { ctx = JSON.parse(raw || '{}') } catch (_) {}
+        reviewerCalls.push({ label, roundKind: ctx.roundKind })
+        if (label === 'architecture-reviewer' && !sentArchitectureBlocker) {
+          sentArchitectureBlocker = true
+          return { findings: [{ ...BLOCKER, dimension: 'Architecture' }], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
+        }
+        return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
+      }
+      if (label.startsWith('synthesis')) return { verdicts: [] }
+      if (label === 'revise-doc') {
+        return {
+          fixes: ['docs/superheroes/wi/plan.md::missing invariant'],
+          deferred: [],
+          changedSubjects: [{ section: 'Components > lib/acceptance_launch.py', reason: 'fixed architecture finding' }],
+          coverageDecisions: [],
+        }
+      }
+      if (label === 'exec') return []
+      return null
+    }
+    v = await sr.runReviewDocPanel({ workItem: 'wi', docType: 'plan',
+      docPath: 'docs/superheroes/wi/plan.md', runDir })
+    assert.strictEqual(v.terminal, 'clean', 'doc-leg policy-vocabulary changed subjects still converge')
+    const intermediate = reviewerCalls.filter((c) => c.roundKind === 'intermediate').map((c) => c.label)
+    assert.deepStrictEqual(intermediate, ['architecture-reviewer'],
+      'the intermediate doc round should run only the touched Architecture dimension')
+  }
+
   console.log('ok: runReviewDocPanel wires the panel-doc leg (in-memory twins)')
 }
 

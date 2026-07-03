@@ -130,13 +130,40 @@ function confirmationReady(records, round, justMarked) {
 // mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
 // the loop's second entry read (last-extras.json) into the same leaf; it comes back as
 // `extras` (null when missing/corrupt — the old readJson-default parity).
-async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
   const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
   } catch (_) {
     return { ok: false, reason: 'round-memory-helper-failed' }
+  }
+}
+
+async function probeRoundRecords(runDir, ioApi) {
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
+  try {
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && typeof parsed === 'object') return parsed
+  } catch (_) { /* fall through */ }
+  return { ok: false, exists: true, state: 'unreadable', reason: 'round-memory-probe-failed' }
+}
+
+async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+  const first = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
+  if (first.ok) return first
+  const second = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
+  if (second.ok) return second
+  const probed = await probeRoundRecords(runDir, ioApi)
+  if (probed && probed.ok && probed.exists === false) {
+    return { ok: true, state: 'missing', records: [], contentHash: ioApi.contentHash(''), extras: null }
+  }
+  return {
+    ok: false,
+    state: 'unreadable',
+    reason: 'round-memory-unreadable',
+    records: [],
+    contentHash: (probed && probed.contentHash) || first.contentHash || second.contentHash,
   }
 }
 
@@ -229,7 +256,11 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: recordedCoverageDecisions || [],
-    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []) },
+    fix: {
+      fixes: fixResult.fixes || fixResult.fixed || [],
+      deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []),
+      changedSubjectDetails: fixResult.changedSubjectDetails || [],
+    },
   }
   if (legKind && legKind.panel) updates.confirmationPending = true
   const updatesJson = JSON.stringify(updates)
@@ -272,10 +303,34 @@ async function loadCoverageDecisions(target, ioApi) {
 function collectRoundUsage(roundFindings, round, synthesized) {
   const usage = {}
   for (const [name, result] of Object.entries(roundFindings || {})) {
-    if (result && result.usage) usage[`${name}:r${round}`] = result.usage
+    const real = _realUsage(result && result.usage)
+    if (real) usage[`${name}:r${round}`] = real
   }
-  if (synthesized && synthesized.usage) usage[`synthesis:r${round}`] = synthesized.usage
+  const synthUsage = _realUsage(synthesized && synthesized.usage)
+  if (synthUsage) usage[`synthesis:r${round}`] = synthUsage
   return usage
+}
+
+function _realUsage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const out = {}
+  let positive = false
+  for (const [key, v] of Object.entries(value)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue
+    if (v > 0) positive = true
+    out[key] = v
+  }
+  return positive ? out : null
+}
+
+function _stripZeroUsage(out) {
+  if (!out || typeof out !== 'object' || Array.isArray(out)) return out
+  const usage = _realUsage(out.usage)
+  if (usage) return Object.assign({}, out, { usage })
+  if (!Object.prototype.hasOwnProperty.call(out, 'usage')) return out
+  const cleaned = Object.assign({}, out)
+  delete cleaned.usage
+  return cleaned
 }
 
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
@@ -372,6 +427,12 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let justMarkedForConfirmation = false
   let fixRanThisRun = false
   const allUsage = {}
+
+  if (!memoryState.ok) {
+    return await finalizeVerdict(
+      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-unreadable', round },
+      records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  }
 
   if (!reviewerSet || reviewerSet.length === 0) {
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
@@ -559,24 +620,33 @@ function _validReviewerResult(out) {
   return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
+function _shapeReviewerResult(out, opts) {
+  if (Array.isArray(out)) {
+    const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
+    return { findings: out, confidence: conf, legacyArray: true }
+  }
+  return _stripZeroUsage(out)
+}
+
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
-  let out = await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts)
-  if (Array.isArray(out)) {
-    const conf = (baseOpts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    out = { findings: out, confidence: conf, legacyArray: true }
-  }
+  let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
   if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
     escalated = true
-    out = await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' }))
-    if (Array.isArray(out)) out = { findings: out, confidence: 'high', legacyArray: true }
+    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
+    if (!_validReviewerResult(out) || out.receiptMissing) {
+      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
+    }
+  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
   }
-  if (!_validReviewerResult(out) || out.confidence !== 'high') {
-    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: _validReviewerResult(out) ? out.findings : [], confidence: _validReviewerResult(out) ? out.confidence : 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }
+  if (!_validReviewerResult(out)) {
+    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: true, legacyArray: !!(out && out.legacyArray), escalated }
     return
   }
-  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier }, out)
+  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier, malformed: false }, out)
 }
 
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {

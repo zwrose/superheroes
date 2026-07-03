@@ -7,6 +7,15 @@ round kind, reviewer run/skip choices, tiers, and cheap-result escalation policy
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
+SUBJECT_FALLBACK = {
+    "test": "Test",
+    "security": "Security",
+    "code": "Code",
+    "architecture": "Architecture",
+    "failure": "Failure-Mode",
+    "premortem": "Failure-Mode",
+}
+POLICY_SUBJECTS = set(SUBJECT_FALLBACK.values())
 
 
 def _dim(prev, name):
@@ -17,9 +26,30 @@ def _dim(prev, name):
 
 
 def _changed_subjects(value):
-    if not isinstance(value, list) or any(not isinstance(x, str) for x in value):
+    if not isinstance(value, list):
         return None
-    return value
+    out = []
+    for item in value:
+        if isinstance(item, str):
+            out.append(item)
+            continue
+        if isinstance(item, dict):
+            for key in ("subject", "dimension", "policySubject"):
+                subject = _policy_subject(item.get(key))
+                if subject:
+                    out.append(subject)
+            # Section-only doc-reviser notes intentionally map to "known empty"; deep confirmation bounds skips.
+            continue
+        return None
+    return sorted(set(out))
+
+
+def _policy_subject(value):
+    if not isinstance(value, str) or not value:
+        return None
+    if value in POLICY_SUBJECTS:
+        return value
+    return SUBJECT_FALLBACK.get(str(value or "").split("-")[0].lower())
 
 
 def _safe_round(value):
@@ -42,7 +72,7 @@ def _subjects(name, info):
         if isinstance(finding, dict) and isinstance(finding.get("dimension"), str):
             subjects.append(finding["dimension"])
     prefix = str(name or "").split("-")[0].lower()
-    fallback = {"test": "Test", "security": "Security", "code": "Code", "architecture": "Architecture", "failure": "Failure-Mode"}.get(prefix)
+    fallback = SUBJECT_FALLBACK.get(prefix)
     if fallback:
         subjects.append(fallback)
     return sorted(set(subjects))
