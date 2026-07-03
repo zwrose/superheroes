@@ -540,10 +540,26 @@ function _parsePorcelain(text) {
   return entries
 }
 
-function _pathInDocDir(path, docDir) {
-  const base = String(docDir).replace(/\/$/, '')
-  const p = String(path).replace(/^\.\//, '')
-  return p === base || p.startsWith(base + '/')
+// Normalize a porcelain or filesystem path to checkout-root-relative form for comparison.
+function _normalizeComparePath(path) {
+  let p = String(path).replace(/^\.\//, '')
+  const root = checkoutRoot()
+  if (root) {
+    const r = String(root).replace(/\/$/, '')
+    if (p === r) return ''
+    if (p.startsWith(r + '/')) return p.slice(r.length + 1)
+  }
+  return p
+}
+
+// author-plan confinement allowlist: only the plan doc's own artifacts (exact paths, not prefix).
+function _authorPlanArtifactPaths(workItem) {
+  const dir = _normalizeComparePath(docDirFor(workItem))
+  return [`${dir}/plan.md`, `${dir}/.plan.complete`]
+}
+
+function _pathIsAuthorPlanArtifact(path, workItem) {
+  return _authorPlanArtifactPaths(workItem).includes(_normalizeComparePath(path))
 }
 
 // After an external author-plan dispatch, revert checkout paths that newly dirtied outside the
@@ -554,19 +570,25 @@ function _pathInDocDir(path, docDir) {
 // user's own uncommitted work.
 async function _revertAuthorPlanStrays(workItem, beforeText, afterText) {
   if (beforeText == null || afterText == null) return { strayPaths: [], unconfined: true }
-  const docDir = docDirFor(workItem)
   const before = _parsePorcelain(beforeText)
   const after = _parsePorcelain(afterText)
   const strays = []
   for (const [p, code] of after) {
-    if (_pathInDocDir(p, docDir)) continue
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
     if (before.has(p)) continue
     strays.push({ path: p, untracked: code === '??' || code[0] === '?' })
   }
   if (strays.length === 0) return { strayPaths: [] }
   const revertCmds = strays.map(({ path, untracked }) =>
-    untracked ? selfContained(`rm -f ${shq(path)}`) : selfContained(`git checkout -- ${shq(path)}`))
-  await exec(revertCmds, 'author-plan revert strays')
+    untracked ? selfContained(`rm -rf -- ${shq(path)}`) : selfContained(`git checkout -- ${shq(path)}`))
+  const results = await exec(revertCmds, 'author-plan revert strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postSnap = await _snapshotGitPorcelain()
+  if (postSnap == null) return { strayPaths: [], unconfined: true }
+  const post = _parsePorcelain(postSnap)
+  for (const { path } of strays) {
+    if (!before.has(path) && post.has(path)) return { strayPaths: [], unconfined: true }
+  }
   return { strayPaths: strays.map((s) => s.path) }
 }
 
@@ -638,7 +660,7 @@ async function producePhase(phase, workItem) {
       const beforeSnap = await _snapshotGitPorcelain()
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt,
-        cwd: procCwd(), model,
+        cwd: checkoutRoot() || procCwd(), model,
       })
       const afterSnap = await _snapshotGitPorcelain()
       const { strayPaths, unconfined } = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)

@@ -89,7 +89,8 @@ const NOT_USABLE_SIGNAL = JSON.stringify({ usable: false, recorded: '', expected
 
 // Agent stub for producePhase: emit-signals sequence + external dispatch stubs + native author trap.
 function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [],
-  events = [], gitSnapshots = null, strayPath = null, preExistingDirty = null }) {
+  events = [], gitSnapshots = null, strayPath = null, untrackedStray = false, preExistingDirty = null,
+  revertPrompts = [], resetPrompts = [] }) {
   const seq = usableSeq.slice()
   let gitSnapIdx = 0
   const gitSeq = gitSnapshots || ['', '']
@@ -111,18 +112,25 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
           if (raw === null) return [{ index: 0, ok: false, stdout: '' }]   // simulated courier flake
           return [{ index: 0, ok: true, stdout: raw ?? '' }]
         }
-        const before = gitSnapIdx === 0
-        gitSnapIdx++
-        if (before && preExistingDirty) return [{ index: 0, ok: true, stdout: preExistingDirty }]
-        if (!before && strayPath) return [{ index: 0, ok: true, stdout: ` M ${strayPath}` }]
+        const snapIdx = gitSnapIdx++
+        if (snapIdx === 0 && preExistingDirty) return [{ index: 0, ok: true, stdout: preExistingDirty }]
+        if (snapIdx === 1 && strayPath) {
+          const prefix = untrackedStray ? '?? ' : ' M '
+          return [{ index: 0, ok: true, stdout: `${prefix}${strayPath}` }]
+        }
         return [{ index: 0, ok: true, stdout: '' }]
       }
       if (execLabel === 'author-plan revert strays') {
         events.push('revert-strays')
+        revertPrompts.push(prompt)
         const n = (prompt.match(/^\d+\./gm) || ['1.']).length
         return Array.from({ length: n }, (_, i) => ({ index: i, ok: true, stdout: '' }))
       }
-      if (execLabel === 'reset author-plan draft') { events.push('reset'); return [{ index: 0, ok: true, stdout: '' }] }
+      if (execLabel === 'reset author-plan draft') {
+        events.push('reset')
+        resetPrompts.push(prompt)
+        return [{ index: 0, ok: true, stdout: '' }]
+      }
       if (prompt.includes('engine_adapter.py build-argv')) {
         externalRuns.push(prompt)
         return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '-p', '--trust', '-f']) }]
@@ -171,24 +179,42 @@ async function produceSmokes() {
     assert.strictEqual(nativeCalls.length, 1, '(2) tasks authors native')
 
     // (3) external dispatch fails -> falls open to the native author within the same attempt.
-    externalRuns = []; nativeCalls = []; events = []
-    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: false, externalRuns, nativeAuthorCalls: nativeCalls, events })
+    externalRuns = []; nativeCalls = []; events = []; const resetPrompts3 = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: false, externalRuns, nativeAuthorCalls: nativeCalls, events, resetPrompts: resetPrompts3 })
     r = await sr.producePhase('plan', 'wi-fallopen')
     assert.strictEqual(r.confidence, 'high', '(3) fall-open native author + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(3) external was attempted once')
     assert.strictEqual(nativeCalls.length, 1, '(3) native author ran after the external failure (fall-open)')
     assert.ok(events.indexOf('reset') >= 0 && events.indexOf('native') >= 0, '(3) reset and native both ran')
     assert.ok(events.indexOf('reset') < events.indexOf('native'), '(3) reset author-plan draft before native author')
+    assert.ok(resetPrompts3.some((p) => p.includes('docs/superheroes/wi-fallopen/plan.md')),
+      '(3) reset removes plan.md')
+    assert.ok(resetPrompts3.some((p) => p.includes('docs/superheroes/wi-fallopen/.plan.complete')),
+      '(3) reset removes .plan.complete')
 
     // (5) stray checkout edit on external success -> reverted + native fallback within the same attempt.
-    externalRuns = []; nativeCalls = []; events = []
-    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, strayPath: 'README.md' })
+    externalRuns = []; nativeCalls = []; events = []; const revertPrompts5 = []; const resetPrompts5 = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, strayPath: 'README.md', revertPrompts: revertPrompts5, resetPrompts: resetPrompts5 })
     r = await sr.producePhase('plan', 'wi-stray')
     assert.strictEqual(r.confidence, 'high', '(5) stray edit triggers native fallback + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(5) external was attempted once')
     assert.strictEqual(nativeCalls.length, 1, '(5) native author ran after stray revert')
     assert.ok(events.includes('revert-strays'), '(5) stray paths were reverted')
+    assert.ok(revertPrompts5.some((p) => p.includes("git checkout -- 'README.md'")),
+      '(5) tracked stray reverted via git checkout: ' + revertPrompts5.join(' | '))
+    assert.ok(resetPrompts5.some((p) => p.includes('docs/superheroes/wi-stray/plan.md')),
+      '(5) reset removes plan.md after stray revert')
+    assert.ok(resetPrompts5.some((p) => p.includes('docs/superheroes/wi-stray/.plan.complete')),
+      '(5) reset removes .plan.complete after stray revert')
     assert.ok(events.indexOf('reset') < events.indexOf('native'), '(5) reset before native after stray edit')
+
+    // (5b) untracked stray -> rm -rf -- and native fallback.
+    externalRuns = []; nativeCalls = []; events = []; const revertPrompts5b = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, strayPath: 'scratch.txt', untrackedStray: true, revertPrompts: revertPrompts5b })
+    r = await sr.producePhase('plan', 'wi-untracked-stray')
+    assert.strictEqual(r.confidence, 'high', '(5b) untracked stray triggers native fallback + usable -> high')
+    assert.ok(revertPrompts5b.some((p) => p.includes("rm -rf -- 'scratch.txt'")),
+      '(5b) untracked stray removed via rm -rf --: ' + revertPrompts5b.join(' | '))
 
     // (6) pre-existing dirty file outside doc dir is left untouched on external success.
     externalRuns = []; nativeCalls = []; events = []
@@ -201,13 +227,17 @@ async function produceSmokes() {
     assert.ok(!events.includes('revert-strays'), '(6) pre-existing dirty file was not reverted')
 
     // (7) external ok but unusable draft -> native fallback within the same attempt (not 3 external retries).
-    externalRuns = []; nativeCalls = []; events = []
-    global.agent = produceAgent({ usableSeq: [false, false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events })
+    externalRuns = []; nativeCalls = []; events = []; const resetPrompts7 = []
+    global.agent = produceAgent({ usableSeq: [false, false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, resetPrompts: resetPrompts7 })
     r = await sr.producePhase('plan', 'wi-unusable-ext')
     assert.strictEqual(r.confidence, 'high', '(7) unusable external draft falls open to native -> high')
     assert.strictEqual(externalRuns.length, 1, '(7) only one external attempt before native fallback')
     assert.strictEqual(nativeCalls.length, 1, '(7) native author ran after unusable external draft')
     assert.ok(events.indexOf('reset') < events.indexOf('native'), '(7) reset before native after unusable external draft')
+    assert.ok(resetPrompts7.some((p) => p.includes('docs/superheroes/wi-unusable-ext/plan.md')),
+      '(7) reset removes plan.md after unusable external draft')
+    assert.ok(resetPrompts7.some((p) => p.includes('docs/superheroes/wi-unusable-ext/.plan.complete')),
+      '(7) reset removes .plan.complete after unusable external draft')
 
     // (8) FAILED before-snapshot (courier flake) + pre-existing dirty checkout: revert NOTHING
     // (an empty "before" would make the user's own edits look stray), discard the draft, native fallback.
@@ -228,6 +258,25 @@ async function produceSmokes() {
     assert.strictEqual(r.confidence, 'high', '(4) native plan author -> high')
     assert.strictEqual(externalRuns.length, 0, '(4) no external dispatch without planAuthor')
     assert.strictEqual(nativeCalls.length, 1, '(4) native author ran')
+
+    // (9) external author-plan dispatch cwd follows __SR_ROOT when process cwd fallback is '.'.
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', planAuthor: 'cursor', effort: {} }
+    const savedRoot9 = globalThis.__SR_ROOT
+    const savedProcess9 = global.process
+    try {
+      globalThis.__SR_ROOT = '/test-checkout-root'
+      global.process = undefined
+      externalRuns = []; nativeCalls = []
+      global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls })
+      r = await sr.producePhase('plan', 'wi-cwd-root')
+      assert.strictEqual(r.confidence, 'high', '(9) external author at checkout root -> high')
+      assert.strictEqual(externalRuns.length, 1, '(9) one external dispatch')
+      assert.ok(externalRuns[0].includes("--cwd '/test-checkout-root'"),
+        '(9) dispatch cwd is checkoutRoot when process absent: ' + externalRuns[0])
+    } finally {
+      globalThis.__SR_ROOT = savedRoot9
+      global.process = savedProcess9
+    }
 
     console.log('OK: producePhase planAuthor route (plan-only, fall-open, native default)')
   } finally {
