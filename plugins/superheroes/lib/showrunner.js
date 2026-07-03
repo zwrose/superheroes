@@ -592,12 +592,30 @@ async function _revertAuthorPlanStrays(workItem, beforeText, afterText) {
   return { strayPaths: strays.map((s) => s.path) }
 }
 
+// Stamp the content-bound completion marker after external author-plan confinement passes.
+async function _stampAuthorPlanMarker(workItem, doc) {
+  const cmd = selfContained(
+    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`)
+  const results = await exec([cmd], 'author-plan write marker')
+  if (!results || !results[0] || !results[0].ok) return false
+  try { return !!JSON.parse(results[0].stdout || '').wrote } catch (_) { return false }
+}
+
+function _draftContentReady(signals) {
+  if (!signals || !signals.expected) return false
+  const missing = Array.isArray(signals.missing_sections) ? signals.missing_sections : []
+  return missing.length === 0 && !signals.placeholder
+}
+
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
 // #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
 // authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
-// The --write-marker stamp is FOLDED into the author agent (FR-4 fold): the author's prompt
-// instructs it to run front_half_usable.py --write-marker after authoring the doc, so there is
-// no separate cmdRunner call — the author leaf handles its own completion stamp.
+// The --write-marker stamp is FOLDED into the native author agent (FR-4 fold): the author's
+// prompt instructs it to run front_half_usable.py --write-marker after authoring the doc.
+// The EXTERNAL author-plan path omits --write-marker from the dispatch prompt; showrunner
+// stamps the marker via exec ONLY after confinement passes and doc content verifies, so a
+// crash before the stamp resumes into re-produce rather than accepting an unconfined draft.
 // Layer 2b: bounded repair loop (N=2 retries, 3 total attempts). On a failed post-check the
 // author is re-dispatched with a TARGETED gap hint derived from the --emit-signals why-signal
 // (missing_sections + placeholder). Only parks (confidence:'low') after all attempts exhausted.
@@ -620,14 +638,19 @@ async function producePhase(phase, workItem) {
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
   // FR-8 sandbox: no banned tokens in this function body.
-  function _authorPrompt(gapSignal) {
-    const base =
+  function _authorPrompt(gapSignal, includeWriteMarker) {
+    let base =
       `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
       `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
-      `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
-      `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
-      selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-      `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
+      `non-empty, no placeholder.`
+    if (includeWriteMarker !== false) {
+      base +=
+        ` After writing the doc, run the following command to stamp the ` +
+        `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
+        selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+        `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n`
+    }
+    base +=
       `Do NOT run review or record the review gate. Return ` +
       `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
       `{ identity, message }.`
@@ -651,15 +674,15 @@ async function producePhase(phase, workItem) {
   // lastSignal carries the why-signal from the previous failed check for the gap hint.
   let lastSignal = null
   for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
-    // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
-    // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-    const prompt = _authorPrompt(attempt > 0 ? lastSignal : null)
+    const gapSignal = attempt > 0 ? lastSignal : null
     let authored = null
     if (aEngine !== 'claude') {
+      // External author-plan: no --write-marker in the dispatch prompt; showrunner stamps after confinement.
+      const extPrompt = _authorPrompt(gapSignal, false)
       const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
       const beforeSnap = await _snapshotGitPorcelain()
       const res = await engineDispatch.dispatchExternal({
-        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt,
+        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
       })
       const afterSnap = await _snapshotGitPorcelain()
@@ -673,15 +696,23 @@ async function producePhase(phase, workItem) {
         await _resetAuthorPlanDraft(workItem, doc) // confinement failure -> fall open to native
       } else if (res && res.ok) {
         const draftNow = await usableDraft(workItem, doc)
-        if (draftNow.usable) authored = { status: 'ok', notify: res.notify || [] }
-        else await _resetAuthorPlanDraft(workItem, doc) // unusable external draft -> fall open to native
+        if (_draftContentReady(draftNow)) {
+          const stamped = await _stampAuthorPlanMarker(workItem, doc)
+          const afterStamp = stamped ? await usableDraft(workItem, doc) : { usable: false }
+          if (afterStamp.usable) authored = { status: 'ok', notify: res.notify || [] }
+          else await _resetAuthorPlanDraft(workItem, doc)
+        } else {
+          await _resetAuthorPlanDraft(workItem, doc) // unusable external draft -> fall open to native
+        }
       } else {
         await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
       }
     }
     if (authored == null) {
+      // FR-4 fold (native only): the author leaf writes its own doc + stamps the completion marker.
+      const nativePrompt = _authorPrompt(gapSignal, true)
       authored = await agent(
-        prompt,
+        nativePrompt,
         { label: `author-${doc}`, model,
           schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     }
@@ -854,6 +885,7 @@ async function usableDraft(workItem, doc) {
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
   return {
     usable: !!signals.usable,
+    expected: signals.expected || '',
     missing_sections: Array.isArray(signals.missing_sections) ? signals.missing_sections : [],
     placeholder: !!signals.placeholder,
   }

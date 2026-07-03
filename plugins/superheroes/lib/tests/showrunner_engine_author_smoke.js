@@ -86,11 +86,14 @@ async function dispatchSmokes() {
 // ---------------------------------------------------------------------------
 const USABLE_SIGNAL = JSON.stringify({ usable: true, recorded: 'abc123', expected: 'abc123' })
 const NOT_USABLE_SIGNAL = JSON.stringify({ usable: false, recorded: '', expected: '' })
+// Content complete but marker not yet stamped (external path pre-stamp check).
+const CONTENT_READY_SIGNAL = JSON.stringify(
+  { usable: false, recorded: '', expected: 'abc123', missing_sections: [], placeholder: false })
 
 // Agent stub for producePhase: emit-signals sequence + external dispatch stubs + native author trap.
 function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [],
   events = [], gitSnapshots = null, strayPath = null, untrackedStray = false, preExistingDirty = null,
-  revertPrompts = [], resetPrompts = [] }) {
+  revertPrompts = [], resetPrompts = [], writeMarkerPrompts = [] }) {
   const seq = usableSeq.slice()
   let gitSnapIdx = 0
   const gitSeq = gitSnapshots || ['', '']
@@ -99,7 +102,9 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
     if (opts && opts.courier) {
       const execLabel = (opts && opts.label) || ''
       if (prompt.includes('emit-signals')) {
-        return [{ index: 0, ok: true, stdout: seq.shift() ? USABLE_SIGNAL : NOT_USABLE_SIGNAL }]
+        const next = seq.shift()
+        const stdout = (typeof next === 'string') ? next : (next ? USABLE_SIGNAL : NOT_USABLE_SIGNAL)
+        return [{ index: 0, ok: true, stdout }]
       }
       if (prompt.includes('append-notify')) {
         const m = prompt.match(/--entries\s+'([^']+)'/)
@@ -107,6 +112,7 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (execLabel === 'author-plan git snapshot' || prompt.includes('git status --porcelain')) {
+        events.push('git-snapshot')
         if (gitSnapshots) {
           const raw = gitSeq[gitSnapIdx++]
           if (raw === null) return [{ index: 0, ok: false, stdout: '' }]   // simulated courier flake
@@ -130,6 +136,11 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         events.push('reset')
         resetPrompts.push(prompt)
         return [{ index: 0, ok: true, stdout: '' }]
+      }
+      if (execLabel === 'author-plan write marker' || (prompt.includes('front_half_usable.py') && prompt.includes('--write-marker'))) {
+        events.push('write-marker')
+        writeMarkerPrompts.push(prompt)
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ wrote: true }) }]
       }
       if (prompt.includes('engine_adapter.py build-argv')) {
         externalRuns.push(prompt)
@@ -159,14 +170,23 @@ async function produceSmokes() {
     globalThis.__SR_OVERRIDES = { 'author-plan': 'fable' }
 
     // (1) plan doc + planAuthor:cursor + external ok -> external authored, native author NOT called.
-    let externalRuns = [], nativeCalls = [], notifyLedger = [], events = []
-    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger, events })
+    let externalRuns = [], nativeCalls = [], notifyLedger = [], events = [], writeMarkerPrompts = []
+    global.agent = produceAgent({ usableSeq: [false, CONTENT_READY_SIGNAL, USABLE_SIGNAL, USABLE_SIGNAL],
+      externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger, events, writeMarkerPrompts })
     let r = await sr.producePhase('plan', 'wi-ext')
     assert.strictEqual(r.confidence, 'high', '(1) external author + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(1) exactly one external dispatch')
     assert.strictEqual(nativeCalls.length, 0, '(1) native author is NOT dispatched when external succeeds')
     assert.ok(externalRuns[0].includes("--role 'author-plan'"), '(1) dispatch carries the author-plan role')
     assert.ok(externalRuns[0].includes("--model 'fable'"), '(1) dispatch threads the resolved author-plan tier: ' + externalRuns[0])
+    assert.ok(!externalRuns[0].includes('--write-marker'),
+      '(1) external author prompt must NOT include --write-marker')
+    assert.ok(events.includes('write-marker'), '(1) showrunner stamps marker after confinement')
+    assert.ok(events.indexOf('write-marker') > events.lastIndexOf('git-snapshot'),
+      '(1) write-marker exec runs AFTER confinement git snapshots')
+    assert.ok(writeMarkerPrompts.length === 1, '(1) exactly one showrunner write-marker exec')
+    assert.ok(writeMarkerPrompts[0].includes('--write-marker'),
+      '(1) showrunner write-marker exec uses front_half_usable.py --write-marker')
     assert.ok(notifyLedger.some((n) => n.phase === 'plan' && n.identity === 'n-ext' && n.message === 'external default'),
       '(1) external notify is durably recorded via append-notify')
 
@@ -207,6 +227,7 @@ async function produceSmokes() {
     assert.ok(resetPrompts5.some((p) => p.includes('docs/superheroes/wi-stray/.plan.complete')),
       '(5) reset removes .plan.complete after stray revert')
     assert.ok(events.indexOf('reset') < events.indexOf('native'), '(5) reset before native after stray edit')
+    assert.ok(!events.includes('write-marker'), '(5) write-marker NOT stamped when confinement fails')
 
     // (5b) untracked stray -> rm -rf -- and native fallback.
     externalRuns = []; nativeCalls = []; events = []; const revertPrompts5b = []
@@ -218,7 +239,8 @@ async function produceSmokes() {
 
     // (6) pre-existing dirty file outside doc dir is left untouched on external success.
     externalRuns = []; nativeCalls = []; events = []
-    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events,
+    global.agent = produceAgent({ usableSeq: [false, CONTENT_READY_SIGNAL, USABLE_SIGNAL, USABLE_SIGNAL],
+      externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events,
       preExistingDirty: ' M README.md' })
     r = await sr.producePhase('plan', 'wi-predirty')
     assert.strictEqual(r.confidence, 'high', '(6) pre-existing dirty + external usable -> high')
@@ -228,7 +250,7 @@ async function produceSmokes() {
 
     // (7) external ok but unusable draft -> native fallback within the same attempt (not 3 external retries).
     externalRuns = []; nativeCalls = []; events = []; const resetPrompts7 = []
-    global.agent = produceAgent({ usableSeq: [false, false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, resetPrompts: resetPrompts7 })
+    global.agent = produceAgent({ usableSeq: [false, NOT_USABLE_SIGNAL, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, resetPrompts: resetPrompts7 })
     r = await sr.producePhase('plan', 'wi-unusable-ext')
     assert.strictEqual(r.confidence, 'high', '(7) unusable external draft falls open to native -> high')
     assert.strictEqual(externalRuns.length, 1, '(7) only one external attempt before native fallback')
@@ -238,6 +260,7 @@ async function produceSmokes() {
       '(7) reset removes plan.md after unusable external draft')
     assert.ok(resetPrompts7.some((p) => p.includes('docs/superheroes/wi-unusable-ext/.plan.complete')),
       '(7) reset removes .plan.complete after unusable external draft')
+    assert.ok(!events.includes('write-marker'), '(7) write-marker NOT stamped when external content unusable')
 
     // (8) FAILED before-snapshot (courier flake) + pre-existing dirty checkout: revert NOTHING
     // (an empty "before" would make the user's own edits look stray), discard the draft, native fallback.
@@ -267,7 +290,8 @@ async function produceSmokes() {
       globalThis.__SR_ROOT = '/test-checkout-root'
       global.process = undefined
       externalRuns = []; nativeCalls = []
-      global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls })
+      global.agent = produceAgent({ usableSeq: [false, CONTENT_READY_SIGNAL, USABLE_SIGNAL, USABLE_SIGNAL],
+        externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls })
       r = await sr.producePhase('plan', 'wi-cwd-root')
       assert.strictEqual(r.confidence, 'high', '(9) external author at checkout root -> high')
       assert.strictEqual(externalRuns.length, 1, '(9) one external dispatch')
