@@ -53,9 +53,9 @@ function baseArg() {
 // build_phase reference is itself lazy, and deferring keeps build_phase's require surface unchanged
 // for the smokes). One exec, no duplication, no front-half change.
 let _execFn = null
-function exec(commands) {
+function exec(commands, label) {
   if (!_execFn) _execFn = require('./showrunner.js').exec
-  return _execFn(commands)
+  return _execFn(commands, label)
 }
 
 // Run ONE command via the exec dumb-pipe and parse its JSON stdout. The cheap haiku courier
@@ -67,9 +67,11 @@ function exec(commands) {
 // park/false/fallback it produces today). A clean {"ok":true} on the first call returns immediately
 // (one exec, no behavior change); a parseable {"ok":false} (a REAL durable-write failure) is returned
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
-async function execJson(cmd) {
+// `label` is the cosmetic display purpose (defaults to 'exec'); dumb-pipe routing rides the courier's
+// `courier: true` marker, so a descriptive label never loosens the cheapest-model pinning.
+async function execJson(cmd, label) {
   try {
-    return await courier.runCourierJson('exec', cmd)
+    return await courier.runCourierJson(label || 'exec', cmd)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -78,9 +80,9 @@ async function execJson(cmd) {
 
 // Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
 // Retry once on an empty stdout; returns the trimmed string, or null after the retry.
-async function execText(cmd) {
+async function execText(cmd, label) {
   try {
-    return (await courier.runCourierText('exec', cmd)).trim()
+    return (await courier.runCourierText(label || 'exec', cmd)).trim()
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -162,12 +164,14 @@ async function buildPhase(workItem, generation) {
   // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
   const gate = await execText(
     `python3 ${LIB}/definition_doc.py read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+    'read gate',
   )
   if (gate == null) return park('could not read the tasks gate — failing closed')
   if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
     `python3 ${LIB}/build_entry.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    'prepare build',
   )
   if (setup == null) return park('build setup failed: no branch')
   if (!setup.branch) return park('build setup failed: ' + (setup.error || 'no branch'))
@@ -178,7 +182,7 @@ async function buildPhase(workItem, generation) {
   // UFR-8: zero executable tasks -> finish without building.
   // With exec+JSON.parse the BUG-2 string-recovery is structurally moot, but KEEP the
   // typeof===string JSON.parse recovery + Array.isArray guard as defense-in-depth (BUG-3).
-  const _taskResult = await execJson(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`)
+  const _taskResult = await execJson(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`, 'read tasks')
   if (_taskResult == null) return park('task-list command did not run — failing closed')
   let tasks = _taskResult.tasks
   if (typeof tasks === 'string') {
@@ -332,7 +336,7 @@ async function resetUncommitted(wt, branch) {
 async function writeProvenance(workItem) {
   // execJson retries the courier ONCE on a dropped/garbled stdout; null -> the SAME fail-closed
   // fallback as today ({ok:false} -> caller parks). A parseable {ok:false} is returned as-is (no retry).
-  const r = await execJson(`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`)
+  const r = await execJson(`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`, 'write provenance')
   if (r == null) return { ok: false, error: 'provenance leaf did not run' }
   return r
 }
@@ -362,6 +366,7 @@ async function fenceOrPark(workItem, generation) {
   if (!root) return false
   const f = await execJson(
     `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))} --root ${shq(root)}`,
+    'fence lease',
   )
   return !!(f && f.ok)
 }
@@ -398,7 +403,7 @@ let _writeAuthNotified = false
 async function _implWriteAuthorized(engine, wt) {
   if (_writeAuthOk !== null) return _writeAuthOk
   const v = await execJson(
-    `python3 ${LIB}/engine_authz.py test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`)
+    `python3 ${LIB}/engine_authz.py test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`, 'check write auth')
   _writeAuthOk = !!(v && v.ok === true)
   if (!_writeAuthOk && !_writeAuthNotified) {
     _writeAuthNotified = true
@@ -464,6 +469,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       // can't run / returns unparseable output must NOT read as a clean trailer state — park (UFR-7).
       const chk = await execJson(
         `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+        'check trailers',
       )
       if (chk == null) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
       // A structured base-resolution error (C-I3) must park with its specific reason, not slip past
@@ -558,6 +564,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
         // through execJson so a dropped/garbled courier stdout is retried once (the write is idempotent).
         await execJson(
           `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
+          'append minors',
         )
       }
       // record-before-advance: record-reviewed must succeed before the task counts reviewed.

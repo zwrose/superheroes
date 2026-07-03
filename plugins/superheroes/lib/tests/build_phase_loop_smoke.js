@@ -52,6 +52,7 @@ function makeAgent(routes) {
       if (routeMatchesLocal(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
     }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    if (opts && opts.courier) { for (const [needle, resp] of routes) if (needle === 'exec') return typeof resp === 'function' ? resp(prompt) : resp }
     return ''
   }
 }

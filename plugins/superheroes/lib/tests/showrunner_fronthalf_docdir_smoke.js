@@ -42,7 +42,7 @@ async function partAppendNotify() {
   let emitCalls = 0
   globalThis.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('emit-signals')) {
         emitCalls += 1
         return [{ index: 0, ok: true, stdout: emitCalls === 1 ? NOT_USABLE : USABLE }]
@@ -92,7 +92,7 @@ async function partReviewReadInner(resolved, legacy) {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
     }
     if (label === 'save round state') return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: 'pending' }) }]
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
@@ -136,7 +136,7 @@ async function partStartupPlants() {
         ok: true, spec_gate: 'passed', model_overrides: {},
         doc_dir: '/abs/proj-store/docs/wi-s' }) }]
     }
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
@@ -163,7 +163,7 @@ async function partStartupPlants() {
     if (label === 'read startup state') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
@@ -191,7 +191,7 @@ async function partMissingDocDirRetries() {
       calls += 1
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} }) }]
     }
-    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{}' }]
+    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{}' }]
     return null
   }
   const facts = await sr.readStartupState('wi-m')

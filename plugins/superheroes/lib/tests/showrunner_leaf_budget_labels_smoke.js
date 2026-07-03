@@ -13,6 +13,9 @@ const exercised = [
   'open draft PR', 'mark PR ready',
   'read test context', 'plan-tests', 'prepare test run',
   'resolve review target', 'check ship-readiness', 'post readout',
+  // #151 descriptive exec-courier labels (replace the bare 'exec') — pinned so a regression to
+  // 'exec' (or a dropped purpose) fails CI. These are the dumb-pipe leaves the build/front-half drive.
+  'check draft', 'read gate', 'prepare build', 'read tasks', 'fence lease', 'write provenance', 'check trailers',
 ]
 const forbidden = ['worker', 'review', 'fixer', 'final-fixer', 'code-fixer', 'fix']
 
@@ -32,7 +35,7 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     if (label === 'read world-snapshot') {
       return jsonOut({ ok: true, gate: 'passed' })
     }
-    if (label === 'read plan draft' || label === 'read tasks draft' || label === 'read gate') {
+    if (label === 'read plan draft' || label === 'read tasks draft') {
       return jsonOut({ ok: true, path: '/tmp/doc.md', docType: 'plan', gate: 'pending', exists: true })
     }
     if (label.startsWith('author-')) return { status: 'ok', notify: [] }
@@ -50,13 +53,18 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     if (label.startsWith('synthesis:')) {
       return { verdicts: [{ id: 'docs/x.md::gap', action: 'keep', reason: 'r', severity: 'Critical' }] }
     }
-    if (label === 'exec') {
-      if (p.includes('read-gate')) return [{ index: 0, ok: true, stdout: 'passed' }]
-      if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
-      if (p.includes('task_list_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
-      if (p.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      return [{ index: 0, ok: true, stdout: '{}' }]
-    }
+    // Build-phase dumb-pipe leaves now carry UNIQUE descriptive labels — match by LABEL, not a prompt
+    // substring. The 'resolve review target' gather embeds build_entry.py + review_code_config.py in
+    // its python -c script, so a p.includes('build_entry.py') check would mis-handle it (returning the
+    // build-setup shape and failing its require:['ok']); label matching avoids that class of collision.
+    // buildPhase's 'read gate' leaf (execText) wants plain 'passed'; the front-half readGate (execJson,
+    // --json) parses 'passed' as non-JSON and falls back to 'unreadable', as it did under bare 'exec'.
+    if (label === 'read gate') return [{ index: 0, ok: true, stdout: 'passed' }]
+    if (label === 'prepare build') return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
+    if (label === 'read tasks') return [{ index: 0, ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
+    if (label === 'fence lease') return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+    if (label === 'write provenance') return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+    if (label === 'append minors') return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
     if (label === 'lib') return { ok: true }
     if (label === 'gather build state') {
       return jsonOut({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' })
@@ -85,6 +93,9 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
     if (label === 'save phase progress') return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
     if (label === 'save round state') return jsonOut({ ok: true })
+    // generic dumb-pipe catch-all — AFTER all named courier branches (e.g. the per-task 'check
+    // trailers' gather + any provenance/minor-rollup leaf that reaches here).
+    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{}' }]
     return {}
   }
 

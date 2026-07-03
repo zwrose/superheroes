@@ -32,22 +32,21 @@ function makeAgent(routes) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     for (const [needle, resp] of routes) if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt, opts) : resp
-    // #118 fold: named courier leaves (record/gather/stamp) carry one command each — feed the
-    // command through the scenario's exec map so per-scenario variations keep working.
-    const COURIER_LABELS = new Set(['record task built', 'record task reviewed', 'stamp build coverage', 'gather build state'])
-    if (COURIER_LABELS.has(label)) {
-      for (const [needle, resp] of routes) {
-        if (needle === 'exec' && typeof resp === 'function') {
-          const cmd = prompt.split('\n\n').slice(1).join('\n\n')
-          return resp(cmd, opts)
-        }
-      }
-    }
     // #150: per-task reviewer labels are "review task <id>:rN" — scenarios route it as 'review'.
     if (/^review task .+:r\d+$/.test(label)) {
       for (const [needle, resp] of routes) if (needle === 'review') return typeof resp === 'function' ? resp(prompt, opts) : resp
     }
     if (label === 'read verify + minors') return JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] })
+    // #118 fold: a dumb-pipe leaf (record/gather/stamp + the descriptively-labelled exec helpers like
+    // 'read gate'/'fence lease') carries opts.courier and one command — route it by that command. A
+    // dedicated script route (needle containing '.py', e.g. 'verify_gate.py' for the 'run verify' leaf)
+    // wins; otherwise it feeds the scenario's generic exec map. Handled BEFORE the substring loop so a
+    // generic English needle ('review') never mis-grabs a courier command ('record-reviewed').
+    if (opts && opts.courier) {
+      const cmd = prompt.split('\n\n').slice(1).join('\n\n')
+      for (const [needle, resp] of routes) if (needle !== 'exec' && needle.includes('.py') && cmd.includes(needle)) return typeof resp === 'function' ? resp(cmd, opts) : resp
+      for (const [needle, resp] of routes) if (needle === 'exec' && typeof resp === 'function') return resp(cmd, opts)
+    }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt, opts) : resp
     return ''
   }
