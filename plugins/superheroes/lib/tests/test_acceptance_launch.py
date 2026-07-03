@@ -102,6 +102,32 @@ def test_external_engine_pref_marks_spend_partial():
     assert res["spend_partial"] is True
 
 
+def test_real_shaped_all_claude_prefs_with_effort_submap_not_partial():
+    # Regression: engine_pref.load_engine_prefs's real return shape is
+    # {"reviewer": ..., "implementation": ..., "effort": {...}} — the "effort" sub-map
+    # is NOT a role and must be excluded from the any-non-claude test. A prior bug
+    # folded "effort"'s dict value into the check (str({}) != "claude" -> True),
+    # falsely marking an all-claude run as spend_partial.
+    child = FakeChild(exits_after=2)
+    res = al.run("wi", CEIL, child_factory=lambda: child,
+                 clock=FakeClock([0, 1, 2]), spend_sampler=lambda: (0.1, True),
+                 engine_pref_reader=lambda: {
+                     "reviewer": "claude", "implementation": "claude", "effort": {}
+                 })
+    assert res["spend_partial"] is False
+
+
+def test_real_shaped_external_prefs_with_effort_submap_is_partial():
+    child = FakeChild(exits_after=2)
+    res = al.run("wi", CEIL, child_factory=lambda: child,
+                 clock=FakeClock([0, 1, 2]), spend_sampler=lambda: (0.1, True),
+                 engine_pref_reader=lambda: {
+                     "reviewer": "codex", "implementation": "claude",
+                     "effort": {"review": "xhigh"}
+                 })
+    assert res["spend_partial"] is True
+
+
 def test_kill_confirmed_dead_only_when_group_empty():
     # SIGTERM then SIGKILL escalation until the group is empty.
     child = FakeChild(exits_after=999, group_empty_after=1)

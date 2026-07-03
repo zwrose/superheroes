@@ -134,12 +134,20 @@ def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_read
 
 
 def _compute_spend_partial(engine_pref_reader):
-    """True when any resolved engine preference is a non-claude external engine."""
+    """True when any resolved ROLE's engine preference is a non-claude external engine.
+
+    `engine_pref.load_engine_prefs`'s real return shape carries a non-role "effort"
+    sub-map (`{"reviewer": ..., "implementation": ..., "effort": {...}}`) alongside the
+    role keys. That sub-map must be excluded from this test: iterating all values naively
+    would fold `effort`'s dict value into the any() check (`str({}) != "claude"` -> True),
+    falsely marking an all-claude run as spend_partial on every real invocation.
+    """
     try:
         prefs = engine_pref_reader() or {}
     except Exception:
         return False
-    return any(str(v).lower() != "claude" for v in prefs.values())
+    return any(str(v).lower() != "claude"
+               for k, v in prefs.items() if k != "effort")
 
 
 def _hard_kill_group(child):

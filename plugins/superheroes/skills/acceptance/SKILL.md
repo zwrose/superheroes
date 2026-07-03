@@ -20,8 +20,9 @@ It resolves host-neutral actions via the host tool map like every other skill (C
 Escalation follows the F5 policy (`escalation-base.md`): act autonomously on agent-verifiable /
 reversible steps, escalate only owner-authority decisions.
 
-Resolve the plugin lib dir once: `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`, and the repo
-root: `ROOT=$(git rev-parse --show-toplevel)`.
+Resolve the plugin lib dir once: `export LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`, and the
+repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1 reads `LIB` back via
+`os.environ["LIB"]` inside a quoted heredoc child process, which only sees exported variables.
 
 ## Start
 
