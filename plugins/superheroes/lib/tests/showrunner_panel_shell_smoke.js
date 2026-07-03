@@ -248,6 +248,40 @@ async function main() {
     const dir = freshDir()
     await io().writeFile(io().join(dir, 'round-records.json'), JSON.stringify([{
       schemaVersion: 2,
+      round: 5,
+      kind: 'confirmation',
+      dimensions: { 'test-reviewer': { status: 'run', confidence: 'high', findings: [], hasFindings: false, subjects: ['Test'] } },
+      findings: [],
+      changedSubjects: ['Test'],
+      coverageDecisions: [],
+    }]))
+    const oldIo = global.io
+    const baseIo = io()
+    let loadCalls = 0
+    let reviewerCalls = 0
+    global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
+      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('load-summary')) {
+        loadCalls += 1
+        return { ok: true, stdout: 'courier wrapped a non-json answer' }
+      }
+      return baseIo.runHelper(cmd, args)
+    } })
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => {
+      reviewerCalls += 1
+      return cleanResult(runDir, round, opts)
+    }
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'] })
+    global.io = oldIo
+    assert.strictEqual(v.reason, 'round-memory-unreadable',
+      'unreadable existing round memory parks by name instead of starting a fresh round')
+    assert.strictEqual(loadCalls, 2, 'round-memory load gets one retry before parking')
+    assert.strictEqual(reviewerCalls, 0, 'unreadable existing memory must not burn a redundant panel')
+  }
+
+  {
+    const dir = freshDir()
+    await io().writeFile(io().join(dir, 'round-records.json'), JSON.stringify([{
+      schemaVersion: 2,
       round: 1,
       kind: 'baseline',
       dimensions: { 'test-reviewer': { status: 'run', confidence: 'high', findings: [{ dimension: 'Test', taxonomy: 'coverage', title: 'Missing acceptance test', severity: 'Critical', evidence: 'x' }], hasFindings: true, subjects: ['Test'] } },

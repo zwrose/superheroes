@@ -34,10 +34,12 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 // setGateFails / journalWriteFails: shape the save phase progress courier response.
 function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, setGateStale, journalWriteFails }) {
   let panelRuns = 0
+  const savePrompts = []
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
     if (label === 'save phase progress') {
+      savePrompts.push(String(prompt))
       if (setGateFails || setGateStale || journalWriteFails) {
         // setGateStale: the fenced set-gate refuses a stale snapshot (exits non-zero inside the
         // batched sideEffectCmd) — the courier reports ok:false and persistPhase fails closed.
@@ -65,6 +67,7 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     return null
   }
   fn.panelRuns = () => panelRuns
+  fn.savePrompts = () => savePrompts
   return fn
 }
 
@@ -203,6 +206,67 @@ async function main() {
   assert.ok(!('findings' in terminal), 'terminal record must not carry evidence-bodied findings')
   assert.ok(!fs.readFileSync(`${hDir}/terminal-record.json`, 'utf8').includes('stale-prior-run'),
     'stale prior terminal record content must be gone')
+
+  // (i) A terminal-record transport flake after a clean verdict must not demote certification.
+  // The gate side effect still has to be returned so runPhases can flip the doc gate to passed.
+  clean('wi-i')
+  ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
+  global.agent = ag
+  const oldIoI = global.io
+  const baseIoI = io()
+  global.io = Object.assign({}, baseIoI, {
+    async runHelper(cmd, args) {
+      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('compose-terminal')) {
+        return { ok: false, stdout: JSON.stringify({ ok: false, reason: 'forced-compose-flake' }) }
+      }
+      return baseIoI.runHelper(cmd, args)
+    },
+  })
+  r = await sr.reviewDocPhase('plan', 'wi-i', { runId: 'run-i' })
+  global.io = oldIoI
+  assert.strictEqual(r.gate, 'passed', 'clean terminal still maps to a passed gate when record compose flakes')
+  assert.strictEqual(r.phaseResult.confidence, 'high',
+    'terminal-record transport flake must not lower clean-phase confidence')
+  assert.deepStrictEqual(r.phaseResult.assumptions || [], [],
+    'terminal-record transport flake must not add phase-step-blocking assumptions to a clean certification')
+  assert.ok(r.persist && r.persist.sideEffectCmd && r.persist.sideEffectCmd.includes('set-gate'),
+    'the passed set-gate side effect is still chained after a clean terminal-record flake')
+
+  // (j) If existing round memory becomes unreadable on entry, the phase parks by name instead of
+  // re-running round 1 or flipping a prior clean gate/terminal back to changes-requested.
+  clean('wi-j')
+  const jDir = '/tmp/showrunner-wi-j-review-plan'
+  fs.mkdirSync(jDir, { recursive: true })
+  fs.writeFileSync(`${jDir}/round-records.json`, JSON.stringify([{ schemaVersion: 2, round: 5, kind: 'confirmation', findings: [], dimensions: {} }]))
+  fs.writeFileSync(`${jDir}/terminal-record.json`, JSON.stringify({ terminal: 'clean', round: 5, runId: 'prior-clean' }))
+  ag = makeAgent({ gate: 'pending', reviewerFindings: [] })
+  global.agent = ag
+  const oldIoJ = global.io
+  const baseIoJ = io()
+  global.io = Object.assign({}, baseIoJ, {
+    async runHelper(cmd, args) {
+      if (String((args || [])[0]).includes('review_setup_gather.py')) {
+        return { ok: true, stdout: JSON.stringify({
+          ok: true,
+          memory: { ok: false, state: 'unreadable', reason: 'forced unreadable' },
+          deferredSet: {},
+          coverage: { ok: true, decisions: [], contentHash: baseIoJ.contentHash('') },
+        }) }
+      }
+      return baseIoJ.runHelper(cmd, args)
+    },
+  })
+  loopOut = await sr.runPhases('wi-j', 1, { reviewDoc: (doc, wi) => sr.reviewDocPhase(doc, wi, { runId: 'run-j' }) })
+  global.io = oldIoJ
+  assert.strictEqual(loopOut.outcome, 'parked')
+  assert.strictEqual(loopOut.reason, 'round-memory-unreadable',
+    'unreadable existing round memory parks with the transport reason')
+  assert.strictEqual(ag.panelRuns(), 0, 'unreadable existing round memory must not re-run reviewers')
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(`${jDir}/terminal-record.json`, 'utf8')),
+    { terminal: 'clean', round: 5, runId: 'prior-clean' },
+    'a later unreadable-memory failure must not overwrite the prior clean terminal record')
+  assert.ok(!ag.savePrompts().some((p) => p.includes('set-gate')),
+    'unreadable-memory park must not chain a changes-requested set-gate')
 
   console.log('ok: reviewDocPhase gate mapping + idempotent skip + gate-write guard + durable-write fail-close (C1)')
 }

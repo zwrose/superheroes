@@ -483,6 +483,20 @@ def test_compose_terminal_missing_records_still_writes(tmp_path):
     assert rec["terminal"] == "cannot-certify"
     assert rec["fixes"] == [] and rec["deferred"] == [] and rec["coverageDecisions"] == []
 
+def test_compose_terminal_preserves_existing_clean_from_later_failure(tmp_path):
+    rm = load_memory()
+    path = tmp_path / "terminal-record.json"
+    clean = {"terminal": "clean", "round": 5, "runId": "old-clean"}
+    path.write_text(json.dumps(clean, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    failure = {"terminal": "cannot-certify", "reason": "round-memory-unreadable", "round": 1}
+    failure_json = json.dumps(failure)
+    out = rm.compose_terminal_record(str(path), failure_json,
+                                     verdict_hash=rm.content_hash(failure_json),
+                                     run_id="flaked-entry")
+    assert out["ok"] is True
+    assert out.get("preserved") is True
+    assert json.loads(path.read_text(encoding="utf-8")) == clean
+
 
 def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):
     """Run dirs are shared across runs of the same work-item+phase: loop entry sweeps a dead

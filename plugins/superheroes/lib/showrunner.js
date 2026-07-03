@@ -610,12 +610,6 @@ async function reviewDocPhase(doc, workItem, opts) {
   // ~14KB evidence-bodied verdict never crosses a courier writeFile — the payload-stage-failed
   // park class (live 2026-07-02, run wf_94c879e0-747). Overwrite is finalize's job: the record
   // is durable for crash-resume, not append-only (the lease serializes live sessions).
-  const recPath = `${runDir}/terminal-record.json`
-  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
-  if (!recWrite.ok) {
-    const gate = gateForTerminal(verdict && verdict.terminal)
-    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
-  }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
   // The set-gate fence hash is computed PYTHON-SIDE at write time ('current' sentinel), never
@@ -637,13 +631,46 @@ async function reviewDocPhase(doc, workItem, opts) {
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
     `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
+  const persist = {
+    sideEffectCmd,
+    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
+  }
+  const recPath = `${runDir}/terminal-record.json`
+  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
+  if (verdict && verdict.reason === 'round-memory-unreadable') {
+    return {
+      phaseResult: {
+        confidence: 'low',
+        assumptions: ['round-memory-unreadable'],
+        parkReason: 'round-memory-unreadable',
+      },
+      gate: null,
+      runtimeDeferredIds: Array.from(deferred.keys()),
+    }
+  }
+  if (!recWrite.ok) {
+    if (gate === 'passed') {
+      return {
+        phaseResult: { confidence: 'high', assumptions: [] },
+        gate,
+        persist,
+        runtimeDeferredIds: Array.from(deferred.keys()),
+      }
+    }
+    return {
+      phaseResult: {
+        confidence: 'low',
+        assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`],
+        parkReason: `terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`,
+      },
+      gate,
+      runtimeDeferredIds: Array.from(deferred.keys()),
+    }
+  }
   return {
     phaseResult: { confidence: 'high', assumptions: [] },
     gate,
-    persist: {
-      sideEffectCmd,
-      journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
-    },
+    persist,
     runtimeDeferredIds: Array.from(deferred.keys()),
   }
 }
@@ -1534,7 +1561,7 @@ async function runPhases(workItem, fromStep, deps) {
     if (!saved.ok) {
       return { outcome: 'parked', phase, reason: `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4` }
     }
-    if (!proceed) return { outcome: 'parked', phase, reason: decision.reason }
+    if (!proceed) return { outcome: 'parked', phase, reason: phaseResult.parkReason || decision.reason }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.

@@ -130,13 +130,40 @@ function confirmationReady(records, round, justMarked) {
 // mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
 // the loop's second entry read (last-extras.json) into the same leaf; it comes back as
 // `extras` (null when missing/corrupt — the old readJson-default parity).
-async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
   const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
   } catch (_) {
     return { ok: false, reason: 'round-memory-helper-failed' }
+  }
+}
+
+async function probeRoundRecords(runDir, ioApi) {
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
+  try {
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && typeof parsed === 'object') return parsed
+  } catch (_) { /* fall through */ }
+  return { ok: false, exists: true, state: 'unreadable', reason: 'round-memory-probe-failed' }
+}
+
+async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+  const first = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
+  if (first.ok) return first
+  const second = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
+  if (second.ok) return second
+  const probed = await probeRoundRecords(runDir, ioApi)
+  if (probed && probed.ok && probed.exists === false) {
+    return { ok: true, state: 'missing', records: [], contentHash: ioApi.contentHash(''), extras: null }
+  }
+  return {
+    ok: false,
+    state: 'unreadable',
+    reason: 'round-memory-unreadable',
+    records: [],
+    contentHash: (probed && probed.contentHash) || first.contentHash || second.contentHash,
   }
 }
 
@@ -400,6 +427,12 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let justMarkedForConfirmation = false
   let fixRanThisRun = false
   const allUsage = {}
+
+  if (!memoryState.ok) {
+    return await finalizeVerdict(
+      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-unreadable', round },
+      records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  }
 
   if (!reviewerSet || reviewerSet.length === 0) {
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
