@@ -560,3 +560,14 @@ def test_poll_lines_includes_diff_content_after_new_event():
     event_idx = next(i for i, ln in enumerate(lines) if "step 5" in ln)
     diff_idx = next(i for i, ln in enumerate(lines) if "build task 1/3 built" in ln)
     assert event_idx < diff_idx
+
+
+def test_format_journal_event_coerces_non_string_type():
+    # a corrupt on-disk event with a non-string `type` must not crash --follow
+    for bad_type in (5, ["x"], {"k": 1}, "", None):
+        line = run_watch.format_journal_event(
+            {"ts": "2026-07-03T14:00:00Z", "seq": 1, "type": bad_type})
+        assert line == "14:00:00  · event"
+    # with a detail, the coerced line still renders the detail suffix
+    assert run_watch.format_journal_event(
+        {"ts": "2026-07-03T14:00:00Z", "seq": 1, "type": 5, "detail": "bad"}) == "14:00:00  · event · bad"
