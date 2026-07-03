@@ -24,7 +24,7 @@ def class_key(finding):
     return "::".join([
         str(finding.get("dimension") or ""),
         str(finding.get("taxonomy") or ""),
-        _norm(finding.get("title")),
+        _norm(finding.get("title") or finding.get("summary")),
     ])
 
 

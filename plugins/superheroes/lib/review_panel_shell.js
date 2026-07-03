@@ -519,6 +519,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       if (!synthesized) {
         try { log(`review-panel r${round}: synthesis produced no result — falling back to raw compile (no findings dropped)`) } catch (_) {}
       }
+      graftSynthesizedFindings(roundFindings, synthesized)
     }
 
     let verifyResult = null
@@ -638,12 +639,25 @@ function _validReviewerResult(out) {
   return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
+function normalizeReviewerFindings(findings) {
+  return (findings || []).map((finding) => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding
+    if ((finding.title === undefined || finding.title === null || finding.title === '') &&
+        typeof finding.summary === 'string' && finding.summary) {
+      return Object.assign({}, finding, { title: finding.summary })
+    }
+    return finding
+  })
+}
+
 function _shapeReviewerResult(out, opts) {
   if (Array.isArray(out)) {
     const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    return { findings: out, confidence: conf, legacyArray: true }
+    return { findings: normalizeReviewerFindings(out), confidence: conf, legacyArray: true }
   }
-  return _stripZeroUsage(out)
+  const shaped = _stripZeroUsage(out)
+  if (!shaped || !Array.isArray(shaped.findings)) return shaped
+  return Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) })
 }
 
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
@@ -674,6 +688,38 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
+function graftSynthesizedFindings(roundFindings, synthesized) {
+  if (!synthesized || typeof synthesized !== 'object' || !Array.isArray(synthesized.findings)) return
+  const keptById = Object.create(null)
+  for (const kept of synthesized.findings) {
+    if (!kept || typeof kept !== 'object' || Array.isArray(kept)) continue
+    keptById[circuitBreaker.findingIdentity(kept)] = kept
+  }
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (!result || typeof result !== 'object' || !Array.isArray(result.findings)) continue
+    const findings = []
+    for (const finding of result.findings) {
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) continue
+      const kept = keptById[circuitBreaker.findingIdentity(finding)]
+      if (!kept) {
+        if (finding.file === null || finding.file === undefined || finding.line === null || finding.line === undefined) {
+          findings.push(finding)
+        }
+        continue
+      }
+      const enriched = Object.assign({}, finding)
+      if ((enriched.title === undefined || enriched.title === null || enriched.title === '') &&
+          kept.title !== undefined && kept.title !== null && kept.title !== '') {
+        enriched.title = kept.title
+      }
+      if (kept.severity !== undefined && kept.severity !== null && kept.severity !== '') enriched.severity = kept.severity
+      if (!enriched.classKey && kept.classKey) enriched.classKey = kept.classKey
+      findings.push(enriched)
+    }
+    roundFindings[name] = Object.assign({}, result, { findings })
+  }
+}
+
 async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
   // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
@@ -681,19 +727,27 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   ioApi = ioApi || io()
   const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
   const command = `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
-  const out = await agent(
+  const prompt =
     `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
     `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
     `(the Bash tool accepts a timeout parameter up to 600000 ms). Do NOT background it. ` +
-    `Do NOT answer until the command prints its final JSON.\n\n` +
-    command,
-    { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
+    `Do NOT answer until the command prints its final JSON. Your structured output fields must be the JSON object's own fields ` +
+    `(result/code/tail); do not nest the JSON as a string.\n\n` +
+    command
+  const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
+  const out = await runCourier()
   const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
   if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
   const readBack = await ioApi.readJson(outPath, null)
   const fromFile = verifyResultFromPayload(verifyCommand, readBack, { allowPass: true })
   if (fromFile) return fromFile
-  return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
+  const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
+  if (fromDirect) return fromDirect
+  const retryOut = await runCourier()
+  const retryReadBack = await ioApi.readJson(outPath, null)
+  const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
+  if (fromRetryFile) return fromRetryFile
+  return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
 }
 
 function own(obj, key) {
@@ -708,6 +762,14 @@ function _integerString(value) {
 function verifyResultFromPayload(verifyCommand, payload, opts) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
   opts = opts || {}
+  if (typeof payload.result === 'string') {
+    try {
+      const nested = JSON.parse(payload.result)
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        return verifyResultFromPayload(verifyCommand, nested, opts)
+      }
+    } catch (_) { /* fall through to normal result handling */ }
+  }
   const command = verifyCommand || (own(payload, 'command') ? payload.command : 'none')
   const commandSkipped = !command || String(command).trim().toLowerCase() === 'none'
   if (payload.result === 'pass') return opts.allowPass ? 'pass' : null

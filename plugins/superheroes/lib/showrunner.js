@@ -127,10 +127,11 @@ function _withRealUsage(out) {
 function _findingKeys(finding) {
   if (!finding || typeof finding !== 'object') return []
   const keys = []
+  const label = finding.title || finding.summary
   if (finding.classKey) keys.push(String(finding.classKey))
   keys.push(reviewMemory.classKey(finding))
   keys.push(circuitBreaker.findingIdentity(finding))
-  if (finding.file && finding.title) keys.push(`${finding.file}::${finding.title}`)
+  if (finding.file && label) keys.push(`${finding.file}::${label}`)
   return keys.filter(Boolean)
 }
 
@@ -211,6 +212,17 @@ function normalizeFixResult(result, fixContext) {
   })
 }
 
+function normalizeReviewerFindings(findings) {
+  return (findings || []).map((finding) => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding
+    if ((finding.title === undefined || finding.title === null || finding.title === '') &&
+        typeof finding.summary === 'string' && finding.summary) {
+      return Object.assign({}, finding, { title: finding.summary })
+    }
+    return finding
+  })
+}
+
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
@@ -223,6 +235,7 @@ function ensureReviewerShape(out, opts = {}) {
     out = { findings: out, confidence: conf, legacyArray: true }
   }
   if (!out || !Array.isArray(out.findings)) return null
+  out = Object.assign({}, out, { findings: normalizeReviewerFindings(out.findings) })
   if (out.confidence !== 'high' && out.confidence !== 'low') {
     out = Object.assign({}, out, { confidence: 'high' })
   }

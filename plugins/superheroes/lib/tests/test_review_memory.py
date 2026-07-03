@@ -39,6 +39,11 @@ def test_carried_findings_do_not_recur():
     assert rm.recurrent_classes(records) == []
 
 
+def test_class_key_falls_back_to_summary_when_title_missing():
+    rm = load_memory()
+    assert rm.class_key({"dimension": "Security", "taxonomy": "leak", "summary": "Secret leaked"}) == "Security::leak::secret leaked"
+
+
 # --- persist-skeleton / update-round / hash: the round record's DURABLE form is the bounded
 # skeleton (D3) — evidence bodies never touch round-records.json, and the inline transport
 # self-verifies via --record-hash (a courier that mangles the JSON cannot recompute its sha256).

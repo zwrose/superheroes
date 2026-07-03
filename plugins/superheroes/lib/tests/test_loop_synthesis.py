@@ -70,3 +70,17 @@ def test_invalid_severity_keeps_original():
     v = {"id": CB.finding_identity(f), "action": "keep", "severity": "Bogus"}
     out = LS.consume([f], [v])
     assert out["findings"][0]["severity"] == "Important"
+
+
+def test_missing_title_matches_summary_identity_and_grafts_severity():
+    f = {"file": "a.py", "line": 1, "summary": "Nested verify result string"}
+    v = {"id": "a.py::nested verify result string", "action": "keep", "severity": "Critical"}
+    out = LS.consume([f], [v])
+    assert out["findings"][0]["severity"] == "Critical"
+
+
+def test_kept_finding_without_any_severity_defaults_to_important():
+    f = {"file": "a.py", "line": 1, "summary": "Severity missing everywhere"}
+    v = {"id": "a.py::severity missing everywhere", "action": "keep", "reason": "still applies"}
+    out = LS.consume([f], [v])
+    assert out["findings"][0]["severity"] == "Important"

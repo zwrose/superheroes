@@ -48,7 +48,7 @@ function base(dir) {
 
 function verifyPath(dir, round) { return path.join(dir, `verify-result-r${round}.json`) }
 
-async function runVerifyCase({ writeCurrentResult = false, staleResult = false, directPass = false } = {}) {
+async function runVerifyCase({ writeCurrentResult = false, writeNestedCurrentResult = false, staleResult = false, directPass = false } = {}) {
   const dir = freshDir()
   if (staleResult) {
     fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: 'pass', code: 0, tail: 'stale' }))
@@ -60,6 +60,9 @@ async function runVerifyCase({ writeCurrentResult = false, staleResult = false, 
       verifyPrompt = _prompt
       if (writeCurrentResult) {
         fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: 'pass', code: 0, tail: '' }))
+      }
+      if (writeNestedCurrentResult) {
+        fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: JSON.stringify({ result: 'pass', code: 0, tail: '' }) }))
       }
       if (directPass) return { result: 'pass', code: 0, tail: '' }
       return 'The process is running and stdout is redirected to the output file. The command is still executing...'
@@ -80,6 +83,12 @@ async function main() {
     'verify courier prompt names the explicit long Bash timeout')
   assert.ok(res.verifyPrompt.includes('Do NOT background') && res.verifyPrompt.includes('Do NOT answer until'),
     'verify courier prompt forbids backgrounding or early prose answers')
+  assert.ok(res.verifyPrompt.includes('structured output fields must be the JSON object'),
+    'verify courier prompt forbids nesting verify_gate JSON as a string result')
+
+  res = await runVerifyCase({ writeNestedCurrentResult: true })
+  assert.strictEqual(res.verdict.terminal, 'clean',
+    'file-authoritative verify read-back must parse nested {"result":"{\\"result\\":...}"} payloads')
 
   res = await runVerifyCase({ directPass: true })
   assert.strictEqual(res.verdict.terminal, 'halted',
@@ -116,6 +125,46 @@ async function main() {
       'round 2 must not certify from round 1 verify-result after a fix changes the tree')
     assert.match(verdict.reason || '', /verify command failed/)
     assert.ok(verifyCalls >= 2, 'the cross-round case must reach the second verify attempt')
+  }
+
+  {
+    const dir = freshDir()
+    let verifyCalls = 0
+    const prompts = []
+    global.reviewerAgent = async (_reviewer, _context, _rubric, runDir, round, opts) => cleanResult(runDir, round, opts)
+    global.agent = async (_prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        prompts.push(_prompt)
+        if (verifyCalls === 2) fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: 'pass', code: 0, tail: '' }))
+        return 'The command was run, but no structured JSON is available.'
+      }
+      return null
+    }
+    const verdict = await reviewPanel(base(dir))
+    assert.strictEqual(verdict.terminal, 'clean',
+      'one bounded verify courier retry may certify from the same round-stamped read-back file')
+    assert.strictEqual(verifyCalls, 2, 'unusable direct answer plus missing read-back gets one retry')
+    assert.ok(prompts.every((p) => p.includes('verify-result-r1.json')),
+      'verify retry keeps the same round-stamped --out target')
+  }
+
+  {
+    const dir = freshDir()
+    let verifyCalls = 0
+    global.reviewerAgent = async (_reviewer, _context, _rubric, runDir, round, opts) => cleanResult(runDir, round, opts)
+    global.agent = async (_prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        return 'The command was run, but no structured JSON is available.'
+      }
+      return null
+    }
+    const verdict = await reviewPanel(base(dir))
+    assert.strictEqual(verdict.terminal, 'halted',
+      'a second unusable verify courier answer with no read-back file still fails closed')
+    assert.match(verdict.reason || '', /verify command failed/)
+    assert.strictEqual(verifyCalls, 2, 'verify read-back recovery is bounded to one retry')
   }
 
   console.log('ok: verify courier read-back is round-scoped and file-authoritative')
