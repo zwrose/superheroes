@@ -3,6 +3,7 @@
 // path and reaches build (FR-9).
 // #115 Task 12: phaseStep is now the JS twin (in-process). #118: the per-phase tail rides ONE
 // 'save phase progress' courier — journal_entry/checkpoint_entry never ride separate leaves.
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const sr = require('../showrunner.js')
 

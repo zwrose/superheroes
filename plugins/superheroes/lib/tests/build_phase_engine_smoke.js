@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_engine_smoke.js
 // #38 Task 11: build_phase.js's worker (buildOneTask), fixer (reviewLoop), and final-review
 // reviewer/final-fixer route to engine_dispatch.dispatchExternal when the implementation/reviewer

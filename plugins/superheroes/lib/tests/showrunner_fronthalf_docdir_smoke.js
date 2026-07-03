@@ -7,6 +7,7 @@
 // wrote plan.md into the project store while the spine read (and hashed, and appended the
 // NOTIFY ledger under) the hard-wired in-repo path.
 'use strict'
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
@@ -136,7 +137,12 @@ async function partStartupPlants() {
         doc_dir: '/abs/proj-store/docs/wi-s' }) }]
     }
     if (label === 'exec') {
-      if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: '{}' }]
+      if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+        checkpoint: null,
+        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+        generation: 1,
+        root: globalThis.__SR_ROOT,
+      }) }]
       if (prompt.includes('definition_doc.py read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
@@ -158,7 +164,12 @@ async function partStartupPlants() {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
     if (label === 'exec') {
-      if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: '{}' }]
+      if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+        checkpoint: null,
+        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+        generation: 1,
+        root: globalThis.__SR_ROOT,
+      }) }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     return null

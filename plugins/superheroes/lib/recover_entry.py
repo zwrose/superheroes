@@ -76,15 +76,24 @@ def _phase_cursor_guard(cp, phases=None):
     return None
 
 
+def _checkout_root(cwd, root_arg):
+    if root_arg:
+        return os.path.realpath(root_arg)
+    return os.path.realpath(cwd)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--work-item", required=True)
+    ap.add_argument("--root", default=None,
+                    help="checkout root the store is keyed to; default cwd at invoke time")
     ap.add_argument("--snapshot", action="store_true",
                     help="Return {checkpoint, world, generation, early_park?} without calling reconcile; "
                          "the JS twin calls recover.reconcile() in-process (#115 Task 12).")
     args = ap.parse_args()
     cwd = os.getcwd()
-    store = control_plane.ensure_store(cwd)
+    checkout_root = _checkout_root(cwd, args.root)
+    store = control_plane.ensure_store(checkout_root)
     if store is None:
         return _park("control-plane store unusable")
     # Step-0 guard A: the enforcer PreToolUse hook must be armed before any write.
@@ -101,11 +110,12 @@ def main():
     ok, generation, reason = ref_lock.acquire(store, args.work_item)
     if not ok:
         return _park("work-item lease %s — another run is in progress (UFR-3)" % reason)
-    paths = control_plane.paths(cwd, args.work_item)
+    paths = control_plane.paths(checkout_root, args.work_item)
     cp = ckpt_lib.read(paths["checkpoint"])
     cursor_gate = _phase_cursor_guard(cp)
     if cursor_gate:
         cursor_gate["generation"] = generation
+        cursor_gate["root"] = checkout_root
         print(json.dumps(cursor_gate))
         return
     # Back-half (a branch exists): recompute the content-hash so reconcile can detect a stale spec;
@@ -115,7 +125,7 @@ def main():
     chash = None
     if cp and cp.get("branch"):
         try:
-            chash = docload.content_hash_for(args.work_item, cwd)
+            chash = docload.content_hash_for(args.work_item, checkout_root)
         except (OSError, ValueError):
             chash = None
     world = {"store_ok": True, "current_content_hash": chash,
@@ -124,10 +134,12 @@ def main():
         # #115 Task 12: return the raw snapshot so the JS spine can call recover.reconcile() in-process
         # via the JS twin. The cursor_gate check (phase-list guard) already ran above and returned early
         # if it triggered, so reaching here means the checkpoint is cursor-safe.
-        print(json.dumps({"checkpoint": cp, "world": world, "generation": generation}))
+        print(json.dumps({"checkpoint": cp, "world": world, "generation": generation,
+                          "root": checkout_root}))
         return
     out = recover.reconcile(cp, world)
     out["generation"] = generation     # UFR-10: thread the entry generation to build_entry
+    out["root"] = checkout_root
     print(json.dumps(out))
 
 

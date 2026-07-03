@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_courier_retry_smoke.js
 // #115 courier-drop retry: the cheap haiku exec "courier" occasionally returns an EMPTY/garbled stdout
 // for a command that ran fine. execJson/runCourierJson retry ONCE on empty/unparseable stdout before

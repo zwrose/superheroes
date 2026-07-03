@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_final_review_smoke.js
 // #115: runFinalReview drives the in-memory panel (single-reviewer code leg). The reviewer RETURNS a
 // findings[] array (no findings-generalist.json); merge/tally run in-process via the parity-locked

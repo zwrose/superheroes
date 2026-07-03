@@ -1,4 +1,5 @@
 // plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 
 global.agent = async (prompt) => {

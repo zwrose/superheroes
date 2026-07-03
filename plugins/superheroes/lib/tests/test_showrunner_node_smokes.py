@@ -43,6 +43,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_front_half_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_label_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_workhorse_park_release_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
     # BUG B: persistPhase resolves the SAVE result from a two-JSON-line side-effect && save chain.
