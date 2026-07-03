@@ -15,12 +15,13 @@ require('./_smoke_checkout_root.js')
 // (the twin called once at entry, twice on a dirty->reset re-reconcile). build_phase calls reconcile
 // THROUGH the module (require('./build_progress.js').reconcile via _reconcile), so the spy takes effect.
 const assert = require('assert')
+const { routeMatches } = require('./_task_leaf_route.js')
 global.log = () => {}
 // reviewPanel uses parallel() — stub it to run all functions sequentially.
 global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
 function makeAgent(routes) {
-  function routeMatches(label, needle) {
-    if (label === needle) return true
+  function routeMatchesLocal(label, needle) {
+    if (routeMatches(label, needle)) return true
     if (needle === 'verify:r' && label.startsWith('verify:r')) return true
     if (String(needle).endsWith(':') && label.startsWith(needle)) return true
     return false
@@ -48,7 +49,7 @@ function makeAgent(routes) {
     // Exact/prefix label match first (labels are unique; `needle:` prefixes route per-round labels),
     // then a prompt-substring fallback. A function resp receives the prompt (capture).
     for (const [needle, resp] of routes) {
-      if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
+      if (routeMatchesLocal(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
     }
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     if (opts && opts.courier) { for (const [needle, resp] of routes) if (needle === 'exec') return typeof resp === 'function' ? resp(prompt) : resp }

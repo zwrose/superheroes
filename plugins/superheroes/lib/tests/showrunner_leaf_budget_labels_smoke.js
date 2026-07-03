@@ -8,7 +8,7 @@ const exercised = [
   'author-plan', 'author-tasks',
   'architecture-reviewer', 'code-reviewer', 'security-reviewer', 'test-reviewer', 'premortem-reviewer',
   'save round state', 'save phase progress',
-  'gather build state', 'implement-task', 'record task built', 'task-reviewer:r1', 'record task reviewed',
+  'gather build state', 'implement task 1 of 1', 'record task built', 'review task 1:r1', 'record task reviewed',
   'read verify + minors', 'stamp build coverage', 'run verify',
   'open draft PR', 'mark PR ready',
   'read test context', 'plan-tests', 'prepare test run',
@@ -39,9 +39,10 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
       return jsonOut({ ok: true, path: '/tmp/doc.md', docType: 'plan', gate: 'pending', exists: true })
     }
     if (label.startsWith('author-')) return { status: 'ok', notify: [] }
-    if (label === 'revise-doc' || label === 'fix-task' || label === 'fix-branch' || label === 'fix-code' || label === 'fix-ci' || label === 'fix-app-bug') return { ok: true, fixes: [], deferred: [] }
-    if (label === 'implement-task') return { ok: true, signal: 'ok', evidence: { testPassed: true, testFailed: false } }
-    if (label.startsWith('task-reviewer:')) return { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }
+    if (label === 'revise-doc' || label === 'fix-branch' || label === 'fix-code' || label === 'fix-ci' || label === 'fix-app-bug') return { ok: true, fixes: [], deferred: [] }
+    if (/^fix task /.test(label)) return { ok: true, fixes: [], deferred: [] }
+    if (/^implement task .+ of \d+$/.test(label)) return { ok: true, signal: 'ok', evidence: { testPassed: true, testFailed: false } }
+    if (/^review task .+:r\d+$/.test(label)) return { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }
     if (label.startsWith('branch-reviewer:')) return { findings: [] }
     if (label === 'architecture-reviewer') {
       return { findings: [{ file: 'docs/x.md', line: 1, title: 'gap', severity: 'Critical', evidence: 'e' }] }

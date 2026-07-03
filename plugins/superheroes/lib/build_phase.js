@@ -24,6 +24,19 @@ const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
+
+// #150: task-scoped leaf labels for the /workflows progress view (spaces, not kebab-case).
+function implementTaskLabel(task, taskCount) {
+  return `implement task ${task.id} of ${taskCount}`
+}
+
+function fixTaskLabel(task) {
+  return `fix task ${task.id}`
+}
+
+function reviewTaskLabel(task, round) {
+  return `review task ${task.id}:r${round}`
+}
 function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
 function ok() { return { confidence: 'high', assumptions: [] } }
 
@@ -260,7 +273,7 @@ async function buildPhase(workItem, generation) {
       }
       if (!isBuilt) {
         // Build the task (fence, dispatch worker, commit, journal, then review).
-        const r = await buildOneTask(workItem, generation, task, branch, validIds, wt)
+        const r = await buildOneTask(workItem, generation, task, branch, validIds, wt, tasks.length)
         if (r.parked) return park(r.reason)
         // On confirmed success (buildOneTask only returns !parked when journal+review both passed):
         builtTaskIds.add(task.id)
@@ -425,7 +438,7 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
-async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
+async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   let attempt = 1
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
@@ -447,7 +460,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
         + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
         + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
-        { label: 'implement-task', schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
@@ -512,7 +525,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
       + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
       + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
-      { label: `task-reviewer:r${round}`,
+      { label: reviewTaskLabel(task, round),
         schema: {
           type: 'object',
           required: ['verdicts'],
@@ -574,7 +587,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
         + `"Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
-        { label: 'fix-task', model: fixerModel }),
+        { label: fixTaskLabel(task), model: fixerModel }),
     })
     history.push({ round, findings: review.findings || [] })
     round += 1
@@ -680,7 +693,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
   return { terminal: verdict && verdict.terminal }
 }
 
-module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok }
+// Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
+module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

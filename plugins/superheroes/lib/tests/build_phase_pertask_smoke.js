@@ -5,6 +5,7 @@ require('./_smoke_checkout_root.js')
 // exec array shape [{index,ok,stdout}] with stdout a JSON STRING. The stub inspects the exec PROMPT
 // (which lists "N. <command>") to choose the stdout. model_tier is now an in-process twin (no leaf).
 const assert = require('assert')
+const { routeMatches } = require('./_task_leaf_route.js')
 global.log = () => {}
 function makeAgent(routes) {
   return async (prompt, opts) => {
@@ -22,7 +23,7 @@ function makeAgent(routes) {
     // Exact-label first (labels are unique), so a short needle never shadows a longer script name
     // via substring; then a prompt-substring fallback. A function resp receives the prompt (capture).
     for (const [needle, resp] of routes) {
-      if (label === needle || (needle.endsWith(':r') && label.startsWith(needle))) {
+      if (routeMatches(label, needle)) {
         return typeof resp === 'function' ? resp(prompt) : resp
       }
     }
@@ -60,7 +61,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
     ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
     ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
   ])
-  let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1,2', '/tmp/wt')
+  let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1,2', '/tmp/wt', 2)
   assert.strictEqual(r.parked, false, 'a clean task should not park')
   assert.ok(gatherPrompt.includes("--valid-ids '1,2'"),
     'the write-time trailer check must score against the FULL valid-id set, not just this task')
@@ -83,7 +84,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
       ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
       ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
     ])
-    r = await bp.buildOneTask('wi', 5, TASK, 'live-showrunner-102', '1,2', '/tmp/wt')
+    r = await bp.buildOneTask('wi', 5, TASK, 'live-showrunner-102', '1,2', '/tmp/wt', 2)
     assert.strictEqual(r.parked, false, 'a clean task on a configured base should not park')
     assert.ok(basePrompt.includes("--base 'live-showrunner-102'"),
       'the per-task UFR-7 gather must thread the configured base (FR-8) so it does not park off origin/main')
@@ -100,7 +101,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
     }],
     ['implement-task', { ok: true, signal: 'ok', evidence: {} }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, true, 'a failed trailer-check leaf must park (fail closed, UFR-7)')
   assert.ok(/boom/i.test(r.reason || ''), 'honest UFR-7 fail-closed reason')
 
@@ -110,7 +111,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
     execRoute(),
     ['implement-task', { ok: false, signal: 'plan_wrong' }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, true, 'worker plan_wrong should park (UFR-3)')
   assert.ok(/plan\/task is wrong/i.test(r.reason || ''), 'park reason is the twin\'s real plan_wrong reason')
 
@@ -132,7 +133,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   global.agent = makeAgent([
     ['exec', () => [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, reason: 'lease lost' }) }]],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, true, 'fence-lost should park before any write (UFR-10)')
 
   // (4b) Fence leaf FAILS to run (ok:false at the exec layer) -> fence reads LOST -> park (UFR-10).
@@ -140,7 +141,7 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   global.agent = makeAgent([
     ['exec', () => [{ index: 0, ok: false, stdout: 'leaf crashed' }]],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, true, 'a failed fence leaf must read as lost (fail closed, UFR-10)')
 
   // (5) Converging fix loop: round 1 returns a blocking finding -> the real task_review TWIN says
