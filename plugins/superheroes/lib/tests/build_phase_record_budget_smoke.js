@@ -1,6 +1,7 @@
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const bp = require('../build_phase.js')
+const { routeMatches } = require('./_task_leaf_route.js')
 
 global.log = () => {}
 global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
@@ -10,7 +11,7 @@ function makeAgent(routes, labels) {
     const label = (opts && opts.label) || ''
     labels.push(label)
     if (label.startsWith('branch-reviewer:')) return { findings: [] }
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    for (const [needle, resp] of routes) if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
     return ''
   }
@@ -53,9 +54,9 @@ function makeAgent(routes, labels) {
   assert.strictEqual(r.confidence, 'high')
   assert.deepStrictEqual(
     labels.filter((label) =>
-      ['gather build state', 'implement-task', 'record task built', 'task-reviewer:r1', 'record task reviewed'].includes(label)
+      ['gather build state', 'implement task 1 of 1', 'record task built', 'review task 1:r1', 'record task reviewed'].includes(label)
     ),
-    ['gather build state', 'implement-task', 'record task built', 'task-reviewer:r1', 'record task reviewed'],
+    ['gather build state', 'implement task 1 of 1', 'record task built', 'review task 1:r1', 'record task reviewed'],
   )
   assert.ok(!labels.includes('worker'))
   assert.ok(!labels.includes('review'))
