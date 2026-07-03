@@ -5265,13 +5265,48 @@ function _findingKeys(finding) {
   return keys.filter(Boolean)
 }
 
+function _fixIdentities(entry) {
+  const out = []
+  if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+    for (const key of ['id', 'key', 'identity']) {
+      if (entry[key]) out.push(String(entry[key]))
+    }
+    return out
+  }
+  if (entry != null && entry !== '') out.push(String(entry))
+  return out
+}
+
+function _changedFiles(result) {
+  const files = new Set()
+  for (const item of result.changedSubjects || []) {
+    if (typeof item === 'string' && item && !_policySubject(item)) files.add(item)
+  }
+  for (const entry of [...(result.fixes || []), ...(result.fixed || [])]) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    for (const f of entry.files || []) {
+      if (typeof f === 'string' && f) files.add(f)
+    }
+  }
+  return files
+}
+
 function _policyChangedSubjects(result, fixContext) {
   const subjects = new Set()
-  const fixed = new Set([...(result.fixes || []), ...(result.fixed || [])].map((x) => String(x)))
+  const fixed = new Set()
+  for (const entry of [...(result.fixes || []), ...(result.fixed || [])]) {
+    for (const id of _fixIdentities(entry)) fixed.add(id)
+  }
+  const changedFiles = _changedFiles(result)
   for (const finding of (fixContext && fixContext.priorFindings) || []) {
-    if (!fixed.size || !_findingKeys(finding).some((key) => fixed.has(key))) continue
-    const subject = _policySubject(finding.dimension)
-    if (subject) subjects.add(subject)
+    if (fixed.size && _findingKeys(finding).some((key) => fixed.has(key))) {
+      const subject = _policySubject(finding.dimension)
+      if (subject) subjects.add(subject)
+    }
+    if (changedFiles.size && finding.file && changedFiles.has(finding.file)) {
+      const subject = _policySubject(finding.dimension)
+      if (subject) subjects.add(subject)
+    }
   }
   for (const item of result.changedSubjects || []) {
     if (typeof item === 'string') {
@@ -5311,7 +5346,7 @@ const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
 const FIX_RESULT_INSTRUCTION =
-  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
+  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Prefer changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode); file paths are accepted but the scheduler derives subjects from fixes+files+priorFindings. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
@@ -5466,7 +5501,7 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
   }))
 }
 
-module.exports = { REVIEW_CODE_REVIEWERS }
+module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
 
 // The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
 const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
