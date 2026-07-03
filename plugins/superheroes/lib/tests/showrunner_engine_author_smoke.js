@@ -97,7 +97,7 @@ const CONTENT_READY_SIGNAL = JSON.stringify(
 // Agent stub for producePhase: emit-signals sequence + external dispatch stubs + native author trap.
 function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [],
   events = [], gitSnapshots = null, strayPath = null, untrackedStray = false, preExistingDirty = null,
-  revertPrompts = [], resetPrompts = [], writeMarkerPrompts = [],
+  revertPrompts = [], resetPrompts = [], writeMarkerPrompts = [], stagedExternalPrompts = null,
   revertFail = false, postRevertStray = false,
   docsSnapshots = null, docsNewer = null, docsStrayPath = null, docsModifiedPath = null }) {
   const seq = usableSeq.slice()
@@ -189,6 +189,10 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         events.push('write-marker')
         writeMarkerPrompts.push(prompt)
         return [{ index: 0, ok: true, stdout: JSON.stringify({ wrote: true }) }]
+      }
+      if (stagedExternalPrompts && prompt.includes('base64 -d') && /\.prompt/.test(prompt)) {
+        const m = prompt.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '[^']+\.prompt'/)
+        if (m) stagedExternalPrompts.push(Buffer.from(m[1], 'base64').toString('utf8'))
       }
       if (prompt.includes('engine_adapter.py build-argv')) {
         externalRuns.push(prompt)
@@ -371,6 +375,34 @@ async function produceSmokes() {
     assert.strictEqual(nativeCalls.length, 1, '(7c) native author ran after placeholder external draft')
     assert.ok(events.indexOf('reset') < events.indexOf('native'), '(7c) reset before native after placeholder')
     assert.ok(!events.includes('write-marker'), '(7c) write-marker NOT stamped when placeholder')
+
+    // (10) repair loop re-dispatches external author on retry attempts with the gap hint.
+    externalRuns = []; nativeCalls = []; events = []; writeMarkerPrompts = []
+    const stagedPrompts10 = []
+    global.agent = produceAgent({
+      usableSeq: [
+        false,
+        MISSING_SECTION_SIGNAL, MISSING_SECTION_SIGNAL,
+        MISSING_SECTION_SIGNAL, MISSING_SECTION_SIGNAL,
+        CONTENT_READY_SIGNAL, USABLE_SIGNAL, USABLE_SIGNAL,
+      ],
+      externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, writeMarkerPrompts,
+      stagedExternalPrompts: stagedPrompts10,
+    })
+    r = await sr.producePhase('plan', 'wi-ext-retry')
+    assert.strictEqual(r.confidence, 'high', '(10) external repair loop converges -> high')
+    assert.strictEqual(externalRuns.length, 3, '(10) external engine re-dispatched on every repair attempt')
+    assert.strictEqual(nativeCalls.length, 2, '(10) native fall-open only on failed external drafts')
+    assert.strictEqual(stagedPrompts10.length, 3, '(10) one staged external prompt per dispatch')
+    assert.ok(!stagedPrompts10[0].includes('IMPORTANT (retry)'),
+      '(10) first external dispatch has no retry gap hint')
+    assert.ok(stagedPrompts10[1].includes('IMPORTANT (retry)'),
+      '(10) second external dispatch carries the retry gap hint')
+    assert.ok(stagedPrompts10[1].includes('## Foo'),
+      '(10) retry gap hint names the missing section')
+    assert.ok(stagedPrompts10[2].includes('IMPORTANT (retry)'),
+      '(10) third external dispatch still carries the retry gap hint')
+    assert.ok(events.includes('write-marker'), '(10) write-marker stamped after external converges')
 
     // (8) FAILED before-snapshot (courier flake) + pre-existing dirty checkout: revert NOTHING
     // (an empty "before" would make the user's own edits look stray), discard the draft, native fallback.
