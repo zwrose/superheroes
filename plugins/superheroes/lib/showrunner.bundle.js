@@ -5800,6 +5800,88 @@ function _pathIsAuthorPlanArtifact(path, workItem) {
   return _authorPlanArtifactPaths(workItem).includes(_normalizeComparePath(path))
 }
 
+// Top-level checkout-relative docs tree for confinement scan (e.g. 'docs'). Skipped when the
+// work-item doc dir resolves outside the checkout (out-of-repo storage).
+function _docsScanRoot(workItem) {
+  const dir = docDirFor(workItem)
+  const root = checkoutRoot()
+  if (String(dir).startsWith('/')) {
+    if (!root) return null
+    const r = String(root).replace(/\/$/, '')
+    if (!String(dir).startsWith(r + '/')) return null
+  } else if (!root) {
+    return null
+  }
+  const rel = _normalizeComparePath(dir)
+  if (!rel) return null
+  const seg = rel.split('/')[0]
+  return seg || null
+}
+
+function _parseFileList(text) {
+  const set = new Set()
+  if (!text) return set
+  for (const line of String(text).split('\n')) {
+    const p = line.trim()
+    if (p) set.add(_normalizeComparePath(p))
+  }
+  return set
+}
+
+async function _snapshotDocsFileList(docsRoot) {
+  const results = await exec([selfContained(`find ${shq(docsRoot)} -type f | sort`)], 'author-plan docs snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+async function _snapshotDocsNewer(docsRoot, stampPath) {
+  const results = await exec(
+    [selfContained(`find ${shq(docsRoot)} -type f -newer ${shq(stampPath)} | sort`)],
+    'author-plan docs newer')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _docsStampPath(workItem) {
+  return `/tmp/showrunner-docs-${safeRunKey(workItem)}.stamp`
+}
+
+// Gitignored docs-tree confinement: detect new/modified files under docsRoot that porcelain misses.
+async function _scanAndRevertDocsStrays(workItem, docsRoot, stampPath, beforeText) {
+  if (beforeText == null) return { strayPaths: [], unconfined: true }
+  const afterText = await _snapshotDocsFileList(docsRoot)
+  if (afterText == null) return { strayPaths: [], unconfined: true }
+  const newerText = await _snapshotDocsNewer(docsRoot, stampPath)
+  if (newerText == null) return { strayPaths: [], unconfined: true }
+  const before = _parseFileList(beforeText)
+  const after = _parseFileList(afterText)
+  const newer = _parseFileList(newerText)
+  const newStrays = []
+  const modifiedStrays = []
+  for (const p of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (!before.has(p)) newStrays.push(p)
+  }
+  for (const p of newer) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) modifiedStrays.push(p)
+  }
+  if (modifiedStrays.length > 0) {
+    return { strayPaths: [], unconfined: true, modifiedPaths: modifiedStrays }
+  }
+  if (newStrays.length === 0) return { strayPaths: [] }
+  const revertCmds = newStrays.map((p) => selfContained(`rm -f -- ${shq(p)}`))
+  const results = await exec(revertCmds, 'author-plan revert docs strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postText = await _snapshotDocsFileList(docsRoot)
+  if (postText == null) return { strayPaths: [], unconfined: true }
+  const post = _parseFileList(postText)
+  for (const p of newStrays) {
+    if (!before.has(p) && post.has(p)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: newStrays }
+}
+
 // After an external author-plan dispatch, revert checkout paths that newly dirtied outside the
 // work-item doc dir during the dispatch window. Pre-existing dirty paths are never touched.
 // A null snapshot (courier flake) on EITHER side makes strays indistinguishable from the user's
@@ -5919,14 +6001,31 @@ async function producePhase(phase, workItem) {
       const extPrompt = _authorPrompt(gapSignal, false)
       const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
       const beforeSnap = await _snapshotGitPorcelain()
+      const docsRoot = _docsScanRoot(workItem)
+      let beforeDocs = null
+      let docsStamp = null
+      if (docsRoot) {
+        docsStamp = _docsStampPath(workItem)
+        const stampRes = await exec([`touch ${shq(docsStamp)}`], 'author-plan docs stamp')
+        if (!stampRes || !stampRes[0] || !stampRes[0].ok) beforeDocs = null
+        else beforeDocs = await _snapshotDocsFileList(docsRoot)
+      }
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
       })
       const afterSnap = await _snapshotGitPorcelain()
-      const { strayPaths, unconfined } = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
+      const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
+      const docsResult = (docsRoot && docsStamp)
+        ? await _scanAndRevertDocsStrays(workItem, docsRoot, docsStamp, beforeDocs)
+        : { strayPaths: [], unconfined: false }
+      const unconfined = porcelainResult.unconfined || docsResult.unconfined
+      const strayPaths = [...porcelainResult.strayPaths, ...docsResult.strayPaths]
       if (strayPaths.length || unconfined) {
         if (typeof globalThis.log === 'function') {
+          if (docsResult.modifiedPaths && docsResult.modifiedPaths.length) {
+            globalThis.log('author-plan: modified ignored docs (unconfined): ' + docsResult.modifiedPaths.join(', '))
+          }
           globalThis.log(unconfined
             ? 'author-plan: confinement snapshot unavailable — external draft discarded (nothing reverted)'
             : 'author-plan: stray checkout edits reverted: ' + strayPaths.join(', '))

@@ -86,6 +86,10 @@ async function dispatchSmokes() {
 // ---------------------------------------------------------------------------
 const USABLE_SIGNAL = JSON.stringify({ usable: true, recorded: 'abc123', expected: 'abc123' })
 const NOT_USABLE_SIGNAL = JSON.stringify({ usable: false, recorded: '', expected: '' })
+const MISSING_SECTION_SIGNAL = JSON.stringify(
+  { usable: false, recorded: '', expected: 'abc123', missing_sections: ['## Foo'], placeholder: false })
+const PLACEHOLDER_SIGNAL = JSON.stringify(
+  { usable: false, recorded: '', expected: 'abc123', missing_sections: [], placeholder: true })
 // Content complete but marker not yet stamped (external path pre-stamp check).
 const CONTENT_READY_SIGNAL = JSON.stringify(
   { usable: false, recorded: '', expected: 'abc123', missing_sections: [], placeholder: false })
@@ -93,10 +97,15 @@ const CONTENT_READY_SIGNAL = JSON.stringify(
 // Agent stub for producePhase: emit-signals sequence + external dispatch stubs + native author trap.
 function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [],
   events = [], gitSnapshots = null, strayPath = null, untrackedStray = false, preExistingDirty = null,
-  revertPrompts = [], resetPrompts = [], writeMarkerPrompts = [] }) {
+  revertPrompts = [], resetPrompts = [], writeMarkerPrompts = [],
+  revertFail = false, postRevertStray = false,
+  docsSnapshots = null, docsNewer = null, docsStrayPath = null, docsModifiedPath = null }) {
   const seq = usableSeq.slice()
   let gitSnapIdx = 0
   const gitSeq = gitSnapshots || ['', '']
+  let docsSnapIdx = 0
+  const docsSeq = docsSnapshots
+  const docsNewerSeq = docsNewer
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (opts && opts.courier) {
@@ -111,6 +120,40 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         if (m) { try { notifyLedger.push(...JSON.parse(m[1])) } catch (_) {} }
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
+      if (execLabel === 'author-plan docs stamp' || (prompt.startsWith('touch ') && prompt.includes('showrunner-docs-'))) {
+        events.push('docs-stamp')
+        return [{ index: 0, ok: true, stdout: '' }]
+      }
+      if (execLabel === 'author-plan docs snapshot' || (prompt.includes('find ') && prompt.includes('-type f | sort'))) {
+        events.push('docs-snapshot')
+        if (docsSeq) {
+          const raw = docsSeq[docsSnapIdx++]
+          if (raw === null) return [{ index: 0, ok: false, stdout: '' }]
+          return [{ index: 0, ok: true, stdout: raw ?? '' }]
+        }
+        if (docsStrayPath && docsSnapIdx === 1) {
+          docsSnapIdx++
+          return [{ index: 0, ok: true, stdout: docsStrayPath + '\n' }]
+        }
+        docsSnapIdx++
+        return [{ index: 0, ok: true, stdout: '' }]
+      }
+      if (execLabel === 'author-plan docs newer' || (prompt.includes('find ') && prompt.includes('-newer'))) {
+        events.push('docs-newer')
+        if (docsNewerSeq) {
+          const raw = docsNewerSeq.shift()
+          if (raw === null) return [{ index: 0, ok: false, stdout: '' }]
+          return [{ index: 0, ok: true, stdout: raw ?? '' }]
+        }
+        if (docsModifiedPath) return [{ index: 0, ok: true, stdout: docsModifiedPath + '\n' }]
+        return [{ index: 0, ok: true, stdout: '' }]
+      }
+      if (execLabel === 'author-plan revert docs strays') {
+        events.push('revert-docs-strays')
+        revertPrompts.push(prompt)
+        const n = (prompt.match(/^\d+\./gm) || ['1.']).length
+        return Array.from({ length: n }, (_, i) => ({ index: i, ok: true, stdout: '' }))
+      }
       if (execLabel === 'author-plan git snapshot' || prompt.includes('git status --porcelain')) {
         events.push('git-snapshot')
         if (gitSnapshots) {
@@ -124,12 +167,17 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
           const prefix = untrackedStray ? '?? ' : ' M '
           return [{ index: 0, ok: true, stdout: `${prefix}${strayPath}` }]
         }
+        if (snapIdx === 2 && postRevertStray && strayPath) {
+          const prefix = untrackedStray ? '?? ' : ' M '
+          return [{ index: 0, ok: true, stdout: `${prefix}${strayPath}` }]
+        }
         return [{ index: 0, ok: true, stdout: '' }]
       }
       if (execLabel === 'author-plan revert strays') {
         events.push('revert-strays')
         revertPrompts.push(prompt)
         const n = (prompt.match(/^\d+\./gm) || ['1.']).length
+        if (revertFail) return [{ index: 0, ok: false, stdout: '' }]
         return Array.from({ length: n }, (_, i) => ({ index: i, ok: true, stdout: '' }))
       }
       if (execLabel === 'reset author-plan draft') {
@@ -237,6 +285,46 @@ async function produceSmokes() {
     assert.ok(revertPrompts5b.some((p) => p.includes("rm -rf -- 'scratch.txt'")),
       '(5b) untracked stray removed via rm -rf --: ' + revertPrompts5b.join(' | '))
 
+    // (5c) new file under gitignored docs/ tree -> deleted + native fallback.
+    const savedRoot5c = globalThis.__SR_ROOT
+    try {
+      globalThis.__SR_ROOT = '/repo'
+      externalRuns = []; nativeCalls = []; events = []; const revertPrompts5c = []; const resetPrompts5c = []
+      const docsStray = 'docs/superheroes/wi-ignored-docs/stray-note.md'
+      global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns,
+        nativeAuthorCalls: nativeCalls, events, docsSnapshots: ['', docsStray + '\n', ''],
+        docsNewer: [docsStray + '\n'], revertPrompts: revertPrompts5c, resetPrompts: resetPrompts5c })
+      r = await sr.producePhase('plan', 'wi-ignored-docs')
+      assert.strictEqual(r.confidence, 'high', '(5c) ignored-docs stray triggers native fallback + usable -> high')
+      assert.strictEqual(nativeCalls.length, 1, '(5c) native author ran after ignored-docs stray revert')
+      assert.ok(events.includes('revert-docs-strays'), '(5c) ignored-docs stray was deleted')
+      assert.ok(revertPrompts5c.some((p) => p.includes("rm -f -- '" + docsStray + "'")),
+        '(5c) ignored-docs stray removed via rm -f --: ' + revertPrompts5c.join(' | '))
+      assert.ok(events.indexOf('reset') < events.indexOf('native'), '(5c) reset before native after ignored-docs stray')
+      assert.ok(!events.includes('write-marker'), '(5c) write-marker NOT stamped when docs confinement fails')
+    } finally {
+      globalThis.__SR_ROOT = savedRoot5c
+    }
+
+    // (5d) modified pre-existing gitignored doc -> unconfined, nothing deleted, native fallback.
+    const savedRoot5d = globalThis.__SR_ROOT
+    try {
+      globalThis.__SR_ROOT = '/repo'
+      externalRuns = []; nativeCalls = []; events = []
+      const modPath = 'docs/superheroes/wi-mod-ignored/spec.md'
+      global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns,
+        nativeAuthorCalls: nativeCalls, events,
+        docsSnapshots: [modPath + '\n', modPath + '\n'], docsModifiedPath: modPath })
+      r = await sr.producePhase('plan', 'wi-mod-ignored')
+      assert.strictEqual(r.confidence, 'high', '(5d) modified ignored doc falls open to native -> high')
+      assert.strictEqual(nativeCalls.length, 1, '(5d) native author ran after modified ignored doc')
+      assert.ok(!events.includes('revert-docs-strays'), '(5d) modified pre-existing ignored doc is NOT deleted')
+      assert.ok(events.includes('reset'), '(5d) external draft discarded when modified ignored doc unconfined')
+      assert.ok(!events.includes('write-marker'), '(5d) write-marker NOT stamped when modified ignored doc unconfined')
+    } finally {
+      globalThis.__SR_ROOT = savedRoot5d
+    }
+
     // (6) pre-existing dirty file outside doc dir is left untouched on external success.
     externalRuns = []; nativeCalls = []; events = []
     global.agent = produceAgent({ usableSeq: [false, CONTENT_READY_SIGNAL, USABLE_SIGNAL, USABLE_SIGNAL],
@@ -262,6 +350,28 @@ async function produceSmokes() {
       '(7) reset removes .plan.complete after unusable external draft')
     assert.ok(!events.includes('write-marker'), '(7) write-marker NOT stamped when external content unusable')
 
+    // (7b) external ok but missing_sections -> native fallback (missing_sections guard).
+    externalRuns = []; nativeCalls = []; events = []; const resetPrompts7b = []
+    global.agent = produceAgent({ usableSeq: [false, MISSING_SECTION_SIGNAL, true, true], externalOk: true,
+      externalRuns, nativeAuthorCalls: nativeCalls, events, resetPrompts: resetPrompts7b })
+    r = await sr.producePhase('plan', 'wi-missing-section')
+    assert.strictEqual(r.confidence, 'high', '(7b) missing_sections external draft falls open to native -> high')
+    assert.strictEqual(externalRuns.length, 1, '(7b) only one external attempt before native fallback')
+    assert.strictEqual(nativeCalls.length, 1, '(7b) native author ran after missing_sections external draft')
+    assert.ok(events.indexOf('reset') < events.indexOf('native'), '(7b) reset before native after missing_sections')
+    assert.ok(!events.includes('write-marker'), '(7b) write-marker NOT stamped when missing_sections')
+
+    // (7c) external ok but placeholder -> native fallback (placeholder guard).
+    externalRuns = []; nativeCalls = []; events = []; const resetPrompts7c = []
+    global.agent = produceAgent({ usableSeq: [false, PLACEHOLDER_SIGNAL, true, true], externalOk: true,
+      externalRuns, nativeAuthorCalls: nativeCalls, events, resetPrompts: resetPrompts7c })
+    r = await sr.producePhase('plan', 'wi-placeholder')
+    assert.strictEqual(r.confidence, 'high', '(7c) placeholder external draft falls open to native -> high')
+    assert.strictEqual(externalRuns.length, 1, '(7c) only one external attempt before native fallback')
+    assert.strictEqual(nativeCalls.length, 1, '(7c) native author ran after placeholder external draft')
+    assert.ok(events.indexOf('reset') < events.indexOf('native'), '(7c) reset before native after placeholder')
+    assert.ok(!events.includes('write-marker'), '(7c) write-marker NOT stamped when placeholder')
+
     // (8) FAILED before-snapshot (courier flake) + pre-existing dirty checkout: revert NOTHING
     // (an empty "before" would make the user's own edits look stray), discard the draft, native fallback.
     externalRuns = []; nativeCalls = []; events = []
@@ -272,6 +382,28 @@ async function produceSmokes() {
     assert.ok(!events.includes('revert-strays'), '(8) NOTHING is reverted when the before-snapshot failed')
     assert.ok(events.includes('reset'), '(8) external draft is discarded when unconfinable')
     assert.strictEqual(nativeCalls.length, 1, '(8) native author ran after unconfinable dispatch')
+
+    // (8b) revert command fails -> unconfined, native fallback.
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns,
+      nativeAuthorCalls: nativeCalls, events, strayPath: 'README.md', revertFail: true })
+    r = await sr.producePhase('plan', 'wi-revert-fail')
+    assert.strictEqual(r.confidence, 'high', '(8b) failed revert falls open to native -> high')
+    assert.ok(events.includes('revert-strays'), '(8b) revert was attempted')
+    assert.ok(events.includes('reset'), '(8b) external draft discarded when revert fails')
+    assert.strictEqual(nativeCalls.length, 1, '(8b) native author ran after failed revert')
+    assert.ok(!events.includes('write-marker'), '(8b) write-marker NOT stamped when revert fails')
+
+    // (8c) post-revert snapshot still shows stray -> unconfined, native fallback.
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns,
+      nativeAuthorCalls: nativeCalls, events, strayPath: 'README.md', postRevertStray: true })
+    r = await sr.producePhase('plan', 'wi-post-revert-dirty')
+    assert.strictEqual(r.confidence, 'high', '(8c) post-revert dirty falls open to native -> high')
+    assert.ok(events.includes('revert-strays'), '(8c) revert was attempted')
+    assert.ok(events.includes('reset'), '(8c) external draft discarded when post-revert still dirty')
+    assert.strictEqual(nativeCalls.length, 1, '(8c) native author ran after post-revert still dirty')
+    assert.ok(!events.includes('write-marker'), '(8c) write-marker NOT stamped when post-revert still dirty')
 
     // (4) planAuthor absent/claude -> plan authors native, no external dispatch.
     globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', effort: {} }
