@@ -37,6 +37,8 @@ Lifecycle (fail-CLOSED everywhere — an internal error yields a fail verdict, n
 Teardown (steps 7) always runs, even when an internal seam raised: the except path routes
 through the same cleanup → fail-verdict-naming-the-error → record write → report.
 """
+import os
+
 import acceptance_reclaim
 import acceptance_verdict
 import acceptance_cleanup
@@ -276,3 +278,56 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
     # Only after the record is durably written do we release the lease.
     deps["release_lease"]()
     return record_path
+
+
+def _cli(argv, env, stdout, stderr):
+    """The DoD live-run entrypoint the acceptance SKILL.md documents (Task 13).
+
+    `python3 acceptance_run.py --fixture <fixture> --root <root>` is the command the
+    front-door skill runs to drive a live acceptance run. This guard makes that command
+    HONEST: it refuses to nest (UFR-5) and never returns a silent exit-0 no-op. Assembling
+    the real live-run `deps` (spawning the actual showrunner, sampling spend, holding the
+    lease) is the skill's job on a real host; run bare like this it reports that and exits
+    non-zero rather than pretending a live run happened.
+
+    Returns the process exit code. All I/O (env, streams) is injected so it is unit-tested
+    without a live run — consistent with the rest of the harness (DoD).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="acceptance_run.py",
+        description="Standalone showrunner acceptance harness — live run entrypoint.",
+    )
+    parser.add_argument("--fixture", required=True,
+                        help="Path to the committed throwaway acceptance fixture.")
+    parser.add_argument("--root", required=True,
+                        help="Repo root the live showrunner runs against.")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        # argparse already printed usage to stderr; propagate its non-zero code.
+        return exc.code if isinstance(exc.code, int) else 2
+
+    # UFR-5: refuse before touching anything if we are already inside a run.
+    # `nesting_refusal` expects a plain dict; `os.environ` is an `os._Environ`, so copy it.
+    refusal = nesting_refusal(dict(env))
+    if refusal["refuse"]:
+        print(refusal["reason"], file=stderr)
+        return 3
+
+    # The live run mutates real state (spawns the showrunner, holds the lease, writes a
+    # record) and must be driven by the front-door skill on a real host, which assembles
+    # and injects the real deps into `invoke`. Refuse loudly rather than no-op silently.
+    print(
+        "acceptance_run: live-run deps are assembled by the `superheroes:acceptance` "
+        "skill on a real host; this bare entrypoint does not spawn a live showrunner. "
+        "fixture=%s root=%s" % (args.fixture, args.root),
+        file=stderr,
+    )
+    return 4
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    raise SystemExit(_cli(_sys.argv[1:], os.environ, _sys.stdout, _sys.stderr))
