@@ -542,3 +542,21 @@ def test_review_from_prior_phase_is_annotated(tmp_path, monkeypatch):
 
     assert snap["review"]["from_phase"] == "review-plan"
     assert "(from review-plan)" in run_watch.render_snapshot(snap)
+
+
+def test_poll_lines_includes_diff_content_after_new_event():
+    prev = {"events": [{"ts": "2026-07-03T14:00:00Z", "seq": 1, "type": "run_started"}],
+            "review": {"available": False},
+            "build": {"available": True, "reviewed": 1, "built": 0, "total": 3},
+            "phase": {"value": "workhorse"}}
+    curr = {"events": prev["events"] + [{"ts": "2026-07-03T14:01:00Z", "seq": 2, "type": "step_completed", "step": 5}],
+            "review": {"available": False},
+            "build": {"available": True, "reviewed": 1, "built": 1, "total": 3},
+            "phase": {"value": "workhorse"}}
+    lines, seen = run_watch._poll_lines(prev, curr, 1)
+    assert seen == 2
+    assert any("step 5" in ln for ln in lines)
+    assert any("build task 1/3 built" in ln for ln in lines)
+    event_idx = next(i for i, ln in enumerate(lines) if "step 5" in ln)
+    diff_idx = next(i for i, ln in enumerate(lines) if "build task 1/3 built" in ln)
+    assert event_idx < diff_idx

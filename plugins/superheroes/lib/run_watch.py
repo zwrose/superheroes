@@ -501,7 +501,8 @@ def _step_label(step, detail=None):
 
 def format_journal_event(evt):
     evt = evt or {}
-    typ = evt.get("type") or "event"
+    typ = evt.get("type")
+    typ = typ if isinstance(typ, str) and typ else "event"
     clock = _clock(evt.get("ts"))
     step = evt.get("step")
     detail = evt.get("detail")
