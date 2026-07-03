@@ -26,14 +26,24 @@ TASK_ID_TRAILER = "Task-Id"
 _CODEX_MODEL = "gpt-5.5"
 _CURSOR_MODEL = "composer-2.5-fast"
 
+# Native tier short-name -> cursor model id, for roles that carry a model override (today only
+# author-plan, the plan-author leaf: `author-plan: fable` + `planAuthor: cursor` = Fable via
+# Cursor). Ids verified live 2026-07-03 against cursor-agent 2026.07.01 `models`. An unmapped or
+# absent override keeps the pinned composer default — never the developer's ambient default.
+_CURSOR_MODEL_BY_TIER = {
+    "fable": "claude-fable-5-thinking-xhigh",
+    "opus": "claude-opus-4-8-thinking-high",
+}
+
 
 def build_argv(engine, role_kind, effort, opts):
     """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
-    read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit model+effort.
-    opts keys: cwd, schema_path. The PROMPT is NOT encoded here — codex reads it from stdin
-    (trailing `-`) and cursor-agent reads it from stdin when given no positional prompt; the JS
-    runner (Task 10) feeds the staged prompt file to the process stdin. Deterministic; fully
-    unit-testable."""
+    read-only sandbox; WRITE (build|fix|author-plan) → workspace-write. Always explicit
+    model+effort. opts keys: cwd, schema_path, model (native tier short name — cursor maps it via
+    _CURSOR_MODEL_BY_TIER; codex ignores it, staying on its pinned model). The PROMPT is NOT
+    encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
+    when given no positional prompt; the JS runner (Task 10) feeds the staged prompt file to the
+    process stdin. Deterministic; fully unit-testable."""
     opts = opts or {}
     cwd = opts.get("cwd")
     schema_path = opts.get("schema_path")
@@ -58,7 +68,8 @@ def build_argv(engine, role_kind, effort, opts):
         # headless run (without it it goes interactive and --output-format is a no-op); --trust
         # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
         # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
-        argv = ["cursor-agent", "--model", _CURSOR_MODEL, "-p", "--trust"]
+        model = _CURSOR_MODEL_BY_TIER.get(opts.get("model"), _CURSOR_MODEL)
+        argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]     # read-only planning mode
         else:
@@ -129,11 +140,24 @@ def _scrub_findings(findings):
     return out
 
 
+def _scrub_notify(notify):
+    """NOTIFY entries are author free-text end to end (identity AND message) — scrub both."""
+    out = []
+    for n in notify if isinstance(notify, list) else []:
+        if not isinstance(n, dict):
+            continue
+        out.append({"identity": _scrub(n.get("identity")) if isinstance(n.get("identity"), str) else None,
+                    "message": _scrub(n.get("message")) if isinstance(n.get("message"), str) else None})
+    return out
+
+
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
-    findings; build|fix → {ok,signal,evidence{testFailed,testPassed}}. Unparseable/empty →
-    {ok:false, reason:'unreadable'}. External free-text is scrubbed HERE (Secret-hygiene).
-    Never raises."""
+    findings; build|fix → {ok,signal,evidence{testFailed,testPassed}}; author-plan →
+    {ok,notify[]} (the doc itself is verified downstream by the deterministic usableDraft
+    post-check — this parse only confirms the engine ran to completion and surfaces NOTIFY
+    defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
+    scrubbed HERE (Secret-hygiene). Never raises."""
     try:
         obj = _last_json_object(stdout)
         if obj is None:
@@ -143,6 +167,8 @@ def parse_result(engine, role_kind, stdout):
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
             return {"ok": True, "findings": _scrub_findings(findings)}
+        if role_kind == "author-plan":
+            return {"ok": True, "notify": _scrub_notify(obj.get("notify"))}
         # build | fix
         ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
         evidence = {"testFailed": bool(ev.get("testFailed")),
@@ -185,7 +211,7 @@ def commit_result(worktree, task_id, pre_sha):
 
 
 def _cmd_build_argv(args):
-    opts = {"cwd": args.cwd, "schema_path": args.schema_path}
+    opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model}
     sys.stdout.write(json.dumps(build_argv(args.engine, args.role, args.effort, opts)) + "\n")
     return 0
 
@@ -195,13 +221,15 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-argv")
     b.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    b.add_argument("--role", required=True, choices=("review", "build", "fix"))
+    b.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))
     b.add_argument("--effort", required=True)
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
+    b.add_argument("--model", default=None,
+                   help="native tier short name (fable/opus); cursor maps it to its model id")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    pr.add_argument("--role", required=True, choices=("review", "build", "fix"))
+    pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))
     pr.add_argument("--stdout-path", default=None,
                      help="file holding the external engine's raw stdout; stdin if omitted")
     cm = sub.add_parser("commit")

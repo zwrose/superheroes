@@ -4,10 +4,14 @@
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
 
-const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation' }
+// `author-plan` (the front-half plan-author leaf) reads its OWN key — plan authoring routes
+// independently of review/build; tasks authoring has no key on purpose and always runs native.
+const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation',
+  'author-plan': 'planAuthor' }
 // Depth-aware review: deep reviewers (security/architecture — reviewer-deep tier) -> 'review-deep'
 // (xhigh); regular review -> 'review' (high). Mirrors engine_pref.py._CODEX_EFFORT.
-const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low' }
+const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low',
+  'author-plan': 'xhigh' }
 const _CURSOR_EFFORT = 'composer'
 
 // Own-key membership (mirror model_tier.js): JS `in`/bracket walk the prototype chain,

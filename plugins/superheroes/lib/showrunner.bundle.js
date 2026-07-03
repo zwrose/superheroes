@@ -3935,10 +3935,14 @@ __modules["engine_pref"] = function (module, exports, require) {
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
 
-const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation' }
+// `author-plan` (the front-half plan-author leaf) reads its OWN key — plan authoring routes
+// independently of review/build; tasks authoring has no key on purpose and always runs native.
+const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation',
+  'author-plan': 'planAuthor' }
 // Depth-aware review: deep reviewers (security/architecture — reviewer-deep tier) -> 'review-deep'
 // (xhigh); regular review -> 'review' (high). Mirrors engine_pref.py._CODEX_EFFORT.
-const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low' }
+const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low',
+  'author-plan': 'xhigh' }
 const _CURSOR_EFFORT = 'composer'
 
 // Own-key membership (mirror model_tier.js): JS `in`/bracket walk the prototype chain,
@@ -4111,10 +4115,15 @@ async function _scrubReason(reason) {
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
 // path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
+  // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
+  // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
+  // Its acceptance gate is the caller's deterministic usableDraft post-check, not this dispatch.
+  const isAuthor = (roleKind === 'author-plan')
 
   // 1. Stage prompt + schema to disk (via exec). The PROMPT file is fed to the external process
   //    stdin by _runArgv (both engines read the prompt from stdin); the SCHEMA path is passed to
@@ -4149,7 +4158,8 @@ async function _dispatchExternalInner(o) {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
-      `--schema-path ${shq(schemaPath)}`)
+      `--schema-path ${shq(schemaPath)}` +
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
 
@@ -4187,6 +4197,16 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
+  // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
+  // back; the caller's usableDraft post-check decides acceptance and falls open on failure.
+  if (isAuthor) {
+    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
+    return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
+  }
 
   // 4. Read role: return findings straight through (no commit). Failure -> caller falls open to Claude.
   // FIX 5 (UFR-6 symmetry): a read role is JUST as unauditable as a write role when the journal
@@ -5022,6 +5042,10 @@ const DEFAULT_TIERS = {
 
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
 
+// Split roles (mirror model_tier.py._ROLE_FALLBACK): own override wins, else resolve as the base
+// role. `author-plan` lets plan authoring alone move (e.g. to fable) without moving tasks authoring.
+const _ROLE_FALLBACK = { 'author-plan': 'author' }
+
 // Python `k in dict` / `dict.get(k, default)` test OWN keys only; JS `in`/bracket walk the prototype
 // chain (so `'constructor' in {}` is true). Use own-key membership everywhere a twin mirrors Python
 // dict membership, so a prototype-named role/identity ('constructor', 'toString', '…::hasOwnProperty')
@@ -5031,6 +5055,15 @@ function hasOwn(o, k) {
 }
 
 function resolveModel(role, overrides, context) {
+  if (hasOwn(_ROLE_FALLBACK, role)) {
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, role)) {
+      const v = overrides[role]
+      if (v === null) return null
+      if (typeof v === 'string' && v.trim()) return v.trim()
+      // malformed own-override -> resolve as the base role (fail-open)
+    }
+    return resolveModel(_ROLE_FALLBACK[role], overrides, context)
+  }
   if (!hasOwn(DEFAULT_TIERS, role)) role = 'reviewer'   // safe capable default for an unknown role
   let def = DEFAULT_TIERS[role]
   if (role === 'fixer' && hasOwn(_FIXER_BY_CONTEXT, context)) def = _FIXER_BY_CONTEXT[context]
@@ -5941,12 +5974,200 @@ function docDirFor(workItem) {
 function docPathFor(workItem, doc) { return `${docDirFor(workItem)}/${doc}.md` }
 function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
 
+// UFR-2: a failed external author-plan may have edited the doc and/or stamped the completion
+// marker; discard both before falling open to the native author so an unaudited external draft
+// cannot pass the post-check usableDraft gate.
+async function _resetAuthorPlanDraft(workItem, doc) {
+  const dir = docDirFor(workItem)
+  const docPath = `${dir}/${doc}.md`
+  const markerPath = `${dir}/.${doc}.complete`
+  const root = checkoutRoot()
+  const cmd = (root && !String(dir).startsWith('/'))
+    ? selfContained(
+      `rm -f ${shq(markerPath)} && (git checkout -- ${shq(docPath)} 2>/dev/null || rm -f ${shq(docPath)})`)
+    : `rm -f ${shq(markerPath)} ${shq(docPath)}`
+  await exec([cmd], 'reset author-plan draft')
+}
+
+// author-plan confinement: snapshot git status --porcelain via the exec courier.
+async function _snapshotGitPorcelain() {
+  const results = await exec([selfContained('git status --porcelain')], 'author-plan git snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _parsePorcelain(text) {
+  const entries = new Map()
+  if (!text) return entries
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue
+    const code = line.slice(0, 2)
+    let path = line.slice(3).trim()
+    const arrow = path.indexOf(' -> ')
+    if (arrow >= 0) path = path.slice(arrow + 4)
+    if (path) entries.set(path, code)
+  }
+  return entries
+}
+
+// Normalize a porcelain or filesystem path to checkout-root-relative form for comparison.
+function _normalizeComparePath(path) {
+  let p = String(path).replace(/^\.\//, '')
+  const root = checkoutRoot()
+  if (root) {
+    const r = String(root).replace(/\/$/, '')
+    if (p === r) return ''
+    if (p.startsWith(r + '/')) return p.slice(r.length + 1)
+  }
+  return p
+}
+
+// author-plan confinement allowlist: only the plan doc's own artifacts (exact paths, not prefix).
+function _authorPlanArtifactPaths(workItem) {
+  const dir = _normalizeComparePath(docDirFor(workItem))
+  return [`${dir}/plan.md`, `${dir}/.plan.complete`]
+}
+
+function _pathIsAuthorPlanArtifact(path, workItem) {
+  return _authorPlanArtifactPaths(workItem).includes(_normalizeComparePath(path))
+}
+
+// Top-level checkout-relative docs tree for confinement scan (e.g. 'docs'). Skipped when the
+// work-item doc dir resolves outside the checkout (out-of-repo storage).
+function _docsScanRoot(workItem) {
+  const dir = docDirFor(workItem)
+  const root = checkoutRoot()
+  if (String(dir).startsWith('/')) {
+    if (!root) return null
+    const r = String(root).replace(/\/$/, '')
+    if (!String(dir).startsWith(r + '/')) return null
+  } else if (!root) {
+    return null
+  }
+  const rel = _normalizeComparePath(dir)
+  if (!rel) return null
+  const seg = rel.split('/')[0]
+  return seg || null
+}
+
+function _parseFileList(text) {
+  const set = new Set()
+  if (!text) return set
+  for (const line of String(text).split('\n')) {
+    const p = line.trim()
+    if (p) set.add(_normalizeComparePath(p))
+  }
+  return set
+}
+
+async function _snapshotDocsFileList(docsRoot) {
+  const results = await exec([selfContained(`find ${shq(docsRoot)} -type f | sort`)], 'author-plan docs snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+async function _snapshotDocsNewer(docsRoot, stampPath) {
+  const results = await exec(
+    [selfContained(`find ${shq(docsRoot)} -type f -newer ${shq(stampPath)} | sort`)],
+    'author-plan docs newer')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _docsStampPath(workItem) {
+  return `/tmp/showrunner-docs-${safeRunKey(workItem)}.stamp`
+}
+
+// Gitignored docs-tree confinement: detect new/modified files under docsRoot that porcelain misses.
+async function _scanAndRevertDocsStrays(workItem, docsRoot, stampPath, beforeText) {
+  if (beforeText == null) return { strayPaths: [], unconfined: true }
+  const afterText = await _snapshotDocsFileList(docsRoot)
+  if (afterText == null) return { strayPaths: [], unconfined: true }
+  const newerText = await _snapshotDocsNewer(docsRoot, stampPath)
+  if (newerText == null) return { strayPaths: [], unconfined: true }
+  const before = _parseFileList(beforeText)
+  const after = _parseFileList(afterText)
+  const newer = _parseFileList(newerText)
+  const newStrays = []
+  const modifiedStrays = []
+  for (const p of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (!before.has(p)) newStrays.push(p)
+  }
+  for (const p of newer) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) modifiedStrays.push(p)
+  }
+  if (modifiedStrays.length > 0) {
+    return { strayPaths: [], unconfined: true, modifiedPaths: modifiedStrays }
+  }
+  if (newStrays.length === 0) return { strayPaths: [] }
+  const revertCmds = newStrays.map((p) => selfContained(`rm -f -- ${shq(p)}`))
+  const results = await exec(revertCmds, 'author-plan revert docs strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postText = await _snapshotDocsFileList(docsRoot)
+  if (postText == null) return { strayPaths: [], unconfined: true }
+  const post = _parseFileList(postText)
+  for (const p of newStrays) {
+    if (!before.has(p) && post.has(p)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: newStrays }
+}
+
+// After an external author-plan dispatch, revert checkout paths that newly dirtied outside the
+// work-item doc dir during the dispatch window. Pre-existing dirty paths are never touched.
+// A null snapshot (courier flake) on EITHER side makes strays indistinguishable from the user's
+// own pre-existing edits — revert NOTHING and report unconfined (the caller fails the dispatch
+// closed to the native author). Reverting against an empty "before" would checkout-revert the
+// user's own uncommitted work.
+async function _revertAuthorPlanStrays(workItem, beforeText, afterText) {
+  if (beforeText == null || afterText == null) return { strayPaths: [], unconfined: true }
+  const before = _parsePorcelain(beforeText)
+  const after = _parsePorcelain(afterText)
+  const strays = []
+  for (const [p, code] of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) continue
+    strays.push({ path: p, untracked: code === '??' || code[0] === '?' })
+  }
+  if (strays.length === 0) return { strayPaths: [] }
+  const revertCmds = strays.map(({ path, untracked }) =>
+    untracked ? selfContained(`rm -rf -- ${shq(path)}`) : selfContained(`git checkout -- ${shq(path)}`))
+  const results = await exec(revertCmds, 'author-plan revert strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postSnap = await _snapshotGitPorcelain()
+  if (postSnap == null) return { strayPaths: [], unconfined: true }
+  const post = _parsePorcelain(postSnap)
+  for (const { path } of strays) {
+    if (!before.has(path) && post.has(path)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: strays.map((s) => s.path) }
+}
+
+// Stamp the content-bound completion marker after external author-plan confinement passes.
+async function _stampAuthorPlanMarker(workItem, doc) {
+  const cmd = selfContained(
+    `python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`)
+  const results = await exec([cmd], 'author-plan write marker')
+  if (!results || !results[0] || !results[0].ok) return false
+  try { return !!JSON.parse(results[0].stdout || '').wrote } catch (_) { return false }
+}
+
+function _draftContentReady(signals) {
+  if (!signals || !signals.expected) return false
+  const missing = Array.isArray(signals.missing_sections) ? signals.missing_sections : []
+  return missing.length === 0 && !signals.placeholder
+}
+
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
 // #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
 // authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
-// The --write-marker stamp is FOLDED into the author agent (FR-4 fold): the author's prompt
-// instructs it to run front_half_usable.py --write-marker after authoring the doc, so there is
-// no separate cmdRunner call — the author leaf handles its own completion stamp.
+// The --write-marker stamp is FOLDED into the native author agent (FR-4 fold): the author's
+// prompt instructs it to run front_half_usable.py --write-marker after authoring the doc.
+// The EXTERNAL author-plan path omits --write-marker from the dispatch prompt; showrunner
+// stamps the marker via exec ONLY after confinement passes and doc content verifies, so a
+// crash before the stamp resumes into re-produce rather than accepting an unconfined draft.
 // Layer 2b: bounded repair loop (N=2 retries, 3 total attempts). On a failed post-check the
 // author is re-dispatched with a TARGETED gap hint derived from the --emit-signals why-signal
 // (missing_sections + placeholder). Only parks (confidence:'low') after all attempts exhausted.
@@ -5957,19 +6178,31 @@ async function producePhase(phase, workItem) {
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
-  const model = authorModel()
+  const model = authorModel(doc)
+  // planAuthor engine route: ONLY the plan doc reads the enginePreferences.planAuthor key (tasks
+  // always authors native). The resolved model tier rides along so cursor can map it to its own
+  // model id (author-plan: fable + planAuthor: cursor = Fable via Cursor). External failure falls
+  // open to the native author within the same attempt — the usableDraft post-check is unchanged.
+  const aEngine = doc === 'plan'
+    ? enginePrefTwin.resolveEngine('author-plan', _enginePrefs())
+    : 'claude'
   // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
   // FR-8 sandbox: no banned tokens in this function body.
-  function _authorPrompt(gapSignal) {
-    const base =
+  function _authorPrompt(gapSignal, includeWriteMarker) {
+    let base =
       `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
       `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
-      `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
-      `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
-      selfContained(`python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
-      `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
+      `non-empty, no placeholder.`
+    if (includeWriteMarker !== false) {
+      base +=
+        ` After writing the doc, run the following command to stamp the ` +
+        `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
+        selfContained(`python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
+        `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n`
+    }
+    base +=
       `Do NOT run review or record the review gate. Return ` +
       `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
       `{ identity, message }.`
@@ -5993,12 +6226,65 @@ async function producePhase(phase, workItem) {
   // lastSignal carries the why-signal from the previous failed check for the gap hint.
   let lastSignal = null
   for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
-    // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
-    // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-    const authored = await agent(
-      _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `author-${doc}`, model,
-        schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    const gapSignal = attempt > 0 ? lastSignal : null
+    let authored = null
+    if (aEngine !== 'claude') {
+      // External author-plan: no --write-marker in the dispatch prompt; showrunner stamps after confinement.
+      const extPrompt = _authorPrompt(gapSignal, false)
+      const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
+      const beforeSnap = await _snapshotGitPorcelain()
+      const docsRoot = _docsScanRoot(workItem)
+      let beforeDocs = null
+      let docsStamp = null
+      if (docsRoot) {
+        docsStamp = _docsStampPath(workItem)
+        const stampRes = await exec([`touch ${shq(docsStamp)}`], 'author-plan docs stamp')
+        if (!stampRes || !stampRes[0] || !stampRes[0].ok) beforeDocs = null
+        else beforeDocs = await _snapshotDocsFileList(docsRoot)
+      }
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
+        cwd: checkoutRoot() || procCwd(), model,
+      })
+      const afterSnap = await _snapshotGitPorcelain()
+      const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
+      const docsResult = (docsRoot && docsStamp)
+        ? await _scanAndRevertDocsStrays(workItem, docsRoot, docsStamp, beforeDocs)
+        : { strayPaths: [], unconfined: false }
+      const unconfined = porcelainResult.unconfined || docsResult.unconfined
+      const strayPaths = [...porcelainResult.strayPaths, ...docsResult.strayPaths]
+      if (strayPaths.length || unconfined) {
+        if (typeof globalThis.log === 'function') {
+          if (docsResult.modifiedPaths && docsResult.modifiedPaths.length) {
+            globalThis.log('author-plan: modified ignored docs (unconfined): ' + docsResult.modifiedPaths.join(', '))
+          }
+          globalThis.log(unconfined
+            ? 'author-plan: confinement snapshot unavailable — external draft discarded (nothing reverted)'
+            : 'author-plan: stray checkout edits reverted: ' + strayPaths.join(', '))
+        }
+        await _resetAuthorPlanDraft(workItem, doc) // confinement failure -> fall open to native
+      } else if (res && res.ok) {
+        const draftNow = await usableDraft(workItem, doc)
+        if (_draftContentReady(draftNow)) {
+          const stamped = await _stampAuthorPlanMarker(workItem, doc)
+          const afterStamp = stamped ? await usableDraft(workItem, doc) : { usable: false }
+          if (afterStamp.usable) authored = { status: 'ok', notify: res.notify || [] }
+          else await _resetAuthorPlanDraft(workItem, doc)
+        } else {
+          await _resetAuthorPlanDraft(workItem, doc) // unusable external draft -> fall open to native
+        }
+      } else {
+        await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
+      }
+    }
+    if (authored == null) {
+      // FR-4 fold (native only): the author leaf writes its own doc + stamps the completion marker.
+      const nativePrompt = _authorPrompt(gapSignal, true)
+      authored = await agent(
+        nativePrompt,
+        { label: `author-${doc}`, model,
+          schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    }
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
     }
@@ -6168,6 +6454,7 @@ async function usableDraft(workItem, doc) {
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
   return {
     usable: !!signals.usable,
+    expected: signals.expected || '',
     missing_sections: Array.isArray(signals.missing_sections) ? signals.missing_sections : [],
     placeholder: !!signals.placeholder,
   }
@@ -6175,9 +6462,11 @@ async function usableDraft(workItem, doc) {
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
 // Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS.author = 'opus').
-function authorModel() {
+// The plan doc resolves the split `author-plan` role (own override, e.g. fable, else exactly
+// `author`); tasks stays on `author` — plan authoring alone can be raised without moving tasks.
+function authorModel(doc) {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
-  return modelTierTwin.resolveModel('author', overrides, null)
+  return modelTierTwin.resolveModel(doc === 'plan' ? 'author-plan' : 'author', overrides, null)
 }
 
 // #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).
@@ -6630,14 +6919,16 @@ async function showrunner({ workItem }) {
   // Fail-safe: an absent/malformed (or courier-stringified) value yields both-"claude" + empty
   // effort map, so the review/build leaves take the byte-unchanged agent() path.
   const _epParsed = _coerceObj((startupFacts && startupFacts.engine_prefs) || null)
-  let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
+  let _epMap = { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} }
   if (_epParsed && typeof _epParsed === 'object' && !Array.isArray(_epParsed)) {
-    // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
-    // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
-    // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+    // Carry the whole object — reviewer/implementation/planAuthor AND the FR-9 effort sub-map
+    // (keyed by role_kind), so resolveEffort can source the owner's effort override from
+    // __SR_ENGINE_PREFS.effort (NOT from the model-tier __SR_OVERRIDES map, which is keyed by
+    // role->model).
     _epMap = {
       reviewer: _epParsed.reviewer || 'claude',
       implementation: _epParsed.implementation || 'claude',
+      planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
   }

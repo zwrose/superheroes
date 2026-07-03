@@ -170,3 +170,73 @@ def test_parse_result_cli(capsys):
         _sys.stdin = _old
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["signal"] == "ok"
+
+
+def test_build_argv_cursor_author_plan_maps_fable_model():
+    argv = EA.build_argv("cursor", "author-plan", "composer", {"cwd": "/wt", "model": "fable"})
+    assert argv[0] == "cursor-agent"
+    assert argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"
+    assert "-f" in argv                       # author writes the doc: workspace-write
+    assert "--mode" not in argv               # not the read-only plan mode
+
+
+def test_build_argv_cursor_author_plan_maps_opus_model():
+    argv = EA.build_argv("cursor", "author-plan", "composer", {"model": "opus"})
+    assert argv[argv.index("--model") + 1] == "claude-opus-4-8-thinking-high"
+
+
+def test_build_argv_cursor_unmapped_model_keeps_composer_default():
+    for model in (None, "", "bogus-tier"):
+        argv = EA.build_argv("cursor", "author-plan", "composer", {"model": model})
+        assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+    # non-author roles without a model override are unchanged
+    argv = EA.build_argv("cursor", "review", "composer", {})
+    assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+
+
+def test_build_argv_codex_author_plan_ignores_model_override():
+    argv = EA.build_argv("codex", "author-plan", "xhigh", {"cwd": "/wt", "model": "fable"})
+    assert argv[argv.index("-m") + 1] == "gpt-5.5"   # codex has no fable; pinned model stands
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert "model_reasoning_effort=xhigh" in argv
+
+
+def test_parse_result_author_plan_surfaces_scrubbed_notify():
+    stdout = json.dumps({"status": "ok", "notify": [
+        {"identity": "seed-choice",
+         "message": "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"}]})
+    res = EA.parse_result("cursor", "author-plan", stdout)
+    assert res["ok"] is True
+    n = res["notify"][0]
+    assert n["identity"] == "seed-choice"
+    assert "sk-EXAMPLEfakenotarealsecret0" not in n["message"]
+    assert "[REDACTED]" in n["message"]
+
+
+def test_parse_result_author_plan_scrubs_notify_identity():
+    stdout = json.dumps({"status": "ok", "notify": [
+        {"identity": "Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+         "message": "took a default"}]})
+    res = EA.parse_result("cursor", "author-plan", stdout)
+    assert res["ok"] is True
+    n = res["notify"][0]
+    assert "sk-EXAMPLEfakenotarealsecret0" not in n["identity"]
+    assert "[REDACTED]" in n["identity"]
+    assert n["message"] == "took a default"
+
+
+def test_parse_result_author_plan_no_notify_is_ok_empty():
+    # the doc's acceptance gate is the deterministic usableDraft post-check, not this parse
+    assert EA.parse_result("cursor", "author-plan", json.dumps({"type": "result"})) == \
+        {"ok": True, "notify": []}
+
+
+def test_parse_result_author_plan_empty_is_unreadable():
+    assert EA.parse_result("cursor", "author-plan", "").get("ok") is False
+
+
+def test_build_argv_cli_author_plan_model(capsys):
+    rc = EA.main(["build-argv", "--engine", "cursor", "--role", "author-plan",
+                  "--effort", "composer", "--model", "fable"])
+    argv = json.loads(capsys.readouterr().out)
+    assert rc == 0 and argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"

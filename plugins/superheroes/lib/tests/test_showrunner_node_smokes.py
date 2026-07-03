@@ -99,6 +99,9 @@ SHOWRUNNER_SMOKES = [
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # plan-author engine route: author-plan external dispatch (commit-free write, --model
+    # threading, notify, UFR-6) + producePhase planAuthor wiring (plan-only, fall-open).
+    "plugins/superheroes/lib/tests/showrunner_engine_author_smoke.js",
     # #38 Task 11: build_phase.js worker/fixer/final-review engine-branch routing (UFR-2/4, FR-15,
     # FIX I5 final-fixer report contract). Name starts build_phase_ so the discovery guard auto-matches.
     "plugins/superheroes/lib/tests/build_phase_engine_smoke.js",

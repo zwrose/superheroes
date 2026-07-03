@@ -45,11 +45,12 @@ def test_core_error_fails_open_for_reviewer_deep(capsys, monkeypatch):
 
 
 def test_embedded_fallback_matches_the_core():
-    # _FALLBACK re-encodes the core's DEFAULT_TIERS for the degrade path; guard
-    # against silent drift so the fallback never serves a stale tier table. The core
-    # is now the in-tree sibling (repointed from plugins/superheroes/lib/model_tier.py).
+    # _FALLBACK re-encodes the core's per-role resolution (DEFAULT_TIERS + split roles like
+    # author-plan) for the degrade path; guard against silent drift so the fallback never
+    # serves a stale tier table. The core is now the in-tree sibling (repointed from
+    # plugins/superheroes/lib/model_tier.py).
     core = _load(os.path.join(_HERE, "..", "model_tier.py"), "model_tier_core")
-    assert MTR._FALLBACK == core.DEFAULT_TIERS
+    assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
 
 
 def test_wrapper_cli_forwards_context(capsys):
@@ -64,5 +65,6 @@ def test_author_role_resolves_to_opus():
     mto = _load(os.path.join(_HERE, "..", "model_tier_overrides.py"), "model_tier_overrides_author")
     assert core.resolve_model("author") == "opus"
     assert core.DEFAULT_TIERS.get("author") == "opus"
-    assert MTR._FALLBACK == core.DEFAULT_TIERS
-    assert set(mto.KNOWN_ROLES) == set(core.DEFAULT_TIERS)
+    assert core.resolve_model("author-plan") == "opus"   # split role: resolves as author by default
+    assert MTR._FALLBACK == {r: core.resolve_model(r) for r in core.ROLES}
+    assert set(mto.KNOWN_ROLES) == set(core.ROLES)
