@@ -11,13 +11,13 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
-    if (label === 'exec' && prompt.includes('git -C')) {
+    if (opts && opts.courier && prompt.includes('git -C')) {
       wtHeadCalls += 1
       return wtHeadCalls <= 1 ? 'head-1\n' : 'head-2\n'
     }
-    if (label === 'exec' && prompt.includes('git rev-parse')) return 'head-1\n'
+    if (opts && opts.courier && prompt.includes('git rev-parse')) return 'head-1\n'
     if (label === 'resume') return '1'
-    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+    if (opts && opts.courier && prompt.includes('review_code_config.py')) {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')
       return JSON.stringify({ verifyCommand, tiers: {} })
     }

@@ -46,7 +46,7 @@ async function partA() {
       return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '',
         engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: { review: 'medium' } } })
     }
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
         throw new Error('engine_pref_load.py dispatched as its own leaf — must ride read startup state (#118)')
       }
@@ -90,7 +90,7 @@ async function partA() {
     const label = (opts && opts.label) || ''
     // an older/mangled canned response WITHOUT engine_prefs must degrade to both-'claude'
     if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({
           checkpoint: null,
@@ -128,9 +128,9 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
     promptLog.push(prompt)
     const label = opts && opts.label
     // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
-    if (label === 'exec' && prompt.includes('git -C')) return 'head-1\n'
+    if (opts && opts.courier && prompt.includes('git -C')) return 'head-1\n'
     if (label === 'resume') return '1'
-    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+    if (opts && opts.courier && prompt.includes('review_code_config.py')) {
       return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} })
     }
     if (label && (label.startsWith('verify') || label === 'run verify')) {

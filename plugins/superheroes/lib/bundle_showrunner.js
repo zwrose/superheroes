@@ -76,11 +76,16 @@ function __safeSmartDefault() {
 const __realAgent = agent
 globalThis.agent = function (prompt, opts) {
   var o = Object.assign({}, opts || {})
-  // Dumb-pipe detection: check the INCOMING label (before __leafLabel may relabel it) to identify
-  // the mechanical tier. exec and io leaves are pure side-effect executors — they ALWAYS run at the
-  // cheapest model unconditionally, independent of __SR_LEAF_MODEL or any session default.
-  // Genuine-LLM (smart) leaves get __SR_LEAF_MODEL when set (throwaway/test run override).
-  var __isDumb = (o.label === 'exec' || o.label === 'io' || o.courier === true)
+  // Dumb-pipe detection. The AUTHORITATIVE marker is o.courier === true — every dumb pipe (the batch
+  // exec() and the single-command courier) sets it, so cheapest-model pinning is decoupled from the
+  // now-cosmetic display label (leaves carry descriptive purposes like 'read gate', 'prepare build').
+  // The label checks are back-compat for older callers/bundles and cover the exec:*/io:* prefix shape;
+  // exec and io leaves are pure side-effect executors — they ALWAYS run at the cheapest model
+  // unconditionally, independent of __SR_LEAF_MODEL or any session default. Genuine-LLM (smart) leaves
+  // get __SR_LEAF_MODEL when set (throwaway/test run override).
+  var __lbl = (typeof o.label === 'string') ? o.label : ''
+  var __isDumb = (o.courier === true || __lbl === 'exec' || __lbl === 'io' ||
+                  __lbl.indexOf('exec:') === 0 || __lbl.indexOf('io:') === 0)
   if (o.courier !== undefined) delete o.courier   // courier marker is preamble-only, never forwarded
   if (__isDumb) {
     o.model = __cheapest()
