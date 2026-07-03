@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.5.0...superheroes-v0.6.0) (2026-07-03)
+
+
+### Features
+
+* **superheroes:** common-dir coordination store + guard cleanup (PR 2 of [#170](https://github.com/zwrose/superheroes/issues/170)) ([#172](https://github.com/zwrose/superheroes/issues/172)) ([6bf7d2b](https://github.com/zwrose/superheroes/commit/6bf7d2bf353691591cc4182c9d338da5b24587f0))
+* **superheroes:** Fable plan-authoring options — author-plan tier + planAuthor engine ([#168](https://github.com/zwrose/superheroes/issues/168)) ([b2e96f8](https://github.com/zwrose/superheroes/commit/b2e96f89118f688aeb7eba77cb9e358ec155e989))
+* **superheroes:** libRoot — portable, version-pinned spine (PR 1 of [#170](https://github.com/zwrose/superheroes/issues/170)) ([#171](https://github.com/zwrose/superheroes/issues/171)) ([746b741](https://github.com/zwrose/superheroes/commit/746b7414ece878fae32bc6396d5c963454e7829c))
+* **superheroes:** script-owned review-spec round scheduler ([#164](https://github.com/zwrose/superheroes/issues/164)) ([#167](https://github.com/zwrose/superheroes/issues/167)) ([26c4e15](https://github.com/zwrose/superheroes/commit/26c4e1578348e3cd1c64e7a0b5eb5f8d245cb715))
+
+
+### Bug Fixes
+
+* **superheroes:** fail closed on synthesized review findings ([#169](https://github.com/zwrose/superheroes/issues/169)) ([d54f9e1](https://github.com/zwrose/superheroes/commit/d54f9e192d9587ef3100dd4dcc1d7c8e0e070e6c))
+* **superheroes:** per-task reviewer honors reviewer engine + model tier ([#160](https://github.com/zwrose/superheroes/issues/160)) ([#163](https://github.com/zwrose/superheroes/issues/163)) ([97dafcd](https://github.com/zwrose/superheroes/commit/97dafcdfee4cbbfbdc5113f8a0802b4ca46ecbbf))
+* **superheroes:** preserve review loop changed subjects ([#161](https://github.com/zwrose/superheroes/issues/161)) ([26c2f99](https://github.com/zwrose/superheroes/commit/26c2f991797b9ae2d9f47c06102dfbf1bb5cfc1c))
+
 ## [0.5.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.4.0...superheroes-v0.5.0) (2026-07-03)
 
 
