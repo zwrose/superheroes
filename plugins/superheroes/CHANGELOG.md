@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.4.0...superheroes-v0.5.0) (2026-07-03)
+
+
+### Features
+
+* **superheroes:** add run_watch live watch CLI ([#155](https://github.com/zwrose/superheroes/issues/155)) ([015d770](https://github.com/zwrose/superheroes/commit/015d770ef137ca87466e0b2a7c6df3576e36657d))
+* **superheroes:** add task-scoped labels to build-phase leaves ([#150](https://github.com/zwrose/superheroes/issues/150)) ([#153](https://github.com/zwrose/superheroes/issues/153)) ([8f9effc](https://github.com/zwrose/superheroes/commit/8f9effc52de87c25e601fdcb5621f0c843e8a6bb))
+* **superheroes:** close the [#118](https://github.com/zwrose/superheroes/issues/118) courier-collapse acceptance gaps and land the D3 review-round durability rework ([#138](https://github.com/zwrose/superheroes/issues/138)) ([05a1965](https://github.com/zwrose/superheroes/commit/05a1965b70f0a36173375dd239fec0566c198979))
+* **superheroes:** record store provenance and add orphan report/sweep ([#134](https://github.com/zwrose/superheroes/issues/134)) ([b153911](https://github.com/zwrose/superheroes/commit/b153911ed2774c965a24dea63328a8b62c0ba0db))
+
+
+### Bug Fixes
+
+* **superheroes:** build-half resolver bypass + transport hardening ([#146](https://github.com/zwrose/superheroes/issues/146)) ([a705f5a](https://github.com/zwrose/superheroes/commit/a705f5aa78729654a489dcea264b482aba325eb8))
+* **superheroes:** collapse the review-loop bookkeeping stretches to the [#118](https://github.com/zwrose/superheroes/issues/118) 0-or-1-leaf bar ([#141](https://github.com/zwrose/superheroes/issues/141)) ([e5b0091](https://github.com/zwrose/superheroes/commit/e5b009168ef4844edf527833fafdb62335d70c65))
+* **superheroes:** compose terminal-record Python-side to survive the courier ([#144](https://github.com/zwrose/superheroes/issues/144)) ([4e496c8](https://github.com/zwrose/superheroes/commit/4e496c84161f395b7539c130b325c9a2055b6edc))
+* **superheroes:** derive policy subjects from code-fixer file-path shape ([#157](https://github.com/zwrose/superheroes/issues/157)) ([#158](https://github.com/zwrose/superheroes/issues/158)) ([538e883](https://github.com/zwrose/superheroes/commit/538e883219ccc22f3c91a670ed97fb919042f882))
+* **superheroes:** descriptive exec-courier labels ([#151](https://github.com/zwrose/superheroes/issues/151)) ([#154](https://github.com/zwrose/superheroes/issues/154)) ([fc256fb](https://github.com/zwrose/superheroes/commit/fc256fb05e9f3ab8d483c8f7b78eb042a6fe737e))
+* **superheroes:** drop top-level allOf from FINDINGS_SCHEMA ([#156](https://github.com/zwrose/superheroes/issues/156)) ([2eef51b](https://github.com/zwrose/superheroes/commit/2eef51b7fe3dcea9196dedd7df6103ca24e9c12f))
+* **superheroes:** fence-blind runHelper + two-JSON-line persist park (run-8 dogfood) ([#140](https://github.com/zwrose/superheroes/issues/140)) ([a2eb441](https://github.com/zwrose/superheroes/commit/a2eb4413ab574de7e870c7fa98e98b9af959dcf8))
+* **superheroes:** finish [#123](https://github.com/zwrose/superheroes/issues/123) unified layout migration for review-code ([#148](https://github.com/zwrose/superheroes/issues/148)) ([476d167](https://github.com/zwrose/superheroes/commit/476d1675d248265f4d7703dcce9ec92e87a6b58a))
+* **superheroes:** five showrunner-spine defects from the 2026-07-02 live dogfood run ([#136](https://github.com/zwrose/superheroes/issues/136)) ([d248a29](https://github.com/zwrose/superheroes/commit/d248a295d6cb2eaa0cee08a4f83b58a7fc217e1a))
+* **superheroes:** harden run_watch fail-soft + status accuracy ([#159](https://github.com/zwrose/superheroes/issues/159)) ([68a5297](https://github.com/zwrose/superheroes/commit/68a529744d24fc062792f23818c902680c670093))
+* **superheroes:** harden showrunner leaf model governance ([#142](https://github.com/zwrose/superheroes/issues/142)) ([c6bb970](https://github.com/zwrose/superheroes/commit/c6bb970e278bf3ebf524abe1161d61f73f81f46d))
+* **superheroes:** restore review-loop convergence levers ([#145](https://github.com/zwrose/superheroes/issues/145)) ([c1127b0](https://github.com/zwrose/superheroes/commit/c1127b08792aacc13c0ccfe0db435b8baffc455c))
+* **superheroes:** stop fabricating verification receipts + remove dead build_progress_cli.py ([#139](https://github.com/zwrose/superheroes/issues/139)) ([9f29253](https://github.com/zwrose/superheroes/commit/9f29253ad0aff3ca543217d90f42d065e27a5c52))
+* **superheroes:** Task-Id body parse + workhorse park lease release ([#147](https://github.com/zwrose/superheroes/issues/147)) ([0034454](https://github.com/zwrose/superheroes/commit/0034454ec3daae370312877d7de27cf75a3ce483))
+
 ## [0.4.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.3.0...superheroes-v0.4.0) (2026-07-02)
 
 
