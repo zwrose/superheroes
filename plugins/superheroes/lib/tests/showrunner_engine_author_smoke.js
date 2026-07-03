@@ -88,11 +88,15 @@ const USABLE_SIGNAL = JSON.stringify({ usable: true, recorded: 'abc123', expecte
 const NOT_USABLE_SIGNAL = JSON.stringify({ usable: false, recorded: '', expected: '' })
 
 // Agent stub for producePhase: emit-signals sequence + external dispatch stubs + native author trap.
-function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [] }) {
+function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [],
+  events = [], gitSnapshots = null, strayPath = null, preExistingDirty = null }) {
   const seq = usableSeq.slice()
+  let gitSnapIdx = 0
+  const gitSeq = gitSnapshots || ['', '']
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (opts && opts.courier) {
+      const execLabel = (opts && opts.label) || ''
       if (prompt.includes('emit-signals')) {
         return [{ index: 0, ok: true, stdout: seq.shift() ? USABLE_SIGNAL : NOT_USABLE_SIGNAL }]
       }
@@ -101,7 +105,24 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         if (m) { try { notifyLedger.push(...JSON.parse(m[1])) } catch (_) {} }
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
-      if (prompt.includes('reset author-plan draft')) return [{ index: 0, ok: true, stdout: '' }]
+      if (execLabel === 'author-plan git snapshot' || prompt.includes('git status --porcelain')) {
+        if (gitSnapshots) {
+          const raw = gitSeq[gitSnapIdx++]
+          if (raw === null) return [{ index: 0, ok: false, stdout: '' }]   // simulated courier flake
+          return [{ index: 0, ok: true, stdout: raw ?? '' }]
+        }
+        const before = gitSnapIdx === 0
+        gitSnapIdx++
+        if (before && preExistingDirty) return [{ index: 0, ok: true, stdout: preExistingDirty }]
+        if (!before && strayPath) return [{ index: 0, ok: true, stdout: ` M ${strayPath}` }]
+        return [{ index: 0, ok: true, stdout: '' }]
+      }
+      if (execLabel === 'author-plan revert strays') {
+        events.push('revert-strays')
+        const n = (prompt.match(/^\d+\./gm) || ['1.']).length
+        return Array.from({ length: n }, (_, i) => ({ index: i, ok: true, stdout: '' }))
+      }
+      if (execLabel === 'reset author-plan draft') { events.push('reset'); return [{ index: 0, ok: true, stdout: '' }] }
       if (prompt.includes('engine_adapter.py build-argv')) {
         externalRuns.push(prompt)
         return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '-p', '--trust', '-f']) }]
@@ -116,7 +137,7 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     if (label === 'lib') return { ok: true }
-    if (label.startsWith('author-')) { nativeAuthorCalls.push(prompt); return { status: 'ok' } }
+    if (label.startsWith('author-')) { events.push('native'); nativeAuthorCalls.push(prompt); return { status: 'ok' } }
     return null
   }
 }
@@ -130,8 +151,8 @@ async function produceSmokes() {
     globalThis.__SR_OVERRIDES = { 'author-plan': 'fable' }
 
     // (1) plan doc + planAuthor:cursor + external ok -> external authored, native author NOT called.
-    let externalRuns = [], nativeCalls = [], notifyLedger = []
-    global.agent = produceAgent({ usableSeq: [false, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger })
+    let externalRuns = [], nativeCalls = [], notifyLedger = [], events = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger, events })
     let r = await sr.producePhase('plan', 'wi-ext')
     assert.strictEqual(r.confidence, 'high', '(1) external author + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(1) exactly one external dispatch')
@@ -150,12 +171,54 @@ async function produceSmokes() {
     assert.strictEqual(nativeCalls.length, 1, '(2) tasks authors native')
 
     // (3) external dispatch fails -> falls open to the native author within the same attempt.
-    externalRuns = []; nativeCalls = []
-    global.agent = produceAgent({ usableSeq: [false, true], externalOk: false, externalRuns, nativeAuthorCalls: nativeCalls })
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: false, externalRuns, nativeAuthorCalls: nativeCalls, events })
     r = await sr.producePhase('plan', 'wi-fallopen')
     assert.strictEqual(r.confidence, 'high', '(3) fall-open native author + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(3) external was attempted once')
     assert.strictEqual(nativeCalls.length, 1, '(3) native author ran after the external failure (fall-open)')
+    assert.ok(events.indexOf('reset') >= 0 && events.indexOf('native') >= 0, '(3) reset and native both ran')
+    assert.ok(events.indexOf('reset') < events.indexOf('native'), '(3) reset author-plan draft before native author')
+
+    // (5) stray checkout edit on external success -> reverted + native fallback within the same attempt.
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events, strayPath: 'README.md' })
+    r = await sr.producePhase('plan', 'wi-stray')
+    assert.strictEqual(r.confidence, 'high', '(5) stray edit triggers native fallback + usable -> high')
+    assert.strictEqual(externalRuns.length, 1, '(5) external was attempted once')
+    assert.strictEqual(nativeCalls.length, 1, '(5) native author ran after stray revert')
+    assert.ok(events.includes('revert-strays'), '(5) stray paths were reverted')
+    assert.ok(events.indexOf('reset') < events.indexOf('native'), '(5) reset before native after stray edit')
+
+    // (6) pre-existing dirty file outside doc dir is left untouched on external success.
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events,
+      preExistingDirty: ' M README.md' })
+    r = await sr.producePhase('plan', 'wi-predirty')
+    assert.strictEqual(r.confidence, 'high', '(6) pre-existing dirty + external usable -> high')
+    assert.strictEqual(externalRuns.length, 1, '(6) external dispatch ran')
+    assert.strictEqual(nativeCalls.length, 0, '(6) native author NOT called when no new strays')
+    assert.ok(!events.includes('revert-strays'), '(6) pre-existing dirty file was not reverted')
+
+    // (7) external ok but unusable draft -> native fallback within the same attempt (not 3 external retries).
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, false, true, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, events })
+    r = await sr.producePhase('plan', 'wi-unusable-ext')
+    assert.strictEqual(r.confidence, 'high', '(7) unusable external draft falls open to native -> high')
+    assert.strictEqual(externalRuns.length, 1, '(7) only one external attempt before native fallback')
+    assert.strictEqual(nativeCalls.length, 1, '(7) native author ran after unusable external draft')
+    assert.ok(events.indexOf('reset') < events.indexOf('native'), '(7) reset before native after unusable external draft')
+
+    // (8) FAILED before-snapshot (courier flake) + pre-existing dirty checkout: revert NOTHING
+    // (an empty "before" would make the user's own edits look stray), discard the draft, native fallback.
+    externalRuns = []; nativeCalls = []; events = []
+    global.agent = produceAgent({ usableSeq: [false, true], externalOk: true, externalRuns,
+      nativeAuthorCalls: nativeCalls, events, gitSnapshots: [null, ' M user-own-edit.txt'] })
+    r = await sr.producePhase('plan', 'wi-snap-flake')
+    assert.strictEqual(r.confidence, 'high', '(8) unconfinable dispatch falls open to native -> high')
+    assert.ok(!events.includes('revert-strays'), '(8) NOTHING is reverted when the before-snapshot failed')
+    assert.ok(events.includes('reset'), '(8) external draft is discarded when unconfinable')
+    assert.strictEqual(nativeCalls.length, 1, '(8) native author ran after unconfinable dispatch')
 
     // (4) planAuthor absent/claude -> plan authors native, no external dispatch.
     globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', effort: {} }

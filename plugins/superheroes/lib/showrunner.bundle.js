@@ -5757,6 +5757,57 @@ async function _resetAuthorPlanDraft(workItem, doc) {
   await exec([cmd], 'reset author-plan draft')
 }
 
+// author-plan confinement: snapshot git status --porcelain via the exec courier.
+async function _snapshotGitPorcelain() {
+  const results = await exec([selfContained('git status --porcelain')], 'author-plan git snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _parsePorcelain(text) {
+  const entries = new Map()
+  if (!text) return entries
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue
+    const code = line.slice(0, 2)
+    let path = line.slice(3).trim()
+    const arrow = path.indexOf(' -> ')
+    if (arrow >= 0) path = path.slice(arrow + 4)
+    if (path) entries.set(path, code)
+  }
+  return entries
+}
+
+function _pathInDocDir(path, docDir) {
+  const base = String(docDir).replace(/\/$/, '')
+  const p = String(path).replace(/^\.\//, '')
+  return p === base || p.startsWith(base + '/')
+}
+
+// After an external author-plan dispatch, revert checkout paths that newly dirtied outside the
+// work-item doc dir during the dispatch window. Pre-existing dirty paths are never touched.
+// A null snapshot (courier flake) on EITHER side makes strays indistinguishable from the user's
+// own pre-existing edits — revert NOTHING and report unconfined (the caller fails the dispatch
+// closed to the native author). Reverting against an empty "before" would checkout-revert the
+// user's own uncommitted work.
+async function _revertAuthorPlanStrays(workItem, beforeText, afterText) {
+  if (beforeText == null || afterText == null) return { strayPaths: [], unconfined: true }
+  const docDir = docDirFor(workItem)
+  const before = _parsePorcelain(beforeText)
+  const after = _parsePorcelain(afterText)
+  const strays = []
+  for (const [p, code] of after) {
+    if (_pathInDocDir(p, docDir)) continue
+    if (before.has(p)) continue
+    strays.push({ path: p, untracked: code === '??' || code[0] === '?' })
+  }
+  if (strays.length === 0) return { strayPaths: [] }
+  const revertCmds = strays.map(({ path, untracked }) =>
+    untracked ? selfContained(`rm -f ${shq(path)}`) : selfContained(`git checkout -- ${shq(path)}`))
+  await exec(revertCmds, 'author-plan revert strays')
+  return { strayPaths: strays.map((s) => s.path) }
+}
+
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
 // #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
 // authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
@@ -5822,12 +5873,27 @@ async function producePhase(phase, workItem) {
     let authored = null
     if (aEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
+      const beforeSnap = await _snapshotGitPorcelain()
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt,
         cwd: procCwd(), model,
       })
-      if (res && res.ok) authored = { status: 'ok', notify: res.notify || [] }
-      else await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
+      const afterSnap = await _snapshotGitPorcelain()
+      const { strayPaths, unconfined } = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
+      if (strayPaths.length || unconfined) {
+        if (typeof globalThis.log === 'function') {
+          globalThis.log(unconfined
+            ? 'author-plan: confinement snapshot unavailable — external draft discarded (nothing reverted)'
+            : 'author-plan: stray checkout edits reverted: ' + strayPaths.join(', '))
+        }
+        await _resetAuthorPlanDraft(workItem, doc) // confinement failure -> fall open to native
+      } else if (res && res.ok) {
+        const draftNow = await usableDraft(workItem, doc)
+        if (draftNow.usable) authored = { status: 'ok', notify: res.notify || [] }
+        else await _resetAuthorPlanDraft(workItem, doc) // unusable external draft -> fall open to native
+      } else {
+        await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
+      }
     }
     if (authored == null) {
       authored = await agent(

@@ -213,6 +213,18 @@ def test_parse_result_author_plan_surfaces_scrubbed_notify():
     assert "[REDACTED]" in n["message"]
 
 
+def test_parse_result_author_plan_scrubs_notify_identity():
+    stdout = json.dumps({"status": "ok", "notify": [
+        {"identity": "Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+         "message": "took a default"}]})
+    res = EA.parse_result("cursor", "author-plan", stdout)
+    assert res["ok"] is True
+    n = res["notify"][0]
+    assert "sk-EXAMPLEfakenotarealsecret0" not in n["identity"]
+    assert "[REDACTED]" in n["identity"]
+    assert n["message"] == "took a default"
+
+
 def test_parse_result_author_plan_no_notify_is_ok_empty():
     # the doc's acceptance gate is the deterministic usableDraft post-check, not this parse
     assert EA.parse_result("cursor", "author-plan", json.dumps({"type": "result"})) == \
