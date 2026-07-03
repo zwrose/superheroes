@@ -83,3 +83,47 @@ def test_halts_at_max_iterations_with_blocking():
 def test_no_halt_at_max_iterations_once_resolved():
     r = [rnd(1, [imp("a")]), rnd(2, [])]
     assert check_circuit_breaker(r, 2)["halt"] is False
+
+
+def _run21_reviewers():
+    return [
+        "architecture-reviewer", "code-reviewer", "security-reviewer",
+        "test-reviewer", "premortem-reviewer",
+    ]
+
+
+def _all_missing_dims():
+    return {r: {"status": "missing", "findings": [], "confidence": "low"} for r in _run21_reviewers()}
+
+
+def _all_run_dims():
+    return {r: {"status": "run", "findings": [], "confidence": "high"} for r in _run21_reviewers()}
+
+
+def _blocking_three(suffix=""):
+    tag = f" {suffix}".rstrip()
+    return [
+        {"file": "plugins/superheroes/lib/acceptance_run.py", "title": f"layering{tag}", "severity": "Important", "dimension": "Architecture"},
+        {"file": "plugins/superheroes/lib/acceptance_deps.py", "title": f"deps{tag}", "severity": "Critical", "dimension": "Security"},
+        {"file": "plugins/superheroes/lib/acceptance_launch.py", "title": f"launch{tag}", "severity": "Important", "dimension": "Code"},
+    ]
+
+
+def test_ignores_transport_failed_round_for_no_net_progress():
+    rounds = [
+        {"round": 1, "findings": [], "dimensions": _all_missing_dims()},
+        {"round": 2, "findings": _blocking_three("r2"), "dimensions": _all_run_dims()},
+        {"round": 3, "findings": _blocking_three("r3"), "dimensions": _all_run_dims()},
+    ]
+    assert check_circuit_breaker(rounds, 7)["halt"] is False
+
+
+def test_halts_on_three_real_review_round_plateau():
+    rounds = [
+        {"round": 1, "findings": _blocking_three("a"), "dimensions": _all_run_dims()},
+        {"round": 2, "findings": _blocking_three("b"), "dimensions": _all_run_dims()},
+        {"round": 3, "findings": _blocking_three("c"), "dimensions": _all_run_dims()},
+    ]
+    res = check_circuit_breaker(rounds, 7)
+    assert res["halt"] is True
+    assert res["reason"] == "no-net-progress"

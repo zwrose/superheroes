@@ -251,6 +251,16 @@ function _blockingCountExcludingGeneralize(roundRec) {
   if (!generalize.size) return blocking.length
   return blocking.filter((f) => !generalize.has(recurrenceKey(f))).length
 }
+function _roundReviewed(roundRec) {
+  const dims = roundRec && roundRec.dimensions
+  if (!dims || typeof dims !== 'object' || Array.isArray(dims)) return true
+  const entries = Object.values(dims)
+  if (!entries.length) return true
+  return entries.some((d) => d && d.status === 'run')
+}
+function _reviewedRounds(rounds) {
+  return (rounds || []).filter(_roundReviewed)
+}
 function checkCircuitBreaker(rounds, maxRounds) {
   const n = rounds.length
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
@@ -259,21 +269,23 @@ function checkCircuitBreaker(rounds, maxRounds) {
     return { halt: true, reason: 'max-iterations',
       detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
   }
-  if (n >= 3) {
-    const cN = _blockingCountExcludingGeneralize(rounds[n - 1])
-    const cN1 = _blockingCountExcludingGeneralize(rounds[n - 2])
-    const cN2 = _blockingCountExcludingGeneralize(rounds[n - 3])
+  const reviewed = _reviewedRounds(rounds)
+  const rn = reviewed.length
+  if (rn >= 3) {
+    const cN = _blockingCountExcludingGeneralize(reviewed[rn - 1])
+    const cN1 = _blockingCountExcludingGeneralize(reviewed[rn - 2])
+    const cN2 = _blockingCountExcludingGeneralize(reviewed[rn - 3])
     if (cN > 0 && cN >= cN1 && cN1 >= cN2) {
       return { halt: true, reason: 'no-net-progress',
         detail: `Blocking-finding count did not decrease over two rounds (${cN2} → ${cN1} → ${cN}).` }
     }
   }
-  if (n >= 2) {
-    const latestRec = rounds[n - 1]
+  if (rn >= 2) {
+    const latestRec = reviewed[rn - 1]
     const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
     const challenged = new Set((latestRec.coverageDecisions || []).filter((d) => d && d.classKey && d.challengedBy).map((d) => d.classKey))
     const latestBlocking = _blocking(latestRec)
-    const prevIds = new Set(_blocking(rounds[n - 2]).map(recurrenceKey))
+    const prevIds = new Set(_blocking(reviewed[rn - 2]).map(recurrenceKey))
     const recurring = latestBlocking.filter((f) => prevIds.has(recurrenceKey(f)))
     const challengedRecurring = recurring.filter((f) => challenged.has(recurrenceKey(f)))
     if (challengedRecurring.length) {
@@ -927,10 +939,24 @@ function assembleRounds(records, deferredSet) {
   for (const rec of records) {
     if (!rec || typeof rec !== 'object') continue
     const findings = (rec.findings || []).filter((f) => !skip.has(circuitBreaker.findingIdentity(f)))
-    out.push({ round: Number(rec.round), findings })
+    out.push({
+      round: Number(rec.round),
+      findings,
+      dimensions: rec.dimensions,
+      coverageDecisions: rec.coverageDecisions,
+    })
   }
   out.sort((a, b) => a.round - b.round)
   return out
+}
+
+function _breakerRoundDimensions(roundFindings) {
+  const dims = {}
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (!result || typeof result !== 'object') continue
+    dims[name] = { status: result.status || 'run' }
+  }
+  return dims
 }
 
 function buildPreviousDimensionState(records) {
@@ -1590,6 +1616,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const thisRound = {
       round,
       findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
+      dimensions: _breakerRoundDimensions(roundFindings),
       coverageDecisions: coverageDecisions || [],
       generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions || []),
     }

@@ -112,6 +112,28 @@ function main() {
   assert.strictEqual(policy.dimensions['premortem-reviewer'].tier, 'reviewer',
     'touched failure-mode must run cheap-first on Sonnet')
 
+  // Runtime hop: normalizeFixResult → extras.changedSubjects → planRound input (review_panel_shell.js:566→482).
+  const lastExtras = normalized.extras
+  assert.deepStrictEqual(lastExtras.changedSubjects, ['Architecture', 'Code', 'Failure-Mode'])
+  const wired = roundPolicy.planRound({
+    round: 2,
+    dimensions: [
+      'architecture-reviewer', 'code-reviewer', 'security-reviewer',
+      'test-reviewer', 'premortem-reviewer',
+    ],
+    changedSubjects: lastExtras.changedSubjects,
+    previous: {
+      'architecture-reviewer': { status: 'run', confidence: 'high', hasFindings: true, subjects: ['Architecture'], round: 1 },
+      'code-reviewer': { status: 'run', confidence: 'high', hasFindings: true, subjects: ['Code'], round: 1 },
+      'security-reviewer': { status: 'run', confidence: 'high', hasFindings: false, subjects: ['Security'], round: 1 },
+      'test-reviewer': { status: 'run', confidence: 'high', hasFindings: false, subjects: ['Test'], round: 1 },
+      'premortem-reviewer': { status: 'run', confidence: 'high', hasFindings: true, subjects: ['Failure-Mode'], round: 1 },
+    },
+    confirmation: false,
+  })
+  assert.strictEqual(wired.escalationPolicy, policy.escalationPolicy,
+    'extras.changedSubjects must be the exact signal planRound receives on the next round')
+
   console.log('ok: _policyChangedSubjects derives policy subjects from code-fixer file-path shape')
 }
 

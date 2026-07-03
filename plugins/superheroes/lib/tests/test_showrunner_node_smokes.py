@@ -54,6 +54,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_review_breaker_halt_smoke.js",
     # #157: code-fixer changedSubjects derivation (file paths + object fixes -> policy subjects).
     "plugins/superheroes/lib/tests/showrunner_policy_changed_subjects_smoke.js",
+    # #157 follow-up: circuit breaker ignores transport-failed (all-missing) rounds.
+    "plugins/superheroes/lib/tests/showrunner_circuit_breaker_reviewed_rounds_smoke.js",
     # #141 fold 2: reviewPanel honors the preloaded review_setup_gather.py result (mkdir + deferred
     # seed + load-summary + coverage folded into ONE leaf); no preloaded -> unfolded fallback.
     "plugins/superheroes/lib/tests/showrunner_review_setup_gather_smoke.js",
