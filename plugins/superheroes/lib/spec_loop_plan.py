@@ -170,10 +170,14 @@ def _read_findings(session_dir, dimension, tier):
     except (OSError, ValueError):
         return {"valid": False, "why": "malformed"}
     if isinstance(data, list):
-        findings = [f for f in data if isinstance(f, dict)]
+        if any(not isinstance(f, dict) for f in data):
+            return {"valid": False, "why": "malformed"}
+        findings = data
         confidence = "low" if (tier == CHEAP and len(findings) > 0) else "high"
     elif isinstance(data, dict) and isinstance(data.get("findings"), list):
-        findings = [f for f in data["findings"] if isinstance(f, dict)]
+        if any(not isinstance(f, dict) for f in data["findings"]):
+            return {"valid": False, "why": "malformed"}
+        findings = data["findings"]
         confidence = str(data.get("confidence") or "").lower()
         if confidence not in ("high", "low"):
             return {"valid": False, "why": "malformed"}
@@ -406,6 +410,7 @@ def cmd_record(session_dir, round_no, dimensions):
             dims[d] = {"dimension": d, "status": "escalation-pending", "round": round_no}
             continue
         if not result["valid"]:
+            _archive_findings(session_dir, d, round_no, tag="invalid")
             dims[d] = {"dimension": d, "status": "missing", "confidence": "low",
                        "round": round_no}
             continue

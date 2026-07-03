@@ -413,14 +413,30 @@ def test_decide_delegates_to_shared_round_policy(tmp_path, capsys):
     (tmp_path / "sess" / "spec.md").write_text(SPEC_V2, encoding="utf-8")
     calls = {}
     real = SLP.review_round_policy.plan_round
+    sentinel_plan = {
+        "roundKind": "intermediate",
+        "dimensions": {
+            "architecture-reviewer": {"action": "run", "tier": "reviewer",
+                                      "reason": "sentinel-plan"},
+            "code-reviewer": {"action": "skip", "tier": "reviewer-deep",
+                              "reason": "sentinel-skip", "carriedFromRound": 1},
+            "security-reviewer": {"action": "skip", "tier": "reviewer-deep",
+                                  "reason": "sentinel-skip", "carriedFromRound": 1},
+            "test-reviewer": {"action": "skip", "tier": "reviewer-deep",
+                              "reason": "sentinel-skip", "carriedFromRound": 1},
+            "premortem-reviewer": {"action": "skip", "tier": "reviewer-deep",
+                                   "reason": "sentinel-skip", "carriedFromRound": 1},
+        },
+        "escalationPolicy": "cheap-first",
+    }
 
     def spy(state):
         calls["state"] = state
-        return real(state)
+        return sentinel_plan
 
     SLP.review_round_policy.plan_round = spy
     try:
-        _decide(capsys, session_dir, 1)
+        out = _decide(capsys, session_dir, 1)
     finally:
         SLP.review_round_policy.plan_round = real
     assert calls["state"]["round"] == 2
@@ -430,6 +446,9 @@ def test_decide_delegates_to_shared_round_policy(tmp_path, capsys):
     prev = calls["state"]["previous"]
     assert prev["architecture-reviewer"]["hasFindings"] is True
     assert prev["security-reviewer"]["confidence"] == "high"
+    assert out["dims_to_run"] == [{"dimension": "architecture-reviewer", "tier": "reviewer",
+                                   "reason": "sentinel-plan"}]
+    assert all(s["reason"] == "sentinel-skip" for s in out["skipped"])
 
 
 def test_gate_decision_delegates_to_loop_state(tmp_path, capsys):
@@ -442,15 +461,18 @@ def test_gate_decision_delegates_to_loop_state(tmp_path, capsys):
 
     def spy(*args, **kwargs):
         calls["args"] = args
-        return real(*args, **kwargs)
+        return ("halt", True, "sentinel-halt")
 
     SLP.loop_state.decide = spy
     try:
         out = _decide(capsys, session_dir, 1)
     finally:
         SLP.loop_state.decide = real
-    assert out["action"] == "exit_clean"
     assert calls["args"][0] == 0  # blocking fixed derived from compiled.json, not self-reported
+    assert out["action"] == "halt"
+    assert out["mandatory"] is True
+    assert out["reason"] == "sentinel-halt"
+    assert out["dims_to_run"] == []
 
 
 # --- changed-section diff ------------------------------------------------------
