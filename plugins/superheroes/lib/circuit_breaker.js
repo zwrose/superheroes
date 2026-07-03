@@ -11,8 +11,12 @@ function normalizeTitle(title) {
   t = t.replace(_WS, ' ')
   return t.trim()
 }
+function findingLabel(finding) {
+  if (!finding || typeof finding !== 'object') return ''
+  return finding.title || finding.summary || ''
+}
 function findingIdentity(finding) {
-  return `${(finding && finding.file) || ''}::${normalizeTitle((finding && finding.title) || '')}`
+  return `${(finding && finding.file) || ''}::${normalizeTitle(findingLabel(finding))}`
 }
 function recurrenceKey(finding) {
   if (finding && finding.classKey) return finding.classKey

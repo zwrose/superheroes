@@ -7,7 +7,7 @@ function _norm(value) {
 
 function classKey(finding) {
   finding = finding || {}
-  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(finding.title)}`
+  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(finding.title || finding.summary)}`
 }
 
 function recurrentClasses(records, coverageDecisions) {

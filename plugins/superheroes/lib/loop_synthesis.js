@@ -2,6 +2,15 @@
 const { findingIdentity } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
 const _BLOCKING = new Set(['Critical', 'Important'])
+const _DEFAULT_BLOCKING_SEVERITY = 'Important'
+
+function _keptSeverity(f, v) {
+  const verdictSeverity = (v && typeof v === 'object') ? v.severity : null
+  if (_TIERS.has(verdictSeverity)) return verdictSeverity
+  if (_TIERS.has(f && f.severity)) return f.severity
+  return _DEFAULT_BLOCKING_SEVERITY
+}
+
 function consume(merged, leafVerdicts) {
   const byId = Object.create(null)   // null-proto: byId[identity] tests own keys only (Python dict parity)
   if (Array.isArray(leafVerdicts)) {
@@ -21,8 +30,7 @@ function consume(merged, leafVerdicts) {
       continue
     }
     const kept = Object.assign({}, f)
-    const sev = (v && typeof v === 'object') ? v.severity : null
-    if (_TIERS.has(sev)) kept.severity = sev
+    kept.severity = _keptSeverity(f, v)
     survivors.push(kept)
   }
   return { findings: survivors, drops }
