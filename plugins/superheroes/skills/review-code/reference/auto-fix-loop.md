@@ -12,7 +12,7 @@
 
 ## Specialist Dispatch Prompt Template
 
-Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), the resolved absolute `$CORE` path (threat model + canonical patterns), and the resolved absolute `$LAYER` path (scope exclusions, focus hints, conventions). Subagents do not inherit shell vars.
+Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), `$CORE` (threat model + canonical patterns), and `$LAYER` (scope, focus, conventions). When both point at the same legacy file, read all sections from that path. Subagents do not inherit shell vars.
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.

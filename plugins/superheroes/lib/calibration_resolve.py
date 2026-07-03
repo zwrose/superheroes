@@ -37,6 +37,17 @@ def _legacy_in_repo(cwd, hero=REVIEW_CREW):
     return os.path.join(_repo_root(cwd), sub)
 
 
+def _unified_in_repo_layer(cwd, hero=REVIEW_CREW):
+    path = os.path.join(_repo_root(cwd), ".claude", "superheroes", hero + ".md")
+    return path if os.path.isfile(path) else None
+
+
+def _unified_global_layer(cwd, hero=REVIEW_CREW, root=None):
+    """Direct probe of control-plane config/<hero>.md (matches review_store._unified_global)."""
+    path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", hero + ".md")
+    return path if os.path.isfile(path) else None
+
+
 def _legacy_global_entry(cwd):
     """Legacy global entry dir when review-profile.md exists there, else None."""
     g = store_core.resolve_global(cwd, review_store.store_root(), heal=False)
@@ -53,52 +64,84 @@ def _in_repo_path(path, repo):
         return False
 
 
+def _core_beside_layer(layer_p, cwd, root):
+    beside = os.path.join(os.path.dirname(layer_p), "core.md")
+    if os.path.isfile(beside):
+        return beside
+    core_p = core_md.core_path(cwd, root)
+    return core_p if os.path.isfile(core_p) else None
+
+
+def _with_dispatch_fields(out):
+    """dispatch_core/dispatch_layer: unified paths when present, else legacy single-file."""
+    legacy = out.get("legacy_path")
+    leg_ok = legacy and os.path.isfile(legacy)
+    out["dispatch_core"] = out.get("core_path") or (legacy if leg_ok else None)
+    out["dispatch_layer"] = out.get("layer_path") or (legacy if leg_ok else None)
+    return out
+
+
 def resolve(cwd, root=None, hero=REVIEW_CREW):
     """Resolve unified + legacy calibration locations for review-crew consumers.
 
-    Returns:
-      location: in-repo | global | none
-      exists: True when unified layer OR legacy profile is present
-      layout: unified | legacy | None
-      core_path, layer_path, legacy_path (each str or None)
+    Returns location, exists, layout, core_path, layer_path, legacy_path, plus
+    dispatch_core and dispatch_layer (paths specialists should read — legacy
+    single-file fills both when no unified split exists yet).
     """
     repo = _repo_root(cwd)
-    core_p = core_md.core_path(cwd, root)
-    layer_p = layer_path(cwd, hero, root)
     legacy_in = _legacy_in_repo(cwd, hero)
 
-    if os.path.isfile(layer_p):
-        loc = mode_registry.IN_REPO if _in_repo_path(layer_p, repo) else mode_registry.GLOBAL
-        return {"location": loc, "exists": True, "layout": "unified",
-                "core_path": core_p if os.path.isfile(core_p) else None,
-                "layer_path": layer_p,
-                "legacy_path": legacy_in if legacy_in and os.path.isfile(legacy_in) else None}
+    layer_p = _unified_in_repo_layer(cwd, hero)
+    if layer_p:
+        return _with_dispatch_fields({
+            "location": mode_registry.IN_REPO, "exists": True, "layout": "unified",
+            "core_path": _core_beside_layer(layer_p, cwd, root),
+            "layer_path": layer_p,
+            "legacy_path": legacy_in if legacy_in and os.path.isfile(legacy_in) else None,
+        })
 
     if legacy_in and os.path.isfile(legacy_in):
-        return {"location": mode_registry.IN_REPO, "exists": True, "layout": "legacy",
-                "core_path": core_p if os.path.isfile(core_p) else None,
-                "layer_path": None, "legacy_path": legacy_in}
+        return _with_dispatch_fields({
+            "location": mode_registry.IN_REPO, "exists": True, "layout": "legacy",
+            "core_path": None, "layer_path": None, "legacy_path": legacy_in,
+        })
+
+    layer_p = _unified_global_layer(cwd, hero, root)
+    if layer_p:
+        return _with_dispatch_fields({
+            "location": mode_registry.GLOBAL, "exists": True, "layout": "unified",
+            "core_path": _core_beside_layer(layer_p, cwd, root),
+            "layer_path": layer_p, "legacy_path": None,
+        })
 
     legacy_dir = _legacy_global_entry(cwd)
     if legacy_dir:
         legacy_p = os.path.join(legacy_dir, review_store.FILENAMES["profile"])
-        return {"location": mode_registry.GLOBAL, "exists": True, "layout": "legacy",
-                "core_path": core_p if os.path.isfile(core_p) else None,
-                "layer_path": None, "legacy_path": legacy_p}
+        return _with_dispatch_fields({
+            "location": mode_registry.GLOBAL, "exists": True, "layout": "legacy",
+            "core_path": None, "layer_path": None, "legacy_path": legacy_p,
+        })
 
-    return {"location": "none", "exists": False, "layout": None,
-            "core_path": core_p if os.path.isfile(core_p) else None,
-            "layer_path": None, "legacy_path": None}
+    layer_p = layer_path(cwd, hero, root)
+    if os.path.isfile(layer_p):
+        loc = mode_registry.IN_REPO if _in_repo_path(layer_p, repo) else mode_registry.GLOBAL
+        return _with_dispatch_fields({
+            "location": loc, "exists": True, "layout": "unified",
+            "core_path": _core_beside_layer(layer_p, cwd, root),
+            "layer_path": layer_p,
+            "legacy_path": legacy_in if legacy_in and os.path.isfile(legacy_in) else None,
+        })
+
+    return _with_dispatch_fields({
+        "location": "none", "exists": False, "layout": None,
+        "core_path": None, "layer_path": None, "legacy_path": None,
+    })
 
 
 def resolve_profile_path(cwd=None, root=None):
     """Hero-specific calibration path: unified layer first, else legacy profile."""
     info = resolve(cwd or os.getcwd(), root=root)
-    if info["layer_path"] and os.path.isfile(info["layer_path"]):
-        return info["layer_path"]
-    if info["legacy_path"] and os.path.isfile(info["legacy_path"]):
-        return info["legacy_path"]
-    return None
+    return info.get("dispatch_layer") or info.get("legacy_path")
 
 
 def main(argv):

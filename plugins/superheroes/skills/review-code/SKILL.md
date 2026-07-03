@@ -94,12 +94,9 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the c
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
   || { echo "calibration_resolve failed — continuing with strict fallback"; CAL='{"location":"none","exists":false,"core_path":null,"layer_path":null,"legacy_path":null}'; }
-CORE=$(printf '%s' "$CAL" | jq -r '.core_path // empty')
-LAYER=$(printf '%s' "$CAL" | jq -r '.layer_path // empty')
-PROFILE="$LAYER"
-if [ -z "$PROFILE" ]; then
-  PROFILE=$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')
-fi
+CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
+LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
+PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
 LOCATION=$(printf '%s' "$CAL" | jq -r .location)
 EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
@@ -172,13 +169,6 @@ if [ "$LOCATION" = "none" ]; then
   fi
   PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
-  # review-init inline (writes core.md + layer), then refresh paths:
-  CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
-    || CAL='{"location":"none","exists":false,"core_path":null,"layer_path":null,"legacy_path":null}'
-  CORE=$(printf '%s' "$CAL" | jq -r '.core_path // empty')
-  LAYER=$(printf '%s' "$CAL" | jq -r '.layer_path // empty')
-  PROFILE="$LAYER"; [ -z "$PROFILE" ] && PROFILE=$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')
-  LOCATION=$(printf '%s' "$CAL" | jq -r .location); EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 fi
 ```
 
@@ -193,6 +183,18 @@ VERIFY_CMD=$(python3 "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null | jq -r '
 ```
 
 When empty after resolve: `mode: unverified` skips the gate; `mode: review-only` degrades to one pass + presentation.
+
+**Refresh dispatch paths before specialists.** `review_code_config.py` (above) and bootstrap may migrate legacy → unified mid-run — re-resolve once:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+  || CAL='{"dispatch_core":null,"dispatch_layer":null,"exists":false}'
+CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
+LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
+PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
+EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
+```
 
 **PR mode:**
 
