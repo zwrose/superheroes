@@ -170,20 +170,40 @@ class _RealChild:
     def __init__(self, proc, terminal_path):
         self._proc = proc
         self._terminal_path = terminal_path
+        # Capture the pgid ONCE, up front, while the leader is still alive. Because the
+        # child is spawned with start_new_session=True, the leader's pid IS the pgid at
+        # spawn time. This must not be re-derived later via `os.getpgid(self._proc.pid)`:
+        # once the leader has been reaped, getpgid(leader_pid) raises ProcessLookupError
+        # even while OTHER members of the same numeric group are still alive — re-deriving
+        # it per-call would falsely report the group empty the instant the leader exits.
+        self._pgid = proc.pid
 
     def poll(self):
         return self._proc.poll()
 
     def killpg(self, sig):
         try:
-            os.killpg(os.getpgid(self._proc.pid), sig)
+            os.killpg(self._pgid, sig)
         except (ProcessLookupError, PermissionError, OSError):
             # Group already gone (or un-signalable) — treated as empty by group_empty().
             pass
 
     def group_empty(self):
-        # The group is empty once the leader has reaped; a live leader keeps the group.
-        return self._proc.poll() is not None
+        # Probe the WHOLE process group via the captured pgid, not just the leader
+        # (UFR-2): the leader can reap quickly on SIGTERM while subprocesses it spawned
+        # into the same group (subagent `claude` processes, in-flight `git`/`gh`) are
+        # still running. Signal 0 raises no signal, only checks whether any member
+        # survives. ProcessLookupError means the pgid has no surviving member -> confirmed
+        # empty. PermissionError means a member exists but is unsignalable by us -> treat
+        # that as NOT empty so escalation keeps trying rather than declaring victory early.
+        try:
+            os.killpg(self._pgid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        else:
+            return False
 
     def terminal_location(self):
         return self._terminal_path

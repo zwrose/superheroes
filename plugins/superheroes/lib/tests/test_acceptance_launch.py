@@ -1,5 +1,5 @@
 # plugins/superheroes/lib/tests/test_acceptance_launch.py
-import os, sys
+import os, subprocess, sys, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_launch as al
 
@@ -105,3 +105,34 @@ def test_kill_confirmed_dead_only_when_group_empty():
                  engine_pref_reader=lambda: {"all": "claude"})
     assert res["outcome"] == "killed"
     assert len(child.signals) >= 2  # SIGTERM then SIGKILL escalation
+
+
+def test_real_child_group_empty_probes_whole_group_not_just_leader():
+    # UFR-2 regression guard: `_RealChild.group_empty()` must probe the WHOLE process
+    # group, not just the leader. A leader that exits quickly while a subprocess it
+    # spawned into the same group survives must report group_empty()==False until that
+    # survivor is actually gone — otherwise the SIGKILL escalation is skipped and the
+    # survivor keeps running (and spending) after the harness reports a clean kill.
+    #
+    # The leader here backgrounds a `sleep` child (same pgid, since it never calls
+    # setsid) and exits immediately, mirroring "leader reaps fast, children linger".
+    proc = subprocess.Popen(
+        ["bash", "-c", "sleep 2 & disown; exit 0"], start_new_session=True)
+    child = al._RealChild(proc, "/tmp/does-not-matter.json")
+    try:
+        deadline = time.monotonic() + 5
+        while child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert child.poll() is not None  # the leader has exited
+        # The grandchild sleep is still running -> group must NOT be reported empty yet.
+        assert child.group_empty() is False
+        # Once the grandchild actually finishes, the group is confirmed empty.
+        deadline = time.monotonic() + 5
+        while not child.group_empty() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert child.group_empty() is True
+    finally:
+        try:
+            os.killpg(proc.pid, 9)
+        except OSError:
+            pass

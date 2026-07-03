@@ -168,7 +168,16 @@ def _run(args, cwd, timeout=15):
 def real_discover_artifacts(root):
     """`deps["discover_artifacts"]`: enumerate local/remote branches + open PRs whose
     names might carry a reserved stamp. Cleanup's own `acceptance_fixture.parse_stamp`
-    routing decides what's actually reaped — this only lists candidates."""
+    routing decides what's actually reaped — this only lists candidates.
+
+    A failed lookup (rc != 0: network blip / rate-limit / timeout) is "couldn't check",
+    NOT "confirmed nothing to discover" — silently omitting that artifact class would let
+    a real leaked branch/PR go both unreaped AND unreported. Instead of dropping it, a
+    synthetic placeholder artifact is appended, carrying the BARE reserved prefix (with a
+    non-`[a-z0-9]` separator so it deliberately never parses to a valid full stamp — see
+    `acceptance_fixture.parse_stamp`) so `acceptance_cleanup.plan` routes it to
+    `leave_behind` (never reaped) with a name that surfaces the degraded class in the report.
+    """
     def _discover(_stamp):
         artifacts = []
         rc, out, _err = _run(["git", "branch", "--list", "wi-%s*" % acceptance_fixture.RESERVED_PREFIX],
@@ -178,6 +187,11 @@ def real_discover_artifacts(root):
                 name = line.strip().lstrip("* ").strip()
                 if name:
                     artifacts.append({"kind": "branch", "name": name})
+        else:
+            artifacts.append({
+                "kind": "branch",
+                "name": acceptance_fixture.RESERVED_PREFIX + " discovery degraded: branch lookup failed",
+            })
         rc, out, _err = _run(
             ["gh", "pr", "list", "--search", acceptance_fixture.RESERVED_PREFIX,
              "--json", "title", "--jq", ".[].title"], cwd=root)
@@ -186,6 +200,11 @@ def real_discover_artifacts(root):
                 title = title.strip()
                 if title:
                     artifacts.append({"kind": "pr", "name": title})
+        else:
+            artifacts.append({
+                "kind": "pr",
+                "name": acceptance_fixture.RESERVED_PREFIX + " discovery degraded: pr lookup failed",
+            })
         return artifacts
     return _discover
 
@@ -212,12 +231,23 @@ def real_reap(root, current_stamp):
                 rc, out, _err = _run(
                     ["gh", "pr", "list", "--search", name, "--json", "number,title",
                      "--jq", ".[0].number"], cwd=root)
-                number = out.strip() if rc == 0 else ""
+                if rc != 0:
+                    # The lookup itself failed (network blip / rate-limit / timeout) —
+                    # this is "couldn't check", NOT "confirmed absent". Never fold a
+                    # failed lookup into the empty-match sentinel: report it left-behind
+                    # so a genuinely-leaked PR is surfaced rather than falsely reported
+                    # cleaned (detectability: the report must never assert a teardown
+                    # that did not happen).
+                    ok = False
+                    left.append({"kind": kind, "name": name,
+                                "reason": "could not confirm PR state (gh lookup failed/timed out)"})
+                    continue
+                number = out.strip()
                 if number:
                     rc2, _o, _e = _run(["gh", "pr", "close", number], cwd=root)
                     ok = rc2 == 0
                 else:
-                    ok = True  # nothing found matching the title -> already gone
+                    ok = True  # confirmed: rc == 0 with no match -> already gone
             else:
                 ok = True  # unknown kind: nothing this reaper knows how to remove
             (cleaned if ok else left).append(name if ok else

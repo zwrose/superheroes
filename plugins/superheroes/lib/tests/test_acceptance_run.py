@@ -127,3 +127,47 @@ def test_environmental_retry_folds_two_attempts_into_one_record_sharing_budget()
     rec = d["_state"]["records_written"][0]
     assert rec["retried"] is True
     assert len(rec["attempts"]) == 2
+
+
+def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
+    # FR-9/UFR-3: attempt 1 fails environmentally (retry-eligible), but the pre-retry
+    # teardown leaves an artifact behind -> no retry launches; the invocation ends on the
+    # cleanup-failure path naming the surviving artifact, with exactly ONE attempt recorded.
+    launches = []
+
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        launches.append({"attempt": attempt, "budget_consumed": budget_consumed})
+        return {"outcome": "exited", "terminal_location": "/t1.json",
+                "spend_partial": False, "spend": 1.0, "elapsed_sec": 300.0}
+
+    def _run_outcome(loc):
+        return {"terminal": "host-unreachable", "phases": [], "readout_pr_link": "",
+                "readout_claimed_checks_green": False, "readout_claimed_pr": "",
+                "failure_kind": "host-unreachable"}
+
+    reap_calls = []
+
+    def _reap(planned):
+        reap_calls.append(planned)
+        # The pre-retry reap fails to remove the branch -> left_behind is non-empty.
+        return {"cleaned_up": [], "left_behind": ["b-s1"]}
+
+    d = _deps(
+        launcher=_launcher, run_outcome=_run_outcome, reap=_reap,
+        materialize=lambda: {"work_item": "wi-s1", "branch": "b-s1", "pr_title": "PR s1",
+                             "stamp": "s1"},
+    )
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "cleanup" in r["report"].lower() or "left" in r["report"].lower()
+    # exactly one launch — no second attempt was spun up alongside the surviving artifact.
+    assert [l["attempt"] for l in launches] == [1]
+    # exactly one reap call (the pre-retry teardown) — no duplicate second reap.
+    assert len(reap_calls) == 1
+    # exactly one record, naming only the single attempt, not retried.
+    assert len(d["_state"]["records_written"]) == 1
+    rec = d["_state"]["records_written"][0]
+    assert rec["retried"] is False
+    assert len(rec["attempts"]) == 1
+    assert rec["left_behind"] == ["b-s1"]

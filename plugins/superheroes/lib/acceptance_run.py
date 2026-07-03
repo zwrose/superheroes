@@ -43,6 +43,7 @@ import acceptance_reclaim
 import acceptance_verdict
 import acceptance_cleanup
 import acceptance_retry
+import acceptance_result
 
 
 def nesting_refusal(env):
@@ -62,18 +63,19 @@ def nesting_refusal(env):
     return {"refuse": False, "reason": "top-level invocation; safe to proceed"}
 
 
-def _report(verdict, reason, record_path, teardown):
-    """Render the single plain-language verdict report (verdict, reason, record, cleanup)."""
-    cleaned = (teardown or {}).get("cleaned_up") or []
-    left = (teardown or {}).get("left_behind") or []
-    lines = [
-        "Acceptance verdict: %s" % verdict.upper(),
-        "Reason: %s" % reason,
-        "Record: %s" % (record_path if record_path else "NOT WRITTEN (lease held)"),
-        "Cleaned up: %s" % (", ".join(str(c) for c in cleaned) if cleaned else "nothing"),
-        "Left behind: %s" % (", ".join(str(l) for l in left) if left else "nothing"),
-    ]
-    return "\n".join(lines)
+def _report(verdict, reason, record_path, teardown, spend_partial=False):
+    """Render the single plain-language verdict report via the tested FR-6 renderer
+    (`acceptance_result.render_report`) so the Markdown/partial-spend output owners see
+    is the same one the module's own tests pin — not a second, drifted format."""
+    result = {
+        "verdict": verdict,
+        "reason": reason,
+        "record_path": record_path if record_path else "NOT WRITTEN (lease held)",
+        "cleaned_up": (teardown or {}).get("cleaned_up") or [],
+        "left_behind": (teardown or {}).get("left_behind") or [],
+        "spend_partial": bool(spend_partial),
+    }
+    return acceptance_result.render_report(result)
 
 
 def _run_one_attempt(deps, stamped, budget_consumed, attempt):
@@ -180,6 +182,7 @@ def invoke(deps):
         launch, outcome, verdict = _run_one_attempt(deps, stamped, budget_consumed, attempt)
         attempts.append(_attempt_record(stamp, launch, verdict))
 
+        pre_retry_cleanup_failed = False
         if verdict["verdict"] == "fail":
             retry = acceptance_retry.classify({
                 "kind": outcome.get("failure_kind"),
@@ -187,23 +190,40 @@ def invoke(deps):
                 "attempt": attempt,
             })
             if retry.get("retry"):
-                # Clean the first attempt before relaunching (UFR-3: a failed pre-retry
-                # cleanup aborts the retry). Then re-materialize with a fresh stamp and
-                # relaunch fed attempt-1's consumed budget (remaining, not a fresh ceiling).
-                _teardown(deps, stamp)
-                budget_consumed = {
-                    "elapsed_sec": launch.get("elapsed_sec") or 0.0,
-                    "spend": launch.get("spend") or 0.0,
-                }
-                stamped = deps["materialize"]()
-                stamp = stamped.get("stamp")
-                attempt = 2
-                launch, outcome, verdict = _run_one_attempt(
-                    deps, stamped, budget_consumed, attempt)
-                attempts.append(_attempt_record(stamp, launch, verdict))
+                # Clean the first attempt before relaunching (FR-9/UFR-3: when the
+                # pre-retry cleanup leaves artifacts behind, no retry launches — the
+                # invocation ends on the cleanup-failure path instead of spinning up a
+                # second stamped run alongside the first attempt's surviving artifacts).
+                pre_retry_teardown = _teardown(deps, stamp)
+                if pre_retry_teardown.get("left_behind"):
+                    pre_retry_cleanup_failed = True
+                    teardown = pre_retry_teardown
+                    verdict = {
+                        "verdict": "fail",
+                        "reason": (
+                            "pre-retry cleanup left artifacts behind (%s); aborting the "
+                            "retry instead of launching a second attempt alongside them"
+                            % ", ".join(str(a) for a in pre_retry_teardown["left_behind"])
+                        ),
+                    }
+                else:
+                    budget_consumed = {
+                        "elapsed_sec": launch.get("elapsed_sec") or 0.0,
+                        "spend": launch.get("spend") or 0.0,
+                    }
+                    stamped = deps["materialize"]()
+                    stamp = stamped.get("stamp")
+                    attempt = 2
+                    launch, outcome, verdict = _run_one_attempt(
+                        deps, stamped, budget_consumed, attempt)
+                    attempts.append(_attempt_record(stamp, launch, verdict))
 
-        # 7. Teardown — runs on every exit path (ready, parked, killed).
-        teardown = _teardown(deps, stamp)
+        # 7. Teardown — runs on every exit path (ready, parked, killed). When the pre-retry
+        # cleanup already failed, that result IS the final teardown — the aborted stamp was
+        # already torn down (as far as possible) and stamp is left in place only for record-
+        # keeping, so we don't attempt a second reap of the same (already-attempted) artifacts.
+        if not pre_retry_cleanup_failed:
+            teardown = _teardown(deps, stamp)
 
         # 8-9. Write the single record (both attempts), then release the lease.
         retried = len(attempts) > 1
@@ -219,7 +239,8 @@ def invoke(deps):
         # 10. Render the single verdict report.
         return {
             "verdict": verdict["verdict"],
-            "report": _report(verdict["verdict"], verdict["reason"], record_path, teardown),
+            "report": _report(verdict["verdict"], verdict["reason"], record_path, teardown,
+                              spend_partial=launch.get("spend_partial")),
             "record_path": record_path,
         }
 
