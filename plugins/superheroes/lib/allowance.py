@@ -15,12 +15,13 @@ gate there is two-part:
      (DEFAULT_TTL), command-scoped. `clear_all` (PreCompact) wipes anything pending so no
      approval survives a context compaction.
 
-Records are namespaced PER CHECKOUT (control_plane.checkout_key, the realpath'd
-`--absolute-git-dir` hash — distinct per worktree/clone), so two concurrent producer
-loops can never cross-consume each other's owner approval (a global, command-string-only
-key would funnel parallel loops onto one record — exactly what control_plane is keyed to
-avoid). `consume` claims the record with an atomic `os.rename` so two racing calls can
-never both honor one approval (the single-use invariant under concurrency).
+Records are namespaced PER CLONE (control_plane.checkout_key, the realpath'd git
+COMMON-dir hash — one namespace shared across a clone's worktrees, distinct across clones),
+so approvals never funnel onto a global command-string-only key. Isolation still holds where
+it matters — the nonce (bound to a THIS-turn gate-deny), single-use, TTL, and command-hash
+binding are what prevent replay/cross-talk; `consume` claims the record with an atomic
+`os.rename` so two racing calls can never both honor one approval (the single-use invariant
+under concurrency).
 
 Threat model (carried from the enforcer): an honest-but-mistaken agent, not a deliberate
 adversary. The deterministic mitigations here (hook-issued nonce + single-use + TTL +
@@ -59,8 +60,8 @@ def _dir():
 
 
 def _ckey(cwd):
-    """Per-checkout namespace. Reuse control_plane.checkout_key (the realpath'd
-    --absolute-git-dir hash, distinct per worktree); fall back to a realpath hash, or a
+    """Per-clone namespace. Reuse control_plane.checkout_key (the realpath'd git
+    COMMON-dir hash, shared across a clone's worktrees); fall back to a realpath hash, or a
     fixed 'global' bucket when no cwd is known."""
     if not cwd:
         return "global"
