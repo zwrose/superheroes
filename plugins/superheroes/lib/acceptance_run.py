@@ -280,18 +280,22 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
     return record_path
 
 
-def _cli(argv, env, stdout, stderr):
+def _cli(argv, env, stdout, stderr, deps_builder=None):
     """The DoD live-run entrypoint the acceptance SKILL.md documents (Task 13).
 
     `python3 acceptance_run.py --fixture <fixture> --root <root>` is the command the
-    front-door skill runs to drive a live acceptance run. This guard makes that command
-    HONEST: it refuses to nest (UFR-5) and never returns a silent exit-0 no-op. Assembling
-    the real live-run `deps` (spawning the actual showrunner, sampling spend, holding the
-    lease) is the skill's job on a real host; run bare like this it reports that and exits
-    non-zero rather than pretending a live run happened.
+    front-door skill runs to drive a live acceptance run. It refuses to nest (UFR-5),
+    then builds the REAL `deps` dict via `acceptance_deps.build` (control-plane lease +
+    git/gh discovery + the real out-of-process launcher) and calls `invoke(deps)` for a
+    genuine live run — never a silent exit-0 no-op and never a stub that declines to run.
 
-    Returns the process exit code. All I/O (env, streams) is injected so it is unit-tested
-    without a live run — consistent with the rest of the harness (DoD).
+    `deps_builder(fixture, root) -> deps` defaults to `acceptance_deps.build`; tests
+    inject a fake builder so this CLI wiring is exercised without spawning a live
+    showrunner (consistent with the rest of the harness's DoD: every deterministic
+    behavior proven without a live run).
+
+    Returns the process exit code: 0 on a `pass` verdict, 1 on `fail`, 3 on a nesting
+    refusal, 2/argparse's code on bad args. All I/O (env, streams, deps) is injected.
     """
     import argparse
 
@@ -316,16 +320,14 @@ def _cli(argv, env, stdout, stderr):
         print(refusal["reason"], file=stderr)
         return 3
 
-    # The live run mutates real state (spawns the showrunner, holds the lease, writes a
-    # record) and must be driven by the front-door skill on a real host, which assembles
-    # and injects the real deps into `invoke`. Refuse loudly rather than no-op silently.
-    print(
-        "acceptance_run: live-run deps are assembled by the `superheroes:acceptance` "
-        "skill on a real host; this bare entrypoint does not spawn a live showrunner. "
-        "fixture=%s root=%s" % (args.fixture, args.root),
-        file=stderr,
-    )
-    return 4
+    if deps_builder is None:
+        import acceptance_deps
+        deps_builder = acceptance_deps.build
+
+    deps = deps_builder(args.fixture, args.root)
+    result = invoke(deps)
+    print(result["report"], file=stdout)
+    return 0 if result["verdict"] == "pass" else 1
 
 
 if __name__ == "__main__":
