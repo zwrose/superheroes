@@ -297,6 +297,42 @@ def test_update_round_applies_small_delta(tmp_path):
     assert rec["runId"] == "run-2"
 
 
+def test_update_round_bounds_oversized_coverage_decisions(tmp_path):
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    base = rm.persist_record(records_path, [], {"schemaVersion": 2, "round": 1, "kind": "baseline",
+                                                "findings": [], "confirmationPending": False},
+                             expected_hash=rm.content_hash(""), run_id="run-1")
+    assert base["ok"]
+    big_text = "x" * 8000
+    small_text = "short coverage rationale"
+    updates = {"coverageDecisions": [
+        {"id": "cd-big", "classKey": "k::big", "text": big_text},
+        {"id": "cd-small", "classKey": "k::small", "text": small_text},
+    ]}
+    r = _cli("update-round", "--path", records_path, "--round", "1",
+             "--updates-json", json.dumps(updates),
+             "--expected-hash", base["contentHash"], "--run-id", "run-2")
+    assert json.loads(r.stdout)["ok"] is True, r.stderr
+    rec = json.loads(open(records_path, encoding="utf-8").read())[0]
+    by_id = {d["id"]: d for d in rec["coverageDecisions"]}
+    assert len(by_id["cd-big"]["text"]) == 500
+    assert by_id["cd-big"]["text"] == big_text[:500]
+    assert by_id["cd-small"]["text"] == small_text
+
+
+def test_persist_skeleton_bounds_coverage_decisions_on_disk(tmp_path):
+    rm = load_memory()
+    records_path = str(tmp_path / "round-records.json")
+    big_text = "y" * 9000
+    record = {"schemaVersion": 2, "round": 1, "kind": "baseline", "findings": [],
+              "coverageDecisions": [{"id": "cd-1", "classKey": "k", "text": big_text}]}
+    r = _skeleton_cli(records_path, record, rm.content_hash(""))
+    assert json.loads(r.stdout)["ok"] is True, r.stderr
+    persisted = json.loads(open(records_path, encoding="utf-8").read())[0]
+    assert len(persisted["coverageDecisions"][0]["text"]) == 500
+
+
 def test_update_round_missing_round_fails_closed(tmp_path):
     rm = load_memory()
     records_path = str(tmp_path / "round-records.json")

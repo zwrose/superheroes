@@ -26,6 +26,9 @@ function _failClosed() {
 function deferredSetPath(runDir) { return `${runDir}/deferred-set.json` }
 
 async function loadDeferredSet(runDir) {
+  // Deliberate degrade: a courier prose-flake on a missing/corrupt deferred-set reads as {}.
+  // Worst case a deferred finding re-blocks or gets re-reviewed (waste, not corruption) — the
+  // tally's skip-set is advisory; record_deferred.py is the authoritative write path.
   const set = await io().readJson(deferredSetPath(runDir), {})
   return (set && typeof set === 'object' && !Array.isArray(set)) ? set : {}
 }
@@ -255,7 +258,7 @@ function mergeRoundRecords(records, record) {
 async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
-    coverageDecisions: recordedCoverageDecisions || [],
+    coverageDecisions: reviewMemory.skeletonCoverageDecisions(recordedCoverageDecisions || []),
     fix: {
       fixes: fixResult.fixes || fixResult.fixed || [],
       deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []),

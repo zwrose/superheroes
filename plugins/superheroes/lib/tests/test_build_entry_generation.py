@@ -23,6 +23,8 @@ def test_build_entry_writes_lock_generation(tmp_path, monkeypatch):
         "---\nsuperheroes: doc\ndocType: tasks\nworkItem: wi\n"
         "parent: {workItem: wi, docType: plan}\nsize: large\n"
         "gates: {review: passed}\n---\n# t\n")
+    open(os.path.join(d, "spec.md"), "w").write(
+        "---\ndocType: spec\ngates: {review: passed}\n---\n# s\n")
     # The in-process reader (control_plane/checkpoint, below) must use the SAME store the
     # subprocess writes to — set it on this process's env, not just the subprocess's.
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))

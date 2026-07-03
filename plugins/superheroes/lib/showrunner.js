@@ -441,6 +441,8 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   // seeded by the caller) inside the one gather leaf — don't re-read it here. Only the unfolded
   // fallback path (gather failed / a direct smoke) does its own seed read.
   if (!preloaded && runtimeDeferred && runtimeDeferred.size === 0) {
+    // Deliberate degrade: a courier prose-flake on deferred-set reads as {} — worst case a
+    // deferred finding re-blocks or gets re-reviewed (waste, not corruption).
     const saved = await io().readJson(`${runDir}/deferred-set.json`, {})
     for (const id of Object.keys(saved || {})) runtimeDeferred.set(id, saved[id])
   }

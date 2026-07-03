@@ -54,3 +54,36 @@ def test_raw_count_counts_unfenced_bad_separator_heading():
     import task_list
     assert task_list.parse(body) == []          # parser rejects it (format mismatch)
     assert _raw_count(body) > 0                  # raw count still catches it
+
+
+def _git(path):
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+
+
+def _setup_global_tasks(tmp_path, wi="wi-store"):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo)
+    import mode_registry
+    assert mode_registry.write_registry(str(repo), mode_registry.GLOBAL, None)
+    store_dir = os.path.join(mode_registry.project_store_dir(str(repo)), "docs", wi)
+    os.makedirs(store_dir)
+    with open(os.path.join(store_dir, "spec.md"), "w", encoding="utf-8") as fh:
+        fh.write("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n")
+    with open(os.path.join(store_dir, "tasks.md"), "w", encoding="utf-8") as fh:
+        fh.write("---\nsuperheroes: doc\ndocType: tasks\nworkItem: %s\n"
+                 "parent: {workItem: %s, docType: plan}\nsize: large\n"
+                 "gates: {review: passed}\n---\n"
+                 "## Goal\nBuild it\n\n### Task 1: First task\nDo the thing\n" % (wi, wi))
+    return repo
+
+
+def test_cli_reads_tasks_from_project_store(tmp_path):
+    repo = _setup_global_tasks(tmp_path)
+    out = subprocess.run([sys.executable, CLI, "--work-item", "wi-store"],
+                         cwd=str(repo), capture_output=True, text=True)
+    assert out.returncode == 0
+    data = json.loads(out.stdout)
+    assert len(data["tasks"]) == 1
+    assert data["tasks"][0]["title"] == "First task"
+    assert data["raw_task_heading_count"] == 1

@@ -24,7 +24,7 @@ const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-function park(reason) { return { confidence: 'low', assumptions: [reason] } }
+function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
 function ok() { return { confidence: 'high', assumptions: [] } }
 
 // FR-8: the configured base (--base) arg, threaded into EVERY build_state_cli gather so the entry
@@ -632,6 +632,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // is the bundle's cheap leaf-bash pipe, the equivalent of showrunner's exec for this leg.)
   globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
+    // Deliberate degrade: a courier prose-flake on deferred-set reads as {} — worst case a
+    // deferred finding re-blocks or gets re-reviewed (waste, not corruption).
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))

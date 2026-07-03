@@ -1,7 +1,7 @@
 # plugins/superheroes/lib/task_list_cli.py
 import argparse, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import definition_doc, docload, task_list
+import docload, task_list
 
 
 def raw_task_heading_count(body):
@@ -18,7 +18,7 @@ def main(argv):
     a = ap.parse_args(argv[1:])
     root = os.getcwd()
     try:
-        _fm, body = docload.load_doc(definition_doc.doc_path(a.work_item, "tasks", root))
+        _fm, body = docload.load_doc(docload.tasks_doc_path(a.work_item, root))
     except (OSError, ValueError):      # missing/malformed tasks doc -> fail closed (empty)
         print(json.dumps({"tasks": [], "raw_task_heading_count": 0}))
         return 0

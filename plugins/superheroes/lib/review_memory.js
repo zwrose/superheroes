@@ -125,6 +125,8 @@ function _summarizeDimension(dim) {
 // delta as identity/severity/reason (+ skeleton finding); the full bodies' durable home is the
 // best-effort round-bodies dump.
 const _MAX_DEFER_REASON = 500
+const _MAX_COVERAGE_TEXT = 500
+const _COVERAGE_FIELDS = ['id', 'classKey', 'kind', 'sourceRound', 'challengedBy', 'text', 'source']
 
 function skeletonDeferred(items) {
   const out = []
@@ -134,6 +136,22 @@ function skeletonDeferred(items) {
     for (const k of ['identity', 'id', 'severity', 'reason']) if (k in item) slim[k] = item[k]
     if (typeof slim.reason === 'string' && slim.reason.length > _MAX_DEFER_REASON) slim.reason = slim.reason.slice(0, _MAX_DEFER_REASON)
     if (item.finding && typeof item.finding === 'object' && !Array.isArray(item.finding)) slim.finding = _skeletonFinding(item.finding)
+    out.push(slim)
+  }
+  return out
+}
+
+// skeletonCoverageDecisions: the JS twin of _skeleton_coverage_decisions — coverage decision
+// text is unbounded in the fix loop but must not ride the courier-staged update-round delta
+// whole. Identity/class/source fields pass through; text is bounded at persist time. The in-memory
+// record keeps the full text for the current session's fix context.
+function skeletonCoverageDecisions(items) {
+  const out = []
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== 'object') { out.push(item); continue }
+    const slim = {}
+    for (const k of _COVERAGE_FIELDS) if (k in item) slim[k] = item[k]
+    if (typeof slim.text === 'string' && slim.text.length > _MAX_COVERAGE_TEXT) slim.text = slim.text.slice(0, _MAX_COVERAGE_TEXT)
     out.push(slim)
   }
   return out
@@ -151,7 +169,7 @@ function skeletonRecord(record) {
     kind: rec.kind === undefined ? null : rec.kind,
     confirmationPending: !!rec.confirmationPending,
     changedSubjects: rec.changedSubjects === undefined ? null : rec.changedSubjects,
-    coverageDecisions: rec.coverageDecisions || [],
+    coverageDecisions: skeletonCoverageDecisions(rec.coverageDecisions || []),
     tokenUsage: rec.tokenUsage === undefined ? null : rec.tokenUsage,
     findings: findings.map(_skeletonFinding),
     carriedFindings: carried.map(_skeletonFinding),
@@ -159,4 +177,4 @@ function skeletonRecord(record) {
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred }
+module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred, skeletonCoverageDecisions }
