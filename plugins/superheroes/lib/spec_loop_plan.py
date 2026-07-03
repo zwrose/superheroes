@@ -93,6 +93,9 @@ def load_state(session_dir):
         return False, {"schemaVersion": 1, "rounds": {}}
     if not isinstance(data, dict) or not isinstance(data.get("rounds"), dict):
         return False, {"schemaVersion": 1, "rounds": {}}
+    for entry in data["rounds"].values():
+        if not isinstance(entry, dict):
+            return False, {"schemaVersion": 1, "rounds": {}}
     return True, data
 
 
@@ -427,8 +430,8 @@ def _next_round_out(session_dir, state, state_ok, round_no, plan, action, mandat
                     dimensions):
     _snapshot(session_dir, round_no + 1, overwrite=True)
     dims_to_run, skipped = _plan_lists(plan, dimensions)
-    for item in dims_to_run:
-        _archive_findings(session_dir, item["dimension"], round_no)
+    for d in dimensions:
+        _archive_findings(session_dir, d, round_no)
     _persist_plan(session_dir, state, round_no + 1, plan, state_ok)
     return {"action": action, "mandatory": mandatory, "reason": reason,
             "round": round_no, "nextRound": round_no + 1,

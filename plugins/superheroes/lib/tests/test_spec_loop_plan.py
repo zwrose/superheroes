@@ -72,6 +72,7 @@ def _write_compiled(session_dir, findings):
 def _run(capsys, *args):
     rc = SLP.main(list(args))
     out = json.loads(capsys.readouterr().out)
+    assert rc == 0
     return rc, out
 
 
@@ -180,6 +181,27 @@ def test_record_malformed_file_treated_as_receipt_miss(tmp_path, capsys):
     assert [e["dimension"] for e in first["escalate"]] == ["architecture-reviewer"]
 
 
+def test_non_dict_findings_entry_is_receipt_miss(tmp_path, capsys):
+    session_dir = _session(tmp_path)
+    _plan(capsys, session_dir, 1)
+    for dim in DIMS[1:]:
+        _write_findings(session_dir, dim, [])
+    _write_findings(session_dir, "architecture-reviewer", ["not-a-finding"])
+    first = _record(capsys, session_dir, 1)
+    assert [e["dimension"] for e in first["escalate"]] == ["architecture-reviewer"]
+
+
+def test_invalid_object_confidence_is_receipt_miss(tmp_path, capsys):
+    session_dir = _session(tmp_path)
+    _plan(capsys, session_dir, 1)
+    for dim in DIMS[1:]:
+        _write_findings(session_dir, dim, [])
+    _write_findings(session_dir, "architecture-reviewer",
+                    {"confidence": "maybe", "findings": []})
+    first = _record(capsys, session_dir, 1)
+    assert [e["dimension"] for e in first["escalate"]] == ["architecture-reviewer"]
+
+
 def test_record_accepts_structured_object_shape(tmp_path, capsys):
     session_dir = _session(tmp_path)
     _plan(capsys, session_dir, 1)
@@ -249,6 +271,11 @@ def test_scheduled_run_dim_findings_file_is_archived(tmp_path, capsys):
     session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
     # round-1 architecture findings must not be readable as a round-2 result
     assert not os.path.exists(os.path.join(session_dir, "findings-architecture.json"))
+
+
+def test_skipped_dim_file_also_archived_on_decide(tmp_path, capsys):
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    assert not os.path.exists(os.path.join(session_dir, "findings-security.json"))
 
 
 def test_stale_result_never_counts_as_executed(tmp_path, capsys):
@@ -375,6 +402,19 @@ def test_corrupt_state_fails_toward_run_all_deep(tmp_path, capsys):
     _write_compiled(session_dir, [_blocker("Architecture")])
     with open(os.path.join(session_dir, "loop-state.json"), "w", encoding="utf-8") as fh:
         fh.write("{corrupt")
+    out = _decide(capsys, session_dir, 1)
+    assert out["action"] == "review"
+    dims = _dims_map(out)
+    assert sorted(dims) == sorted(DIMS)
+    assert all(d["tier"] == "reviewer-deep" for d in dims.values())
+
+
+def test_non_dict_round_entry_is_corrupt_state(tmp_path, capsys):
+    session_dir = _session(tmp_path)
+    _round1(capsys, session_dir, {"architecture-reviewer": [_blocker("Architecture")]})
+    _write_compiled(session_dir, [_blocker("Architecture")])
+    with open(os.path.join(session_dir, "loop-state.json"), "w", encoding="utf-8") as fh:
+        json.dump({"schemaVersion": 1, "rounds": {"1": ["x"]}}, fh)
     out = _decide(capsys, session_dir, 1)
     assert out["action"] == "review"
     dims = _dims_map(out)

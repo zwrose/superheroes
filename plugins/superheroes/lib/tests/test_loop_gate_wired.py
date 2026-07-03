@@ -16,7 +16,13 @@ SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 # review-spec's gate runs THROUGH its script-owned scheduler (#164): `spec_loop_plan.py decide`
 # wraps loop_state.decide and additionally emits the next round's dims_to_run.
 LOOPING_SKILLS = ("review-code", "review-plan", "review-tasks")
-GATE_WRAPPED_SKILLS = {"review-spec": 'spec_loop_plan.py" decide --session-dir'}
+GATE_WRAPPED_SKILLS = {
+    "review-spec": [
+        'spec_loop_plan.py" decide --session-dir',
+        'spec_loop_plan.py" record --session-dir',
+        'spec_loop_plan.py" plan --session-dir',
+    ],
+}
 
 
 def _read(skill):
@@ -33,8 +39,13 @@ def test_looping_skills_invoke_the_continuation_gate():
 
 
 def test_gate_wrapped_skills_invoke_their_wrapper():
-    missing = [s for s, marker in GATE_WRAPPED_SKILLS.items() if marker not in _read(s)]
-    assert not missing, "gate wrapper not actually invoked in: " + ", ".join(missing)
+    missing = []
+    for skill, markers in GATE_WRAPPED_SKILLS.items():
+        text = _read(skill)
+        for marker in markers:
+            if marker not in text:
+                missing.append("%s: %s" % (skill, marker))
+    assert not missing, "gate wrapper not actually invoked — missing: " + ", ".join(missing)
 
 
 def test_spec_loop_plan_wires_the_continuation_gate():
