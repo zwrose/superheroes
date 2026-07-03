@@ -1,7 +1,10 @@
 import identifiers
 import docload
 import definition_doc
-
+import json
+import os
+import subprocess
+import sys
 
 _DOC = (
     "---\n"
@@ -42,8 +45,52 @@ def test_content_hash_for_resolves_the_tasks_doc(tmp_path):
     wi = "wi-abc123"
     d = tmp_path / "docs" / "superheroes" / wi
     d.mkdir(parents=True)
+    (d / "spec.md").write_text("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n", encoding="utf-8")
     (d / "tasks.md").write_text(_DOC, encoding="utf-8")
     h = docload.content_hash_for(wi, str(tmp_path))
     fm, body = definition_doc.read_frontmatter(str(d / "tasks.md"))
     assert h == identifiers.content_hash(fm, body)
     assert len(h) == 16
+
+
+def _git(path):
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+
+
+def _setup_global_tasks(tmp_path, wi="wi-store"):
+    """Out-of-repo project: tasks doc lives in the project store, not under repo root."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo)
+    import mode_registry
+    assert mode_registry.write_registry(str(repo), mode_registry.GLOBAL, None)
+    store_dir = os.path.join(mode_registry.project_store_dir(str(repo)), "docs", wi)
+    os.makedirs(store_dir)
+    with open(os.path.join(store_dir, "spec.md"), "w", encoding="utf-8") as fh:
+        fh.write("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n")
+    doc = _DOC.replace("wi-abc123", wi)
+    with open(os.path.join(store_dir, "tasks.md"), "w", encoding="utf-8") as fh:
+        fh.write(doc)
+    return repo, store_dir
+
+
+def test_content_hash_for_resolves_store_tasks_doc(tmp_path):
+    # Regression for the 2026-07-02 live park: legacy in-repo path cannot find out-of-repo docs.
+    repo, store_dir = _setup_global_tasks(tmp_path)
+    h = docload.content_hash_for("wi-store", str(repo))
+    fm, body = definition_doc.read_frontmatter(os.path.join(store_dir, "tasks.md"))
+    assert h == identifiers.content_hash(fm, body)
+    assert len(h) == 16
+
+
+def test_content_hash_for_in_repo_unchanged(tmp_path):
+    # In-repo mode must stay byte-identical with the legacy docs/superheroes/<wi>/tasks.md path.
+    wi = "wi-abc123"
+    d = tmp_path / "docs" / "superheroes" / wi
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("---\ndocType: spec\ngates: {review: passed}\n---\n# S\n", encoding="utf-8")
+    (d / "tasks.md").write_text(_DOC, encoding="utf-8")
+    legacy = definition_doc.doc_path(wi, "tasks", str(tmp_path))
+    assert docload.tasks_doc_path(wi, str(tmp_path)) == legacy
+    assert docload.content_hash_for(wi, str(tmp_path)) == identifiers.content_hash(
+        *definition_doc.read_frontmatter(legacy))

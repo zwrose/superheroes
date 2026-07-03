@@ -197,7 +197,7 @@ def summarize_record(record):
         "kind": rec.get("kind"),
         "confirmationPending": bool(rec.get("confirmationPending")),
         "changedSubjects": rec.get("changedSubjects"),
-        "coverageDecisions": rec.get("coverageDecisions") or [],
+        "coverageDecisions": _skeleton_coverage_decisions(rec.get("coverageDecisions") or []),
         "tokenUsage": rec.get("tokenUsage"),
         "findings": [_skeleton_finding(f) for f in findings],
         "carriedFindings": [_skeleton_finding(f) for f in carried],
@@ -302,6 +302,25 @@ def persist_skeleton_record(path, record_json, record_hash, expected_hash=None,
 
 
 _MAX_DEFER_REASON = 500
+_MAX_COVERAGE_TEXT = 500
+_COVERAGE_FIELDS = ("id", "classKey", "kind", "sourceRound", "challengedBy", "text", "source")
+
+
+def _skeleton_coverage_decision(decision):
+    """Slim a coverage decision for the durable round record — identity/class/source fields
+    pass through; unbounded text is bounded so a large coverage batch cannot outgrow the
+    courier-staged update-round delta."""
+    if not isinstance(decision, dict):
+        return decision
+    slim = {k: decision[k] for k in _COVERAGE_FIELDS if k in decision}
+    text = slim.get("text")
+    if isinstance(text, str) and len(text) > _MAX_COVERAGE_TEXT:
+        slim["text"] = text[:_MAX_COVERAGE_TEXT]
+    return slim
+
+
+def _skeleton_coverage_decisions(items):
+    return [_skeleton_coverage_decision(d) for d in (items if isinstance(items, list) else [])]
 
 
 def _skeleton_deferred(items):
@@ -326,6 +345,8 @@ def _skeleton_deferred(items):
 
 def _sanitize_updates(updates):
     up = dict(updates or {})
+    if "coverageDecisions" in up:
+        up["coverageDecisions"] = _skeleton_coverage_decisions(up.get("coverageDecisions"))
     fix = up.get("fix")
     if isinstance(fix, dict) and "deferred" in fix:
         fix = dict(fix)

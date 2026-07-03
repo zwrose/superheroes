@@ -814,6 +814,8 @@ function _summarizeDimension(dim) {
 // delta as identity/severity/reason (+ skeleton finding); the full bodies' durable home is the
 // best-effort round-bodies dump.
 const _MAX_DEFER_REASON = 500
+const _MAX_COVERAGE_TEXT = 500
+const _COVERAGE_FIELDS = ['id', 'classKey', 'kind', 'sourceRound', 'challengedBy', 'text', 'source']
 
 function skeletonDeferred(items) {
   const out = []
@@ -823,6 +825,22 @@ function skeletonDeferred(items) {
     for (const k of ['identity', 'id', 'severity', 'reason']) if (k in item) slim[k] = item[k]
     if (typeof slim.reason === 'string' && slim.reason.length > _MAX_DEFER_REASON) slim.reason = slim.reason.slice(0, _MAX_DEFER_REASON)
     if (item.finding && typeof item.finding === 'object' && !Array.isArray(item.finding)) slim.finding = _skeletonFinding(item.finding)
+    out.push(slim)
+  }
+  return out
+}
+
+// skeletonCoverageDecisions: the JS twin of _skeleton_coverage_decisions — coverage decision
+// text is unbounded in the fix loop but must not ride the courier-staged update-round delta
+// whole. Identity/class/source fields pass through; text is bounded at persist time. The in-memory
+// record keeps the full text for the current session's fix context.
+function skeletonCoverageDecisions(items) {
+  const out = []
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item !== 'object') { out.push(item); continue }
+    const slim = {}
+    for (const k of _COVERAGE_FIELDS) if (k in item) slim[k] = item[k]
+    if (typeof slim.text === 'string' && slim.text.length > _MAX_COVERAGE_TEXT) slim.text = slim.text.slice(0, _MAX_COVERAGE_TEXT)
     out.push(slim)
   }
   return out
@@ -840,7 +858,7 @@ function skeletonRecord(record) {
     kind: rec.kind === undefined ? null : rec.kind,
     confirmationPending: !!rec.confirmationPending,
     changedSubjects: rec.changedSubjects === undefined ? null : rec.changedSubjects,
-    coverageDecisions: rec.coverageDecisions || [],
+    coverageDecisions: skeletonCoverageDecisions(rec.coverageDecisions || []),
     tokenUsage: rec.tokenUsage === undefined ? null : rec.tokenUsage,
     findings: findings.map(_skeletonFinding),
     carriedFindings: carried.map(_skeletonFinding),
@@ -848,7 +866,7 @@ function skeletonRecord(record) {
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred }
+module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred, skeletonCoverageDecisions }
 
 };
 
@@ -882,6 +900,9 @@ function _failClosed() {
 function deferredSetPath(runDir) { return `${runDir}/deferred-set.json` }
 
 async function loadDeferredSet(runDir) {
+  // Deliberate degrade: a courier prose-flake on a missing/corrupt deferred-set reads as {}.
+  // Worst case a deferred finding re-blocks or gets re-reviewed (waste, not corruption) — the
+  // tally's skip-set is advisory; record_deferred.py is the authoritative write path.
   const set = await io().readJson(deferredSetPath(runDir), {})
   return (set && typeof set === 'object' && !Array.isArray(set)) ? set : {}
 }
@@ -1111,7 +1132,7 @@ function mergeRoundRecords(records, record) {
 async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
-    coverageDecisions: recordedCoverageDecisions || [],
+    coverageDecisions: reviewMemory.skeletonCoverageDecisions(recordedCoverageDecisions || []),
     fix: {
       fixes: fixResult.fixes || fixResult.fixed || [],
       deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []),
@@ -4007,7 +4028,7 @@ const LIB = 'plugins/superheroes/lib'
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-function park(reason) { return { confidence: 'low', assumptions: [reason] } }
+function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
 function ok() { return { confidence: 'high', assumptions: [] } }
 
 // FR-8: the configured base (--base) arg, threaded into EVERY build_state_cli gather so the entry
@@ -4615,6 +4636,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // is the bundle's cheap leaf-bash pipe, the equivalent of showrunner's exec for this leg.)
   globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
+    // Deliberate degrade: a courier prose-flake on deferred-set reads as {} — worst case a
+    // deferred finding re-blocks or gets re-reviewed (waste, not corruption).
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
@@ -5515,6 +5538,8 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   // seeded by the caller) inside the one gather leaf — don't re-read it here. Only the unfolded
   // fallback path (gather failed / a direct smoke) does its own seed read.
   if (!preloaded && runtimeDeferred && runtimeDeferred.size === 0) {
+    // Deliberate degrade: a courier prose-flake on deferred-set reads as {} — worst case a
+    // deferred finding re-blocks or gets re-reviewed (waste, not corruption).
     const saved = await io().readJson(`${runDir}/deferred-set.json`, {})
     for (const id of Object.keys(saved || {})) runtimeDeferred.set(id, saved[id])
   }
