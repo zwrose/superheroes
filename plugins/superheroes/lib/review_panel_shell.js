@@ -12,6 +12,7 @@ const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
 const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
+const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
@@ -149,7 +150,7 @@ function confirmationReady(records, round, justMarked) {
 // the loop's second entry read (last-extras.json) into the same leaf; it comes back as
 // `extras` (null when missing/corrupt — the old readJson-default parity).
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
@@ -159,7 +160,7 @@ async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
 }
 
 async function probeRoundRecords(runDir, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
   try {
     const parsed = JSON.parse((out && out.stdout) || '')
     if (parsed && typeof parsed === 'object') return parsed
@@ -228,7 +229,7 @@ async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, run
   const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
   const inline = recordJson.length <= _INLINE_RECORD_BOUND
   const stagedPath = inline ? null : ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
+  const args = [libPath('review_memory.py'), 'persist-skeleton',
     '--path', ioApi.join(runDir, 'round-records.json')]
   args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
   args.push('--record-hash', ioApi.contentHash(recordJson),
@@ -284,7 +285,7 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   const updatesJson = JSON.stringify(updates)
   const inline = updatesJson.length <= _INLINE_RECORD_BOUND
   const stagedPath = inline ? null : ioApi.join(runDir, `round-updates-r${round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
+  const args = [libPath('review_memory.py'), 'update-round',
     '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round)]
   args.push(...(inline ? ['--updates-json', updatesJson] : ['--updates-path', stagedPath]))
   args.push('--updates-hash', ioApi.contentHash(updatesJson),
@@ -309,7 +310,7 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
 // 'stale' park — courier text must never enter an integrity decision. A mangled helper
 // ANSWER fails JSON.parse and parks fail-closed (never silently-empty decisions).
 async function loadCoverageDecisions(target, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/coverage_decisions.py', 'load',
+  const out = await ioApi.runHelper('python3', [libPath('coverage_decisions.py'), 'load',
     '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
   try {
     const parsed = JSON.parse((out && out.stdout) || '')
@@ -366,7 +367,7 @@ function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
 // No expected-hash: the telemetry file is a single-writer run artifact written once at the
 // terminal — the old pre-read + CAS pair cost a leaf and protected nothing the lease doesn't.
 async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, lease, ioApi) {
-  const args = ['plugins/superheroes/lib/review_telemetry.py', 'write-from-records',
+  const args = [libPath('review_telemetry.py'), 'write-from-records',
     '--path', ioApi.join(runDir, 'review-telemetry.json'),
     '--records-path', ioApi.join(runDir, 'round-records.json'),
     '--expected-leaves-json', JSON.stringify(expectedLeaves || []),
@@ -384,7 +385,7 @@ async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, le
 
 async function recordCoverageDecision(targetPath, decision, expectedHash, mode, runId, lease, ioApi) {
   const cmd = mode === 'code' ? 'record-code' : 'record-doc'
-  const args = ['plugins/superheroes/lib/coverage_decisions.py', cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
+  const args = [libPath('coverage_decisions.py'), cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
   try {
@@ -404,7 +405,7 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi }) {
   const api = ioApi || io()
   const target = await coverageDecisionTarget(runDir, context, legKind || {}, api)
-  const args = ['plugins/superheroes/lib/review_setup_gather.py', 'gather',
+  const args = [libPath('review_setup_gather.py'), 'gather',
     '--run-dir', runDir,
     '--records-path', api.join(runDir, 'round-records.json'),
     '--dimensions', JSON.stringify(reviewerSet || []),
@@ -726,7 +727,7 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   // session model). The preamble strips the marker before the real agent().
   ioApi = ioApi || io()
   const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
-  const command = `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
+  const command = `python3 ${libPath('verify_gate.py')} --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
   const prompt =
     `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
     `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
