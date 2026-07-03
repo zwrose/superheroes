@@ -5208,10 +5208,6 @@ const FINDINGS_SCHEMA = {
     },
     usage: { type: 'object' },
   },
-  allOf: [{
-    if: { properties: { confidence: { const: 'high' } }, required: ['confidence'] },
-    then: { required: ['verificationReceipt'] },
-  }],
 }
 const SYNTH_VERDICTS_SCHEMA = {
   type: 'object',
