@@ -1,4 +1,5 @@
 const { io } = require('./io_seam.js')
+const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 // fencedJsonWrite: put a JSON artifact on disk through the courier in ONE leaf (fold 1, #141) —
 // io.stageAndRunHelper chains the opaque base64 stage-write AND the fenced_json.py verify-write
@@ -27,7 +28,7 @@ async function fencedJsonWrite(path, payload, opts) {
   const text = JSON.stringify(next)
   const want = ioApi.contentHash(text)
   const stagedPath = path + '.payload'
-  const args = ['plugins/superheroes/lib/fenced_json.py', 'write', '--path', path,
+  const args = [libPath('fenced_json.py'), 'write', '--path', path,
     '--payload-path', stagedPath, '--payload-hash', want, '--run-id', opts.runId]
   if (opts.overwrite) args.push('--allow-overwrite')
   else args.push('--expected-hash', opts.expectedHash)
@@ -87,7 +88,7 @@ async function writeTerminalRecord(recPath, verdict, opts) {
   delete slim.coverageDecisions
   const verdictJson = JSON.stringify(slim)
   const verdictHash = ioApi.contentHash(verdictJson)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'compose-terminal',
+  const args = [libPath('review_memory.py'), 'compose-terminal',
     '--path', recPath,
     '--records-path', ioApi.join(runDir, 'round-records.json'),
     '--telemetry-path', ioApi.join(runDir, 'review-telemetry.json'),
