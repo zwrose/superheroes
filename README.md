@@ -89,7 +89,9 @@ Two things make it more than a clever prompt:
   also run the panel on a **different model family** — set the reviewer engine to
   Codex or Cursor in `configure` — for a cross-family safety net; findings flow
   through the same auto-fix loop unchanged, and the fix is written by the
-  implementation engine.
+  implementation engine. Plan authoring alone can use a third **`planAuthor` engine**
+  (tasks always authors on Claude); pair it with an **`author-plan` model tier** when
+  you want a stronger plan model via an external host.
 - **Measured, not vibes.** The reviewer agents ship with a frozen eval harness
   (planted findings + decoy traps, a deterministic scorer) and a non-regression
   gate: a change has to prove it catches real issues without inflating false

@@ -5742,6 +5742,21 @@ function docDirFor(workItem) {
 function docPathFor(workItem, doc) { return `${docDirFor(workItem)}/${doc}.md` }
 function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
 
+// UFR-2: a failed external author-plan may have edited the doc and/or stamped the completion
+// marker; discard both before falling open to the native author so an unaudited external draft
+// cannot pass the post-check usableDraft gate.
+async function _resetAuthorPlanDraft(workItem, doc) {
+  const dir = docDirFor(workItem)
+  const docPath = `${dir}/${doc}.md`
+  const markerPath = `${dir}/.${doc}.complete`
+  const root = checkoutRoot()
+  const cmd = (root && !String(dir).startsWith('/'))
+    ? selfContained(
+      `rm -f ${shq(markerPath)} && (git checkout -- ${shq(docPath)} 2>/dev/null || rm -f ${shq(docPath)})`)
+    : `rm -f ${shq(markerPath)} ${shq(docPath)}`
+  await exec([cmd], 'reset author-plan draft')
+}
+
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
 // #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
 // authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
@@ -5812,7 +5827,7 @@ async function producePhase(phase, workItem) {
         cwd: procCwd(), model,
       })
       if (res && res.ok) authored = { status: 'ok', notify: res.notify || [] }
-      // dispatch failure -> authored stays null -> native author below (same attempt)
+      else await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
     }
     if (authored == null) {
       authored = await agent(
@@ -6435,14 +6450,16 @@ async function showrunner({ workItem }) {
   // Fail-safe: an absent/malformed (or courier-stringified) value yields both-"claude" + empty
   // effort map, so the review/build leaves take the byte-unchanged agent() path.
   const _epParsed = _coerceObj((startupFacts && startupFacts.engine_prefs) || null)
-  let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
+  let _epMap = { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} }
   if (_epParsed && typeof _epParsed === 'object' && !Array.isArray(_epParsed)) {
-    // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
-    // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
-    // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+    // Carry the whole object — reviewer/implementation/planAuthor AND the FR-9 effort sub-map
+    // (keyed by role_kind), so resolveEffort can source the owner's effort override from
+    // __SR_ENGINE_PREFS.effort (NOT from the model-tier __SR_OVERRIDES map, which is keyed by
+    // role->model).
     _epMap = {
       reviewer: _epParsed.reviewer || 'claude',
       implementation: _epParsed.implementation || 'claude',
+      planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
   }

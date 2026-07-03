@@ -49,6 +49,8 @@ async function dispatchSmokes() {
     prompt: 'author the plan', cwd: '/repo', schema: {}, timeoutSeconds: 300, workItem: 'wi-plan', model: 'fable' })
   assert.strictEqual(rA.ok, true, 'author-plan happy path returns ok')
   assert.deepStrictEqual(rA.notify, [{ identity: 'n1', message: 'took a default' }], 'notify rides back')
+  const runCmd = execLogA.find((c) => c.includes('cursor-agent') && c.includes(' < '))
+  assert.ok(runCmd && /\.prompt/.test(runCmd), 'author-plan must run cursor-agent with the staged prompt on stdin')
   assert.ok(!execLogA.some((c) => c.includes('git') && c.includes('rev-parse HEAD')), 'author-plan captures no preSHA')
   assert.ok(!execLogA.some((c) => c.includes('engine_adapter.py commit')), 'author-plan never commits')
   const argvCmd = execLogA.find((c) => c.includes('engine_adapter.py build-argv'))
@@ -86,7 +88,7 @@ const USABLE_SIGNAL = JSON.stringify({ usable: true, recorded: 'abc123', expecte
 const NOT_USABLE_SIGNAL = JSON.stringify({ usable: false, recorded: '', expected: '' })
 
 // Agent stub for producePhase: emit-signals sequence + external dispatch stubs + native author trap.
-function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [] }) {
+function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [] }) {
   const seq = usableSeq.slice()
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
@@ -94,14 +96,20 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
       if (prompt.includes('emit-signals')) {
         return [{ index: 0, ok: true, stdout: seq.shift() ? USABLE_SIGNAL : NOT_USABLE_SIGNAL }]
       }
-      if (prompt.includes('append-notify')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('append-notify')) {
+        const m = prompt.match(/--entries\s+'([^']+)'/)
+        if (m) { try { notifyLedger.push(...JSON.parse(m[1])) } catch (_) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('reset author-plan draft')) return [{ index: 0, ok: true, stdout: '' }]
       if (prompt.includes('engine_adapter.py build-argv')) {
         externalRuns.push(prompt)
         return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '-p', '--trust', '-f']) }]
       }
       if (prompt.includes('engine_adapter.py parse-result')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify(
-          externalOk ? { ok: true, notify: [] } : { ok: false, reason: 'unreadable' }) }]
+          externalOk ? { ok: true, notify: [{ identity: 'n-ext', message: 'external default' }] }
+            : { ok: false, reason: 'unreadable' }) }]
       }
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       if (prompt.includes('cursor-agent')) return [{ index: 0, ok: true, stdout: '{"status":"ok"}' }]
@@ -122,14 +130,16 @@ async function produceSmokes() {
     globalThis.__SR_OVERRIDES = { 'author-plan': 'fable' }
 
     // (1) plan doc + planAuthor:cursor + external ok -> external authored, native author NOT called.
-    let externalRuns = [], nativeCalls = []
-    global.agent = produceAgent({ usableSeq: [false, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls })
+    let externalRuns = [], nativeCalls = [], notifyLedger = []
+    global.agent = produceAgent({ usableSeq: [false, true], externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger })
     let r = await sr.producePhase('plan', 'wi-ext')
     assert.strictEqual(r.confidence, 'high', '(1) external author + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(1) exactly one external dispatch')
     assert.strictEqual(nativeCalls.length, 0, '(1) native author is NOT dispatched when external succeeds')
     assert.ok(externalRuns[0].includes("--role 'author-plan'"), '(1) dispatch carries the author-plan role')
     assert.ok(externalRuns[0].includes("--model 'fable'"), '(1) dispatch threads the resolved author-plan tier: ' + externalRuns[0])
+    assert.ok(notifyLedger.some((n) => n.phase === 'plan' && n.identity === 'n-ext' && n.message === 'external default'),
+      '(1) external notify is durably recorded via append-notify')
 
     // (2) tasks doc NEVER consults planAuthor -> native author even with the pref set.
     externalRuns = []; nativeCalls = []
