@@ -48,10 +48,24 @@ function assembleRounds(records, deferredSet) {
   for (const rec of records) {
     if (!rec || typeof rec !== 'object') continue
     const findings = (rec.findings || []).filter((f) => !skip.has(circuitBreaker.findingIdentity(f)))
-    out.push({ round: Number(rec.round), findings })
+    out.push({
+      round: Number(rec.round),
+      findings,
+      dimensions: rec.dimensions,
+      coverageDecisions: rec.coverageDecisions,
+    })
   }
   out.sort((a, b) => a.round - b.round)
   return out
+}
+
+function _breakerRoundDimensions(roundFindings) {
+  const dims = {}
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (!result || typeof result !== 'object') continue
+    dims[name] = { status: result.status || 'run' }
+  }
+  return dims
 }
 
 function buildPreviousDimensionState(records) {
@@ -711,6 +725,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const thisRound = {
       round,
       findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
+      dimensions: _breakerRoundDimensions(roundFindings),
       coverageDecisions: coverageDecisions || [],
       generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions || []),
     }

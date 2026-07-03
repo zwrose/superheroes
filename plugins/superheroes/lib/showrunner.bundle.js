@@ -251,6 +251,16 @@ function _blockingCountExcludingGeneralize(roundRec) {
   if (!generalize.size) return blocking.length
   return blocking.filter((f) => !generalize.has(recurrenceKey(f))).length
 }
+function _roundReviewed(roundRec) {
+  const dims = roundRec && roundRec.dimensions
+  if (!dims || typeof dims !== 'object' || Array.isArray(dims)) return true
+  const entries = Object.values(dims)
+  if (!entries.length) return true
+  return entries.some((d) => d && d.status === 'run')
+}
+function _reviewedRounds(rounds) {
+  return (rounds || []).filter(_roundReviewed)
+}
 function checkCircuitBreaker(rounds, maxRounds) {
   const n = rounds.length
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
@@ -259,21 +269,23 @@ function checkCircuitBreaker(rounds, maxRounds) {
     return { halt: true, reason: 'max-iterations',
       detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
   }
-  if (n >= 3) {
-    const cN = _blockingCountExcludingGeneralize(rounds[n - 1])
-    const cN1 = _blockingCountExcludingGeneralize(rounds[n - 2])
-    const cN2 = _blockingCountExcludingGeneralize(rounds[n - 3])
+  const reviewed = _reviewedRounds(rounds)
+  const rn = reviewed.length
+  if (rn >= 3) {
+    const cN = _blockingCountExcludingGeneralize(reviewed[rn - 1])
+    const cN1 = _blockingCountExcludingGeneralize(reviewed[rn - 2])
+    const cN2 = _blockingCountExcludingGeneralize(reviewed[rn - 3])
     if (cN > 0 && cN >= cN1 && cN1 >= cN2) {
       return { halt: true, reason: 'no-net-progress',
         detail: `Blocking-finding count did not decrease over two rounds (${cN2} → ${cN1} → ${cN}).` }
     }
   }
-  if (n >= 2) {
-    const latestRec = rounds[n - 1]
+  if (rn >= 2) {
+    const latestRec = reviewed[rn - 1]
     const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
     const challenged = new Set((latestRec.coverageDecisions || []).filter((d) => d && d.classKey && d.challengedBy).map((d) => d.classKey))
     const latestBlocking = _blocking(latestRec)
-    const prevIds = new Set(_blocking(rounds[n - 2]).map(recurrenceKey))
+    const prevIds = new Set(_blocking(reviewed[rn - 2]).map(recurrenceKey))
     const recurring = latestBlocking.filter((f) => prevIds.has(recurrenceKey(f)))
     const challengedRecurring = recurring.filter((f) => challenged.has(recurrenceKey(f)))
     if (challengedRecurring.length) {
@@ -927,10 +939,24 @@ function assembleRounds(records, deferredSet) {
   for (const rec of records) {
     if (!rec || typeof rec !== 'object') continue
     const findings = (rec.findings || []).filter((f) => !skip.has(circuitBreaker.findingIdentity(f)))
-    out.push({ round: Number(rec.round), findings })
+    out.push({
+      round: Number(rec.round),
+      findings,
+      dimensions: rec.dimensions,
+      coverageDecisions: rec.coverageDecisions,
+    })
   }
   out.sort((a, b) => a.round - b.round)
   return out
+}
+
+function _breakerRoundDimensions(roundFindings) {
+  const dims = {}
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (!result || typeof result !== 'object') continue
+    dims[name] = { status: result.status || 'run' }
+  }
+  return dims
 }
 
 function buildPreviousDimensionState(records) {
@@ -1590,6 +1616,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const thisRound = {
       round,
       findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
+      dimensions: _breakerRoundDimensions(roundFindings),
       coverageDecisions: coverageDecisions || [],
       generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions || []),
     }
@@ -5265,13 +5292,48 @@ function _findingKeys(finding) {
   return keys.filter(Boolean)
 }
 
+function _fixIdentities(entry) {
+  const out = []
+  if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+    for (const key of ['id', 'key', 'identity']) {
+      if (entry[key]) out.push(String(entry[key]))
+    }
+    return out
+  }
+  if (entry != null && entry !== '') out.push(String(entry))
+  return out
+}
+
+function _changedFiles(result) {
+  const files = new Set()
+  for (const item of result.changedSubjects || []) {
+    if (typeof item === 'string' && item && !_policySubject(item)) files.add(item)
+  }
+  for (const entry of [...(result.fixes || []), ...(result.fixed || [])]) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+    for (const f of entry.files || []) {
+      if (typeof f === 'string' && f) files.add(f)
+    }
+  }
+  return files
+}
+
 function _policyChangedSubjects(result, fixContext) {
   const subjects = new Set()
-  const fixed = new Set([...(result.fixes || []), ...(result.fixed || [])].map((x) => String(x)))
+  const fixed = new Set()
+  for (const entry of [...(result.fixes || []), ...(result.fixed || [])]) {
+    for (const id of _fixIdentities(entry)) fixed.add(id)
+  }
+  const changedFiles = _changedFiles(result)
   for (const finding of (fixContext && fixContext.priorFindings) || []) {
-    if (!fixed.size || !_findingKeys(finding).some((key) => fixed.has(key))) continue
-    const subject = _policySubject(finding.dimension)
-    if (subject) subjects.add(subject)
+    if (fixed.size && _findingKeys(finding).some((key) => fixed.has(key))) {
+      const subject = _policySubject(finding.dimension)
+      if (subject) subjects.add(subject)
+    }
+    if (changedFiles.size && finding.file && changedFiles.has(finding.file)) {
+      const subject = _policySubject(finding.dimension)
+      if (subject) subjects.add(subject)
+    }
   }
   for (const item of result.changedSubjects || []) {
     if (typeof item === 'string') {
@@ -5311,7 +5373,7 @@ const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
 const FIX_RESULT_INSTRUCTION =
-  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
+  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Prefer changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode); file paths are accepted but the scheduler derives subjects from fixes+files+priorFindings. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
@@ -5466,7 +5528,7 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
   }))
 }
 
-module.exports = { REVIEW_CODE_REVIEWERS }
+module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
 
 // The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
 const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
