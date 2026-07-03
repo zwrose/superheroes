@@ -23,6 +23,7 @@
 //       gate + ONE folded gather; engine_pref_load.py must not appear as its own leaf.
 //   (5) LABEL SET (FR-10): every observed label is in the matrix-derived allowlist.
 'use strict'
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const crypto = require('crypto')
 const fs = require('fs')
@@ -273,7 +274,7 @@ function shellResponse(cmd) {
   // single-command exec/courier pipes, routed by content:
   if (cmd.includes('recover_entry.py')) {
     // world_derive from step 0, carrying the acquired lease generation (the ship fences renew it)
-    return JSON.stringify({ checkpoint: null, world: {}, generation: 5 })
+    return JSON.stringify({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
   }
   if (cmd.includes('front_half_usable.py')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'

@@ -8,6 +8,7 @@
 // #118: reviewDocPhase RETURNS its persist spec (set-gate side-effect + journal payload); the ONE
 //   'save phase progress' write happens in runPhases' per-phase tail — the failure scenarios drive
 //   runPhases and assert the park there (UFR-5: never advance on an un-recorded gate).
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')

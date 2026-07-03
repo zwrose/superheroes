@@ -11,6 +11,8 @@ import control_plane, ref_lock
 ap = argparse.ArgumentParser()
 ap.add_argument("--work-item", required=True)
 ap.add_argument("--generation", required=True)
+ap.add_argument("--root", required=True,
+                help="checkout root the control-plane store is keyed to (acquire authority)")
 ap.add_argument("--release", action="store_true",
                 help="delete the lease iff this generation still holds it (terminal exit)")
 a = ap.parse_args()
@@ -19,7 +21,14 @@ try:
 except (TypeError, ValueError):
     print(json.dumps({"ok": False, "reason": "malformed --generation"}))
     sys.exit(0)
-store = control_plane.ensure_store(os.getcwd())
+try:
+    root = os.path.realpath(a.root)
+except (TypeError, ValueError, OSError):
+    root = ""
+if not root or not os.path.isdir(root):
+    print(json.dumps({"ok": False, "reason": "control-plane store unusable"}))
+    sys.exit(0)
+store = control_plane.ensure_store(root)
 if store is None:
     print(json.dumps({"ok": False, "reason": "control-plane store unusable"}))
     sys.exit(0)
