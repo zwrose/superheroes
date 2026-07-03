@@ -142,8 +142,19 @@ def invoke(deps):
                 "report": _report("fail", reason, None, None),
                 "record_path": None,
             }
+        dead_run_teardown = {"cleaned_up": [], "left_behind": []}
+        if reclaim["action"] == "reclaim":
+            # UFR-8: a confirmed-dead prior run's leftover branch/PR/work-item-dir artifacts
+            # must be reaped, not just its record backstopped. `run_stamp=None` puts
+            # `acceptance_cleanup.plan` in record-less discovery mode — ANY name that
+            # parses to a valid full stamp is reaped, independent of this invocation's own
+            # (not-yet-materialized) stamp. This must run before this invocation's own
+            # materialize/launch so the dead run's artifacts never linger alongside the
+            # fresh attempt's.
+            dead_run_teardown = _discovery_teardown(deps)
         if reclaim["action"] == "reclaim" and reclaim.get("write_orphan_record"):
-            # The dead prior run left no record — write its orphan failed record before proceeding.
+            # The dead prior run left no record — write its orphan failed record before
+            # proceeding, honestly reflecting what the discovery teardown above reaped.
             deps["write_record"]({
                 "verdict": "fail",
                 "reason": "orphan record for a reclaimed dead prior run",
@@ -156,8 +167,8 @@ def invoke(deps):
                 "terminated_at": deps["clock_now"](),
                 "retried": False,
                 "attempts": [{"stamp": recorded_state.get("stamp"), "verdict": "fail"}],
-                "cleaned_up": [],
-                "left_behind": [],
+                "cleaned_up": dead_run_teardown.get("cleaned_up") or [],
+                "left_behind": dead_run_teardown.get("left_behind") or [],
             })
 
         # 2. Materialize the stamped throwaway fixture work-item.
@@ -270,6 +281,21 @@ def _teardown(deps, stamp):
     if stamp is None:
         return {"cleaned_up": [], "left_behind": []}
     planned = acceptance_cleanup.plan(deps["discover_artifacts"](stamp), run_stamp=stamp)
+    return deps["reap"](planned)
+
+
+def _discovery_teardown(deps):
+    """UFR-8: the record-less discovery cleanup for a reclaimed DEAD prior run.
+
+    Distinct from `_teardown` (which no-ops on `stamp is None`, since that guard means
+    "this invocation never got as far as materializing anything yet"): here `stamp=None`
+    is deliberately passed to `acceptance_cleanup.plan` as `run_stamp`, putting it in
+    discovery mode — ANY discovered name that parses to a valid full stamp is reaped,
+    not just this (not-yet-materialized) invocation's own. `discover_artifacts` itself
+    takes no meaningful stamp argument in this mode; `None` mirrors the other record-less
+    discovery call sites in this module.
+    """
+    planned = acceptance_cleanup.plan(deps["discover_artifacts"](None), run_stamp=None)
     return deps["reap"](planned)
 
 

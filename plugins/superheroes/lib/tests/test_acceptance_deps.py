@@ -170,3 +170,109 @@ def test_real_run_outcome_corrupt_json_fails_closed():
         assert out["terminal"] == "parked"
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+# --- real_gh_reader: PR discovery by head-branch prefix, not the synthetic pr_title ----
+#
+# premortem-001: the live showrunner titles its PR from the first commit's Conventional-
+# Commit subject (`gh pr create --fill-first`), never `stamped["pr_title"]`, so a title
+# search never reliably finds the real PR. `real_gh_reader` must instead match by the
+# real build-branch prefix (`buildtree.branch_name`: `superheroes/<work_item>-<hash>`).
+
+
+def test_real_gh_reader_matches_by_superheroes_branch_prefix_not_title(monkeypatch):
+    calls = []
+
+    def fake_run(args, cwd, timeout=15):
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "list"]:
+            import json as _json
+            return 0, _json.dumps([
+                {"number": 1, "url": "https://x/pr/1", "isDraft": False,
+                 "headRefName": "superheroes/accept-harness-abc-def456",
+                 "statusCheckRollup": [{"conclusion": "SUCCESS"}]},
+                {"number": 2, "url": "https://x/pr/2", "isDraft": True,
+                 "headRefName": "claude/unrelated-branch", "statusCheckRollup": []},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    read = deps.real_gh_reader("root", {"work_item": "accept-harness-abc",
+                                        "pr_title": "totally different title never used"})
+    result = read()
+    assert result["pr_exists"] is True
+    assert result["live_pr"] == "https://x/pr/1"
+    assert result["checks_green"] is True
+    # No --search flag naming the synthetic pr_title was ever used.
+    assert not any("--search" in c for c in calls)
+
+
+def test_real_gh_reader_no_matching_branch_prefix_returns_pr_not_exists(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            import json as _json
+            return 0, _json.dumps([
+                {"number": 9, "url": "https://x/pr/9", "isDraft": False,
+                 "headRefName": "claude/unrelated-branch", "statusCheckRollup": []},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    read = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})
+    result = read()
+    assert result["pr_exists"] is False
+
+
+def test_real_gh_reader_missing_work_item_is_unreadable():
+    read = deps.real_gh_reader("root", {})
+    result = read()
+    assert result["unreadable"] == ["pr_exists"]
+
+
+# --- real_discover_artifacts: real showrunner branch/PR naming ------------------------
+#
+# code-reviewer finding: branch discovery globbed only the harness's own legacy
+# `wi-<stamp>*` naming, never the real showrunner build-branch naming
+# (`superheroes/<work_item>-<hash>`), so a live run's fixture branch was never discovered
+# (and never reaped). PR discovery must key off `headRefName`, not a free-text title
+# search on the reserved prefix (which the showrunner's own PR title never carries).
+
+
+def test_real_discover_artifacts_finds_superheroes_prefixed_branch(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:2] == ["git", "branch"] and "superheroes/*accept-harness-*" in args:
+            return 0, "  superheroes/accept-harness-xyz-abc123\n", ""
+        if args[:2] == ["git", "branch"]:
+            return 0, "", ""
+        if args[:3] == ["gh", "pr", "list"]:
+            return 0, "[]", ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    discover = deps.real_discover_artifacts("root")
+    artifacts = discover("accept-harness-xyz")
+    branch_names = [a["name"] for a in artifacts if a["kind"] == "branch"]
+    assert "superheroes/accept-harness-xyz-abc123" in branch_names
+
+
+def test_real_discover_artifacts_finds_pr_by_head_ref_not_title(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:2] == ["git", "branch"]:
+            return 0, "", ""
+        if args[:3] == ["gh", "pr", "list"]:
+            import json as _json
+            return 0, _json.dumps([
+                {"title": "fix: unrelated conventional commit subject",
+                 "headRefName": "superheroes/accept-harness-xyz-abc123"},
+                {"title": "some other PR", "headRefName": "claude/unrelated"},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    discover = deps.real_discover_artifacts("root")
+    artifacts = discover("accept-harness-xyz")
+    pr_artifacts = [a for a in artifacts if a["kind"] == "pr"]
+    assert len(pr_artifacts) == 1
+    # The artifact's name is the head branch (embeds the stamp for parse_stamp routing),
+    # not the PR's own (unrelated) title.
+    assert pr_artifacts[0]["name"] == "superheroes/accept-harness-xyz-abc123"

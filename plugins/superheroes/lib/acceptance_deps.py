@@ -170,6 +170,14 @@ def real_discover_artifacts(root):
     names might carry a reserved stamp. Cleanup's own `acceptance_fixture.parse_stamp`
     routing decides what's actually reaped — this only lists candidates.
 
+    Branch discovery globs BOTH the harness's own legacy `wi-<stamp>*` naming and the
+    real showrunner build-branch naming (`buildtree.branch_name`:
+    `superheroes/<work_item>-<content_hash>`, where `work_item` IS the stamp) — a live
+    showrunner run never produces a `wi-<stamp>*` branch, so glob-ing only that pattern
+    left every real fixture branch undiscovered (and therefore un-reaped) after a live
+    run. `parse_stamp` still gates what's structurally a valid stamp before anything is
+    ever deleted, so widening the glob cannot cause an unrelated branch to be reaped.
+
     A failed lookup (rc != 0: network blip / rate-limit / timeout) is "couldn't check",
     NOT "confirmed nothing to discover" — silently omitting that artifact class would let
     a real leaked branch/PR go both unreaped AND unreported. Instead of dropping it, a
@@ -177,29 +185,57 @@ def real_discover_artifacts(root):
     non-`[a-z0-9]` separator so it deliberately never parses to a valid full stamp — see
     `acceptance_fixture.parse_stamp`) so `acceptance_cleanup.plan` routes it to
     `leave_behind` (never reaped) with a name that surfaces the degraded class in the report.
+
+    PR discovery lists open+closed PRs and filters by `headRefName` (the branch the
+    harness actually creates, `superheroes/<stamp>-...` or legacy `wi-<stamp>`) rather
+    than a free-text title search — the live showrunner titles its PR from the first
+    commit's Conventional-Commit subject (`gh pr create --fill-first`, see pr_entry.py),
+    never the harness's synthetic `pr_title`, so a title search never reliably finds the
+    real PR. The discovered PR artifact's `name` is the matching `headRefName` (which
+    embeds the stamp, so `acceptance_cleanup.plan`'s `parse_stamp` routing still works),
+    NOT the PR's own title — `real_reap` looks the PR back up by that same head branch.
     """
     def _discover(_stamp):
         artifacts = []
-        rc, out, _err = _run(["git", "branch", "--list", "wi-%s*" % acceptance_fixture.RESERVED_PREFIX],
-                             cwd=root)
-        if rc == 0:
-            for line in out.splitlines():
-                name = line.strip().lstrip("* ").strip()
-                if name:
-                    artifacts.append({"kind": "branch", "name": name})
-        else:
+        branch_names = set()
+        branch_lookup_failed = False
+        for pattern in ("wi-%s*" % acceptance_fixture.RESERVED_PREFIX,
+                        "superheroes/*%s*" % acceptance_fixture.RESERVED_PREFIX):
+            rc, out, _err = _run(["git", "branch", "--list", pattern], cwd=root)
+            if rc == 0:
+                for line in out.splitlines():
+                    name = line.strip().lstrip("* ").strip()
+                    if name:
+                        branch_names.add(name)
+            else:
+                branch_lookup_failed = True
+        if branch_lookup_failed:
+            # One degraded placeholder regardless of how many glob patterns failed —
+            # never a per-pattern duplicate.
             artifacts.append({
                 "kind": "branch",
                 "name": acceptance_fixture.RESERVED_PREFIX + " discovery degraded: branch lookup failed",
             })
+        for name in sorted(branch_names):
+            artifacts.append({"kind": "branch", "name": name})
         rc, out, _err = _run(
-            ["gh", "pr", "list", "--search", acceptance_fixture.RESERVED_PREFIX,
-             "--json", "title", "--jq", ".[].title"], cwd=root)
+            ["gh", "pr", "list", "--state", "all",
+             "--json", "title,headRefName", "--jq", "."], cwd=root)
         if rc == 0:
-            for title in out.splitlines():
-                title = title.strip()
-                if title:
-                    artifacts.append({"kind": "pr", "name": title})
+            try:
+                prs = json.loads(out) if out.strip() else []
+            except ValueError:
+                prs = None
+            if prs is None:
+                artifacts.append({
+                    "kind": "pr",
+                    "name": acceptance_fixture.RESERVED_PREFIX + " discovery degraded: pr lookup failed",
+                })
+            else:
+                for pr in prs:
+                    head = pr.get("headRefName") or ""
+                    if acceptance_fixture.RESERVED_PREFIX in head:
+                        artifacts.append({"kind": "pr", "name": head})
         else:
             artifacts.append({
                 "kind": "pr",
@@ -228,9 +264,12 @@ def real_reap(root, current_stamp):
                 rc, _out, _err = _run(["git", "branch", "-D", name], cwd=root)
                 ok = rc == 0
             elif kind == "pr":
+                # `name` here is the PR's head branch (see real_discover_artifacts) — look
+                # the PR back up by that exact branch, not a free-text title search, since
+                # the harness's discovered PR artifacts carry no reliable title to search on.
                 rc, out, _err = _run(
-                    ["gh", "pr", "list", "--search", name, "--json", "number,title",
-                     "--jq", ".[0].number"], cwd=root)
+                    ["gh", "pr", "list", "--head", name, "--state", "all",
+                     "--json", "number,title", "--jq", ".[0].number"], cwd=root)
                 if rc != 0:
                     # The lookup itself failed (network blip / rate-limit / timeout) —
                     # this is "couldn't check", NOT "confirmed absent". Never fold a
@@ -265,18 +304,28 @@ def real_reap(root, current_stamp):
 
 
 def real_gh_reader(root, stamped):
-    """`deps["gh_reader"]`: live PR/check facts for the stamped run's PR (found by title
-    search, since the run's own final PR number is not known ahead of the launch)."""
+    """`deps["gh_reader"]`: live PR/check facts for the stamped run's PR.
+
+    Found by HEAD BRANCH PREFIX, not the harness's synthetic `pr_title` — the live
+    showrunner titles its PR from the first commit's Conventional-Commit subject
+    (`gh pr create --fill-first`, pr_entry.py), never `stamped["pr_title"]`, and that
+    title is never threaded into the launch prompt either. The showrunner's real build
+    branch is `buildtree.branch_name`: `superheroes/<work_item>-<content_hash>` — the
+    content hash isn't known ahead of the run, so this lists PRs and matches by the
+    `superheroes/<work_item>-` prefix (falling back to the harness's own legacy
+    `wi-<work_item>` naming) rather than an exact `--head` lookup.
+    """
     def _read():
-        title = stamped.get("pr_title") if isinstance(stamped, dict) else None
+        work_item = stamped.get("work_item") if isinstance(stamped, dict) else None
         result = {"pr_exists": False, "pr_ready_for_review": False, "checks_green": False,
                   "live_checks_green": False, "live_pr": "", "unreadable": []}
-        if not title:
+        if not work_item:
             result["unreadable"] = ["pr_exists"]
             return result
         rc, out, _err = _run(
-            ["gh", "pr", "list", "--search", title,
-             "--json", "number,url,isDraft,statusCheckRollup", "--jq", "."], cwd=root)
+            ["gh", "pr", "list", "--state", "all",
+             "--json", "number,url,isDraft,statusCheckRollup,headRefName", "--jq", "."],
+            cwd=root)
         if rc != 0 or not out.strip():
             result["unreadable"] = ["pr_exists"]
             return result
@@ -285,9 +334,11 @@ def real_gh_reader(root, stamped):
         except ValueError:
             result["unreadable"] = ["pr_exists"]
             return result
-        if not prs:
+        prefixes = ("superheroes/%s-" % work_item, "wi-%s" % work_item)
+        matches = [pr for pr in prs if (pr.get("headRefName") or "").startswith(prefixes)]
+        if not matches:
             return result
-        pr = prs[0]
+        pr = matches[0]
         result["pr_exists"] = True
         result["pr_ready_for_review"] = pr.get("isDraft") is False
         result["live_pr"] = pr.get("url") or ""

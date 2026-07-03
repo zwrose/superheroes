@@ -56,6 +56,48 @@ def test_confirmed_alive_prior_run_refuses_creating_nothing():
     assert calls == []   # nothing materialized/launched
 
 
+def test_reclaimed_dead_run_reaps_its_own_leftover_artifacts_before_proceeding():
+    # UFR-8: a confirmed-dead prior run's leftover branch/PR/work-item-dir artifacts must
+    # be reaped via a record-less discovery cleanup (run_stamp=None), not just backstopped
+    # with an orphan record. Pins the discover_artifacts(None)/reap(run_stamp=None) call
+    # that must happen BEFORE this invocation's own materialize/launch.
+    discover_calls = []
+    reap_calls = []
+
+    def discover_artifacts(stamp):
+        discover_calls.append(stamp)
+        if stamp is None:
+            return [{"kind": "branch", "name": "wi-accept-harness-deadrun"}]
+        return [{"kind": "branch", "name": "b-s1"}]
+
+    def reap(planned):
+        reap_calls.append(planned)
+        return {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
+    d = _deps(
+        reclaim_probe=lambda: ({"in_flight": True, "stamp": "accept-harness-deadrun",
+                                "has_record": False}, "dead"),
+        discover_artifacts=discover_artifacts,
+        reap=reap,
+    )
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    # The record-less discovery call (run_stamp=None) happened, and its plan reaped the
+    # dead run's own branch — proving _discovery_teardown actually executed the reap, not
+    # just planned it.
+    assert None in discover_calls
+    assert any(
+        any(a.get("name") == "wi-accept-harness-deadrun" for a in call.get("reap") or [])
+        for call in reap_calls
+    )
+    # The orphan record for the dead run reflects what was actually cleaned up, not a
+    # hardcoded empty list.
+    orphan_records = [rec for rec in d["_state"]["records_written"]
+                      if rec.get("reason") == "orphan record for a reclaimed dead prior run"]
+    assert len(orphan_records) == 1
+    assert orphan_records[0]["cleaned_up"] == ["wi-accept-harness-deadrun"]
+
+
 def test_parked_terminal_is_fail_but_teardown_still_runs():
     d = _deps(run_outcome=lambda loc: {"terminal": "parked", "phases": ["plan"],
                                        "readout_pr_link": "", "readout_claimed_checks_green": False,

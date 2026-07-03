@@ -56,6 +56,31 @@ def test_reap_pr_found_and_closed_is_cleaned(monkeypatch):
     assert result["left_behind"] == []
 
 
+def test_reap_pr_looked_up_by_head_branch_not_free_text_search(monkeypatch):
+    # real_discover_artifacts now emits the PR artifact's `name` as its head branch
+    # (which embeds the stamp for parse_stamp routing) — real_reap must look it back up
+    # by that exact branch (`--head`), never a free-text `--search`.
+    calls = []
+
+    def fake_run(args, cwd, timeout=15):
+        calls.append(args)
+        if args[:3] == ["gh", "pr", "list"]:
+            return 0, "42", ""
+        if args[:3] == ["gh", "pr", "close"]:
+            return 0, "", ""
+        return 1, "", ""
+    monkeypatch.setattr(deps, "_run", fake_run)
+    reap = deps.real_reap("root", lambda: None)
+    result = reap({"reap": [{"kind": "pr", "name": "superheroes/accept-harness-xyz-abc123"}],
+                   "leave_behind": []})
+    assert result["cleaned_up"] == ["superheroes/accept-harness-xyz-abc123"]
+    list_calls = [c for c in calls if c[:3] == ["gh", "pr", "list"]]
+    assert len(list_calls) == 1
+    assert "--head" in list_calls[0]
+    assert "superheroes/accept-harness-xyz-abc123" in list_calls[0]
+    assert "--search" not in list_calls[0]
+
+
 def test_discover_branch_lookup_failure_surfaces_degraded_placeholder_not_silently_dropped(monkeypatch):
     def fake_run(args, cwd, timeout=15):
         if args[:2] == ["git", "branch"]:
