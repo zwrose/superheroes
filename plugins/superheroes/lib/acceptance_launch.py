@@ -17,6 +17,15 @@ process-group leader (`start_new_session=True`) with two env markers set on the 
   - `SUPERHEROES_ACCEPTANCE_DENY_ONLY=1` — the enforcement marker the workhorse enforcer
     reads to run deny-only across the full owner-authority set (Task 8 / UFR-6).
 
+The spawned child is driven with a non-interactive prompt (`claude -p "<prompt>"` — `-p`/
+`--print` is the CLI's actual non-interactive form; there is no `--headless` flag) built by
+`build_launch_prompt`. The prompt directs the session to run `superheroes:showrunner` on the
+stamped work-item and then persist the showrunner's machine-readable `run_outcome` projection
+(`run_readout.run_outcome`) to the `terminal_location` path as JSON — that write is the ONLY
+thing that makes a run-level terminal record exist at the path `real_run_outcome` reads; the
+showrunner itself does not persist one, so without this explicit instruction the harness would
+have no terminal record to judge no matter how the child was invoked.
+
 Return contract (every path):
   {"outcome": "exited"|"killed",
    "ceiling": None|"elapsed"|"spend",
@@ -209,17 +218,45 @@ class _RealChild:
         return self._terminal_path
 
 
-def _default_child_factory(stamped, terminal_path=None):
-    """Spawn the headless `claude` CLI as an isolated process-group leader (UFR-5/UFR-6).
+def build_launch_prompt(work_item, terminal_path):
+    """The non-interactive prompt handed to `claude -p` for a live acceptance run.
 
-    Sets the execution-context + deny-only markers and the harness-scoped permission
-    profile on the child env. Returns a `_RealChild` handle for the watch loop.
+    Directs the headless session to drive `superheroes:showrunner` to completion on the
+    stamped work-item, then persist the showrunner's machine-readable run-outcome
+    projection (`run_readout.run_outcome`) to `terminal_path` as JSON — the one write
+    that makes a run-level terminal record exist at the path `real_run_outcome` reads.
+    Pure string-building so the exact wording is unit-tested without a live spawn.
+    """
+    return (
+        "Run the superheroes:showrunner skill end-to-end on the approved work-item "
+        "%(work_item)s (invoke it exactly as documented in its SKILL.md — pre-flight, "
+        "then the Workflow tool on the committed bundle with args: {workItem: %(work_item)s}). "
+        "After the run reaches a terminal state (ready or parked), compute its "
+        "run-outcome projection via plugins/superheroes/lib/run_readout.py's "
+        "run_outcome(state) function over the run's end state, and write that projection "
+        "as JSON to this exact path, creating parent directories as needed: %(terminal_path)s. "
+        "Do not merge, release, or force-push anything — this run's changes are confined "
+        "to the work-item's own branch and PR."
+        % {"work_item": work_item, "terminal_path": terminal_path}
+    )
+
+
+def _default_child_factory(stamped, terminal_path=None):
+    """Spawn `claude -p <prompt>` as an isolated process-group leader (UFR-5/UFR-6).
+
+    `-p`/`--print` is the CLI's actual non-interactive form (there is no `--headless`
+    flag); the prompt (`build_launch_prompt`) directs the session to drive
+    `superheroes:showrunner` on the stamped work-item and persist its run-outcome
+    projection to `terminal_path`. Sets the execution-context + deny-only markers on the
+    child env. Returns a `_RealChild` handle for the watch loop.
     """
     env = dict(os.environ)
     env[_CONTEXT_MARKER] = "1"
     env[_DENY_ONLY_MARKER] = "1"
+    work_item = stamped.get("work_item") if isinstance(stamped, dict) else stamped
+    prompt = build_launch_prompt(work_item, terminal_path)
     proc = subprocess.Popen(
-        ["claude", "--headless"],
+        ["claude", "-p", prompt],
         start_new_session=True,
         env=env,
     )

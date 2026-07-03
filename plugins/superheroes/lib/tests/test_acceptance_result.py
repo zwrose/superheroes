@@ -45,6 +45,49 @@ def test_read_missing_record_returns_none_never_raises():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_read_record_schema_version_mismatch_returns_none():
+    # test-002: the schemaVersion guard is the load-bearing rollback fence for the FR-5
+    # durable record. A stale-schema record must never be read as current.
+    d = tempfile.mkdtemp()
+    try:
+        path = ar.write_record(dict(FULL), d)
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        rec["schemaVersion"] = ar.SCHEMA_VERSION + 1
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        assert ar.read_record(d) is None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_read_record_missing_schema_version_key_returns_none():
+    d = tempfile.mkdtemp()
+    try:
+        path = ar.write_record(dict(FULL), d)
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        del rec["schemaVersion"]
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+        assert ar.read_record(d) is None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_read_record_corrupt_json_returns_none_never_raises():
+    # test-002: the corrupt-JSON except (OSError, ValueError) branch must never raise —
+    # a regression narrowing it to drop ValueError would break the never-raises contract.
+    d = tempfile.mkdtemp()
+    try:
+        path = os.path.join(d, ar.RECORD_NAME)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("{ this is not valid json ]")
+        assert ar.read_record(d) is None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_render_report_has_all_four_elements():
     out = ar.render_report(dict(FULL))
     assert "fail" in out.lower()                 # verdict

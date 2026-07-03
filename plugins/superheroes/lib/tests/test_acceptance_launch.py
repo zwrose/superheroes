@@ -5,6 +5,11 @@ import acceptance_launch as al
 
 CEIL = {"elapsed_sec": 100.0, "spend": 10.0}
 
+# code-001 regression guard: the production launcher must spawn a real, working
+# non-interactive `claude` invocation (`-p`/`--print`), never the invalid `--headless`
+# flag, and it must actually drive `superheroes:showrunner` on the stamped work-item
+# rather than opening a bare/instructionless session.
+
 
 class FakeClock:
     def __init__(self, ticks): self.ticks = list(ticks); self.i = -1
@@ -136,3 +141,49 @@ def test_real_child_group_empty_probes_whole_group_not_just_leader():
             os.killpg(proc.pid, 9)
         except OSError:
             pass
+
+
+def test_build_launch_prompt_names_the_skill_work_item_and_terminal_path():
+    prompt = al.build_launch_prompt("accept-harness-abc123", "/run/dir/terminal-record.json")
+    assert "superheroes:showrunner" in prompt
+    assert "accept-harness-abc123" in prompt
+    assert "/run/dir/terminal-record.json" in prompt
+    # must direct the child to persist the run_outcome projection to that exact path —
+    # otherwise no run-level terminal record is ever written for real_run_outcome to read.
+    assert "run_outcome" in prompt
+
+
+def test_build_launch_prompt_forbids_merging():
+    prompt = al.build_launch_prompt("accept-harness-xyz", "/t.json").lower()
+    assert "do not merge" in prompt
+
+
+def test_default_child_factory_spawns_real_non_interactive_claude_with_prompt(monkeypatch):
+    """code-001: the real spawn must use `-p`/`--print` (never the invalid `--headless`
+    flag) and must pass a prompt that actually drives the showrunner on the stamped
+    work-item — pinning the real factory's argv rather than only fake Popen calls."""
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+            self.pid = 12345
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    stamped = {"work_item": "accept-harness-abc123"}
+    al._default_child_factory(stamped, terminal_path="/run/dir/terminal-record.json")
+
+    argv = captured["argv"]
+    assert argv[0] == "claude"
+    assert "--headless" not in argv                 # the invalid flag must never appear
+    assert argv[1] in ("-p", "--print")              # the CLI's real non-interactive form
+    assert len(argv) >= 3
+    prompt = argv[2]
+    assert "accept-harness-abc123" in prompt
+    assert "superheroes:showrunner" in prompt
+    assert "/run/dir/terminal-record.json" in prompt
+    assert captured["kwargs"].get("start_new_session") is True
+    env = captured["kwargs"].get("env") or {}
+    assert env.get("SUPERHEROES_ACCEPTANCE_CONTEXT") == "1"
+    assert env.get("SUPERHEROES_ACCEPTANCE_DENY_ONLY") == "1"

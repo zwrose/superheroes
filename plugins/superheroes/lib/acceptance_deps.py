@@ -303,7 +303,16 @@ def real_gh_reader(root, stamped):
 def real_run_outcome(root):
     """`deps["run_outcome"]`: read the showrunner's terminal record + project the readout
     facts `acceptance_verdict.decide` needs. Missing/unreadable -> a `parked`-shaped
-    outcome so the verdict fails naming the unreadable facts rather than crashing."""
+    outcome so the verdict fails naming the unreadable facts rather than crashing.
+
+    The record on disk is whatever `run_readout.run_outcome(state)` (the "#112 consumer
+    contract" — see run_readout.py) emits: `status`/`checks`/`reason`/`prUrl`/
+    `phasesTraversed`/`readoutPath`. `status` is `"ready"` on a genuine success terminal
+    (mirrored from `acceptance_verdict.decide`'s own `facts["terminal"] != "ready"`
+    check) and `checks` is the CI string (`"green"`/`"none"`/`"red"`) — a claimed-green
+    readout is exactly `checks == "green"`. Older/foreign field names (`terminal`,
+    `checksGreen`, `failureKind`) are NOT read: they do not exist in the real projection
+    and reading them would silently pin every real run to the fail-closed default."""
     def _read(terminal_location):
         default = {"terminal": "parked", "phases": [], "readout_pr_link": "",
                    "readout_claimed_checks_green": None, "readout_claimed_pr": "",
@@ -317,14 +326,15 @@ def real_run_outcome(root):
             return default
         if not isinstance(record, dict):
             return default
+        pr_url = record.get("prUrl") or ""
+        checks = record.get("checks")
         return {
-            "terminal": record.get("terminal", "parked"),
-            "phases": record.get("phasesTraversed") or record.get("phases") or [],
-            "readout_pr_link": record.get("prUrl") or record.get("readout_pr_link") or "",
-            "readout_claimed_checks_green": record.get("checksGreen",
-                                                        record.get("readout_claimed_checks_green")),
-            "readout_claimed_pr": record.get("prUrl") or record.get("readout_claimed_pr") or "",
-            "failure_kind": record.get("failureKind"),
+            "terminal": record.get("status") or "parked",
+            "phases": record.get("phasesTraversed") or [],
+            "readout_pr_link": pr_url,
+            "readout_claimed_checks_green": (checks == "green") if checks is not None else None,
+            "readout_claimed_pr": pr_url,
+            "failure_kind": record.get("reason"),
         }
     return _read
 
