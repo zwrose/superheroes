@@ -4112,6 +4112,10 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
+// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
+// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
+// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
 const engineDispatch = require('./engine_dispatch.js')
@@ -4602,6 +4606,66 @@ async function reviewOneTask(workItem, generation, task, branch, wt) {
   return reviewLoop(workItem, generation, task, branch, wt)
 }
 
+// #160: the per-task reviewer's bespoke two-verdict schema — the shape the task_review twin consumes.
+// `findings` is REQUIRED (not just a declared property): for codex this schema is enforced via
+// --output-schema, and the engine adapter's review parse (parse_result role='review') treats a missing
+// findings list as 'unreadable' — so a schema-conformant clean external review that omitted findings
+// would needlessly fall open to Claude, defeating the reviewer-engine preference on clean tasks. Both
+// engines are therefore required to emit the findings array the parse layer depends on (matching the
+// whole-branch review's external schema). Harmless for the native path — the native reviewer already
+// emits findings, and reviewLoop reads `review.findings || []` either way.
+const REVIEW_TASK_SCHEMA = {
+  type: 'object',
+  required: ['verdicts', 'findings'],
+  properties: {
+    verdicts: {
+      type: 'object',
+      required: ['spec_compliance', 'code_quality'],
+      properties: {
+        spec_compliance: { enum: ['pass', 'fail'] },
+        code_quality: { enum: ['pass', 'fail'] },
+      },
+    },
+    findings: { type: 'array' },
+  },
+}
+
+// #160: dispatch ONE per-task review, honoring enginePreferences.reviewer AND the model-tier policy —
+// mirroring the whole-branch final review beside it (runFinalReview's reviewerAgent). Before this, the
+// per-task reviewer called agent() with NO model + NO engine resolution, so a project configured
+// `reviewer: codex` never routed the per-task review to codex (it silently rode the bundle's Opus
+// safety floor, bypassing enginePreferences.reviewer entirely — found live). The per-task review runs
+// at the LIGHTER `reviewer` tier / regular `review` effort — the whole-branch review is the deep one
+// (reviewer-deep / review-deep). Returns the bespoke {verdicts, findings} shape the task_review twin
+// consumes.
+async function taskReviewAgent(workItem, task, branch, wt, round) {
+  const reviewerModel = modelTierTwin.resolveModel('reviewer', _overrides(), null)
+  const prompt =
+    `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
+    + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
+    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+  const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+  if (rEngine !== 'claude') {
+    // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
+    const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+    const res = await engineDispatch.dispatchExternal({
+      workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
+      schema: REVIEW_TASK_SCHEMA, taskId: task.id,
+    })
+    // The engine adapter's review parse yields {findings} only (parse_result role_kind='review'
+    // discards verdicts), so synthesize the two required verdicts from the findings. The task_review
+    // twin uses the verdicts ONLY as a completeness guard — their pass/fail value is unused; the real
+    // decision rides the findings' blocking severities — so this is behavior-identical to a native
+    // two-verdict review that returned the same findings. An unreadable external review (null / no
+    // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
+    if (res && Array.isArray(res.findings)) {
+      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
+    }
+  }
+  return agent(prompt, { label: reviewTaskLabel(task, round), model: reviewerModel, schema: REVIEW_TASK_SCHEMA })
+}
+
 // The bespoke two-verdict review + bounded fix loop (FR-4..7, UFR-4/5). Never uses reviewPanel.
 async function reviewLoop(workItem, generation, task, branch, wt) {
   // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
@@ -4618,26 +4682,9 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
   for (;;) {
     iter += 1
     if (iter > MAX_ITER) return { parked: true, reason: 'review loop exceeded its iteration guard — park' }
-    const review = await agent(
-      `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
-      + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-      + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
-      { label: reviewTaskLabel(task, round),
-        schema: {
-          type: 'object',
-          required: ['verdicts'],
-          properties: {
-            verdicts: {
-              type: 'object',
-              required: ['spec_compliance', 'code_quality'],
-              properties: {
-                spec_compliance: { enum: ['pass', 'fail'] },
-                code_quality: { enum: ['pass', 'fail'] },
-              },
-            },
-            findings: { type: 'array' },
-          },
-        } })
+    // #160: engine- + model-tier-aware per-task review (see taskReviewAgent) — honors
+    // enginePreferences.reviewer + the reviewer model tier, mirroring the whole-branch review.
+    const review = await taskReviewAgent(workItem, task, branch, wt, round)
     // #115 runaway fix: defensively recover a stringified `verdicts` (a leaf can still derail and emit
     // it as JSON-in-a-string despite the pinned schema — same nested-structure-stringification family
     // as the exec/fence mangles, and mirrors build_phase's existing task-list string recovery). The
