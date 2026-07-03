@@ -42,14 +42,21 @@ def _bootstrap(cwd, transcript_path, host):
 
 
 def _resume_brief(cwd, source):
-    """The additive workhorse resume-brief — only on compact WITH a work-item."""
+    """The additive workhorse resume-brief — only on compact WITH a live work-item lease.
+    #170: the active work item is derived from the common-dir store's live lease (the honest
+    replacement for the retired current.json). Emitted only when EXACTLY ONE work item is live
+    — with 0 there is nothing to resume, and with >1 (two parallel runs sharing the clone's
+    store) the store alone can't say which one THIS session owns, so we defer to the cold
+    reconcile rather than name the wrong one."""
     if source != "compact":
         return ""
     try:
         import control_plane
-        wi = control_plane.get_current(cwd)
-        if not wi:
+        import ref_lock
+        active = ref_lock.active_work_items(control_plane.checkout_dir(cwd))
+        if len(active) != 1:
             return ""
+        wi = active[0]
         brief = control_plane.paths(cwd, wi)["resume_brief"]
         return ("Workhorse resume: this session was compacted mid-run on work-item "
                 "'%s'. Before continuing, RECONCILE against reality and RE-ARM the step 0 "

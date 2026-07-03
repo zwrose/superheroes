@@ -121,3 +121,59 @@ def test_plan_reconcile_bidirectional():
     out = buildtree.plan_reconcile(disk, record)
     assert [e["path"] for e in out["to_record"]] == ["/wt/c"]           # disk\record
     assert sorted(e["path"] for e in out["candidates"]) == ["/wt/a", "/wt/b", "/wt/c"]
+# append to plugins/superheroes/lib/tests/test_buildtree.py
+import subprocess
+import sys
+
+
+_WORKER = r'''
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import buildtree as b
+rf, tag, K = sys.argv[2], sys.argv[3], int(sys.argv[4])
+# Interleaved read-modify-write on the SHARED registry: each worker adds K entries in its own
+# path namespace and removes the previous EVEN index whenever i is odd. Namespaces are disjoint,
+# so a worker's own net set is order-independent; only a LOST UPDATE (an unlocked concurrent
+# writer clobbering the file) can drop another worker's entry.
+for i in range(K):
+    b.record_add(rf, {"workItem": tag, "contentHash": "h", "branch": None,
+                      "path": "%s-%d" % (tag, i)})
+    if i % 2 == 1:
+        b.record_remove(rf, "%s-%d" % (tag, i - 1))
+'''
+
+
+def _simulate(tag, K):
+    """Single-threaded ground truth for one worker's net path set (disjoint namespace)."""
+    kept = {}
+    for i in range(K):
+        kept["%s-%d" % (tag, i)] = True
+        if i % 2 == 1:
+            kept.pop("%s-%d" % (tag, i - 1), None)
+    return set(kept)
+
+
+def test_record_two_process_writers_no_lost_updates(tmp_path):
+    # #170: two processes doing interleaved record_add/record_remove on ONE shared worktrees.json
+    # (the common-dir store now funnels a clone's parallel runs to one registry). The fcntl.flock
+    # around each read-modify-write must prevent lost updates — without it, concurrent writers
+    # clobber each other and the surviving set is smaller than the union of both workers' nets.
+    lib = os.path.dirname(os.path.abspath(buildtree.__file__))
+    rf = str(tmp_path / "store" / "worktrees.json")
+    os.makedirs(os.path.dirname(rf), exist_ok=True)
+    K = 60
+    worker = tmp_path / "worker.py"
+    worker.write_text(_WORKER)
+    procs = [subprocess.Popen([sys.executable, str(worker), lib, rf, tag, str(K)])
+             for tag in ("A", "B")]
+    for p in procs:
+        assert p.wait(timeout=60) == 0
+    got = {e["path"] for e in buildtree.record_read(rf)}
+    expected = _simulate("A", K) | _simulate("B", K)
+    assert got == expected, "lost updates: missing=%s extra=%s" % (
+        sorted(expected - got), sorted(got - expected))
+    # schema intact + every surviving entry is a well-formed dict
+    import json
+    data = json.load(open(rf))
+    assert data["schemaVersion"] == buildtree.RECORD_SCHEMA
+    assert all(isinstance(w, dict) and "path" in w for w in data["worktrees"])
