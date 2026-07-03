@@ -49,7 +49,7 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
       return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
     }
     if (label === 'save round state') return jsonOut({ ok: true })
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
       // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
       if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as exec — must use JS twin')

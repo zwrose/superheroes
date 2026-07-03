@@ -21,7 +21,7 @@ function agentWith({ usableSeq, authored, notifyOk = true }) {
   let produceCalls = 0
   const fn = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('emit-signals')) return [{ index: 0, ok: true, stdout: seq.shift() ? USABLE_SIGNAL : NOT_USABLE_SIGNAL }]
       if (prompt.includes('append-notify')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: notifyOk }) }]
       // Any other exec (e.g. persist, journal, checkpoint) — return ok
@@ -65,7 +65,7 @@ function repairAgent({ emitSeq, authorResults, capturedPrompts = [], notifyOk = 
   const aSeq = authorResults.slice()
   return async function(prompt, opts) {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('emit-signals')) {
         const sig = eSeq.shift()
         return [{ index: 0, ok: true, stdout: sig !== undefined ? sig : NOT_USABLE_SIGNAL }]
@@ -140,7 +140,7 @@ async function repairLoopSmokes() {
   const lEmitSeq = [GAP_SIGNAL, GAP_SIGNAL, USABLE_SIGNAL]
   global.agent = async function(prompt, opts) {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('emit-signals')) {
         const sig = lEmitSeq.shift()
         return [{ index: 0, ok: true, stdout: sig !== undefined ? sig : USABLE_SIGNAL }]
@@ -219,7 +219,7 @@ async function main() {
     let capturedPrompt = null
     const agG = async (prompt, opts) => {
       const label = (opts && opts.label) || ''
-      if (label === 'exec') {
+      if (opts && opts.courier) {
         if (prompt.includes('emit-signals')) return [{ index: 0, ok: true, stdout: NOT_USABLE_SIGNAL }]
         if (prompt.includes('append-notify')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
         return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
@@ -235,7 +235,7 @@ async function main() {
     let emitCount = 0
     global.agent = async (prompt, opts) => {
       const label = (opts && opts.label) || ''
-      if (label === 'exec') {
+      if (opts && opts.courier) {
         if (prompt.includes('emit-signals')) {
           emitCount += 1
           return [{ index: 0, ok: true, stdout: emitCount === 1 ? NOT_USABLE_SIGNAL : USABLE_SIGNAL }]
