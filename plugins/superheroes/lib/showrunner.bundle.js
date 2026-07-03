@@ -1570,7 +1570,7 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
   // session model). The preamble strips the marker before the real agent().
   ioApi = ioApi || io()
-  const outPath = ioApi.join(runDir, 'verify-result.json')
+  const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
   const command = `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
   const out = await agent(
     `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
@@ -1579,10 +1579,12 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
     `Do NOT answer until the command prints its final JSON.\n\n` +
     command,
     { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  const direct = verifyResultFromPayload(verifyCommand, out)
-  if (direct) return direct
+  const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
+  if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
   const readBack = await ioApi.readJson(outPath, null)
-  return verifyResultFromPayload(verifyCommand, readBack) || 'fail'
+  const fromFile = verifyResultFromPayload(verifyCommand, readBack, { allowPass: true })
+  if (fromFile) return fromFile
+  return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
 }
 
 function own(obj, key) {
@@ -1594,18 +1596,22 @@ function _integerString(value) {
   return /^-?\d+$/.test(s) ? s : null
 }
 
-function verifyResultFromPayload(verifyCommand, payload) {
+function verifyResultFromPayload(verifyCommand, payload, opts) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
-  if (typeof payload.result === 'string' && _VERIFY_OK.has(payload.result)) return payload.result
+  opts = opts || {}
+  const command = verifyCommand || (own(payload, 'command') ? payload.command : 'none')
+  const commandSkipped = !command || String(command).trim().toLowerCase() === 'none'
+  if (payload.result === 'pass') return opts.allowPass ? 'pass' : null
+  if (payload.result === 'skipped') return commandSkipped ? 'skipped' : null
   if (payload.result === 'fail' || payload.result === 'timeout') return payload.result
-  const command = own(payload, 'command') ? payload.command : (verifyCommand || 'none')
-  if (!command || String(command).trim().toLowerCase() === 'none') return 'skipped'
+  if (commandSkipped) return 'skipped'
   const timedOut = payload.timedOut === true || String(payload.timedOut).toLowerCase() === 'true'
   if (timedOut) return 'timeout'
   const rc = own(payload, 'returncode') ? payload.returncode : (own(payload, 'code') ? payload.code : undefined)
   const rcStr = _integerString(rc)
   if (!rcStr) return null
-  return verifyGateTwin.classify({ command, returncode: rcStr, timedOut: false })
+  const classified = verifyGateTwin.classify({ command, returncode: rcStr, timedOut: false })
+  return classified === 'pass' && !opts.allowPass ? null : classified
 }
 
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],

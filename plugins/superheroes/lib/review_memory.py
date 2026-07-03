@@ -557,7 +557,8 @@ def sweep_stale_staging(run_dir):
     never blocks the load."""
     swept = 0
     for pattern in ("dim-result-*.json", "round-skeleton-*.json", "round-updates-*.json",
-                    "*.payload", "round-state.json", "verify-result.json", ".verify-result-*"):
+                    "*.payload", "round-state.json", "verify-result.json",
+                    "verify-result-r*.json", ".verify-result-*"):
         for path in glob.glob(os.path.join(run_dir, pattern)):
             try:
                 os.unlink(path)

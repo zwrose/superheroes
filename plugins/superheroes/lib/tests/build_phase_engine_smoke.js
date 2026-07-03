@@ -70,6 +70,15 @@ function resetFinalReviewRunDir(workItem) {
   return d
 }
 
+function verifyGateStub(cmd, result = 'pass') {
+  const m = String(cmd || '').match(/--out '([^']+)'/)
+  const payload = result === 'pass' ? { result: 'pass', code: 0, tail: '' }
+    : result === 'timeout' ? { result: 'timeout', code: null, tail: '' }
+    : { result: 'fail', code: 1, tail: '' }
+  if (m) fs.writeFileSync(m[1], JSON.stringify(payload))
+  return { command: 'pytest -q', returncode: result === 'pass' ? 0 : 1, timedOut: result === 'timeout' }
+}
+
 // standardLeaf: the stdout for the common IO leaves on a clean build-then-verify run. `authzOk`
 // controls the UFR-4 engine_authz.py test-dispatch preflight verdict; `authzCalls` counts it (cached
 // per run -> must fire exactly once even across multiple dispatches in the same process instance).
@@ -180,7 +189,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       execRoute((p) => standardLeaf(p)),
       ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-      ['verify_gate.py', () => { verifyGateFired += 1; return { command: 'pytest -q', returncode: 0, timedOut: false } }],
+      ['verify_gate.py', (cmd) => { verifyGateFired += 1; return verifyGateStub(cmd, 'pass') }],
     ])
     resetFinalReviewRunDir('wi')
     const fr = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
@@ -195,7 +204,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       execRoute((p) => standardLeaf(p)),
       ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-      ['verify_gate.py', () => { verifyGateFiredFail += 1; return { command: 'pytest -q', returncode: 1, timedOut: false } }],
+      ['verify_gate.py', (cmd) => { verifyGateFiredFail += 1; return verifyGateStub(cmd, 'fail') }],
     ])
     resetFinalReviewRunDir('wi')
     const frFail = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
@@ -230,7 +239,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
       ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
-      ['verify_gate.py', () => ({ command: 'pytest -q', returncode: 0, timedOut: false })],
+      ['verify_gate.py', (cmd) => verifyGateStub(cmd, 'pass')],
     ])
     resetFinalReviewRunDir('wi')
     const fr2 = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
@@ -322,7 +331,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
           return { findings: [] }
         }
       })()],
-      ['verify_gate.py', () => ({ command: 'pytest -q', returncode: 0, timedOut: false })],
+      ['verify_gate.py', (cmd) => verifyGateStub(cmd, 'pass')],
     ])
     const fr = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
     assert.strictEqual(fr.terminal, 'clean',
