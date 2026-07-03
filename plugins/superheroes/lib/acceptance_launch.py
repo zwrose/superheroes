@@ -9,8 +9,9 @@ decision) hard-signals the whole group SIGTERM → SIGKILL until it is confirmed
 (UFR-2). Every I/O boundary — the child, the clock, the spend sampler, the engine-pref
 read — is injected so the tests drive only fakes and never spawn a live run.
 
-Real defaults (used in production, not in tests) spawn the headless `claude` CLI as a
-process-group leader (`start_new_session=True`) with two env markers set on the child:
+Real defaults (used in production, not in tests) spawn a non-interactive `claude` CLI
+session as a process-group leader (`start_new_session=True`) with two env markers set
+on the child:
 
   - `SUPERHEROES_ACCEPTANCE_CONTEXT=1`   — the execution-context marker the front-door
     skill reads to refuse nesting (UFR-5).

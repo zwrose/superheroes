@@ -349,7 +349,8 @@ def real_clock_now():
 
 def real_launcher(root):
     """`deps["launcher"]`: `acceptance_launch.run` with its production real defaults
-    (spawns the headless `claude` CLI as a process-group leader)."""
+    (spawns `claude -p <prompt>` — the non-interactive CLI form — as a process-group
+    leader, driving superheroes:showrunner on the stamped work-item)."""
     def _launch(stamped, budget_consumed=None, attempt=1):
         from acceptance_ceiling import DEFAULT_CEILINGS
         terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
