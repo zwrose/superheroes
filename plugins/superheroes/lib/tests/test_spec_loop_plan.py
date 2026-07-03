@@ -142,6 +142,22 @@ def test_plan_missing_state_fails_toward_run_all_deep(tmp_path, capsys):
     assert out["skipped"] == []
 
 
+def test_custom_dimensions_list_is_honored(tmp_path, capsys):
+    session_dir = _session(tmp_path)
+    _, out = _run(capsys, "plan", "--session-dir", session_dir, "--round", "1",
+                  "--dimensions", '["architecture-reviewer"]')
+    assert [d["dimension"] for d in out["dims_to_run"]] == ["architecture-reviewer"]
+
+
+def test_malformed_dimensions_falls_back_to_default_roster(tmp_path, capsys):
+    session_dir = _session(tmp_path)
+    _, out = _run(capsys, "plan", "--session-dir", session_dir, "--round", "1",
+                  "--dimensions", "not-json")
+    dims = _dims_map(out)
+    assert sorted(dims) == sorted(DIMS)
+    assert all(d["tier"] == "reviewer-deep" for d in dims.values())
+
+
 # --- record: executed evidence + escalation ---------------------------------
 
 def test_record_baseline_fresh_clean_is_high_confidence(tmp_path, capsys):
