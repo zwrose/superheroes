@@ -47,6 +47,13 @@ state is; a never-started showrunner pick simply re-enters here.
    Invoke the Workflow tool with that script text and `args: {workItem: <work-item>}`. The bundle
    runs the native front-half → build → review → ship pipeline; it parks (never merges) on a red
    gate and hands back a ready-for-review PR when the branch is base-current and CI is green.
+   Then print the zero-token watcher command for a second terminal:
+
+   ```bash
+   python3 "$LIB/run_watch.py" --work-item "<work-item>" --root "$ROOT" --print-command
+   ```
+
+   Show its single-line output under: `Watch this run live (zero tokens) from another terminal:`
 
 3. **Render the codified readout.** On completion, assemble the run-end readout via the deciders
    and print it — the PR link, CI status, built-vs-acceptance, test-pilot result, and the
