@@ -34,13 +34,20 @@ function _sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // libRootProbe: a shell prefix that fail-closes when an ABSOLUTE spine code root has gone missing
 // (e.g. a plugin-cache eviction between phases). It rides an ALREADY-composed command —
 // `${libRootProbe()}python3 <lib>/recover_entry.py …` — so it adds NO leaf. When the dir is absent it
-// echoes MISSING_MARKER and exits 0 (the caller maps that stdout to a named park); when present it is
-// a no-op passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the compose stays
+// echoes a PARSEABLE failure object carrying MISSING_MARKER and exits 0; when present it is a no-op
+// passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the compose stays
 // byte-identical.
+//
+// The payload is a JSON `{"ok":false,"reason":"<marker>"}` (not a bare echo) so BOTH probe sites map
+// it to the same named park uniformly: the exec-based launch probe (reconcile) substring-matches the
+// marker in raw stdout, and the runCourierJson-based back-half probe (persistPhase) gets it back
+// verbatim as an `ok:false` failure (retryRealFailure:false) — a bare echo would be unparseable JSON,
+// making that courier retry then throw a GENERIC transport error instead of the named reason.
 const MISSING_MARKER = '__SR_LIBROOT_MISSING__'
 function libRootProbe() {
   if (!isAbsoluteLibRoot()) return ''
-  return 'test -d ' + _sq(libRoot()) + " || { echo '" + MISSING_MARKER + "'; exit 0; }; "
+  const payload = '{"ok":false,"reason":"' + MISSING_MARKER + '"}'
+  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; exit 0; }; "
 }
 
 // pyLibDir: a Python EXPRESSION that evaluates to the lib dir, for embedded

@@ -56,6 +56,24 @@ async function reconcileWith(libRootValue, snapshotStdout) {
   return { result, prompt: captured }
 }
 
+// persistPhase rides the runCourierJson path (not exec) — the courier returns a bare stdout string.
+async function persistWith(libRootValue, courierStdout) {
+  resetGlobals()
+  globalThis.__SR_LIB = libRootValue
+  delete require.cache[require.resolve('../showrunner.js')]
+  const sr = require('../showrunner.js')
+  let captured = null
+  globalThis.agent = async (prompt, opts) => {
+    if (opts && opts.label === 'save phase progress') captured = String(prompt)
+    return courierStdout
+  }
+  const result = await sr.persistPhase('wi-x', { step: 1, phase: 'x', journalPayload: { phase: 'x' } })
+  return { result, prompt: captured }
+}
+
+// The parseable failure object the probe echoes when an absolute code root is missing.
+const MISSING_PAYLOAD = JSON.stringify({ ok: false, reason: libRootMod.MISSING_MARKER })
+
 ;(async () => {
   const ABS = '/opt/sr-libroot'   // absolute + free of the `plugins/superheroes/lib` substring
 
@@ -76,13 +94,27 @@ async function reconcileWith(libRootValue, snapshotStdout) {
     resetGlobals()
   }
 
-  // (C) missing absolute libRoot -> the leaf echoes the marker -> reconcile parks with a NAMED reason.
+  // (C) missing absolute libRoot -> the leaf echoes the marker payload. BOTH probe sites — the
+  //     launch-entry reconcile (exec) AND the once-per-phase persistPhase durable write (courier) —
+  //     must fail closed to the SAME named park, so the back half is covered, not just startup.
+  const MISS = '/opt/sr-missing-libroot'
   {
-    const { result, prompt } = await reconcileWith('/opt/sr-missing-libroot', libRootMod.MISSING_MARKER)
-    assert.ok(prompt.includes("test -d '/opt/sr-missing-libroot'"), '(C) probe present for a missing absolute root')
-    assert.strictEqual(result.action, 'park_gate', '(C) a missing spine code root fails closed to a park')
+    // (C1) reconcile / startup entry.
+    const { result, prompt } = await reconcileWith(MISS, MISSING_PAYLOAD)
+    assert.ok(prompt.includes(`test -d '${MISS}'`), '(C1) probe present for a missing absolute root')
+    assert.strictEqual(result.action, 'park_gate', '(C1) a missing spine code root fails closed to a park')
     assert.strictEqual(result.reason, 'spine code root missing (libRoot)',
-      `(C) the park must NAME the missing code root.\nGot: ${JSON.stringify(result)}`)
+      `(C1) the park must NAME the missing code root.\nGot: ${JSON.stringify(result)}`)
+  }
+  {
+    // (C2) persistPhase / back-half once-per-phase durable write.
+    const { result, prompt } = await persistWith(MISS, MISSING_PAYLOAD)
+    assert.ok(prompt && prompt.includes(`test -d '${MISS}'`), '(C2) persistPhase save compose arms the probe')
+    assert.ok(prompt.includes(MISS + '/phase_progress_entry.py'), '(C2) save compose resolves under the absolute libRoot')
+    assert.ok(!prompt.includes('plugins/superheroes/lib'), '(C2) no repo-relative literal in the save compose')
+    assert.strictEqual(result.ok, false, '(C2) a missing spine code root fails the durable write closed')
+    assert.strictEqual(result.error, 'spine code root missing (libRoot)',
+      `(C2) the back-half durable write must fail with the SAME named reason.\nGot: ${JSON.stringify(result)}`)
   }
 
   // (D) default (relative) libRoot -> byte-identical pre-#170 compose, probe emits nothing.
@@ -96,5 +128,5 @@ async function reconcileWith(libRootValue, snapshotStdout) {
   }
 
   resetGlobals()
-  console.log('OK: #170 libRoot compose guard (A bundle-static, B absolute-resolve, C fail-closed probe, D default byte-identical)')
+  console.log('OK: #170 libRoot compose guard (A bundle-static, B absolute-resolve, C1/C2 fail-closed probe reconcile+persistPhase, D default byte-identical)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })

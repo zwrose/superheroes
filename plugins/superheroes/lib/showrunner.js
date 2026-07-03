@@ -1027,15 +1027,25 @@ async function persistPhase(workItem, opts) {
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
     `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
+  // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
+  // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
+  // file-not-found. In dev/dogfood (relative libRoot) libRootProbe() is empty, so this is byte-identical.
+  const probedCmd = `${libRootProbe()}${cmd}`
   const required = journalOnly
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
     const res = await courier.runCourierJson(
       'save phase progress',
-      cmd,
+      probedCmd,
       { require: required, retryRealFailure: false },
     )
+    // Map the libRoot-missing marker to the SAME named park reason reconcile uses, before the
+    // save-result read-back check — the back half fails closed with a descriptive cause, not a
+    // generic read-back mismatch.
+    if (res && typeof res.reason === 'string' && res.reason.indexOf(MISSING_MARKER) >= 0) {
+      return { ok: false, error: 'spine code root missing (libRoot)' }
+    }
     const confirmed = res && res.ok && res.journal_confirmed &&
       (journalOnly || res.checkpoint_confirmed)
     return confirmed
