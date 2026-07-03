@@ -2,6 +2,7 @@
 // Dev-time only (node, not CI): proves the #86 panel verdict -> gate vocabulary mapping.
 // verdictToGate is a pure synchronous map, so this smoke needs no agent()/parallel() stubs.
 const assert = require('assert')
+const fs = require('fs')
 const sr = require('../showrunner.js')
 
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
@@ -23,6 +24,8 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     }
     if (label === 'run verify') {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'verify gate runs from the explicit target worktree')
+      const m = String(prompt).match(/--out '([^']+)'/)
+      if (m && verifyCommand !== 'none') fs.writeFileSync(m[1], JSON.stringify({ result: 'pass', code: 0, tail: '' }))
       return { command: verifyCommand, returncode: 0, timedOut: false }
     }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
@@ -56,7 +59,7 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     promptLog.push(prompt)
     return firstStub(prompt, opts)
   }
-  const runDir1 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-1-'))
+  const runDir1 = fs.mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-1-'))
   const r = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
@@ -74,7 +77,7 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     promptLog.push(prompt)
     return changedStub(prompt, opts)
   }
-  const runDir2 = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-2-'))
+  const runDir2 = fs.mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-2-'))
   const changed = await sr.reviewCodePhase('wi-targeted', {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',

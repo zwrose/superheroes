@@ -97,6 +97,8 @@ async function main() {
     const prevAgent = global.agent
     global.agent = async (prompt, opts) => {
       if (opts && opts.label === 'run verify') {
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'),
+          JSON.stringify({ command: 'run-tests', returncode: '0', timedOut: 'false' }))
         return { command: 'run-tests', returncode: '0', timedOut: 'false' }  // courier-stringified
       }
       return null
