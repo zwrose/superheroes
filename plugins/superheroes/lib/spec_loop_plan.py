@@ -221,6 +221,25 @@ def _plan_lists(plan, dimensions):
     return dims_to_run, skipped
 
 
+def _overlay_escalations(plan, escalations):
+    """Return a copy of *plan* with pending escalations emitted at reviewer-deep."""
+    if not escalations:
+        return plan
+    overlay = {"roundKind": plan.get("roundKind"),
+               "dimensions": dict(plan.get("dimensions") or {}),
+               "escalationPolicy": plan.get("escalationPolicy")}
+    for d in escalations:
+        info = overlay["dimensions"].get(d)
+        if isinstance(info, dict) and info.get("action") == "run":
+            updated = dict(info)
+            updated["tier"] = DEEP
+            reason = updated.get("reason") or ""
+            if " (pending escalation)" not in reason:
+                updated["reason"] = "%s (pending escalation)" % reason
+            overlay["dimensions"][d] = updated
+    return overlay
+
+
 def _persist_plan(session_dir, state, round_no, plan, state_ok):
     if not state_ok:
         state = {"schemaVersion": 1, "rounds": {}, "rebuilt": True}
@@ -312,6 +331,7 @@ def cmd_plan(session_dir, round_no, dimensions):
     state_ok, state = load_state(session_dir)
     entry = (state.get("rounds") or {}).get(str(round_no)) or {}
     plan = entry.get("plan") if state_ok else None
+    plan_created = False
     if not isinstance(plan, dict) or not isinstance(plan.get("dimensions"), dict):
         if round_no <= 1:
             plan = review_round_policy.plan_round(
@@ -321,7 +341,16 @@ def cmd_plan(session_dir, round_no, dimensions):
             plan = _run_all_plan(dimensions,
                                  "no persisted plan for round %d — fail toward run-all" % round_no)
             _snapshot(session_dir, round_no)
+            for d in dimensions:
+                sched = (plan.get("dimensions") or {}).get(d) or {}
+                if sched.get("action") != "skip":
+                    _archive_findings(session_dir, d, round_no - 1)
         state = _persist_plan(session_dir, state, round_no, plan, state_ok)
+        plan_created = True
+    if plan_created:
+        state_ok, state = load_state(session_dir)
+    entry = (state.get("rounds") or {}).get(str(round_no)) or {}
+    plan = _overlay_escalations(plan, entry.get("escalations") or {})
     dims_to_run, skipped = _plan_lists(plan, dimensions)
     return {"ok": True, "round": round_no, "roundKind": plan.get("roundKind"),
             "dims_to_run": dims_to_run, "skipped": skipped}

@@ -194,6 +194,32 @@ def test_record_accepts_structured_object_shape(tmp_path, capsys):
     assert d["blockingCount"] == 1
 
 
+def test_deep_low_confidence_result_forces_confirmation(tmp_path, capsys):
+    session_dir = _session(tmp_path)
+    _plan(capsys, session_dir, 1)
+    for dim in DIMS[1:]:
+        _write_findings(session_dir, dim, [])
+    _write_findings(session_dir, "architecture-reviewer",
+                    {"confidence": "low", "findings": []})
+    rec = _record(capsys, session_dir, 1)
+    assert rec["escalate"] == []
+    d = rec["dimensions"]["architecture-reviewer"]
+    assert d["status"] == "run" and d["confidence"] == "low"
+    _write_compiled(session_dir, [])
+    out = _decide(capsys, session_dir, 1)
+    assert out["action"] == "review" and out["roundKind"] == "confirmation"
+
+
+def test_plan_overlays_pending_escalation_at_deep(tmp_path, capsys):
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [_blocker("Architecture")])
+    rec = _record(capsys, session_dir, 2)
+    assert [e["dimension"] for e in rec["escalate"]] == ["architecture-reviewer"]
+    replay = _plan(capsys, session_dir, 2)
+    dims = _dims_map(replay)
+    assert dims["architecture-reviewer"]["tier"] == "reviewer-deep"
+
+
 def _reach_round2_with_cheap_arch(tmp_path, capsys):
     """Round 1: architecture flags a blocker, rest clean. Decide → round 2 plan:
     architecture runs cheap, the clean four skip."""
