@@ -44,7 +44,10 @@ state is; a never-started showrunner pick simply re-enters here.
    cat "$LIB/showrunner.bundle.js"
    ```
 
-   Invoke the Workflow tool with that script text and `args: {workItem: <work-item>}`. The bundle
+   Invoke the Workflow tool with that script text and
+   `args: {workItem: <work-item>, root: <ROOT>, libRoot: <LIB>}` — pass the resolved `$ROOT`
+   (target repo) and `$LIB` (the versioned plugin-cache lib dir) so the run operates on this repo
+   while executing the spine from immutable cache code, portable to any project. The bundle
    runs the native front-half → build → review → ship pipeline; it parks (never merges) on a red
    gate and hands back a ready-for-review PR when the branch is base-current and CI is green.
    Then print the zero-token watcher command for a second terminal:

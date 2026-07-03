@@ -39,7 +39,7 @@ def test_skill_documents_resume_substrate():
     skill = os.path.join(os.path.dirname(os.path.dirname(here)), "skills", "workhorse", "SKILL.md")
     body = open(skill, encoding="utf-8").read().lower()
     for needle in ("reconcile", "ref-lease", "fence", "ci_fix_attempt",
-                   "re-arm", "startup lock", "control-plane"):
+                   "re-arm", "control-plane"):
         assert needle in body, needle
 
 

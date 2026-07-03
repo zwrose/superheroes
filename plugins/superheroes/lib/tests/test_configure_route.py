@@ -75,10 +75,31 @@ def test_work_in_flight_false_when_no_control_plane(tmp_path):
     assert crt.work_in_flight(str(tmp_path), root=str(tmp_path / "store")) is False
 
 
-def test_work_in_flight_true_when_an_issue_is_in_progress(tmp_path, monkeypatch):
+def test_work_in_flight_true_when_a_live_lease_exists(tmp_path):
+    # #170: work-in-flight is now derived from a live ref-lease in the common-dir store (the
+    # honest replacement for the retired current.json), not a monkeypatched pointer.
+    import control_plane
+    import ref_lock
     _init_repo(tmp_path)
-    monkeypatch.setattr(crt, "_current_work", lambda cwd, root: {"workItem": "wi", "phase": "build"})
-    assert crt.work_in_flight(str(tmp_path), root=str(tmp_path / "store")) is True
+    root = str(tmp_path / "store")
+    store = control_plane.ensure_store(str(tmp_path), root=root)
+    assert store is not None
+    ok, _gen, _reason = ref_lock.acquire(store, "wi")
+    assert ok
+    assert crt.work_in_flight(str(tmp_path), root=root) is True
+
+
+def test_work_in_flight_false_when_lease_is_stale(tmp_path):
+    # A released (parked) or expired lease is not "in flight" — no live work item.
+    import control_plane
+    import ref_lock
+    _init_repo(tmp_path)
+    root = str(tmp_path / "store")
+    store = control_plane.ensure_store(str(tmp_path), root=root)
+    ok, gen, _reason = ref_lock.acquire(store, "wi")
+    assert ok
+    ref_lock.release(store, "wi", gen)      # park/hand-back releases the lease
+    assert crt.work_in_flight(str(tmp_path), root=root) is False
 
 
 def test_structural_signal_routes_to_fix(tmp_path, monkeypatch):

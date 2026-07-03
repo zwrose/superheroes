@@ -25,6 +25,19 @@ def _git_repo_with_claude(tmp_path, sentinel):
     (tmp_path / "CLAUDE.md").write_text("# Project rules\n%s\n" % sentinel)
 
 
+def _seed_live_lease(cwd, wi, store_root):
+    """#170: the active work item is now derived from a live ref-lease, not current.json.
+    ensure_store (the git repo the lease ref lives in) + acquire a fresh lease held by THIS
+    (alive) test process, so the hooks read it as live."""
+    import control_plane
+    import ref_lock
+    store = control_plane.ensure_store(cwd, root=store_root)
+    assert store is not None
+    ok, _gen, _reason = ref_lock.acquire(store, wi)
+    assert ok
+    return store
+
+
 def test_session_start_startup_emits_bootstrap(tmp_path):
     # The contract this change introduces: a slash-command spawn (source=startup)
     # now gets the project-context bootstrap, NOT nothing. (Replaces the old
@@ -55,8 +68,7 @@ def test_session_start_compact_with_workitem_emits_both(tmp_path):
     # arrive in one additionalContext — the brief layers in, it is not dropped.
     _git_repo_with_claude(tmp_path, "COMPACT_SENTINEL")
     env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
-    import control_plane as cp
-    cp.set_current(str(tmp_path), "wi", root=str(tmp_path / "store"))
+    _seed_live_lease(str(tmp_path), "wi", str(tmp_path / "store"))
     r = _run("session_start.py", {"source": "compact", "cwd": str(tmp_path)}, env)
     assert r.returncode == 0
     ctx = _ctx(r).lower()
@@ -108,7 +120,7 @@ def test_precompact_refreshes_brief_with_state(tmp_path):
     import control_plane as cp
     import checkpoint as ck
     import journal
-    cp.set_current(str(tmp_path), "wi", root=root)
+    _seed_live_lease(str(tmp_path), "wi", root)
     p = cp.paths(str(tmp_path), "wi", root=root)
     ck.write(p["checkpoint"], ck.new("wi", "superheroes/wi-abc"))
     journal.append(p["events"], "run_started", root=str(tmp_path))

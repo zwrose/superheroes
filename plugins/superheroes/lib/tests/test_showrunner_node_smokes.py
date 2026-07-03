@@ -34,6 +34,7 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_verify_readback_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_readout_fencing_smoke.js",
@@ -98,6 +99,9 @@ SHOWRUNNER_SMOKES = [
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # plan-author engine route: author-plan external dispatch (commit-free write, --model
+    # threading, notify, UFR-6) + producePhase planAuthor wiring (plan-only, fall-open).
+    "plugins/superheroes/lib/tests/showrunner_engine_author_smoke.js",
     # #38 Task 11: build_phase.js worker/fixer/final-review engine-branch routing (UFR-2/4, FR-15,
     # FIX I5 final-fixer report contract). Name starts build_phase_ so the discovery guard auto-matches.
     "plugins/superheroes/lib/tests/build_phase_engine_smoke.js",
@@ -126,6 +130,10 @@ SHOWRUNNER_SMOKES = [
     # parked payload-stage-failed; the record is now composed Python-side from on-disk state so no
     # oversized blob crosses the courier, and it survives a byte-dropping courier fake.
     "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
+    # #170: the libRoot compose guard — no raw `plugins/superheroes/lib` compose survives the bundle,
+    # an absolute __SR_LIB resolves composes under it, and a missing absolute code root fails closed
+    # to a named park.
+    "plugins/superheroes/lib/tests/showrunner_compose_libroot_smoke.js",
 ]
 
 

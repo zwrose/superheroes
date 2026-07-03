@@ -83,7 +83,9 @@ completes.
 2. **Per-role preference (FR-12).** Ask, one at a time, which engine to use for the reviewer role and
    for the implementation role (only ready engines are selectable). Record the pick into `core.md`'s
    machine block `enginePreferences: {reviewer, implementation}` via `core_md` (schemaVersion 2). An
-   absent block reads as both `claude`.
+   absent block reads as both `claude`. (A third key, `planAuthor`, routes the showrunner's
+   plan-author leaf; it is a tune-level knob — offer it only when the owner asks, per
+   `reference/view-and-tune.md`.)
 
 3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine
    is chosen, an external autonomous write needs a one-time owner grant. Show the exact snippet and where

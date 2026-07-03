@@ -32,6 +32,10 @@ def test_finding_identity_combines_file_and_title():
     assert finding_identity({"file": "src/a.ts", "title": "Missing Filter"}) == "src/a.ts::missing filter"
 
 
+def test_finding_identity_falls_back_to_summary_when_title_missing():
+    assert finding_identity({"file": "src/a.ts", "summary": "Missing Filter"}) == "src/a.ts::missing filter"
+
+
 def test_finding_identity_null_file_is_empty_string():
     assert finding_identity({"file": None, "title": "X"}) == "::x"
 

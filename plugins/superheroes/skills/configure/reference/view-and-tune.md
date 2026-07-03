@@ -64,12 +64,18 @@ action that owns it, leaving the rest of the calibration untouched:
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
 - **Switch the storage mode** → the confirmed switch below.
-- **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
-  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing
-  `enginePreferences` through `core_md`. Set a role back to `claude` (or clear it) to fall fully open.
-- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/author)
-  → show the effective map first, then write only the `## Model tiers` block in the resolved
-  review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+- **Change the per-role engine** (reviewer engine / implementation engine / plan-author engine) → the
+  engine step in `reference/set-up.md` §4.5 (availability → preference → show-authorization →
+  test-dispatch), writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`,
+  `planAuthor`). Set a role back to `claude` (or clear it) to fall fully open. `planAuthor` routes ONLY
+  the showrunner's plan-author leaf; tasks authoring always runs native.
+- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/
+  author/author-plan) → show the effective map first, then write only the `## Model tiers` block in the
+  resolved review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+  `author-plan` is a split role: unset, it resolves exactly as `author`; set (e.g. `author-plan: fable`,
+  only on explicit owner ask) it moves plan authoring alone. Fable-via-Cursor plan authoring = both
+  `author-plan: fable` and `planAuthor: cursor` (the cursor adapter maps the tier to its own fable
+  model id).
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

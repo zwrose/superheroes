@@ -44,7 +44,7 @@ async function partA() {
     // courier — a separate engine_pref_load.py leaf must never fire.
     if (label === 'read startup state') {
       return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '',
-        engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: { review: 'medium' } } })
+        engine_prefs: { reviewer: 'codex', implementation: 'cursor', planAuthor: 'cursor', effort: { review: 'medium' } } })
     }
     if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
@@ -79,8 +79,8 @@ async function partA() {
 
   assert.deepStrictEqual(
     globalThis.__SR_ENGINE_PREFS,
-    { reviewer: 'codex', implementation: 'cursor', effort: { review: 'medium' } },
-    'FAIL (a2): __SR_ENGINE_PREFS does not deep-equal the parsed reviewer/implementation/effort map',
+    { reviewer: 'codex', implementation: 'cursor', planAuthor: 'cursor', effort: { review: 'medium' } },
+    'FAIL (a2): __SR_ENGINE_PREFS does not deep-equal the parsed reviewer/implementation/planAuthor/effort map',
   )
 
   // fail-safe: bad/unreadable JSON -> both 'claude' + empty effort, never crashes.
@@ -111,7 +111,7 @@ async function partA() {
   } catch (_) {}
   assert.deepStrictEqual(
     globalThis.__SR_ENGINE_PREFS,
-    { reviewer: 'claude', implementation: 'claude', effort: {} },
+    { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} },
     'FAIL (a3): __SR_ENGINE_PREFS must fail-safe to both-claude + empty effort on a bad parse',
   )
 
@@ -134,6 +134,8 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
       return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} })
     }
     if (label && (label.startsWith('verify') || label === 'run verify')) {
+      const m = String(prompt).match(/--out '([^']+)'/)
+      if (m) fs.writeFileSync(m[1], JSON.stringify({ result: 'pass', code: 0, tail: '' }))
       return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }
     }
     if (label && label.startsWith('synthesis')) {

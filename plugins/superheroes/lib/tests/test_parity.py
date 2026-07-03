@@ -87,6 +87,8 @@ BUNDLED_NON_TWINS = {
     "pr_comment_scrub.js",
     "fenced_json.js",
     "engine_dispatch.js",
+    # #170: a JS-only compose-path helper (reads globalThis.__SR_LIB); no Python counterpart.
+    "lib_root.js",
 }
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,9 @@ const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const reviewMemory = require('./review_memory.js')
 const circuitBreaker = require('./circuit_breaker.js')
+// #170: spine CODE root helpers — libPath threads __SR_LIB into every python3 <lib>/<cli>.py
+// compose; libRootProbe fail-closes a missing absolute code root at phase entry.
+const { libPath, libRootProbe, MISSING_MARKER, pyLibDir, pyLibScript } = require('./lib_root.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -127,10 +130,11 @@ function _withRealUsage(out) {
 function _findingKeys(finding) {
   if (!finding || typeof finding !== 'object') return []
   const keys = []
+  const label = finding.title || finding.summary
   if (finding.classKey) keys.push(String(finding.classKey))
   keys.push(reviewMemory.classKey(finding))
   keys.push(circuitBreaker.findingIdentity(finding))
-  if (finding.file && finding.title) keys.push(`${finding.file}::${finding.title}`)
+  if (finding.file && label) keys.push(`${finding.file}::${label}`)
   return keys.filter(Boolean)
 }
 
@@ -211,6 +215,17 @@ function normalizeFixResult(result, fixContext) {
   })
 }
 
+function normalizeReviewerFindings(findings) {
+  return (findings || []).map((finding) => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding
+    if ((finding.title === undefined || finding.title === null || finding.title === '') &&
+        typeof finding.summary === 'string' && finding.summary) {
+      return Object.assign({}, finding, { title: finding.summary })
+    }
+    return finding
+  })
+}
+
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
@@ -223,6 +238,7 @@ function ensureReviewerShape(out, opts = {}) {
     out = { findings: out, confidence: conf, legacyArray: true }
   }
   if (!out || !Array.isArray(out.findings)) return null
+  out = Object.assign({}, out, { findings: normalizeReviewerFindings(out.findings) })
   if (out.confidence !== 'high' && out.confidence !== 'low') {
     out = Object.assign({}, out, { confidence: 'high' })
   }
@@ -337,7 +353,7 @@ function reviewCodeLeaves(tiers, opts) {
     // (frozen) appends the deferred identities to deferred-set.json — the channel the in-process tally
     // reads — and prints the readout-enrichment extras (fixes + accumulated parentOrigin) to stdout.
     const out = await exec([
-      `python3 plugins/superheroes/lib/record_deferred.py --run-dir ${shq(runDir)} ` +
+      `python3 ${libPath('record_deferred.py')} --run-dir ${shq(runDir)} ` +
       `--report ${shq(JSON.stringify(report || {}))}`,
     ], 'record deferred')
     // Attach the computed extras to the fix report so #104's shared shell threads it
@@ -437,7 +453,7 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
   await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
   const results = await exec([
-    `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
+    `python3 ${libPath('front_half.py')} record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
   ], 'record deferred')
   for (const item of (report && report.deferred) || []) {
@@ -504,12 +520,200 @@ function docDirFor(workItem) {
 function docPathFor(workItem, doc) { return `${docDirFor(workItem)}/${doc}.md` }
 function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
 
+// UFR-2: a failed external author-plan may have edited the doc and/or stamped the completion
+// marker; discard both before falling open to the native author so an unaudited external draft
+// cannot pass the post-check usableDraft gate.
+async function _resetAuthorPlanDraft(workItem, doc) {
+  const dir = docDirFor(workItem)
+  const docPath = `${dir}/${doc}.md`
+  const markerPath = `${dir}/.${doc}.complete`
+  const root = checkoutRoot()
+  const cmd = (root && !String(dir).startsWith('/'))
+    ? selfContained(
+      `rm -f ${shq(markerPath)} && (git checkout -- ${shq(docPath)} 2>/dev/null || rm -f ${shq(docPath)})`)
+    : `rm -f ${shq(markerPath)} ${shq(docPath)}`
+  await exec([cmd], 'reset author-plan draft')
+}
+
+// author-plan confinement: snapshot git status --porcelain via the exec courier.
+async function _snapshotGitPorcelain() {
+  const results = await exec([selfContained('git status --porcelain')], 'author-plan git snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _parsePorcelain(text) {
+  const entries = new Map()
+  if (!text) return entries
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue
+    const code = line.slice(0, 2)
+    let path = line.slice(3).trim()
+    const arrow = path.indexOf(' -> ')
+    if (arrow >= 0) path = path.slice(arrow + 4)
+    if (path) entries.set(path, code)
+  }
+  return entries
+}
+
+// Normalize a porcelain or filesystem path to checkout-root-relative form for comparison.
+function _normalizeComparePath(path) {
+  let p = String(path).replace(/^\.\//, '')
+  const root = checkoutRoot()
+  if (root) {
+    const r = String(root).replace(/\/$/, '')
+    if (p === r) return ''
+    if (p.startsWith(r + '/')) return p.slice(r.length + 1)
+  }
+  return p
+}
+
+// author-plan confinement allowlist: only the plan doc's own artifacts (exact paths, not prefix).
+function _authorPlanArtifactPaths(workItem) {
+  const dir = _normalizeComparePath(docDirFor(workItem))
+  return [`${dir}/plan.md`, `${dir}/.plan.complete`]
+}
+
+function _pathIsAuthorPlanArtifact(path, workItem) {
+  return _authorPlanArtifactPaths(workItem).includes(_normalizeComparePath(path))
+}
+
+// Top-level checkout-relative docs tree for confinement scan (e.g. 'docs'). Skipped when the
+// work-item doc dir resolves outside the checkout (out-of-repo storage).
+function _docsScanRoot(workItem) {
+  const dir = docDirFor(workItem)
+  const root = checkoutRoot()
+  if (String(dir).startsWith('/')) {
+    if (!root) return null
+    const r = String(root).replace(/\/$/, '')
+    if (!String(dir).startsWith(r + '/')) return null
+  } else if (!root) {
+    return null
+  }
+  const rel = _normalizeComparePath(dir)
+  if (!rel) return null
+  const seg = rel.split('/')[0]
+  return seg || null
+}
+
+function _parseFileList(text) {
+  const set = new Set()
+  if (!text) return set
+  for (const line of String(text).split('\n')) {
+    const p = line.trim()
+    if (p) set.add(_normalizeComparePath(p))
+  }
+  return set
+}
+
+async function _snapshotDocsFileList(docsRoot) {
+  const results = await exec([selfContained(`find ${shq(docsRoot)} -type f | sort`)], 'author-plan docs snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+async function _snapshotDocsNewer(docsRoot, stampPath) {
+  const results = await exec(
+    [selfContained(`find ${shq(docsRoot)} -type f -newer ${shq(stampPath)} | sort`)],
+    'author-plan docs newer')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _docsStampPath(workItem) {
+  return `/tmp/showrunner-docs-${safeRunKey(workItem)}.stamp`
+}
+
+// Gitignored docs-tree confinement: detect new/modified files under docsRoot that porcelain misses.
+async function _scanAndRevertDocsStrays(workItem, docsRoot, stampPath, beforeText) {
+  if (beforeText == null) return { strayPaths: [], unconfined: true }
+  const afterText = await _snapshotDocsFileList(docsRoot)
+  if (afterText == null) return { strayPaths: [], unconfined: true }
+  const newerText = await _snapshotDocsNewer(docsRoot, stampPath)
+  if (newerText == null) return { strayPaths: [], unconfined: true }
+  const before = _parseFileList(beforeText)
+  const after = _parseFileList(afterText)
+  const newer = _parseFileList(newerText)
+  const newStrays = []
+  const modifiedStrays = []
+  for (const p of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (!before.has(p)) newStrays.push(p)
+  }
+  for (const p of newer) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) modifiedStrays.push(p)
+  }
+  if (modifiedStrays.length > 0) {
+    return { strayPaths: [], unconfined: true, modifiedPaths: modifiedStrays }
+  }
+  if (newStrays.length === 0) return { strayPaths: [] }
+  const revertCmds = newStrays.map((p) => selfContained(`rm -f -- ${shq(p)}`))
+  const results = await exec(revertCmds, 'author-plan revert docs strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postText = await _snapshotDocsFileList(docsRoot)
+  if (postText == null) return { strayPaths: [], unconfined: true }
+  const post = _parseFileList(postText)
+  for (const p of newStrays) {
+    if (!before.has(p) && post.has(p)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: newStrays }
+}
+
+// After an external author-plan dispatch, revert checkout paths that newly dirtied outside the
+// work-item doc dir during the dispatch window. Pre-existing dirty paths are never touched.
+// A null snapshot (courier flake) on EITHER side makes strays indistinguishable from the user's
+// own pre-existing edits — revert NOTHING and report unconfined (the caller fails the dispatch
+// closed to the native author). Reverting against an empty "before" would checkout-revert the
+// user's own uncommitted work.
+async function _revertAuthorPlanStrays(workItem, beforeText, afterText) {
+  if (beforeText == null || afterText == null) return { strayPaths: [], unconfined: true }
+  const before = _parsePorcelain(beforeText)
+  const after = _parsePorcelain(afterText)
+  const strays = []
+  for (const [p, code] of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) continue
+    strays.push({ path: p, untracked: code === '??' || code[0] === '?' })
+  }
+  if (strays.length === 0) return { strayPaths: [] }
+  const revertCmds = strays.map(({ path, untracked }) =>
+    untracked ? selfContained(`rm -rf -- ${shq(path)}`) : selfContained(`git checkout -- ${shq(path)}`))
+  const results = await exec(revertCmds, 'author-plan revert strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postSnap = await _snapshotGitPorcelain()
+  if (postSnap == null) return { strayPaths: [], unconfined: true }
+  const post = _parsePorcelain(postSnap)
+  for (const { path } of strays) {
+    if (!before.has(path) && post.has(path)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: strays.map((s) => s.path) }
+}
+
+// Stamp the content-bound completion marker after external author-plan confinement passes.
+async function _stampAuthorPlanMarker(workItem, doc) {
+  const cmd = selfContained(
+    `python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`)
+  const results = await exec([cmd], 'author-plan write marker')
+  if (!results || !results[0] || !results[0].ok) return false
+  try { return !!JSON.parse(results[0].stdout || '').wrote } catch (_) { return false }
+}
+
+function _draftContentReady(signals) {
+  if (!signals || !signals.expected) return false
+  const missing = Array.isArray(signals.missing_sections) ? signals.missing_sections : []
+  return missing.length === 0 && !signals.placeholder
+}
+
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
 // #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
 // authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
-// The --write-marker stamp is FOLDED into the author agent (FR-4 fold): the author's prompt
-// instructs it to run front_half_usable.py --write-marker after authoring the doc, so there is
-// no separate cmdRunner call — the author leaf handles its own completion stamp.
+// The --write-marker stamp is FOLDED into the native author agent (FR-4 fold): the author's
+// prompt instructs it to run front_half_usable.py --write-marker after authoring the doc.
+// The EXTERNAL author-plan path omits --write-marker from the dispatch prompt; showrunner
+// stamps the marker via exec ONLY after confinement passes and doc content verifies, so a
+// crash before the stamp resumes into re-produce rather than accepting an unconfined draft.
 // Layer 2b: bounded repair loop (N=2 retries, 3 total attempts). On a failed post-check the
 // author is re-dispatched with a TARGETED gap hint derived from the --emit-signals why-signal
 // (missing_sections + placeholder). Only parks (confidence:'low') after all attempts exhausted.
@@ -520,19 +724,31 @@ async function producePhase(phase, workItem) {
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
-  const model = authorModel()
+  const model = authorModel(doc)
+  // planAuthor engine route: ONLY the plan doc reads the enginePreferences.planAuthor key (tasks
+  // always authors native). The resolved model tier rides along so cursor can map it to its own
+  // model id (author-plan: fable + planAuthor: cursor = Fable via Cursor). External failure falls
+  // open to the native author within the same attempt — the usableDraft post-check is unchanged.
+  const aEngine = doc === 'plan'
+    ? enginePrefTwin.resolveEngine('author-plan', _enginePrefs())
+    : 'claude'
   // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
   // FR-8 sandbox: no banned tokens in this function body.
-  function _authorPrompt(gapSignal) {
-    const base =
+  function _authorPrompt(gapSignal, includeWriteMarker) {
+    let base =
       `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
       `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
-      `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
-      `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
-      selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-      `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
+      `non-empty, no placeholder.`
+    if (includeWriteMarker !== false) {
+      base +=
+        ` After writing the doc, run the following command to stamp the ` +
+        `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
+        selfContained(`python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
+        `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n`
+    }
+    base +=
       `Do NOT run review or record the review gate. Return ` +
       `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
       `{ identity, message }.`
@@ -556,12 +772,65 @@ async function producePhase(phase, workItem) {
   // lastSignal carries the why-signal from the previous failed check for the gap hint.
   let lastSignal = null
   for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
-    // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
-    // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-    const authored = await agent(
-      _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `author-${doc}`, model,
-        schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    const gapSignal = attempt > 0 ? lastSignal : null
+    let authored = null
+    if (aEngine !== 'claude') {
+      // External author-plan: no --write-marker in the dispatch prompt; showrunner stamps after confinement.
+      const extPrompt = _authorPrompt(gapSignal, false)
+      const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
+      const beforeSnap = await _snapshotGitPorcelain()
+      const docsRoot = _docsScanRoot(workItem)
+      let beforeDocs = null
+      let docsStamp = null
+      if (docsRoot) {
+        docsStamp = _docsStampPath(workItem)
+        const stampRes = await exec([`touch ${shq(docsStamp)}`], 'author-plan docs stamp')
+        if (!stampRes || !stampRes[0] || !stampRes[0].ok) beforeDocs = null
+        else beforeDocs = await _snapshotDocsFileList(docsRoot)
+      }
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
+        cwd: checkoutRoot() || procCwd(), model,
+      })
+      const afterSnap = await _snapshotGitPorcelain()
+      const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
+      const docsResult = (docsRoot && docsStamp)
+        ? await _scanAndRevertDocsStrays(workItem, docsRoot, docsStamp, beforeDocs)
+        : { strayPaths: [], unconfined: false }
+      const unconfined = porcelainResult.unconfined || docsResult.unconfined
+      const strayPaths = [...porcelainResult.strayPaths, ...docsResult.strayPaths]
+      if (strayPaths.length || unconfined) {
+        if (typeof globalThis.log === 'function') {
+          if (docsResult.modifiedPaths && docsResult.modifiedPaths.length) {
+            globalThis.log('author-plan: modified ignored docs (unconfined): ' + docsResult.modifiedPaths.join(', '))
+          }
+          globalThis.log(unconfined
+            ? 'author-plan: confinement snapshot unavailable — external draft discarded (nothing reverted)'
+            : 'author-plan: stray checkout edits reverted: ' + strayPaths.join(', '))
+        }
+        await _resetAuthorPlanDraft(workItem, doc) // confinement failure -> fall open to native
+      } else if (res && res.ok) {
+        const draftNow = await usableDraft(workItem, doc)
+        if (_draftContentReady(draftNow)) {
+          const stamped = await _stampAuthorPlanMarker(workItem, doc)
+          const afterStamp = stamped ? await usableDraft(workItem, doc) : { usable: false }
+          if (afterStamp.usable) authored = { status: 'ok', notify: res.notify || [] }
+          else await _resetAuthorPlanDraft(workItem, doc)
+        } else {
+          await _resetAuthorPlanDraft(workItem, doc) // unusable external draft -> fall open to native
+        }
+      } else {
+        await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
+      }
+    }
+    if (authored == null) {
+      // FR-4 fold (native only): the author leaf writes its own doc + stamps the completion marker.
+      const nativePrompt = _authorPrompt(gapSignal, true)
+      authored = await agent(
+        nativePrompt,
+        { label: `author-${doc}`, model,
+          schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    }
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
     }
@@ -661,7 +930,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   // (UFR-5 — the run never advances on an un-recorded gate).
   const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =
-    `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
+    `python3 ${libPath('definition_doc.py')} set-gate --doc ${shq(doc)} ` +
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
     `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
   const persist = {
@@ -723,7 +992,7 @@ function gateForTerminal(terminal) {
 // produce repair loop (producePhase) can craft a targeted gap hint for re-prompting.
 async function usableDraft(workItem, doc) {
   const results = await exec([
-    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
     `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)" --emit-signals`,
   ], 'check draft')
   let signals = null
@@ -731,6 +1000,7 @@ async function usableDraft(workItem, doc) {
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
   return {
     usable: !!signals.usable,
+    expected: signals.expected || '',
     missing_sections: Array.isArray(signals.missing_sections) ? signals.missing_sections : [],
     placeholder: !!signals.placeholder,
   }
@@ -738,9 +1008,11 @@ async function usableDraft(workItem, doc) {
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
 // Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS.author = 'opus').
-function authorModel() {
+// The plan doc resolves the split `author-plan` role (own override, e.g. fable, else exactly
+// `author`); tasks stays on `author` — plan authoring alone can be raised without moving tasks.
+function authorModel(doc) {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
-  return modelTierTwin.resolveModel('author', overrides, null)
+  return modelTierTwin.resolveModel(doc === 'plan' ? 'author-plan' : 'author', overrides, null)
 }
 
 // #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).
@@ -762,7 +1034,7 @@ function notifyLedgerFor(workItem) { return `${docDirFor(workItem)}/.notify.json
 // appendNotify: IO accumulator write via exec (not cmdRunner). Returns false on failed durable write.
 async function appendNotify(workItem, entries) {
   const results = await exec([
-    `python3 plugins/superheroes/lib/front_half.py append-notify ` +
+    `python3 ${libPath('front_half.py')} append-notify ` +
     `--ledger ${shq(notifyLedgerFor(workItem))} --entries ${shq(JSON.stringify(entries || []))}`,
   ], 'append notify')
   let out = null
@@ -819,7 +1091,7 @@ async function frontHalfBoundary(workItem) {
     try {
       const text = await courier.runCourierText(
         'readout',
-        `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`)
+        `python3 ${libPath('loop_readout.py')} --record ${shq(recPath)}`)
       return typeof text === 'string' ? text : ''
     } catch (_e) {
       return ''
@@ -875,7 +1147,7 @@ function checkoutRoot(explicit) {
 function fenceCliCmd(workItem, generation, root, extra) {
   const r = checkoutRoot(root)
   if (!r) return null
-  return `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
+  return `python3 ${libPath('fence_cli.py')} --work-item ${shq(workItem)} ` +
     `--generation ${shq(String(generation))} --root ${shq(r)}${extra || ''}`
 }
 
@@ -1008,18 +1280,28 @@ async function persistPhase(workItem, opts) {
   const sideArg = side ? ` --json ${shq(JSON.stringify(side))}` : ''
   const joArg = journalOnly ? ' --journal-only' : ''
   const saveCmd =
-    `python3 plugins/superheroes/lib/phase_progress_entry.py save --work-item ${shq(workItem)} ` +
+    `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
     `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
+  // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
+  // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
+  // file-not-found. In dev/dogfood (relative libRoot) libRootProbe() is empty, so this is byte-identical.
+  const probedCmd = `${libRootProbe()}${cmd}`
   const required = journalOnly
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
     const res = await courier.runCourierJson(
       'save phase progress',
-      cmd,
+      probedCmd,
       { require: required, retryRealFailure: false },
     )
+    // Map the libRoot-missing marker to the SAME named park reason reconcile uses, before the
+    // save-result read-back check — the back half fails closed with a descriptive cause, not a
+    // generic read-back mismatch.
+    if (res && typeof res.reason === 'string' && res.reason.indexOf(MISSING_MARKER) >= 0) {
+      return { ok: false, error: 'spine code root missing (libRoot)' }
+    }
     const confirmed = res && res.ok && res.journal_confirmed &&
       (journalOnly || res.checkpoint_confirmed)
     return confirmed
@@ -1086,10 +1368,18 @@ async function reconcile(workItem) {
   const preRoot = checkoutRoot()
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
   const results = await exec([
-    `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)} --snapshot${rootFlag}`,
+    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`,
   ], 'gather snapshot')
+  const _snapStdout = (results[0] && results[0].stdout) || ''
+  // #170 fail-closed probe: an ABSOLUTE spine code root that vanished mid-run (e.g. plugin-cache
+  // eviction) short-circuits the compose to MISSING_MARKER instead of a file-not-found python error —
+  // park with a NAMED reason so the readout says exactly what's wrong. Relative (dev) libRoot never
+  // emits the marker.
+  if (_snapStdout.indexOf(MISSING_MARKER) >= 0) {
+    return { action: 'park_gate', reason: 'spine code root missing (libRoot)', generation: null }
+  }
   let snap = null
-  try { snap = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
+  try { snap = JSON.parse(_snapStdout) } catch (_) {}
   if (!snap) {
     // A failed/empty snapshot (IO error, store unusable before lease) -> fail closed.
     return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
@@ -1175,14 +1465,16 @@ async function showrunner({ workItem }) {
   // Fail-safe: an absent/malformed (or courier-stringified) value yields both-"claude" + empty
   // effort map, so the review/build leaves take the byte-unchanged agent() path.
   const _epParsed = _coerceObj((startupFacts && startupFacts.engine_prefs) || null)
-  let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
+  let _epMap = { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} }
   if (_epParsed && typeof _epParsed === 'object' && !Array.isArray(_epParsed)) {
-    // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
-    // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
-    // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+    // Carry the whole object — reviewer/implementation/planAuthor AND the FR-9 effort sub-map
+    // (keyed by role_kind), so resolveEffort can source the owner's effort override from
+    // __SR_ENGINE_PREFS.effort (NOT from the model-tier __SR_OVERRIDES map, which is keyed by
+    // role->model).
     _epMap = {
       reviewer: _epParsed.reviewer || 'claude',
       implementation: _epParsed.implementation || 'claude',
+      planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
   }
@@ -1223,7 +1515,7 @@ async function showrunner({ workItem }) {
 async function readGate(workItem, doc) {
   try {
     const results = await exec([
-      `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
+      `python3 ${libPath('definition_doc.py')} read-gate --doc ${shq(doc)} ` +
       `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
     ], 'read gate')
     let out = null
@@ -1237,7 +1529,7 @@ async function readGate(workItem, doc) {
 async function readStartupState(workItem) {
   const script = [
     'import json, os, sys',
-    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc, model_tier_overrides',
     'wi = sys.argv[1]',
     'root = sys.argv[2]',
@@ -1289,7 +1581,7 @@ async function readDefinitionDraft(workItem, doc) {
   const label = doc === 'plan' ? 'read plan draft' : 'read tasks draft'
   const script = [
     'import json, os, sys',
-    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc',
     'wi = sys.argv[1]',
     'doc = sys.argv[2]',
@@ -1379,7 +1671,7 @@ function testPilotDeps(workItem, generation) {
       const baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
       const raw = await courier.runCourierJson(
         'read test context',
-        `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
+        `python3 ${libPath('test_pilot_context_cli.py')} resolve ` +
         `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}` +
         `${wtArg}${baseArg}`,
         { require: ['head'] },
@@ -1413,17 +1705,17 @@ function testPilotDeps(workItem, generation) {
       const recordsPath = await writeJson('seed-records', records)
       const manifestPath = await writeJson('prepare-run-manifest', {
         artifacts: [
-          'python3', 'plugins/superheroes/lib/test_pilot_artifacts_cli.py', 'ensure',
+          'python3', libPath('test_pilot_artifacts_cli.py'), 'ensure',
           '--plan-json', planPath, '--results-json', resultsPath, '--pr', String(pr),
           '--key', keyFor(context.branch),
         ],
         server: [
-          'python3', 'plugins/superheroes/lib/test_pilot_server_config_cli.py', 'resolve',
+          'python3', libPath('test_pilot_server_config_cli.py'), 'resolve',
           '--profile-json', profilePath, '--detection-json', detectionPath,
           '--work-item', workItem,
         ],
         seed: [
-          'python3', 'plugins/superheroes/lib/test_pilot_seed_cli.py', 'prepare',
+          'python3', libPath('test_pilot_seed_cli.py'), 'prepare',
           '--records-json', recordsPath,
         ],
       })
@@ -1461,7 +1753,7 @@ function testPilotDeps(workItem, generation) {
       const planPath = await writeJson('plan-artifact', { key: keyFor(context.branch), records })
       const resultsPath = await writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `python3 ${libPath('test_pilot_artifacts_cli.py')} ensure ` +
         `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(context.branch))}`,
         { type: 'object' })
     },
@@ -1470,7 +1762,7 @@ function testPilotDeps(workItem, generation) {
       const profile = await writeJson('server-profile', context.profile || {})
       const detection = await writeJson('server-detection', context.detectors || {})
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py resolve ` +
+        `python3 ${libPath('test_pilot_server_config_cli.py')} resolve ` +
         `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
         { type: 'object' })
     },
@@ -1478,7 +1770,7 @@ function testPilotDeps(workItem, generation) {
     withManagedServer: async (serverContext, run) => {
       const launchPath = await writeJson('server-launch-context', serverContext)
       const launched = await cli(
-        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py launch ` +
+        `python3 ${libPath('test_pilot_server_config_cli.py')} launch ` +
         `--context-json ${shq(launchPath)}`,
         { type: 'object' })
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
@@ -1489,14 +1781,14 @@ function testPilotDeps(workItem, generation) {
         const contextPath = await writeJson('server-finish-context', launched)
         const outcomePath = await writeJson('server-finish-outcome', outcome || {})
         return cli(
-          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
       } catch (err) {
         const contextPath = await writeJson('server-finish-context', launched)
         const outcomePath = await writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
         await cli(
-          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
         throw err
@@ -1506,7 +1798,7 @@ function testPilotDeps(workItem, generation) {
     seedRecords: async (records) => {
       const recordsPath = await writeJson('seed-records', records)
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py prepare --records-json ${shq(recordsPath)}`,
+        `python3 ${libPath('test_pilot_seed_cli.py')} prepare --records-json ${shq(recordsPath)}`,
         { type: 'object' })
     },
 
@@ -1529,7 +1821,7 @@ function testPilotDeps(workItem, generation) {
     restoreBaseline: async (records, details) => {
       const recordsPath = await writeJson('restore-records', records)
       const out = await cli(
-        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py restore-baseline --records-json ${shq(recordsPath)}`,
+        `python3 ${libPath('test_pilot_seed_cli.py')} restore-baseline --records-json ${shq(recordsPath)}`,
         { type: 'object' })
       if (out.action === 'park' || out.ok === false) return out
       return Object.assign({}, out, { baseline: { head: details.head, restored: true, status: out.status } })
@@ -1541,7 +1833,7 @@ function testPilotDeps(workItem, generation) {
       const planPath = await writeJson('final-plan-artifact', { key: keyFor(payload.context.branch), records: payload.records })
       const resultsPath = await writeJson('final-results-artifact', Object.assign({ key: keyFor(payload.context.branch) }, payload.aggregated || {}))
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `python3 ${libPath('test_pilot_artifacts_cli.py')} ensure ` +
         `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(payload.context.branch))}`,
         { type: 'object' })
     },
@@ -1556,7 +1848,7 @@ function testPilotDeps(workItem, generation) {
       const generationArg = generation ? ` --generation ${shq(String(generation))}` : ''
       return courier.runCourierJson(
         'publish tested head',
-        `python3 plugins/superheroes/lib/test_pilot_publish_cli.py publish --work-item ${shq(workItem)} ` +
+        `python3 ${libPath('test_pilot_publish_cli.py')} publish --work-item ${shq(workItem)} ` +
         `--head ${shq(head)} --status-json ${shq(statusPath)} --expected-branch ${shq(payload.context.branch)} ` +
         `${storeArg}${generationArg}`,
         { require: ['ok', 'read_back'], retryRealFailure: false },
@@ -1571,7 +1863,7 @@ function testPilotDeps(workItem, generation) {
       const statusPath = await writeJson('status-write', status)
       return courier.runCourierJson(
         'write test status',
-        `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
+        `python3 ${libPath('test_pilot_status_cli.py')} write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
         { require: ['ok', 'read_back'], retryRealFailure: false },
       )
     },
@@ -1668,14 +1960,14 @@ async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   try {
     text = await courier.runCourierText(
       'readout',
-      `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`)
+      `python3 ${libPath('loop_readout.py')} --record ${shq(recPath)}`)
   } catch (_e) {
     text = ''   // transport drop: post the bare park reason path below (best-effort render)
   }
   try {
     await courier.runCourierJson(
       'post readout',
-      `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
+      `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
       { require: ['posted'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -1750,7 +2042,7 @@ async function reviewCodePhase(workItem, opts) {
   }
   const cfg = (resolvedConfig && typeof resolvedConfig === 'object') ? resolvedConfig
     : await execJson(
-        inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree), 'read review config')
+        inWorktree(`python3 ${libPath('review_code_config.py')} --root "$(git rev-parse --show-toplevel)"`, targetWorktree), 'read review config')
   const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
     target: { worktree: resolvedWorktree, head: resolvedHead },
   })
@@ -1801,7 +2093,7 @@ async function reviewCodePhase(workItem, opts) {
     try {
       prov = await courier.runCourierJson(
         'stamp review coverage',
-        `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
+        `python3 ${libPath('prov_entry.py')} --step review --work-item ${shq(workItem)}${targetArgs}`,
         { require: ['ok'], retryRealFailure: false },
       )
     } catch (_) {
@@ -1860,7 +2152,7 @@ async function resolveBuildTarget(workItem) {
     'setup = None',
     'for _ in range(2):',
     '    try:',
-    '        r = subprocess.run(["python3", "plugins/superheroes/lib/build_entry.py", "--work-item", wi], capture_output=True, text=True, timeout=120)',
+    `        r = subprocess.run(["python3", ${pyLibScript('build_entry.py')}, "--work-item", wi], capture_output=True, text=True, timeout=120)`,
     '    except subprocess.TimeoutExpired:',
     '        continue',
     '    if r.returncode != 0: continue',
@@ -1883,7 +2175,7 @@ async function resolveBuildTarget(workItem) {
     '    print(json.dumps({"ok": False, "error": "missing target head"})); raise SystemExit(0)',
     'cfg = None',
     'try:',
-    '    r = subprocess.run(["python3", "plugins/superheroes/lib/review_code_config.py", "--root", wt], capture_output=True, text=True, timeout=60, cwd=wt)',
+    `    r = subprocess.run(["python3", ${pyLibScript('review_code_config.py')}, "--root", wt], capture_output=True, text=True, timeout=60, cwd=wt)`,
     '    if r.returncode == 0:',
     '        cfg = json.loads((r.stdout or "").strip() or "null")',
     'except Exception:',
@@ -1927,7 +2219,7 @@ module.exports.buildPhase = buildPhase
 // persistPhase tail; there is no separate checkpoint_entry write leaf anymore.
 async function loadPr(workItem) {
   const out = await execJson(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`, 'read pr')
+    `python3 ${libPath('checkpoint_entry.py')} --work-item ${shq(workItem)} --read-pr`, 'read pr')
   return (out && out.pr !== undefined) ? out.pr : null
 }
 
@@ -1939,7 +2231,7 @@ async function draftPRPhase(workItem) {
   try {
     out = await courier.runCourierJson(
       'open draft PR',
-      `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
+      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -1962,7 +2254,7 @@ async function markReadyPhase(workItem) {
   try {
     out = await courier.runCourierJson(
       'mark PR ready',
-      `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
+      `python3 ${libPath('pr_entry.py')} --step mark-ready --work-item ${shq(workItem)}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -2008,7 +2300,7 @@ async function checkShipReadiness(workItem, worktree, baseName, generation, chec
   const rootArg = r ? ` --root ${shq(r)}` : ''
   return courier.runCourierJson(
     'check ship-readiness',
-    `python3 plugins/superheroes/lib/ship_phase.py --step ship-readiness --work-item ${shq(workItem)}` +
+    `python3 ${libPath('ship_phase.py')} --step ship-readiness --work-item ${shq(workItem)}` +
     `${baseArg}${wtArg}${genArg}${checksArg}${rootArg}`,
     { require: checksOnly ? ['checks'] : ['ok', 'reconcile', 'freshness', 'checks'] },
   )
@@ -2017,7 +2309,7 @@ async function checkShipReadiness(workItem, worktree, baseName, generation, chec
 async function prepareCiFix(workItem, failing) {
   return courier.runCourierJson(
     'prepare CI fix',
-    `python3 plugins/superheroes/lib/ship_phase.py --step prepare-ci-fix --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(failing || []))}`,
+    `python3 ${libPath('ship_phase.py')} --step prepare-ci-fix --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(failing || []))}`,
     { require: ['action', 'read_back'], retryRealFailure: false },
   )
 }
@@ -2026,7 +2318,7 @@ async function pushCiFixRecheck(workItem, worktree) {
   const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
   return courier.runCourierJson(
     'push CI fix + recheck',
-    `python3 plugins/superheroes/lib/ship_phase.py --step push-ci-fix-recheck --work-item ${shq(workItem)}${wtArg}`,
+    `python3 ${libPath('ship_phase.py')} --step push-ci-fix-recheck --work-item ${shq(workItem)}${wtArg}`,
     { require: ['read_back', 'checks'], retryRealFailure: false },
   )
 }
@@ -2034,8 +2326,8 @@ async function pushCiFixRecheck(workItem, worktree) {
 async function postReadout(workItem, pr, args) {
   const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
   const cmd = args.ctx
-    ? `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(args.ctx))}`
-    : `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}`
+    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}`
   try {
     return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
   } catch (_e) {
@@ -2126,7 +2418,7 @@ async function shipPhase(workItem, pr, generation) {
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation, storeRoot))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await execJson(
-        `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`, 'revert draft')
+        `python3 ${libPath('ship_phase.py')} --step revert-draft --work-item ${shq(workItem)}`, 'revert draft')
       const reverted = !!(rd && rd.ok)
       return shipHandback(workItem, pr, { ready: false, ci: 'red', integrated, reverted,
         reason: reverted

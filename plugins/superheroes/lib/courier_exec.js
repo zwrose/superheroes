@@ -18,7 +18,9 @@ function currentAgent() {
 }
 
 // FR-5 cwd-rooting: mirror showrunner's selfContained() — when __SR_ROOT is set (throwaway/live-eval
-// runs), root every courier command at the repo root so `python3 plugins/superheroes/lib/...` resolves.
+// runs), root every courier command at the TARGET repo so git/build/docs paths resolve. The lib
+// interpreter path itself comes from `${libPath(...)}` (#170: an absolute plugin-cache path in
+// production, the repo-relative default in dev), so it resolves independent of this cwd.
 // Already-rooted commands (a leading `cd `) are left untouched; without __SR_ROOT this is a no-op.
 function rootedCommand(command) {
   const root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null

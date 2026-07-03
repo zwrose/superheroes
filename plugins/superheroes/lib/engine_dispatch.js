@@ -4,7 +4,7 @@
 // wrapper sequences them through the spine's exec dumb-pipe and returns the NATIVE result shape so
 // everything downstream (loop math, verify gate, journal) is reused unchanged. Read roles are
 // read-only (no preSHA/commit); write roles capture preSHA -> engine edits -> adapter commits.
-const LIB = 'plugins/superheroes/lib'
+const { libPath } = require('./lib_root.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
@@ -99,7 +99,7 @@ async function _journalExternal(payload) {
   // the payload is written AS-IS (non-secret {engine,effort,roleKind,verify,outcome}). A failed durable
   // append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
   return _execJson(
-    `python3 ${LIB}/journal_entry.py --work-item ${shq(payload.workItem || '')} ` +
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
     `--event-type external_dispatch --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
       verify: payload.verify, outcome: payload.outcome })))
@@ -112,7 +112,7 @@ async function _journalExternal(payload) {
 async function _scrubReason(reason) {
   const s = reason == null ? '' : String(reason)
   if (!s) return s
-  const res = await _exec([`printf '%s' ${shq(s)} | python3 ${LIB}/pr_comment.py scrub`])
+  const res = await _exec([`printf '%s' ${shq(s)} | python3 ${libPath('pr_comment.py')} scrub`])
   const r0 = res && res[0]
   if (r0 && r0.ok && r0.stdout != null) return String(r0.stdout)
   return 'external error (scrubbed)'
@@ -123,10 +123,15 @@ async function _scrubReason(reason) {
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
 // path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
+  // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
+  // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
+  // Its acceptance gate is the caller's deterministic usableDraft post-check, not this dispatch.
+  const isAuthor = (roleKind === 'author-plan')
 
   // 1. Stage prompt + schema to disk (via exec). The PROMPT file is fed to the external process
   //    stdin by _runArgv (both engines read the prompt from stdin); the SCHEMA path is passed to
@@ -159,9 +164,10 @@ async function _dispatchExternalInner(o) {
   // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
   const run = (async () => {
     const argvObj = await _execJson(
-      `python3 ${LIB}/engine_adapter.py build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
+      `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
-      `--schema-path ${shq(schemaPath)}`)
+      `--schema-path ${shq(schemaPath)}` +
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
 
@@ -177,7 +183,7 @@ async function _dispatchExternalInner(o) {
     const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
     if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
     const parsed = await _execJson(
-      `python3 ${LIB}/engine_adapter.py parse-result --engine ${shq(engine)} --role ${shq(roleKind)} ` +
+      `python3 ${libPath('engine_adapter.py')} parse-result --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--stdout-path ${shq(rawPath)}`)
     if (!parsed || parsed.ok !== true) return { ok: false, reason: (parsed && parsed.reason) || 'unreadable' }
     return parsed
@@ -200,6 +206,16 @@ async function _dispatchExternalInner(o) {
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
 
+  // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
+  // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
+  // back; the caller's usableDraft post-check decides acceptance and falls open on failure.
+  if (isAuthor) {
+    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
+    return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
+  }
+
   // 4. Read role: return findings straight through (no commit). Failure -> caller falls open to Claude.
   // FIX 5 (UFR-6 symmetry): a read role is JUST as unauditable as a write role when the journal
   // append itself fails — mirror the write-role check below (a failed journal -> {ok:false,
@@ -220,7 +236,7 @@ async function _dispatchExternalInner(o) {
 
   // 6. Write success -> the adapter is the SOLE committer (preSHA-scoped fold; single Task-Id trailer).
   const commit = await _execJson(
-    `python3 ${LIB}/engine_adapter.py commit --worktree ${shq(cwd)} --task-id ${shq(o.taskId || '')} ` +
+    `python3 ${libPath('engine_adapter.py')} commit --worktree ${shq(cwd)} --task-id ${shq(o.taskId || '')} ` +
     `--pre-sha ${shq(preSha)}`)
   if (!commit || commit.ok !== true) {
     // M1: commit.error carries raw git stderr — SCRUB it before it can reach an owner-facing notice.
