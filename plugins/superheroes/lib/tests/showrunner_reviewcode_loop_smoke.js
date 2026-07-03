@@ -38,7 +38,7 @@ function reviewerPayload(findings, runDir, round) {
 function install({ roundFindings, fix = 'resolve', provOk = true }) {
   const queue = roundFindings.slice()
   const nextFindings = () => (queue.length > 1 ? queue.shift() : queue[0])
-  const calls = { prov: 0, readout: 0, readoutPost: 0, fix: 0, recordDeferred: 0 }
+  const calls = { prov: 0, readout: 0, readoutPost: 0, fix: 0, recordDeferred: 0, reviewerModels: [] }
   function runRecordDeferred(cmd) {
     calls.recordDeferred += 1
     const rd = cmd.match(/--run-dir '([^']+)'/)
@@ -99,6 +99,7 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
     const m = label.match(/^(architecture|code|security|test|premortem)-reviewer:r(\d+)/)
     if (m) {
       const round = Number(m[2]) || 1
+      calls.reviewerModels.push({ label, round, model: opts && opts.model })
       const runDir = (prompt.match(/Prompt context: (\{.*\})/) || [])[1]
       let ctx = {}
       try { ctx = JSON.parse(runDir || '{}') } catch (_) {}
@@ -150,11 +151,21 @@ async function main() {
   assert.strictEqual(r.gate, 'changes-requested', 'failed covers stamp -> park, never ship-ready (UFR-2)')
   assert.strictEqual(r.phaseResult.confidence, 'low', 'UFR-2 park is low-confidence (resumable)')
 
+  const fixRunDir = fresh()
   calls = install({ roundFindings: [BLOCKER, [], []], fix: 'resolve' })
-  r = await sr.reviewCodePhase('wi-fix', { runDir: fresh(), resolveTarget: stubResolveTarget })
+  r = await sr.reviewCodePhase('wi-fix', { runDir: fixRunDir, resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'passed', 'continue then clean converges to passed')
   assert.ok(calls.fix === 1 && calls.recordDeferred === 1, 'the fix step + recordDeferred leaves are invoked')
   assert.strictEqual(calls.prov, 1, 'a fix-applied clean still stamps covers (X′)')
+  const lastExtras = JSON.parse(fs.readFileSync(path.join(fixRunDir, 'last-extras.json'), 'utf8'))
+  assert.deepStrictEqual(lastExtras.changedSubjects, ['Code'],
+    'real fix executor path must persist normalized changedSubjects beside fix-detail extras')
+  const records = JSON.parse(fs.readFileSync(path.join(fixRunDir, 'round-records.json'), 'utf8'))
+  const roundTwoDims = records.find((rec) => rec.round === 2).dimensions
+  assert.ok(Object.values(roundTwoDims).some((dim) => dim.status === 'skipped' || dim.tier === 'reviewer'),
+    'round 2 must consume persisted changedSubjects and schedule skips or cheap reviewer runs')
+  assert.ok(calls.reviewerModels.some((call) => call.round === 2 && call.model === 'sonnet'),
+    'a cheap-scheduled round-2 reviewer must dispatch with an explicit Sonnet-tier model')
 
   console.log('ok: reviewCodePhase clean/skips/halted/cannot-certify + UFR-2 + continue/fix/clean')
 }

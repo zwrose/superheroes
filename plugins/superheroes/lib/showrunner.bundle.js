@@ -1656,12 +1656,34 @@ async function runFixStep(fixStep, fixContext, verdict, runDir) {
   try {
     const fixResult = await fixStep(fixContext, verdict, runDir)
     if (!fixResult) return { ok: false, extras: null, fixResult: null }
+    const schedulingExtras = fixSchedulingExtras(fixResult)
     await recordDeferred(fixResult, verdict, runDir)
-    return { ok: true, extras: fixResult.extras || null, fixResult }
+    const detailExtras = plainExtras(fixResult.extras)
+    const extras = Object.assign({}, detailExtras || {}, schedulingExtras || {})
+    return { ok: true, extras: Object.keys(extras).length ? extras : null, fixResult }
   } catch (e) {
     try { log(`review-panel: fix step failed, treating as fix failure -> halted: ${e && e.message ? e.message : e}`) } catch (_) {}
     return { ok: false, extras: null, fixResult: null }
   }
+}
+
+function plainExtras(value) {
+  return (value && typeof value === 'object' && !Array.isArray(value)) ? value : null
+}
+
+function fixSchedulingExtras(fixResult) {
+  if (!fixResult || typeof fixResult !== 'object' || Array.isArray(fixResult)) return null
+  const out = {}
+  if (Array.isArray(fixResult.changedSubjects)) {
+    out.changedSubjects = fixResult.changedSubjects
+    out.needsConfirmation = true
+  }
+  if (Array.isArray(fixResult.changedSubjectDetails)) out.changedSubjectDetails = fixResult.changedSubjectDetails
+  const extras = plainExtras(fixResult.extras)
+  if (extras && Object.prototype.hasOwnProperty.call(extras, 'needsConfirmation')) {
+    out.needsConfirmation = extras.needsConfirmation
+  }
+  return Object.keys(out).length ? out : null
 }
 
 const VERDICT_SCHEMA = {
