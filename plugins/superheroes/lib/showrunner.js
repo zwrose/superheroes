@@ -825,11 +825,27 @@ function safeRunKey(s) { return String(s).replace(/[^A-Za-z0-9_.-]+/g, '-').slic
 // build-worktree inWorktree commands) are left untouched — the startsWith guard prevents double-cd.
 // When __SR_ROOT is unset (most smokes, back-half runs not yet opted in) behavior is unchanged.
 function selfContained(cmd) {
-  var root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null
+  var root = checkoutRoot()
   if (!root) return cmd
   var trimmed = String(cmd).trimLeft ? String(cmd).trimLeft() : String(cmd).replace(/^\s+/, '')
   if (trimmed.startsWith('cd ')) return cmd   // already rooted (inWorktree or similar) — leave alone
   return 'cd ' + shq(root) + ' && ' + cmd
+}
+
+// checkoutRoot: the acquire-authority repo root threaded from recover_entry's snapshot (UFR-10).
+// Planted on globalThis.__SR_ROOT after reconcile; bundle ENTRY may preset it from args.root.
+function checkoutRoot(explicit) {
+  if (explicit && String(explicit).trim()) return String(explicit)
+  const r = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT)
+    ? String(globalThis.__SR_ROOT) : null
+  return (r && r.trim()) ? r : null
+}
+
+function fenceCliCmd(workItem, generation, root, extra) {
+  const r = checkoutRoot(root)
+  if (!r) return null
+  return `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
+    `--generation ${shq(String(generation))} --root ${shq(r)}${extra || ''}`
 }
 
 // cheapestModel: resolves the mechanical (cheapest) tier once and caches it. The `mechanical` tier
@@ -1031,8 +1047,10 @@ async function cmdRunner(cmd, { schema, label }) {
 // (IO: store, enforcer, lease, checkpoint, world read), then the JS twin decides (pure, in-process).
 // generation is threaded from the Python snapshot (UFR-10).
 async function reconcile(workItem) {
+  const preRoot = checkoutRoot()
+  const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
   const results = await exec([
-    `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)} --snapshot`,
+    `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)} --snapshot${rootFlag}`,
   ])
   let snap = null
   try { snap = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
@@ -1043,8 +1061,16 @@ async function reconcile(workItem) {
   // recover_entry emits an early_park when the cursor guard triggers (before snapshot).
   // In that case the snapshot fields are absent and {action, reason, generation} come directly.
   if (snap.action) return snap   // early park (cursor_gate or store/enforcer/lease failure)
+  if (!snap.root || typeof snap.root !== 'string' || !String(snap.root).trim()) {
+    return {
+      action: 'park_gate',
+      reason: 'recover_entry snapshot missing checkout root',
+      generation: snap.generation ?? null,
+    }
+  }
+  if (typeof globalThis !== 'undefined') globalThis.__SR_ROOT = String(snap.root)
   const decision = recoverTwin.reconcile(snap.checkpoint, snap.world)
-  return Object.assign({}, decision, { generation: snap.generation })
+  return Object.assign({}, decision, { generation: snap.generation, root: snap.root })
 }
 
 // releaseLease: CAS-release the work-item ref-lease at EVERY terminal exit of the run — parks
@@ -1058,13 +1084,14 @@ async function reconcile(workItem) {
 // 2026-07-02 the park-path release rode the batch exec and the courier improvised ~10 unscripted
 // Bash calls, "manually" releasing the lease itself — the misbehaving-courier class #138 hardened
 // for WRITES, now closed for this exec leaf too.
-async function releaseLease(workItem, generation) {
+async function releaseLease(workItem, generation, root) {
   if (generation == null) return
+  const cmd = fenceCliCmd(workItem, generation, root, ' --release')
+  if (!cmd) return
   try {
     await courier.runCourierJson(
       'release lease',
-      `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
-      `--generation ${shq(String(generation))} --release`,
+      cmd,
       { require: ['ok'], retryRealFailure: false, strict: true },
     )
   } catch (_) { /* TTL backstop */ }
@@ -1073,8 +1100,8 @@ async function releaseLease(workItem, generation) {
 // Park from runPhases: persist the journal (caller already did) then release the lease before
 // returning — same release-on-park path reconcile/startup use. Belt-and-braces with showrunner()'s
 // finally (a second release no-ops when the lease is already gone).
-async function parkFromPhases(workItem, generation, phase, reason) {
-  await releaseLease(workItem, generation)
+async function parkFromPhases(workItem, generation, root, phase, reason) {
+  await releaseLease(workItem, generation, root)
   return { outcome: 'parked', phase, reason }
 }
 
@@ -1084,7 +1111,7 @@ async function showrunner({ workItem }) {
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   const r = await reconcile(workItem)
   if (r.action === 'park_gate' || r.action === 'gate') {
-    await releaseLease(workItem, r.generation)
+    await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
   // UFR-1: refuse to run if the spec hasn't been approved.
@@ -1092,7 +1119,7 @@ async function showrunner({ workItem }) {
   const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
   const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
   if (startup.action !== 'proceed') {
-    await releaseLease(workItem, r.generation)
+    await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
   const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
@@ -1129,7 +1156,7 @@ async function showrunner({ workItem }) {
   const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
   // UFR-10 (#107): thread the lease generation recover_entry acquired into the workhorse build phase,
   // so the build can fence (renew-then-fence) at every branch-mutating boundary.
-  const deps = { gateRead: gateReadFor(workItem), generation: r.generation }
+  const deps = { gateRead: gateReadFor(workItem), generation: r.generation, root: r.root }
   // FR-7 (#108)/FR-4 (#102)/Task-13a (#115): native front-half wiring. Three opt-in selectors
   // share the native authoring deps but differ on the boundary park:
   //   - env SUPERHEROES_FRONT_HALF=native: direct-node/smoke path (procEnv); keeps boundary park.
@@ -1151,7 +1178,7 @@ async function showrunner({ workItem }) {
     // Every runPhases exit is terminal for THIS run — phaseStep park, boundary park, or the
     // ship hand-back ('ready') — and a crash unwinds through here too. Release the lease so
     // the relaunch (or the owner's next run) never waits out the TTL.
-    await releaseLease(workItem, r.generation)
+    await releaseLease(workItem, r.generation, r.root)
   }
 }
 
@@ -1569,11 +1596,11 @@ async function runPhases(workItem, fromStep, deps) {
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
     if (!saved.ok) {
-      return parkFromPhases(workItem, deps.generation, phase,
+      return parkFromPhases(workItem, deps.generation, deps.root, phase,
         `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4`)
     }
     if (!proceed) {
-      return parkFromPhases(workItem, deps.generation, phase,
+      return parkFromPhases(workItem, deps.generation, deps.root, phase,
         phaseResult.parkReason || decision.reason)
     }
   }
@@ -1920,11 +1947,11 @@ module.exports.testPilotDeps = testPilotDeps
 // renew-then-fence the lease generation immediately before a branch-/PR-mutating boundary (UFR-4).
 // Fail-closed: a null generation or a lost/unreadable lease returns false -> the caller parks BEFORE
 // any mutation. Mirrors build_phase.js's fenceOrPark; #118 folds this seam spine-wide.
-async function shipFenceOrPark(workItem, generation) {
+async function shipFenceOrPark(workItem, generation, root) {
   if (generation == null) return false
-  // exec courier (pinned cheapest, one-shot retry on a drop) — mirrors build_phase.js's fenceOrPark.
-  const out = await execJson(
-    `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`)
+  const cmd = fenceCliCmd(workItem, generation, root)
+  if (!cmd) return false
+  const out = await execJson(cmd)
   return !!(out && out.ok)
 }
 module.exports.shipFenceOrPark = shipFenceOrPark
@@ -1936,15 +1963,17 @@ function parseCiChecks(checks) {
   return { checks: Array.isArray(checks) ? checks : [] }
 }
 
-async function checkShipReadiness(workItem, worktree, baseName, generation, checksOnly) {
+async function checkShipReadiness(workItem, worktree, baseName, generation, checksOnly, root) {
   const baseArg = baseName ? ` --base ${shq(baseName)}` : ''
   const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
   const genArg = generation != null ? ` --generation ${shq(String(generation))}` : ''
   const checksArg = checksOnly ? ' --checks-only' : ''
+  const r = checkoutRoot(root)
+  const rootArg = r ? ` --root ${shq(r)}` : ''
   return courier.runCourierJson(
     'check ship-readiness',
     `python3 plugins/superheroes/lib/ship_phase.py --step ship-readiness --work-item ${shq(workItem)}` +
-    `${baseArg}${wtArg}${genArg}${checksArg}`,
+    `${baseArg}${wtArg}${genArg}${checksArg}${rootArg}`,
     { require: checksOnly ? ['checks'] : ['ok', 'reconcile', 'freshness', 'checks'] },
   )
 }
@@ -1992,6 +2021,7 @@ async function postReadout(workItem, pr, args) {
 //   (read-reality, apply-once). #118 generalizes that primitive to EVERY durable write (its FR-4).
 // #118 may fold/relabel these leaves; #120 deliberately leaves them as clean, un-folded seams.
 async function shipPhase(workItem, pr, generation) {
+  const storeRoot = checkoutRoot()
   const target = await resolveBuildTarget(workItem)
   const worktree = target && target.worktree ? target.worktree : null
   if (!worktree) {
@@ -1999,12 +2029,12 @@ async function shipPhase(workItem, pr, generation) {
   }
   const _srBase = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const baseName = _srBase || ''
-  if (!(await shipFenceOrPark(workItem, generation))) {
+  if (!(await shipFenceOrPark(workItem, generation, storeRoot))) {
     return park(workItem, pr, 'lease lost before reconciling the PR head — park (UFR-4)')
   }
   let ready
   try {
-    ready = await checkShipReadiness(workItem, worktree, baseName, generation, false)
+    ready = await checkShipReadiness(workItem, worktree, baseName, generation, false, storeRoot)
   } catch (_e) {
     return park(workItem, pr, 'branch readiness could not be confirmed (unreadable) — park (UFR-2)')
   }
@@ -2037,7 +2067,7 @@ async function shipPhase(workItem, pr, generation) {
     }
     if (parsed.stale) {
       try {
-        const recheck = await checkShipReadiness(workItem, worktree, baseName, generation, true)
+        const recheck = await checkShipReadiness(workItem, worktree, baseName, generation, true, storeRoot)
         ciChecks = recheck && recheck.checks
       } catch (_e) {
         return park(workItem, pr, 'CI status could not be read')
@@ -2058,7 +2088,7 @@ async function shipPhase(workItem, pr, generation) {
       return park(workItem, pr, 'CI fix preparation could not be confirmed (unreadable) — park (UFR-2)')
     }
     if (!decided || decided.action === 'revert_and_gate') {
-      if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
+      if (!(await shipFenceOrPark(workItem, generation, storeRoot))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await execJson(
         `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`)
       const reverted = !!(rd && rd.ok)
@@ -2071,7 +2101,7 @@ async function shipPhase(workItem, pr, generation) {
       if (!decided.ok || decided.read_back === false) {
         return park(workItem, pr, 'could not record the CI-fix round (durable write failed) — park before the fix push (UFR-5)')
       }
-      if (!(await shipFenceOrPark(workItem, generation))) { return park(workItem, pr, 'lease lost before CI fix push — park (UFR-4)') }
+      if (!(await shipFenceOrPark(workItem, generation, storeRoot))) { return park(workItem, pr, 'lease lost before CI fix push — park (UFR-4)') }
       await agent(
         `Fix the failing CI checks for this PR in the build worktree${worktree ? ' at ' + worktree : ''}: ${ciRes.failing.join(', ')}. ` +
         `Make ONLY the code changes needed to make the checks pass; do not write CI-log text into a commit.`,
@@ -2133,6 +2163,7 @@ async function defaultPhaseLeaf(_phase, _workItem) {
 module.exports.showrunner = showrunner
 module.exports.cmdRunner = cmdRunner
 module.exports.reconcile = reconcile
+module.exports.checkoutRoot = checkoutRoot
 module.exports.runPhases = runPhases
 module.exports.PHASES = PHASES
 module.exports.exec = exec

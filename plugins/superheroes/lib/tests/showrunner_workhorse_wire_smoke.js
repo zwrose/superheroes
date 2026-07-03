@@ -1,4 +1,5 @@
 // plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 global.log = () => {}
 // Stub the Python bridge so the spine can record the phase + decide AFTER the workhorse leaf

@@ -86,15 +86,22 @@ def _replay_push_onto_remote(work_item, branch, wt):
     return True, head, read_back, reason
 
 
-def _fence_check(work_item, generation, cwd=None):
+def _fence_check(work_item, generation, root):
     """Inline renew-then-fence; skipped when generation is absent (smoke/test paths)."""
     if generation is None:
         return {"ok": True, "reason": "no generation — fence skipped"}
     script_dir = os.path.dirname(os.path.abspath(__file__))
     try:
+        checkout_root = os.path.realpath(root)
+    except (TypeError, ValueError, OSError):
+        return {"ok": False, "reason": "fence unreadable"}
+    if not checkout_root or not os.path.isdir(checkout_root):
+        return {"ok": False, "reason": "fence unreadable"}
+    try:
         r = subprocess.run([sys.executable, os.path.join(script_dir, "fence_cli.py"),
-                            "--work-item", work_item, "--generation", str(generation)],
-                           capture_output=True, text=True, timeout=30, cwd=cwd or os.getcwd())
+                            "--work-item", work_item, "--generation", str(generation),
+                            "--root", checkout_root],
+                           capture_output=True, text=True, timeout=30)
     except Exception:
         return {"ok": False, "reason": "fence unreadable"}
     try:
@@ -172,10 +179,24 @@ ap.add_argument("--attempt", type=int, default=1,
 ap.add_argument("--worktree", default=None,
                 help="the build worktree the git mechanics run in; absent -> cwd")
 ap.add_argument("--round", type=int, default=None, help="1-based CI-fix round for ci-record")
+ap.add_argument("--root", default=None,
+                help="checkout root the control-plane store is keyed to (required for fence when --generation is set)")
 ap.add_argument("--failing", default=None, help="JSON array of current failing check signatures")
 a = ap.parse_args()
 
+
+def _store_root():
+    if not a.root:
+        return None
+    try:
+        root = os.path.realpath(a.root)
+    except (TypeError, ValueError, OSError):
+        return None
+    return root if root and os.path.isdir(root) else None
+
+
 if a.step == "freshness":
+
     # is the branch up to date with base = does HEAD contain <base> = is <base> an ancestor of HEAD.
     # (rc 0 = yes/up-to-date, 1 = behind, other = unreadable -> gate.)
     # FR-8: --base is a caller-supplied branch name (e.g. 'live-showrunner-102' or 'main').
@@ -403,7 +424,7 @@ elif a.step == "ship-readiness":
         print(json.dumps({"ok": True, "fence": fence, "reconcile": {"ok": True, "skipped": True},
                           "freshness": {"decision": "skipped"}, "integrated": False, "checks": checks}))
         sys.exit(0)
-    fence = _fence_check(a.work_item, a.generation, wt)
+    fence = _fence_check(a.work_item, a.generation, _store_root())
     if not fence.get("ok"):
         print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
                           "freshness": freshness_out, "integrated": False,
@@ -461,7 +482,7 @@ elif a.step == "ship-readiness":
                               "freshness": freshness_out, "integrated": integrated,
                               "checks": {"error": "CI status could not be read"}}))
             sys.exit(0)
-        fence = _fence_check(a.work_item, a.generation, wt)
+        fence = _fence_check(a.work_item, a.generation, _store_root())
         if not fence.get("ok"):
             print(json.dumps({"ok": False, "fence": fence, "reconcile": reconcile,
                               "freshness": freshness_out, "integrated": integrated,

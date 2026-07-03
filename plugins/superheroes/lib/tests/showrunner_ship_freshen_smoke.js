@@ -1,4 +1,5 @@
 // plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 

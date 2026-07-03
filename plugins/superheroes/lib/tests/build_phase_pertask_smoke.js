@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_pertask_smoke.js
 // #115 increment A: the IO leaves (gather/fence/journal/record-reviewed/minor-rollup) are ported to
 // exec(raw)+in-process-parse — they all route through the single 'exec' label now, returning the

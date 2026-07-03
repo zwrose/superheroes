@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const bp = require('../build_phase.js')
 const { testPilotPhase } = require('../test_pilot_phase.js')

@@ -1,8 +1,11 @@
 // plugins/superheroes/lib/tests/showrunner_workhorse_park_release_smoke.js
 // Workhorse parks (e.g. UFR-7 trailer check) must release the run lease via runPhases'
-// release-on-park path — not only showrunner()'s finally — so a relaunch never waits TTL.
+// release-on-park path — targeting the acquire-authority store via --root (and cd when set).
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 global.log = () => {}
+
+const CHECKOUT_ROOT = globalThis.__SR_ROOT
 
 function agentFor(generation, releaseCalls) {
   return async (prompt, opts) => {
@@ -12,6 +15,11 @@ function agentFor(generation, releaseCalls) {
     }
     if (label === 'release lease') {
       assert.ok(prompt.includes('fence_cli.py') && prompt.includes('--release'))
+      assert.ok(prompt.includes('--root'), 'release must carry --root for store keying')
+      assert.ok(
+        prompt.includes(`--root '${CHECKOUT_ROOT}'`) || prompt.startsWith("cd '"),
+        'release must target the acquire-authority checkout root',
+      )
       releaseCalls.push(prompt)
       return JSON.stringify({ ok: true, reason: 'lease released' })
     }
@@ -26,6 +34,7 @@ const sr = require('../showrunner.js')
   const idx = sr.PHASES.indexOf('workhorse')
   const out = await sr.runPhases('wi', idx, {
     generation: 7,
+    root: CHECKOUT_ROOT,
     build: async () => ({
       confidence: 'low',
       assumptions: ['a commit lacks its Task-Id trailer — park (UFR-7)'],

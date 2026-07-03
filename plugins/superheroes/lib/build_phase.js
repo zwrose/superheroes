@@ -339,12 +339,16 @@ async function recordFinalReviewClean(workItem) {
 
 // fenceOrPark: lease-fence acquire. CRITICAL fail-closed: an exec/parse failure must read as a LOST
 // fence (false), NEVER as ok — a fence failure read as ok would let an unfenced write through (UFR-10).
+function _checkoutRoot() {
+  const r = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT)
+    ? String(globalThis.__SR_ROOT) : null
+  return (r && r.trim()) ? r : null
+}
 async function fenceOrPark(workItem, generation) {
-  // execJson retries the courier ONCE on a dropped/garbled stdout; null -> false (fence reads LOST),
-  // preserving the CRITICAL fail-closed semantic (an exec/parse failure must NEVER read as ok — an
-  // unfenced write would slip through, UFR-10). A parseable {ok:false} returns false the same.
+  const root = _checkoutRoot()
+  if (!root) return false
   const f = await execJson(
-    `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))} --root ${shq(root)}`,
   )
   return !!(f && f.ok)
 }
