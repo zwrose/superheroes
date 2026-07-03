@@ -120,7 +120,7 @@ correctness-only. Record the choice in `## Conventions`.
 the interview, write a `status: provisional` profile from detected defaults with
 the **strict** threat model, and note in the body it was auto-generated.
 
-## Step 4 — Create: seed canonical patterns, then write
+## Step 4 — Create: seed canonical patterns, assemble core + layer bodies
 
 Seed `## Canonical patterns` by detection — grep for the project's own idioms so
 generalized agents stay sharp (each is `pattern: file:line`):
@@ -131,58 +131,21 @@ grep -rlE "export const [A-Z_]+_ERRORS|errors?\.(ts|js|py)$" "$ROOT"/src 2>/dev/
 grep -rnE "userId|ownerId|tenantId" "$ROOT"/src 2>/dev/null | head -1                              # ownership idiom
 ```
 
-Record only patterns you actually found (omit the section if none). Then write
-the profile to the resolved `$PROFILE` (from Step 2) using the **template below**.
-Only when `$PROFILE` is in-repo (under `./.claude/`) `AskUserQuestion` whether to
-commit it (`git add "$PROFILE" && git commit`); a global-store profile lives
-outside the working tree and is not committed.
+Record only patterns you actually found. From the Step 3 interview, assemble two payloads —
+**do not** write the legacy single-file template to `$PROFILE` (that path is the unified layer
+file; clobbering it breaks dispatch):
 
-### Profile template
+- `$CORE_FACTS_JSON` — JSON for `core_md.py write`: `verifyCommand`, `stackTags`, `threatModel`,
+  `patterns` (canonical patterns block as a string).
+- `$REVIEW_LAYER_BODY` — markdown body for `core_md.py write-layer`: `## Scope exclusions`,
+  `## Focus hints`, `## Conventions` (hero-owned sections only; no provenance block).
 
-```markdown
-<!-- review-profile · managed by review-crew · schema 1 -->
-<!-- provenance — do not hand-edit this block; everything below it is yours to edit -->
-schema: 1
-plugin: review-crew@<plugin-version>
-rubric-version: <N from review-base.md>
-generated: <YYYY-MM-DD>
-updated: <YYYY-MM-DD>
-status: <provisional|stable>
-nudge-ack: {}
-signals:
-  dep-set: [<names@major>]
-  default-branch: <branch>
-  forge: <github|gitlab|none>
-<!-- end provenance -->
+Proceed to Step 4b to write both files. Only when the layer path is in-repo (under
+`./.claude/superheroes/`) `AskUserQuestion` whether to commit (`git add` the new core + layer);
+a global-store profile lives outside the working tree and is not committed.
 
-## Project
-<one line: stack + what it is>
-
-## Threat model
-<single-user|multi-tenant|public>
-
-## Verify
-command: <verify command>
-# or: mode: unverified | mode: review-only
-
-## Scope exclusions
-- <only real exclusions; omit the bullets if none>
-
-## Focus hints
-- security: <one line>
-- architecture: <one line>
-- test: <one line>
-- code: <one line>
-
-## Canonical patterns
-- <pattern-name>: <file:line>
-
-## Conventions
-See CLAUDE.md.
-```
-
-`status` is `stable` when the interview was completed interactively with a real
-verify story; `provisional` for headless/greenfield/defaulted profiles.
+`status` is `confirmed` when the interview was completed interactively with a real verify story;
+`provisional` for headless/greenfield/defaulted profiles.
 
 ### Step 4b — Write the shared brain (core.md) + the review-crew layer
 
@@ -201,7 +164,7 @@ printf '%s' "$CORE_FACTS_JSON" \
   | python3 "$ROOT_DIR/lib/core_md.py" write --status "$STATUS"
 # CREATE: review-crew's own sections → its layer file (FR-3).
 printf '%s' "$REVIEW_LAYER_BODY" \
-  | python3 "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS"
+  | python3 "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS" --rubric-version "$RUBRIC_VERSION"
 ```
 
 `write` above is the **create** path: on an existing core it returns `reused`/`proposed` and

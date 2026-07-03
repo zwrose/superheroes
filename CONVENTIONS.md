@@ -331,7 +331,7 @@ config-vs-state line, because the two have opposite sharing needs:
     registry.json                       # AUTHORITATIVE: { schemaVersion, storageMode, remoteKey | null, createdAt }
     meta.json                           # { schemaVersion, sourcePath }  mint-time provenance; never rewritten (store_sweep's orphan signal)
     config.lock                         # the project-scoped config-write lock (§4.4)
-    config/                             # core.md, <plugin>.md, patterns.md       (global mode only; in-repo → in the repo)
+    config/                             # core.md, <plugin>.md, patterns.md, review-decisions.json   (global mode only; in-repo → in the repo)
     docs/<work-item>/{spec,plan,tasks}.md   # definition-docs                          (global mode only; in-repo → in the repo)
   checkouts/<absolute-git-dir-key>/     # CONTROL-PLANE STORE — a git repo; ONE per worktree/clone
     .git/

@@ -490,6 +490,21 @@ def _legacy_review_path(repo):
     return os.path.join(d, "review-profile.md")
 
 
+def _seed_legacy_global_profile(repo, hero_root):
+    """Seed a legacy review-profile.md in the review-crew global store (not unified layer)."""
+    import store_core as sc
+    ident = sc.derive_identifiers(repo)
+    eid = ident["gitdir_hash"]
+    entry = os.path.join(hero_root, "entries", eid)
+    os.makedirs(entry, exist_ok=True)
+    if not os.path.exists(os.path.join(entry, "keys.json")):
+        sc.write_keys_json(entry, ident)
+    sc.write_pointer(hero_root, ident["gitdir_hash"], eid)
+    if ident["remote_hash"]:
+        sc.write_pointer(hero_root, ident["remote_hash"], eid)
+    return os.path.join(entry, "review-profile.md")
+
+
 def test_migrate_global_standard_splits_and_retires_legacy(tmp_path):
     # Global mode (no repo root override / nongit): write core.md + layer, remove legacy.
     repo = str(tmp_path)
@@ -544,7 +559,7 @@ def test_migrate_global_mode_legacy_profile_is_found_and_migrated(tmp_path, monk
     # seed a global review-crew profile (hermetic: point review_store.store_root at hero_root)
     import review_store
     monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
-    prof_path = review_store.create(repo, "profile", "global", hero_root)  # mints entry + pointers
+    prof_path = _seed_legacy_global_profile(repo, hero_root)
     open(prof_path, "w").write(_REVIEW_PROFILE)
     # _legacy_path resolves the global profile path (NOT the in-repo .claude/review-profile.md)
     legacy = CM._legacy_path(repo, "review-crew")
@@ -663,7 +678,7 @@ def test_migrate_in_repo_with_out_of_repo_legacy_commits_and_records(tmp_path, m
     hero_root = str(tmp_path / "review_store")
     import review_store
     monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
-    prof_path = review_store.create(repo, "profile", "global", hero_root)
+    prof_path = _seed_legacy_global_profile(repo, hero_root)
     open(prof_path, "w").write(_REVIEW_PROFILE)
     legacy = CM._legacy_path(repo, "review-crew")
     assert legacy == prof_path  # out-of-repo (global hero store)
@@ -1042,7 +1057,7 @@ def test_resume_placeholder_with_out_of_repo_legacy_rescues_and_commits(tmp_path
     hero_root = str(tmp_path / "review_store")
     import review_store
     monkeypatch.setattr(review_store, "store_root", lambda: hero_root)
-    prof_path = review_store.create(repo, "profile", "global", hero_root)
+    prof_path = _seed_legacy_global_profile(repo, hero_root)
     open(prof_path, "w").write(_REVIEW_PROFILE)
     d = os.path.join(repo, ".claude", "superheroes")
     os.makedirs(d, exist_ok=True)

@@ -134,13 +134,18 @@ def write_registry(cwd, mode, remote_key, root=None, allow_migration=False, now=
         return rec
 
 
-# mode_registry owns the in-repo subpath + filename (the heroes keep them inline today);
-# the GLOBAL store root is read from each hero's own store_root() via a deferred import.
-_HERO_INREPO = {
+# Legacy single-file profile paths — migration source only (_legacy_path in core_md).
+_HERO_LEGACY_INREPO = {
     "review-crew": os.path.join(".claude", "review-profile.md"),
     "test-pilot": os.path.join(".claude", "test-pilot", "profile.md"),
 }
+# Unified layer paths — evidence / mode-detection probes (#81 / #123).
+_HERO_LAYER_INREPO = {
+    "review-crew": os.path.join(".claude", "superheroes", "review-crew.md"),
+    "test-pilot": os.path.join(".claude", "superheroes", "test-pilot.md"),
+}
 _HERO_GLOBAL_FILENAME = {"review-crew": "review-profile.md", "test-pilot": "profile.md"}
+_HERO_LAYER_FILENAME = {"review-crew": "review-crew.md", "test-pilot": "test-pilot.md"}
 
 
 def _hero_global_root(name):
@@ -156,15 +161,27 @@ def _repo_root(cwd):
     return os.path.realpath(out) if out else os.path.realpath(cwd)
 
 
+def _hero_layer_global_path(cwd, hero, root=None):
+    """Unified global layer in the control-plane project store (not the hero's legacy store)."""
+    return os.path.join(project_store_dir(cwd, root), "config", _HERO_LAYER_FILENAME[hero])
+
+
 def hero_evidence(cwd, root=None, hero_roots=None):
     """Pure read-only probe of each hero's calibration location. In-repo is anchored at
-    the REPO ROOT; global is resolved read-only (resolve_global heal=False). Returns
-    {hero: 'in-repo'|'global'|'none'}. hero_roots overrides each global root for tests."""
+    the REPO ROOT; global checks the unified control-plane layer first, then the hero's
+    legacy global store. A hero is present when its unified layer OR legacy profile exists.
+    Returns {hero: 'in-repo'|'global'|'none'}. hero_roots overrides each legacy global root."""
     repo = _repo_root(cwd)
     out = {}
-    for name, subpath in _HERO_INREPO.items():
-        if os.path.isfile(os.path.join(repo, subpath)):
+    for name in _HERO_LEGACY_INREPO:
+        layer_sub = _HERO_LAYER_INREPO[name]
+        legacy_sub = _HERO_LEGACY_INREPO[name]
+        if (os.path.isfile(os.path.join(repo, layer_sub))
+                or os.path.isfile(os.path.join(repo, legacy_sub))):
             out[name] = IN_REPO
+            continue
+        if os.path.isfile(_hero_layer_global_path(cwd, name, root)):
+            out[name] = GLOBAL
             continue
         groot = (hero_roots or {}).get(name) or _hero_global_root(name)
         g = store_core.resolve_global(cwd, groot, heal=False)
