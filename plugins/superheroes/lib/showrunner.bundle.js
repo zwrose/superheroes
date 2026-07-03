@@ -502,6 +502,15 @@ __modules["review_round_policy"] = function (module, exports, require) {
 // plugins/superheroes/lib/review_round_policy.js
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
+const SUBJECT_FALLBACK = {
+  test: 'Test',
+  security: 'Security',
+  code: 'Code',
+  architecture: 'Architecture',
+  failure: 'Failure-Mode',
+  premortem: 'Failure-Mode',
+}
+const POLICY_SUBJECTS = new Set(Object.values(SUBJECT_FALLBACK))
 
 function _dim(prev, name) {
   if (!prev || typeof prev !== 'object' || Array.isArray(prev)) return {}
@@ -510,7 +519,30 @@ function _dim(prev, name) {
 }
 
 function _changedSubjects(value) {
-  return Array.isArray(value) && value.every((x) => typeof x === 'string') ? value : null
+  if (!Array.isArray(value)) return null
+  const out = []
+  for (const item of value) {
+    if (typeof item === 'string') {
+      out.push(item)
+      continue
+    }
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      for (const key of ['subject', 'dimension', 'policySubject']) {
+        const subject = _policySubject(item[key])
+        if (subject) out.push(subject)
+      }
+      // Section-only doc-reviser notes intentionally map to "known empty": cheap skips are bounded by the mandatory deep confirmation round.
+      continue
+    }
+    return null
+  }
+  return Array.from(new Set(out))
+}
+
+function _policySubject(value) {
+  if (typeof value !== 'string' || !value) return null
+  if (POLICY_SUBJECTS.has(value)) return value
+  return SUBJECT_FALLBACK[String(value || '').split('-')[0].toLowerCase()] || null
 }
 
 function _safeRound(value) {
@@ -527,7 +559,7 @@ function _subjects(name, info) {
   for (const finding of Array.isArray(info.findings) ? info.findings : []) {
     if (finding && typeof finding.dimension === 'string') subjects.push(finding.dimension)
   }
-  const fallback = { test: 'Test', security: 'Security', code: 'Code', architecture: 'Architecture', failure: 'Failure-Mode' }[String(name || '').split('-')[0].toLowerCase()]
+  const fallback = SUBJECT_FALLBACK[String(name || '').split('-')[0].toLowerCase()]
   if (fallback) subjects.push(fallback)
   return Array.from(new Set(subjects))
 }
@@ -954,13 +986,40 @@ function confirmationReady(records, round, justMarked) {
 // mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
 // the loop's second entry read (last-extras.json) into the same leaf; it comes back as
 // `extras` (null when missing/corrupt — the old readJson-default parity).
-async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
   const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
   try {
     const parsed = JSON.parse(out.stdout || '{}')
     return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
   } catch (_) {
     return { ok: false, reason: 'round-memory-helper-failed' }
+  }
+}
+
+async function probeRoundRecords(runDir, ioApi) {
+  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
+  try {
+    const parsed = JSON.parse((out && out.stdout) || '')
+    if (parsed && typeof parsed === 'object') return parsed
+  } catch (_) { /* fall through */ }
+  return { ok: false, exists: true, state: 'unreadable', reason: 'round-memory-probe-failed' }
+}
+
+async function loadRoundRecords(runDir, reviewerSet, ioApi) {
+  const first = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
+  if (first.ok) return first
+  const second = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
+  if (second.ok) return second
+  const probed = await probeRoundRecords(runDir, ioApi)
+  if (probed && probed.ok && probed.exists === false) {
+    return { ok: true, state: 'missing', records: [], contentHash: ioApi.contentHash(''), extras: null }
+  }
+  return {
+    ok: false,
+    state: 'unreadable',
+    reason: 'round-memory-unreadable',
+    records: [],
+    contentHash: (probed && probed.contentHash) || first.contentHash || second.contentHash,
   }
 }
 
@@ -1053,7 +1112,11 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: recordedCoverageDecisions || [],
-    fix: { fixes: fixResult.fixes || fixResult.fixed || [], deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []) },
+    fix: {
+      fixes: fixResult.fixes || fixResult.fixed || [],
+      deferred: reviewMemory.skeletonDeferred(fixResult.deferred || []),
+      changedSubjectDetails: fixResult.changedSubjectDetails || [],
+    },
   }
   if (legKind && legKind.panel) updates.confirmationPending = true
   const updatesJson = JSON.stringify(updates)
@@ -1096,10 +1159,34 @@ async function loadCoverageDecisions(target, ioApi) {
 function collectRoundUsage(roundFindings, round, synthesized) {
   const usage = {}
   for (const [name, result] of Object.entries(roundFindings || {})) {
-    if (result && result.usage) usage[`${name}:r${round}`] = result.usage
+    const real = _realUsage(result && result.usage)
+    if (real) usage[`${name}:r${round}`] = real
   }
-  if (synthesized && synthesized.usage) usage[`synthesis:r${round}`] = synthesized.usage
+  const synthUsage = _realUsage(synthesized && synthesized.usage)
+  if (synthUsage) usage[`synthesis:r${round}`] = synthUsage
   return usage
+}
+
+function _realUsage(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const out = {}
+  let positive = false
+  for (const [key, v] of Object.entries(value)) {
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue
+    if (v > 0) positive = true
+    out[key] = v
+  }
+  return positive ? out : null
+}
+
+function _stripZeroUsage(out) {
+  if (!out || typeof out !== 'object' || Array.isArray(out)) return out
+  const usage = _realUsage(out.usage)
+  if (usage) return Object.assign({}, out, { usage })
+  if (!Object.prototype.hasOwnProperty.call(out, 'usage')) return out
+  const cleaned = Object.assign({}, out)
+  delete cleaned.usage
+  return cleaned
 }
 
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
@@ -1196,6 +1283,12 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   let justMarkedForConfirmation = false
   let fixRanThisRun = false
   const allUsage = {}
+
+  if (!memoryState.ok) {
+    return await finalizeVerdict(
+      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-unreadable', round },
+      records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  }
 
   if (!reviewerSet || reviewerSet.length === 0) {
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
@@ -1383,24 +1476,33 @@ function _validReviewerResult(out) {
   return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
+function _shapeReviewerResult(out, opts) {
+  if (Array.isArray(out)) {
+    const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
+    return { findings: out, confidence: conf, legacyArray: true }
+  }
+  return _stripZeroUsage(out)
+}
+
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
-  let out = await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts)
-  if (Array.isArray(out)) {
-    const conf = (baseOpts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    out = { findings: out, confidence: conf, legacyArray: true }
-  }
+  let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
   if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
     escalated = true
-    out = await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' }))
-    if (Array.isArray(out)) out = { findings: out, confidence: 'high', legacyArray: true }
+    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
+    if (!_validReviewerResult(out) || out.receiptMissing) {
+      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
+    }
+  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
   }
-  if (!_validReviewerResult(out) || out.confidence !== 'high') {
-    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: _validReviewerResult(out) ? out.findings : [], confidence: _validReviewerResult(out) ? out.confidence : 'low', malformed: !_validReviewerResult(out), legacyArray: !!(out && out.legacyArray), escalated }
+  if (!_validReviewerResult(out)) {
+    roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: true, legacyArray: !!(out && out.legacyArray), escalated }
     return
   }
-  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier }, out)
+  roundFindings[reviewer] = Object.assign({ status: 'run', dimension: reviewer, escalated, tier: baseOpts.tier, malformed: false }, out)
 }
 
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
@@ -4989,6 +5091,8 @@ const ciStatusTwin = require('./ci_status.js')
 // #38: the external-engine dispatch leaf + the pure engine-preference resolver twin.
 const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
+const reviewMemory = require('./review_memory.js')
+const circuitBreaker = require('./circuit_breaker.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -5004,6 +5108,15 @@ const REVIEW_CODE_REVIEWERS = [
 
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
 const ADVANCE_TERMINALS = new Set(['clean'])
+const POLICY_SUBJECT_FALLBACK = {
+  test: 'Test',
+  security: 'Security',
+  code: 'Code',
+  architecture: 'Architecture',
+  failure: 'Failure-Mode',
+  premortem: 'Failure-Mode',
+}
+const POLICY_SUBJECTS = new Set(Object.values(POLICY_SUBJECT_FALLBACK))
 
 // the canonical severity tiers (panel_tally.SEV_RANK): Critical > Important > Minor > Nit.
 const DEFERRED_ITEMS = {
@@ -5027,9 +5140,21 @@ const FINDINGS_SCHEMA = {
   properties: {
     findings: { type: 'array' },
     confidence: { enum: ['high', 'low'] },
-    verificationReceipt: { type: 'object' },
+    verificationReceipt: {
+      type: 'object',
+      required: ['artifact', 'chain', 'coverageDecisionIds'],
+      properties: {
+        artifact: { type: 'string' },
+        chain: { type: 'array' },
+        coverageDecisionIds: { type: 'array' },
+      },
+    },
     usage: { type: 'object' },
   },
+  allOf: [{
+    if: { properties: { confidence: { const: 'high' } }, required: ['confidence'] },
+    then: { required: ['verificationReceipt'] },
+  }],
 }
 const SYNTH_VERDICTS_SCHEMA = {
   type: 'object',
@@ -5049,20 +5174,88 @@ const FIX_RESULT_SCHEMA = {
   },
 }
 
-function normalizeFixResult(result) {
+function _policySubject(value) {
+  if (typeof value !== 'string' || !value) return null
+  if (POLICY_SUBJECTS.has(value)) return value
+  return POLICY_SUBJECT_FALLBACK[String(value || '').split('-')[0].toLowerCase()] || null
+}
+
+function _realUsage(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return null
+  const out = {}
+  let positive = false
+  for (const [key, value] of Object.entries(usage)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    if (value > 0) positive = true
+    out[key] = value
+  }
+  return positive ? out : null
+}
+
+function _withRealUsage(out) {
+  if (!out || typeof out !== 'object') return out
+  const usage = _realUsage(out.usage)
+  if (usage) return Object.assign({}, out, { usage })
+  if (!Object.prototype.hasOwnProperty.call(out, 'usage')) return out
+  const cleaned = Object.assign({}, out)
+  delete cleaned.usage
+  return cleaned
+}
+
+function _findingKeys(finding) {
+  if (!finding || typeof finding !== 'object') return []
+  const keys = []
+  if (finding.classKey) keys.push(String(finding.classKey))
+  keys.push(reviewMemory.classKey(finding))
+  keys.push(circuitBreaker.findingIdentity(finding))
+  if (finding.file && finding.title) keys.push(`${finding.file}::${finding.title}`)
+  return keys.filter(Boolean)
+}
+
+function _policyChangedSubjects(result, fixContext) {
+  const subjects = new Set()
+  const fixed = new Set([...(result.fixes || []), ...(result.fixed || [])].map((x) => String(x)))
+  for (const finding of (fixContext && fixContext.priorFindings) || []) {
+    if (!fixed.size || !_findingKeys(finding).some((key) => fixed.has(key))) continue
+    const subject = _policySubject(finding.dimension)
+    if (subject) subjects.add(subject)
+  }
+  for (const item of result.changedSubjects || []) {
+    if (typeof item === 'string') {
+      const subject = _policySubject(item)
+      if (subject) subjects.add(subject)
+    } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+      for (const key of ['subject', 'dimension', 'policySubject']) {
+        const subject = _policySubject(item[key])
+        if (subject) subjects.add(subject)
+      }
+    }
+  }
+  return Array.from(subjects).sort()
+}
+
+function normalizeFixResult(result, fixContext) {
   if (!result || !Array.isArray(result.changedSubjects) || !Array.isArray(result.coverageDecisions)) return null
+  const changedSubjectDetails = result.changedSubjects
+  const changedSubjects = _policyChangedSubjects(result, fixContext)
   return Object.assign({}, result, {
+    changedSubjects,
+    changedSubjectDetails,
     fixes: result.fixes || result.fixed || [],
     // record_deferred.py (frozen) reads ONLY `fixed` for the readout fixes-enrichment, while the
     // FIX_RESULT_INSTRUCTION shape carries `fixes` — normalize BOTH keys so the report satisfies
     // either consumer regardless of which key the fixer returned.
     fixed: result.fixed || result.fixes || [],
-    extras: Object.assign({}, result.extras || {}, { changedSubjects: result.changedSubjects, needsConfirmation: true }),
+    extras: Object.assign({}, result.extras || {}, {
+      changedSubjects,
+      changedSubjectDetails,
+      needsConfirmation: true,
+    }),
   })
 }
 
 const REVIEWER_RESULT_INSTRUCTION =
-  'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]},"usage":{"input":0,"output":0,"total":0}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low","usage":{...}} instead of a boilerplate receipt.'
+  'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
 const FIX_RESULT_INSTRUCTION =
   'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
@@ -5083,18 +5276,17 @@ function ensureReviewerShape(out, opts = {}) {
       // Mark the result as externally reviewed (real evidence: an independent engine actually ran)
       // instead of fabricating a receipt shape it never produced. panel_tally's final-confirmation
       // check treats externalReview as an alternate, honestly-labeled confirmation path.
-      out = Object.assign({}, out, { externalReview: opts.externalEngine || true, usage: out.usage || { total: 1 } })
+      out = Object.assign({}, out, { externalReview: opts.externalEngine || true })
     } else {
       // A genuine reviewer leaf claimed high confidence but supplied no verification receipt.
       // REVIEWER_RESULT_INSTRUCTION already tells leaves that "no evidence" means confidence:low —
       // trust that contract instead of fabricating canned evidence to paper over a leaf that
       // skipped it. Downstream, low confidence forces cannot-certify (an honest "not verified"),
-      // never a silently-passed round. usage still defaults (as the old fabrication path did) so a
-      // receipt-less leaf isn't also invisible to telemetry.
-      out = Object.assign({}, out, { confidence: 'low', usage: out.usage || { total: 1 } })
+      // never a silently-passed round. receiptMissing tells the shell this is worth one deep retry.
+      out = Object.assign({}, out, { confidence: 'low', receiptMissing: true })
     }
   }
-  return out
+  return _withRealUsage(out)
 }
 
 // Build the four caller-supplied leaf wrappers, closed over the resolved model tiers (FR-7/FR-8).
@@ -5156,7 +5348,7 @@ function reviewCodeLeaves(tiers, opts) {
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
-      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} — one ` +
+      `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
       `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
       withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
@@ -5175,12 +5367,12 @@ function reviewCodeLeaves(tiers, opts) {
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
       })
-      if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] })
+      if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(tiers.fixer, { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
-      return normalizeFixResult(out)
+      return normalizeFixResult(out, fixContext)
     }
     const out = await agent(prompt, withModel(tiers.fixer, { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
-    return normalizeFixResult(out)
+    return normalizeFixResult(out, fixContext)
   }
 
   const recordDeferred = async (report, _verdict, runDir) => {
@@ -5256,7 +5448,7 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
-    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}],"usage":{"input":0,"output":0,"total":0}} keyed by ` +
+    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
@@ -5313,7 +5505,7 @@ async function docReviser(fixContext, verdict, runDir, context) {
     `${FIX_RESULT_INSTRUCTION} Per plugins/superheroes/eval/doc-reviser-leaf.md resolve blocking findings. ` +
     `Fix context:\n${JSON.stringify(fixContext)}`,
     Object.assign({ model }, { label: 'revise-doc', schema: FIX_RESULT_SCHEMA }))
-  return normalizeFixResult(out)
+  return normalizeFixResult(out, fixContext)
 }
 
 // run the panel-doc leg: set the four global wrappers, then reviewPanel with the front-half wiring.
@@ -5492,12 +5684,6 @@ async function reviewDocPhase(doc, workItem, opts) {
   // ~14KB evidence-bodied verdict never crosses a courier writeFile — the payload-stage-failed
   // park class (live 2026-07-02, run wf_94c879e0-747). Overwrite is finalize's job: the record
   // is durable for crash-resume, not append-only (the lease serializes live sessions).
-  const recPath = `${runDir}/terminal-record.json`
-  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
-  if (!recWrite.ok) {
-    const gate = gateForTerminal(verdict && verdict.terminal)
-    return { phaseResult: { confidence: 'low', assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`] }, gate }
-  }
   // gateForTerminal is the in-process JS twin (no agent dispatch).
   const gate = gateForTerminal(verdict && verdict.terminal)
   // The set-gate fence hash is computed PYTHON-SIDE at write time ('current' sentinel), never
@@ -5519,13 +5705,46 @@ async function reviewDocPhase(doc, workItem, opts) {
     `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
     `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
+  const persist = {
+    sideEffectCmd,
+    journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
+  }
+  const recPath = `${runDir}/terminal-record.json`
+  const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
+  if (verdict && verdict.reason === 'round-memory-unreadable') {
+    return {
+      phaseResult: {
+        confidence: 'low',
+        assumptions: ['round-memory-unreadable'],
+        parkReason: 'round-memory-unreadable',
+      },
+      gate: null,
+      runtimeDeferredIds: Array.from(deferred.keys()),
+    }
+  }
+  if (!recWrite.ok) {
+    if (gate === 'passed') {
+      return {
+        phaseResult: { confidence: 'high', assumptions: [] },
+        gate,
+        persist,
+        runtimeDeferredIds: Array.from(deferred.keys()),
+      }
+    }
+    return {
+      phaseResult: {
+        confidence: 'low',
+        assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`],
+        parkReason: `terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`,
+      },
+      gate,
+      runtimeDeferredIds: Array.from(deferred.keys()),
+    }
+  }
   return {
     phaseResult: { confidence: 'high', assumptions: [] },
     gate,
-    persist: {
-      sideEffectCmd,
-      journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
-    },
+    persist,
     runtimeDeferredIds: Array.from(deferred.keys()),
   }
 }
@@ -6416,7 +6635,7 @@ async function runPhases(workItem, fromStep, deps) {
     if (!saved.ok) {
       return { outcome: 'parked', phase, reason: `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4` }
     }
-    if (!proceed) return { outcome: 'parked', phase, reason: decision.reason }
+    if (!proceed) return { outcome: 'parked', phase, reason: phaseResult.parkReason || decision.reason }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.

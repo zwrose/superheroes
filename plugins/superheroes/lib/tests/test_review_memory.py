@@ -483,6 +483,7 @@ def test_compose_terminal_missing_records_still_writes(tmp_path):
     assert rec["terminal"] == "cannot-certify"
     assert rec["fixes"] == [] and rec["deferred"] == [] and rec["coverageDecisions"] == []
 
+
 def test_compose_terminal_preserves_existing_clean_from_later_failure(tmp_path):
     rm = load_memory()
     path = tmp_path / "terminal-record.json"
@@ -496,6 +497,28 @@ def test_compose_terminal_preserves_existing_clean_from_later_failure(tmp_path):
     assert out["ok"] is True
     assert out.get("preserved") is True
     assert json.loads(path.read_text(encoding="utf-8")) == clean
+
+
+def test_compose_terminal_preserves_clean_for_transport_class_failures_only(tmp_path):
+    rm = load_memory()
+    path = tmp_path / "terminal-record.json"
+    clean = {"terminal": "clean", "round": 5, "runId": "old-clean"}
+    path.write_text(json.dumps(clean, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    transport = {"terminal": "cannot-certify", "reason": "coverage-decisions-unreadable", "round": 6}
+    transport_json = json.dumps(transport)
+    out = rm.compose_terminal_record(str(path), transport_json,
+                                     verdict_hash=rm.content_hash(transport_json),
+                                     run_id="flaked-entry")
+    assert out["ok"] is True and out.get("preserved") is True
+    assert json.loads(path.read_text(encoding="utf-8")) == clean
+
+    legitimate = {"terminal": "halted", "reason": "fix failed", "round": 6}
+    legitimate_json = json.dumps(legitimate)
+    out = rm.compose_terminal_record(str(path), legitimate_json,
+                                     verdict_hash=rm.content_hash(legitimate_json),
+                                     run_id="later-real-failure")
+    assert out["ok"] is True and out.get("preserved") is not True
+    assert json.loads(path.read_text(encoding="utf-8"))["terminal"] == "halted"
 
 
 def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):

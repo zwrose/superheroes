@@ -424,7 +424,33 @@ def probe_records_path(path):
         return {"ok": False, "exists": os.path.exists(path), "state": "unreadable", "reason": str(exc)}
 
 
-_PRESERVE_CLEAN_FAILURE_REASONS = {"round-memory-unreadable"}
+_TRANSPORT_FAILURE_REASONS = {
+    "round-memory-unreadable",
+    "round-memory-write-failed",
+    "coverage-decisions-unreadable",
+    "coverage-decision-write-failed",
+    "terminal-record-write-failed",
+}
+
+
+def _number(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _should_preserve_clean_terminal(prior, incoming):
+    if not isinstance(prior, dict) or prior.get("terminal") != "clean":
+        return False
+    if not isinstance(incoming, dict) or incoming.get("terminal") == "clean":
+        return False
+    prior_round = _number(prior.get("round"))
+    incoming_round = _number(incoming.get("round"))
+    if prior_round is not None and incoming_round is not None and incoming_round < prior_round:
+        return True
+    # Transport-class failure verdicts are not stronger evidence than an existing clean terminal.
+    return incoming.get("reason") in _TRANSPORT_FAILURE_REASONS
 
 
 def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=None,
@@ -447,7 +473,7 @@ def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=
         return {"ok": False, "reason": "verdict-corrupt", "detail": str(exc)}
     if not isinstance(verdict, dict):
         return {"ok": False, "reason": "verdict-corrupt", "detail": "not a dict"}
-    if verdict.get("terminal") != "clean" and verdict.get("reason") in _PRESERVE_CLEAN_FAILURE_REASONS:
+    if verdict.get("terminal") != "clean":
         try:
             with open(path, encoding="utf-8") as fh:
                 prior_text = fh.read()
@@ -455,7 +481,7 @@ def compose_terminal_record(path, verdict_json, verdict_hash=None, records_path=
         except (OSError, ValueError):
             prior = None
             prior_text = ""
-        if isinstance(prior, dict) and prior.get("terminal") == "clean":
+        if _should_preserve_clean_terminal(prior, verdict):
             return {
                 "ok": True,
                 "contentHash": content_hash(prior_text),

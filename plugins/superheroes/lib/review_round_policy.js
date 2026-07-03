@@ -30,6 +30,7 @@ function _changedSubjects(value) {
         const subject = _policySubject(item[key])
         if (subject) out.push(subject)
       }
+      // Section-only doc-reviser notes intentionally map to "known empty": cheap skips are bounded by the mandatory deep confirmation round.
       continue
     }
     return null

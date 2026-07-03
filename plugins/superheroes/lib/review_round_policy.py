@@ -38,6 +38,7 @@ def _changed_subjects(value):
                 subject = _policy_subject(item.get(key))
                 if subject:
                     out.append(subject)
+            # Section-only doc-reviser notes intentionally map to "known empty"; deep confirmation bounds skips.
             continue
         return None
     return sorted(set(out))
