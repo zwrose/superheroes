@@ -258,15 +258,17 @@ def _compute_drift(prof, engine_plugin_ver, engine_rubric_ver, root, env):
             % (sc, SUPPORTED_SCHEMA)
         )
 
-    # 3. >= DEP_THRESHOLD ADDED top-level deps.
-    profile_deps = {_norm_dep(d) for d in prof["dep-set"]}
-    live_deps = _detect_live_deps(root)
-    if live_deps:  # only judge when we could actually read a manifest
-        added = live_deps - profile_deps
-        if len(added) >= DEP_THRESHOLD:
-            drift.append(
-                "%d added top-level deps since last profile" % len(added)
-            )
+    # 3. >= DEP_THRESHOLD ADDED top-level deps (skip when no baseline was recorded).
+    dep_set = prof.get("dep-set")
+    if dep_set is not None:
+        profile_deps = {_norm_dep(d) for d in dep_set}
+        live_deps = _detect_live_deps(root)
+        if live_deps:  # only judge when we could actually read a manifest
+            added = live_deps - profile_deps
+            if len(added) >= DEP_THRESHOLD:
+                drift.append(
+                    "%d added top-level deps since last profile" % len(added)
+                )
 
     # 4. new top-level source dir not reflected in the recorded src-dirs.
     recorded = prof["src-dirs"]
@@ -316,6 +318,58 @@ def _soft_fail():
     }
 
 
+def _parse_layer_provenance(text):
+    """Parse nudge-ack from a unified layer's provenance comment, if present."""
+    m = re.search(r"nudge-ack=(\{.*?\})", text or "")
+    if not m:
+        return {}
+    try:
+        val = json.loads(m.group(1).replace("'", '"'))
+        return val if isinstance(val, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _doctor_unified(root, plugin_ver, rubric_ver, env, layer_text):
+    """Staleness check for unified layout (core.md + layer) without legacy provenance."""
+    prof = {
+        "schema": SUPPORTED_SCHEMA,
+        "plugin": plugin_ver,
+        "rubric-version": rubric_ver,
+        "nudge-ack": _parse_layer_provenance(layer_text),
+        "dep-set": None,  # unified layers carry no dep baseline — skip dep drift
+        "default-branch": None,
+        "forge": None,
+        "src-dirs": None,
+        "verify-command": None,
+    }
+    try:
+        rec = core_md.read(root)
+        if rec and rec.get("verifyCommand"):
+            prof["verify-command"] = rec["verifyCommand"]
+    except Exception:
+        pass
+    drift = _compute_drift(prof, plugin_ver, rubric_ver, root, env)
+    signal_hash = _hash_drift(drift)
+    nudge_acked = bool(signal_hash) and signal_hash in prof["nudge-ack"]
+    message = None
+    if drift:
+        message = "review-crew profile drift: " + "; ".join(drift) \
+            + " — consider re-running review-init"
+    return {
+        "ok": True,
+        "readable": True,
+        "drift": drift,
+        "signal_hash": signal_hash,
+        "nudge_acked": nudge_acked,
+        "message": message,
+    }
+
+
+def _is_unified_layer(text):
+    return bool(re.search(r"<!--\s*review-crew:", text or ""))
+
+
 def doctor(profile_path, plugin_ver, rubric_ver, root, env):
     """Core check. Returns the result dict. Catches everything → soft-fail. The verify command
     prefers core_md.read(root).verifyCommand (a PURE read — never migrates, never writes), so the
@@ -326,6 +380,11 @@ def doctor(profile_path, plugin_ver, rubric_ver, root, env):
         with open(profile_path) as fh:
             text = fh.read()
     except Exception:
+        return _soft_fail()
+
+    if "schema:" not in text:
+        if _is_unified_layer(text):
+            return _doctor_unified(root, plugin_ver, rubric_ver, env, text)
         return _soft_fail()
 
     try:

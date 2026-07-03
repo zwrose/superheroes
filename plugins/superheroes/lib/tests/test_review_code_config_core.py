@@ -32,9 +32,8 @@ def test_resolve_falls_back_to_legacy_when_core_absent(tmp_path, monkeypatch):
     # fallback: NO core.md → resolve_shared yields nothing → the legacy profile parse wins.
     repo = str(tmp_path)
     store = str(tmp_path / "store")
-    prof = os.path.join(repo, "review-profile.md")
+    prof = os.path.join(repo, ".claude", "review-profile.md")
+    os.makedirs(os.path.dirname(prof), exist_ok=True)
     open(prof, "w").write("## Verify\ncommand: make test\n")
-    monkeypatch.setattr(rcc.review_store, "resolve",
-                        lambda cwd, kind, root: {"exists": True, "path": prof})
     out = rcc.resolve(repo, root=store)
     assert out["verifyCommand"] == "make test"

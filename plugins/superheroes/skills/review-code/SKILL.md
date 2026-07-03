@@ -18,7 +18,7 @@ There are three top-level paths, chosen at invocation:
 - **`--review-only`** → one review pass, then a read-only interactive terminal presentation. No commits.
 - **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
 
-The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project profile (`.claude/review-profile.md`), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator does not chain a "verifier agent" or run a specialist twice within a round, because multi-turn agentic review within a single pass degrades F1 and fabricates findings as real ones get exhausted (base rubric, "In-pass verification & single-pass discipline"). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
+The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project calibration (`core.md` for threat model + canonical patterns, `review-crew.md` layer for scope/focus/conventions), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator does not chain a "verifier agent" or run a specialist twice within a round, because multi-turn agentic review within a single pass degrades F1 and fabricates findings as real ones get exhausted (base rubric, "In-pass verification & single-pass discipline"). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
 
 ## Invocation
 
@@ -88,15 +88,20 @@ ESC_WRAPPER="$ROOT_DIR/lib/escalation_resolve.py"   # absolute; embed the expand
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
 ```
 
-**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+**Resolve calibration paths (resolver-driven).** `calibration_resolve.py` returns core + layer paths (or legacy profile). Capture `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS` before staleness check and bootstrap:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
-  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
-PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
-LOCATION=$(printf '%s' "$RES" | jq -r .location)
-EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+  || { echo "calibration_resolve failed — continuing with strict fallback"; CAL='{"location":"none","exists":false,"core_path":null,"layer_path":null,"legacy_path":null}'; }
+CORE=$(printf '%s' "$CAL" | jq -r '.core_path // empty')
+LAYER=$(printf '%s' "$CAL" | jq -r '.layer_path // empty')
+PROFILE="$LAYER"
+if [ -z "$PROFILE" ]; then
+  PROFILE=$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')
+fi
+LOCATION=$(printf '%s' "$CAL" | jq -r .location)
+EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
   || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
@@ -113,9 +118,7 @@ PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
-**Resolve the model tiers once (band-wide knob).** The five specialists run at the
-`reviewer` tier (`reviewer-deep` for security/architecture), and the triage + fixer
-subagents at `mechanical`. Resolve each via the shared knob to get the band defaults:
+**Resolve model tiers.** Specialists at `reviewer` (`reviewer-deep` for security/architecture); triage + fixer at `mechanical`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -126,9 +129,7 @@ DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.mode
 MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
 ```
 
-**Resolve the per-role engine (orthogonal to the model tier).** The reviewer engine runs the five
-specialists (read-only); the implementation engine runs the auto-fix (FR-15). Default `claude` — a
-project that set nothing behaves exactly as today.
+**Resolve per-role engine (FR-15).** Default `claude` when unset.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -153,7 +154,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
+(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on `--post` once the worktree exists; empty otherwise.) Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superheroes:configure` and continue. Retain `message`, `signal_hash`, `nudge_acked` for the end-of-run staleness nudge. Do NOT act on `drift` here.
 
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -171,19 +172,27 @@ if [ "$LOCATION" = "none" ]; then
   fi
   PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
-  # Then run review-init's create procedure inline, writing the profile to $PROFILE.
+  # review-init inline (writes core.md + layer), then refresh paths:
+  CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+    || CAL='{"location":"none","exists":false,"core_path":null,"layer_path":null,"legacy_path":null}'
+  CORE=$(printf '%s' "$CAL" | jq -r '.core_path // empty')
+  LAYER=$(printf '%s' "$CAL" | jq -r '.layer_path // empty')
+  PROFILE="$LAYER"; [ -z "$PROFILE" ] && PROFILE=$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')
+  LOCATION=$(printf '%s' "$CAL" | jq -r .location); EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. Headless runs get a provisional profile from detected defaults.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+**Read the verify story from core calibration** via `review_code_config.py` (uses `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`). Sets `VERIFY_CMD` for the verify gate and fixer:
 
-**Read the verify story from the resolved profile** (the `## Verify` section of `$PROFILE`). This sets `VERIFY_CMD` for the orchestrator's verify gate and the fixer (see `## The verify command` below):
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+VERIFY_CMD=$(python3 "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null | jq -r '.verifyCommand // empty')
+[ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
+```
 
-- `command: <cmd>` present → `VERIFY_CMD="<cmd>"`.
-- `mode: unverified` → no verify command; the verify gate is skipped and commits proceed ungated.
-- `mode: review-only` → the project opted out of auto-fix; the default path degrades to a single review pass + the `--review-only` presentation.
+When empty after resolve: `mode: unverified` skips the gate; `mode: review-only` degrades to one pass + presentation.
 
 **PR mode:**
 

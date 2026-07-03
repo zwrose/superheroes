@@ -12,7 +12,7 @@
 
 ## Specialist Dispatch Prompt Template
 
-Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) and the resolved absolute `$PROFILE` path (subagents do not inherit shell vars).
+Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), the resolved absolute `$CORE` path (threat model + canonical patterns), and the resolved absolute `$LAYER` path (scope exclusions, focus hints, conventions). Subagents do not inherit shell vars.
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
@@ -20,22 +20,23 @@ You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
 ## Your assignment
 Review the diff at $SESSION_DIR/round-<round>/diff.txt for your dimension.
 Read the base rubric (absolute path below) for severity calibration,
-verification rules, and the findings output format. Read the project profile
-and CLAUDE.md for calibration (threat model, scope, focus hints, canonical
-patterns, conventions). Apply the diff-scope rule: only flag code in `+` or
+verification rules, and the findings output format. Read the project calibration
+and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
+conventions. Apply the diff-scope rule: only flag code in `+` or
 `-` lines.
 
 ## Context files
 - Diff: $SESSION_DIR/round-<round>/diff.txt
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
-- Project profile (threat model, scope, focus hints, canonical patterns): <PROFILE_PATH>
+- Core calibration (threat model, canonical patterns): <CORE_PATH>
+- Review-crew layer (scope exclusions, focus hints, conventions): <LAYER_PATH>
 - CLAUDE.md (project conventions): CLAUDE.md
 - <PR read-only paths only> PR branch checkout: $SESSION_DIR/repo/
 - <PR mode only> Prior comments + author justifications: $SESSION_DIR/prior-comments.json
 - <if focus notes> Focus: <focus notes>
 
 ## Calibration precedence
-Base rubric (binding) > CLAUDE.md (conventions) > profile (adder over CLAUDE.md)
+Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
 > strict fallback when a needed field is absent in all of them.
 
 ## PR branch checkout (--post / --review-only PR paths only)

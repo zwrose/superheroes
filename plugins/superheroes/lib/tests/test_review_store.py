@@ -165,39 +165,52 @@ def test_disagreement_prefers_remote(tmp_path):
     assert rs.read_pointer(root, ident["gitdir_hash"]) == "entry-REMOTE"  # re-pointed
 
 
-def test_create_global_registers_both_pointers_and_keys(tmp_path):
+def test_create_global_unified_profile_and_decisions_in_control_plane(tmp_path):
     repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
-    root = str(tmp_path / "store")
-    path = rs.create(repo, "profile", "global", root)
+    registry = str(tmp_path / "registry")
+    legacy = str(tmp_path / "review-crew-store")
+    import mode_registry as mr
+    path = rs.create(repo, "profile", "global", registry_root=registry)
+    open(path, "w").write("layer")
+    store = mr.ensure_project_store(repo, root=registry)
+    assert path == os.path.join(store, "config", "review-crew.md")
+    dpath = rs.create(repo, "decisions", "global", legacy_root=legacy, registry_root=registry)
+    assert dpath == os.path.join(store, "config", "review-decisions.json")
+
+
+def test_create_global_legacy_decisions_registers_pointers(tmp_path):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
+    legacy = str(tmp_path / "review-crew-store")
+    dpath = rs.create(repo, "decisions", "global", legacy_root=legacy)
     ident = rs.derive_identifiers(repo)
     eid = ident["gitdir_hash"]
-    assert path == os.path.join(root, "entries", eid, "review-profile.md")
-    assert rs.read_pointer(root, ident["gitdir_hash"]) == eid
-    assert rs.read_pointer(root, ident["remote_hash"]) == eid
-    keys = json.load(open(os.path.join(root, "entries", eid, "keys.json")))
+    assert dpath == os.path.join(legacy, "entries", eid, "review-decisions.json")
+    assert rs.read_pointer(legacy, ident["gitdir_hash"]) == eid
+    assert rs.read_pointer(legacy, ident["remote_hash"]) == eid
+    keys = json.load(open(os.path.join(legacy, "entries", eid, "keys.json")))
     assert keys["remote"] == "github.com/o/p"
     assert keys["gitdir_hash"] == eid
 
 
 def test_create_global_is_non_clobbering(tmp_path):
     repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
-    root = str(tmp_path / "store")
-    path = rs.create(repo, "profile", "global", root)
+    registry = str(tmp_path / "registry")
+    path = rs.create(repo, "profile", "global", registry_root=registry)
     with open(path, "w") as fh:
         fh.write("MY PROFILE")
     # second create must reuse the entry and NOT overwrite the profile
-    again = rs.create(repo, "profile", "global", root)
+    again = rs.create(repo, "profile", "global", registry_root=registry)
     assert again == path
     assert open(path).read() == "MY PROFILE"
 
 
 def test_create_in_repo_returns_dot_claude_and_mints_no_global(tmp_path):
     repo = _init_repo(tmp_path / "r")
-    root = str(tmp_path / "store")
-    path = rs.create(repo, "profile", "in-repo", root)
-    assert path == os.path.join(repo, ".claude", "review-profile.md")
-    assert not os.path.exists(os.path.join(root, "entries"))
-    assert not os.path.exists(os.path.join(root, "keys"))
+    legacy = str(tmp_path / "review-crew-store")
+    path = rs.create(repo, "profile", "in-repo", legacy_root=legacy)
+    assert path == os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    assert not os.path.exists(os.path.join(legacy, "entries"))
+    assert not os.path.exists(os.path.join(legacy, "keys"))
 
 
 CONTRACT_KEYS = {"kind", "path", "location", "exists", "healed", "entry_id"}
@@ -214,38 +227,59 @@ def test_resolve_none_when_nothing(tmp_path):
 
 def test_resolve_in_repo_wins_over_global(tmp_path):
     repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
-    root = str(tmp_path / "store")
-    # global profile exists
-    gpath = rs.create(repo, "profile", "global", root)
+    registry = str(tmp_path / "registry")
+    legacy = str(tmp_path / "review-crew-store")
+    gpath = rs.create(repo, "profile", "global", registry_root=registry)
     open(gpath, "w").write("global")
-    # in-repo profile exists too -> must win
-    ipath = rs.create(repo, "profile", "in-repo", root)
+    ipath = rs.create(repo, "profile", "in-repo", legacy_root=legacy)
     open(ipath, "w").write("inrepo")
-    r = rs.resolve(repo, "profile", root)
+    r = rs.resolve(repo, "profile", legacy_root=legacy, registry_root=registry)
     assert r["location"] == "in-repo"
-    assert r["path"] == os.path.join(repo, ".claude", "review-profile.md")
+    assert r["path"] == os.path.join(repo, ".claude", "superheroes", "review-crew.md")
     assert r["exists"] is True
 
 
 def test_resolve_global_when_only_global(tmp_path):
     repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
-    root = str(tmp_path / "store")
-    gpath = rs.create(repo, "profile", "global", root)
+    registry = str(tmp_path / "registry")
+    legacy = str(tmp_path / "review-crew-store")
+    gpath = rs.create(repo, "profile", "global", registry_root=registry)
     open(gpath, "w").write("global")
-    r = rs.resolve(repo, "profile", root)
+    r = rs.resolve(repo, "profile", legacy_root=legacy, registry_root=registry)
     assert r["location"] == "global"
     assert r["path"] == gpath
     assert r["exists"] is True
 
 
-def test_resolve_decisions_colocates_with_profile(tmp_path):
+def test_resolve_decisions_colocates_with_unified_global_profile(tmp_path):
     repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
-    root = str(tmp_path / "store")
-    gpath = rs.create(repo, "profile", "global", root)
+    registry = str(tmp_path / "registry")
+    legacy = str(tmp_path / "review-crew-store")
+    gpath = rs.create(repo, "profile", "global", registry_root=registry)
     open(gpath, "w").write("global")
-    r = rs.resolve(repo, "decisions", root)
+    r = rs.resolve(repo, "decisions", legacy_root=legacy, registry_root=registry)
     assert r["location"] == "global"
     assert r["path"] == os.path.join(os.path.dirname(gpath), "review-decisions.json")
+
+
+def test_resolve_decisions_prefers_legacy_store_when_present(tmp_path):
+    repo = _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
+    registry = str(tmp_path / "registry")
+    legacy = str(tmp_path / "review-crew-store")
+    gpath = rs.create(repo, "profile", "global", registry_root=registry)
+    open(gpath, "w").write("layer")
+    ident = rs.derive_identifiers(repo)
+    eid = ident["gitdir_hash"]
+    entry = os.path.join(legacy, "entries", eid)
+    os.makedirs(entry)
+    rs.write_keys_json(entry, ident)
+    rs.write_pointer(legacy, ident["gitdir_hash"], eid)
+    if ident["remote_hash"]:
+        rs.write_pointer(legacy, ident["remote_hash"], eid)
+    legacy_dec = os.path.join(entry, "review-decisions.json")
+    open(legacy_dec, "w").write("{}")
+    r = rs.resolve(repo, "decisions", legacy_root=legacy, registry_root=registry)
+    assert r["path"] == legacy_dec
 
 
 def test_decide_location_greenfield_delegates_to_decide_mode(tmp_path):

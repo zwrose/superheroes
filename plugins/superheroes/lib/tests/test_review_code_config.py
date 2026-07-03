@@ -38,15 +38,21 @@ def test_tiers_honor_override():
 
 
 def test_resolve_composes_verify_and_tiers(tmp_path, monkeypatch):
-    # resolve(cwd) is what reviewCodePhase calls — exercise the profile-exists wiring + overrides.
-    prof = tmp_path / "review-profile.md"
-    prof.write_text("## Verify\ncommand: pytest -q\n\n## Model tiers\nreviewer-deep: sonnet\n")
-    monkeypatch.setattr(RC.review_store, "store_root", lambda: str(tmp_path))
-    monkeypatch.setattr(RC.review_store, "resolve",
-                        lambda cwd, kind, root: {"path": str(prof), "exists": True})
-    out = RC.resolve(str(tmp_path))
+    # resolve(cwd) is what reviewCodePhase calls — exercise the layer-exists wiring + overrides.
+    import subprocess
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    repo = str(tmp_path)
+    layer = tmp_path / ".claude" / "superheroes" / "review-crew.md"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("## Model tiers\nreviewer-deep: sonnet\n")
+    core = tmp_path / ".claude" / "superheroes" / "core.md"
+    core.write_text(
+        __import__("core_md").render_core(
+            {"verifyCommand": "pytest -q", "stackTags": [], "threatModel": "x", "patterns": ""},
+            "confirmed", "2026-06-26", "2026-06-26"))
+    out = RC.resolve(repo)
     assert out["verifyCommand"] == "pytest -q"
-    assert out["tiers"]["reviewerDeep"] == "sonnet"   # profile override honored
+    assert out["tiers"]["reviewerDeep"] == "sonnet"   # layer override honored
     assert out["tiers"]["fixer"] == "sonnet"           # FR-7 code-context default
 
 

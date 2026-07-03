@@ -44,8 +44,6 @@ def resolve_tiers(overrides):
 
 def resolve(cwd, root=None):
     # core.md first (FR-2): resolve_shared also fires migrate-on-read at this hero-acting seam.
-    # `root` is optional (defaults to the real registry store) so a test can isolate core.md
-    # resolution to a tmp store.
     verify = None
     try:
         shared = core_md.resolve_shared(cwd, root=root)
@@ -53,8 +51,11 @@ def resolve(cwd, root=None):
             verify = shared["verifyCommand"]
     except Exception:
         verify = None  # fail-open: fall back to the legacy profile parse
-    res = review_store.resolve(cwd, "profile", review_store.store_root())
-    profile = res.get("path") if res.get("exists") else None
+    import calibration_resolve
+    cal = calibration_resolve.resolve(cwd, root=root)
+    profile = cal.get("layer_path") or cal.get("legacy_path")
+    if profile and not os.path.isfile(profile):
+        profile = None
     overrides = model_tier_overrides.load_overrides(profile)
     if verify is None:
         verify = resolve_verify_command(profile)

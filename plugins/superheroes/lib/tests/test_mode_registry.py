@@ -176,6 +176,31 @@ def test_evidence_in_repo_anchored_at_repo_root(tmp_path):
     assert locs["review-crew"] == mr.IN_REPO and locs["test-pilot"] == "none"
 
 
+def test_evidence_in_repo_unified_layer(tmp_path):
+    _init_repo(tmp_path)
+    layer = tmp_path / ".claude" / "superheroes" / "review-crew.md"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("<!-- review-crew: schemaVersion=2 status=confirmed created=2026-01-01 updated=2026-01-01 nudge-ack={} -->\n")
+    locs = mr.hero_evidence(str(tmp_path), hero_roots={"review-crew": str(tmp_path/"g1"),
+                                                       "test-pilot": str(tmp_path/"g2")})
+    assert locs["review-crew"] == mr.IN_REPO
+
+
+def test_evidence_global_unified_layer_in_control_plane(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    import core_md as cm
+    store = mr.ensure_project_store(str(tmp_path), root=root)
+    cfg = os.path.join(store, "config")
+    os.makedirs(cfg, exist_ok=True)
+    open(os.path.join(cfg, "review-crew.md"), "w").write(
+        cm._render_layer("## Focus hints\n- code: x\n", "review-crew", "confirmed", "2026-01-01"))
+    locs = mr.hero_evidence(str(tmp_path), root=root,
+                            hero_roots={"review-crew": str(tmp_path/"g1"),
+                                        "test-pilot": str(tmp_path/"g2")})
+    assert locs["review-crew"] == mr.GLOBAL
+
+
 def test_verdict_present_only_and_disagree_needs_two():
     assert mr.evidence_verdict({"review-crew": mr.IN_REPO, "test-pilot": "none"}) == mr.IN_REPO
     assert mr.evidence_verdict({"review-crew": "none", "test-pilot": "none"}) == "none"

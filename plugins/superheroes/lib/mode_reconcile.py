@@ -80,7 +80,7 @@ def gather_signals(cwd, root=None):
                      "identity": _sig_id("core-md-unreadable"), "detail": {}})
 
     # per-hero legacy-profile drift: ambiguous-pending (no usable core.md) or stray (core.md exists)
-    for hero in mr._HERO_INREPO:
+    for hero in mr._HERO_LEGACY_INREPO:
         try:
             legacy = core_md._legacy_path(cwd, hero) if core_p is not None else None
         except Exception:
