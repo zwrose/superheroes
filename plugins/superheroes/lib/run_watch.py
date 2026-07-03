@@ -4,6 +4,7 @@ import calendar
 import glob
 import json
 import os
+import shlex
 import sys
 import time
 
@@ -476,14 +477,23 @@ def format_journal_event(evt):
 
 def _dq(value):
     value = os.path.abspath(value)
+    if any(ch in value for ch in "$`!\\"):
+        return shlex.quote(value)
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _arg(value):
+    text = str(value)
+    if any(ch.isspace() or ch in "$`!\\\"'" for ch in text):
+        return shlex.quote(text)
+    return text
 
 
 def watch_command(lib_dir, root, work_item):
     script = os.path.join(os.path.abspath(lib_dir), "run_watch.py")
     return 'python3 %s --work-item %s --root %s --follow' % (
         _dq(script),
-        str(work_item),
+        _arg(work_item),
         _dq(root),
     )
 

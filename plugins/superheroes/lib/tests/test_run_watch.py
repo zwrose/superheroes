@@ -343,3 +343,16 @@ def test_watch_command_resolves_absolute_paths_and_quotes(tmp_path):
         f'python3 "{lib_dir / "run_watch.py"}" --work-item live-watch-152 '
         f'--root "{root}" --follow'
     )
+
+
+def test_watch_command_shell_quotes_expansion_characters(tmp_path):
+    lib_dir = tmp_path / "lib$HOME"
+    root = tmp_path / "repo$(echo bad)"
+    lib_dir.mkdir()
+    root.mkdir()
+
+    command = run_watch.watch_command(str(lib_dir), str(root), "wi $(bad)")
+
+    assert "'%s'" % (lib_dir / "run_watch.py") in command
+    assert "'%s'" % root in command
+    assert "'wi $(bad)'" in command
