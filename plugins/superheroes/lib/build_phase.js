@@ -427,12 +427,16 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       prompt:
         `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
         + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+        + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
         + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+        + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
         { label: 'implement-task', schema: { type: 'object', required: ['ok'] } }),
     })
@@ -555,10 +559,10 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: task.id, wt, branch,
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}": ${_fixFindings}`,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
-        + `"Task-Id: ${task.id}": ${_fixFindings}`,
+        + `"Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
         { label: 'fix-task', model: fixerModel }),
     })
     history.push({ round, findings: review.findings || [] })

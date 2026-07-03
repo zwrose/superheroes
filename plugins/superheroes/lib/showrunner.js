@@ -1070,6 +1070,14 @@ async function releaseLease(workItem, generation) {
   } catch (_) { /* TTL backstop */ }
 }
 
+// Park from runPhases: persist the journal (caller already did) then release the lease before
+// returning — same release-on-park path reconcile/startup use. Belt-and-braces with showrunner()'s
+// finally (a second release no-ops when the lease is already gone).
+async function parkFromPhases(workItem, generation, phase, reason) {
+  await releaseLease(workItem, generation)
+  return { outcome: 'parked', phase, reason }
+}
+
 async function showrunner({ workItem }) {
   // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
   // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
@@ -1561,9 +1569,13 @@ async function runPhases(workItem, fromStep, deps) {
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
     if (!saved.ok) {
-      return { outcome: 'parked', phase, reason: `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4` }
+      return parkFromPhases(workItem, deps.generation, phase,
+        `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4`)
     }
-    if (!proceed) return { outcome: 'parked', phase, reason: phaseResult.parkReason || decision.reason }
+    if (!proceed) {
+      return parkFromPhases(workItem, deps.generation, phase,
+        phaseResult.parkReason || decision.reason)
+    }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.

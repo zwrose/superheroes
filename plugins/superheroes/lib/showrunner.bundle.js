@@ -4431,12 +4431,16 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       prompt:
         `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
         + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+        + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
         + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+        + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
         { label: 'implement-task', schema: { type: 'object', required: ['ok'] } }),
     })
@@ -4559,10 +4563,10 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: task.id, wt, branch,
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}": ${_fixFindings}`,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
-        + `"Task-Id: ${task.id}": ${_fixFindings}`,
+        + `"Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
         { label: 'fix-task', model: fixerModel }),
     })
     history.push({ round, findings: review.findings || [] })
@@ -6167,6 +6171,14 @@ async function releaseLease(workItem, generation) {
   } catch (_) { /* TTL backstop */ }
 }
 
+// Park from runPhases: persist the journal (caller already did) then release the lease before
+// returning — same release-on-park path reconcile/startup use. Belt-and-braces with showrunner()'s
+// finally (a second release no-ops when the lease is already gone).
+async function parkFromPhases(workItem, generation, phase, reason) {
+  await releaseLease(workItem, generation)
+  return { outcome: 'parked', phase, reason }
+}
+
 async function showrunner({ workItem }) {
   // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
   // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
@@ -6658,9 +6670,13 @@ async function runPhases(workItem, fromStep, deps) {
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
     if (!saved.ok) {
-      return { outcome: 'parked', phase, reason: `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4` }
+      return parkFromPhases(workItem, deps.generation, phase,
+        `phase progress not recorded (${saved.error || 'durable write failed'}) — UFR-2/FR-4`)
     }
-    if (!proceed) return { outcome: 'parked', phase, reason: phaseResult.parkReason || decision.reason }
+    if (!proceed) {
+      return parkFromPhases(workItem, deps.generation, phase,
+        phaseResult.parkReason || decision.reason)
+    }
   }
   // Unreachable in normal operation — the 'ship' phase always returns first. Reaching here means
   // PHASES lacks 'ship' (an invariant violation), so park defensively rather than claim ready.

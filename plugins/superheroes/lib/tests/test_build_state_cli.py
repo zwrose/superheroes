@@ -123,6 +123,24 @@ def test_gather_unresolvable_base_emits_structured_stdout_error(tmp_path):
     assert "committed_task_ids" not in payload, "must not emit a usable state on an unresolvable base"
 
 
+def test_gather_maps_task_id_before_co_authored_by_trailer_block(tmp_path):
+    """Task-Id separated from Co-Authored-By by a blank line is invisible to git trailers but must map."""
+    repo = str(tmp_path)
+    _git(repo, "init", "-q")
+    _git(repo, "commit", "--allow-empty", "-m", "base", "-q")
+    _git(repo, "checkout", "-q", "-b", "superheroes/wi-abc")
+    _git(repo, "branch", "-f", "main", "HEAD")
+    msg = "feat: task 1\n\nTask-Id: 1\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+    _git(repo, "commit", "--allow-empty", "-m", msg, "-q")
+    env = dict(os.environ, WORKHORSE_STORE_ROOT=str(tmp_path / "store"))
+    out = subprocess.run([sys.executable, CLI, "gather", "--work-item", "wi",
+                          "--branch", "superheroes/wi-abc", "--valid-ids", "1,2"],
+                         cwd=repo, env=env, capture_output=True, text=True)
+    st = json.loads(out.stdout)
+    assert "1" in st["committed_task_ids"]
+    assert st["unmapped_commits"] == 0
+
+
 def test_record_reviewed_then_gather_reads_it(tmp_path):
     repo = str(tmp_path)
     _git(repo, "init", "-q")
