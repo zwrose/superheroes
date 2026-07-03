@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js
 // Guards for BUG-2 (schema lets tasks be a string) and BUG-3 (string "[]" passes .length===0 but
 // crashes .map), plus the silent-zero park guard (raw_task_heading_count > 0 but tasks:[]).

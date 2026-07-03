@@ -14,6 +14,7 @@
 // For (b): the wrapper lives in the bundle's PREAMBLE, not in showrunner.js. We evaluate the
 // bundle in a vm sandbox (as showrunner_bundle_smoke.js does) and call globalThis.agent()
 // directly to observe the model that is handed to the real underlying agent.
+require('./_smoke_checkout_root.js')
 'use strict'
 const assert = require('assert')
 const fs = require('fs')
@@ -41,7 +42,12 @@ async function partA() {
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         // reconcile: return empty snapshot -> world_derive -> proceed
-        return [{ index: 0, ok: true, stdout: '{}' }]
+        return [{ index: 0, ok: true, stdout: JSON.stringify({
+          checkpoint: null,
+          world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+          generation: 1,
+          root: globalThis.__SR_ROOT,
+        }) }]
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         // readGate for spec: 'passed'
@@ -99,7 +105,12 @@ async function partA() {
     }
     if (label === 'exec') {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: '{}' }]
+        return [{ index: 0, ok: true, stdout: JSON.stringify({
+          checkpoint: null,
+          world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+          generation: 1,
+          root: globalThis.__SR_ROOT,
+        }) }]
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]

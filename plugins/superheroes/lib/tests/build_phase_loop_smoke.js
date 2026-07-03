@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_loop_smoke.js
 // FR-4a contract: build_state gather runs ONCE at entry (not per loop iteration).
 // reconcile is the in-process twin (build_progress.js), NOT an agent.

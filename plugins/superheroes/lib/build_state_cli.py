@@ -5,7 +5,6 @@ import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_state, control_plane, ship_gate, base_ref
 import idempotent_write
-from engine_adapter import TASK_ID_TRAILER
 
 
 def _git(root, *args):
@@ -54,15 +53,19 @@ def _gather(root, work_item, valid_ids, worktree=None, base_branch=None):
     else:
         base = _base(git_root)
     mb = _git(git_root, "merge-base", "HEAD", base).stdout.strip() or base
-    log = _git(git_root, "log",
-               "--format=%H%x1f%(trailers:key=" + TASK_ID_TRAILER + ",valueonly)",
-               "%s..HEAD" % mb)
+    # Body-carrying format: Task-Id may appear anywhere in the message (not only the git trailer
+    # block). A blank line before Co-Authored-By splits the trailer block and hides Task-Id from
+    # %(trailers:...) — parse the full body instead (UFR-7).
+    log = _git(git_root, "log", "--format=%H%x1f%B%x1e", "%s..HEAD" % mb)
     rows = []
-    for line in (log.stdout or "").splitlines():
-        sha, _sep, tid = line.partition("\x1f")
-        if not sha.strip():  # spurious empty row from the trailers' trailing newline — not a commit
+    for rec in (log.stdout or "").split("\x1e"):
+        rec = rec.strip("\n")
+        if not rec.strip():
             continue
-        rows.append((sha, tid.strip()))
+        sha, _sep, body = rec.partition("\x1f")
+        if not sha.strip():
+            continue
+        rows.append((sha.strip(), body))
     committed, unmapped = build_state.parse_trailers(rows, valid_ids)
     dirty = bool(_git(git_root, "status", "--porcelain").stdout.strip())
     st = build_state.read_state(build_state.state_path(root, work_item))

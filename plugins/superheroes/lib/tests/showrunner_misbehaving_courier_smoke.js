@@ -30,6 +30,7 @@
 // WRITTEN with the correct verdict (the live failure mode was a phase that completed its
 // panel but died in persistence, leaving no terminal record).
 'use strict'
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const crypto = require('crypto')
 const fs = require('fs')
@@ -171,7 +172,7 @@ function shellResponse(cmd) {
     }
     return body
   }
-  if (cmd.includes('recover_entry.py')) return JSON.stringify({ checkpoint: null, world: {}, generation: 5 })
+  if (cmd.includes('recover_entry.py')) return JSON.stringify({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
   if (cmd.includes('front_half_usable.py')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
     usableCalls[doc] = (usableCalls[doc] || 0) + 1
