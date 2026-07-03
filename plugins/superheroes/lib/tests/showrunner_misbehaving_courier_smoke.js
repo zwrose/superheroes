@@ -9,9 +9,12 @@
 //       exist at that path."). Nothing may hash or parse that prose into a fence/decision.
 //   (2) CHATTY WRITE ACKS — write leaves answer conversational acknowledgements instead of
 //       the command's stdout. The runtime must not read anything into a write's answer.
-//   (3) CONTENT-MANGLED WRITE — one staged write leaf writes the WRONG content on its first
-//       attempt (live: the second dim's write leaf re-wrote the first dim's content). The
-//       Python-side hash verify must refuse it and the retry must recover.
+//   (3) CONTENT-MANGLED SELF-VERIFIED LEAF — the review-plan terminal-record write's compose-terminal
+//       leaf receives a MANGLED inline verdict on its first attempt (the courier content-mangle
+//       class). The Python-side --verdict-hash self-check must refuse it (verdict-corrupt) and
+//       writeTerminalRecord must retry and converge — the terminal record is composed Python-side
+//       from on-disk state now (no oversized blob staged through the courier), so the record's only
+//       courier exposure is this small, self-verifying scalar arg.
 //   (4) MANGLED HELPER ANSWER — one persist helper's stdout comes back as prose after the
 //       write applied. The retry must converge (idempotent stale-probe), not park.
 //   (5) FENCED runHelper ANSWER — a haiku courier STOCHASTICALLY wraps a runHelper answer in ```
@@ -71,6 +74,26 @@ function runHelperResponse(cmdline) {
     }
     if (args[0] === 'compose-persist') throw new Error('compose-persist rode a leaf (D3 replaced it)')
     if (args[0] === 'update-round') return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
+    if (args[0] === 'compose-terminal') {
+      // The terminal record is composed Python-side from on-disk state; only the small verdict
+      // scalars ride inline, self-verified by --verdict-hash. (3) CONTENT-MANGLE: mangle the
+      // review-plan verdict on its FIRST compose attempt — the self-check must refuse it and the
+      // caller must retry and converge (the write is never staged as an oversized courier blob).
+      const target = args[args.indexOf('--path') + 1]
+      let verdictJson = args[args.indexOf('--verdict-json') + 1]
+      const wantHash = args[args.indexOf('--verdict-hash') + 1]
+      if (target.endsWith('review-plan/terminal-record.json') && counters.sabotagedWrites === 0) {
+        counters.sabotagedWrites += 1
+        verdictJson = verdictJson + ' /*MANGLED*/'   // corrupt the inline arg -> hash mismatch
+      }
+      if (sha256(verdictJson) !== wantHash &&
+          !(verdictJson.endsWith('\n') && sha256(verdictJson.slice(0, -1)) === wantHash)) {
+        return JSON.stringify({ ok: false, reason: 'verdict-corrupt' })
+      }
+      const verdict = JSON.parse(verdictJson)
+      files[target] = JSON.stringify(Object.assign({}, verdict, { runId: 'run-x' }))
+      return JSON.stringify({ ok: true, contentHash: sha256(files[target]) })
+    }
   }
   if (script.endsWith('review_setup_gather.py')) {
     // fold 2 (#141): the ONE pre-round gather leaf (mkdir + load-summary + deferred seed + coverage).
@@ -107,20 +130,15 @@ function runHelperResponse(cmdline) {
 function shellResponse(cmd) {
   cmd = cmd.replace(/^cd '[^']*' && /, '')
   // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] opaque base64 stage-write (stdout to
-  // /dev/null) && fenced_json.py, all ONE leaf. Decode the payload into the in-memory FS (applying the
-  // SAME content-mangle sabotage on the review-plan terminal-record's first attempt), then answer the
-  // helper — so the Python-side --payload-hash refuses the sabotaged bytes and the retry recovers.
+  // /dev/null) && fenced_json.py, all ONE leaf. The terminal-record write no longer stages here — it
+  // is composed Python-side via compose-terminal, and the content-mangle regression moved to that
+  // self-verified inline path (see the compose-terminal handler in runHelperResponse). Any remaining
+  // fenced write decodes honestly, then answers the helper.
   const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
   if (cw) {
     const helper = cw[1]
     const staged = JSON.parse(cw[2])
-    const honest = Buffer.from(cw[3], 'base64').toString('utf8')
-    if (staged.endsWith('review-plan/terminal-record.json.payload') && counters.sabotagedWrites === 0) {
-      counters.sabotagedWrites += 1
-      files[staged] = '{"terminal": "halted", "note": "this is the WRONG content a mangling leaf wrote"}'
-    } else {
-      files[staged] = honest
-    }
+    files[staged] = Buffer.from(cw[3], 'base64').toString('utf8')
     const out = runHelperResponse(helper)
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
@@ -129,13 +147,7 @@ function shellResponse(cmd) {
   const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
   if (bw) {
     const target = JSON.parse(bw[1])
-    const honest = Buffer.from(bw[2], 'base64').toString('utf8')
-    if (target.endsWith('review-plan/terminal-record.json.payload') && counters.sabotagedWrites === 0) {
-      counters.sabotagedWrites += 1
-      files[target] = '{"terminal": "halted", "note": "this is the WRONG content a mangling leaf wrote"}'
-    } else {
-      files[target] = honest
-    }
+    files[target] = Buffer.from(bw[2], 'base64').toString('utf8')
     counters.chattyAcks += 1
     return CHATTY_ACK   // (2) the write's answer is conversational, never the command's stdout
   }
@@ -302,20 +314,21 @@ async function main() {
   // every misbehavior mode actually fired
   assert.ok(counters.proseReads >= 1, 'the prose-for-missing-file read mode must be exercised')
   assert.ok(counters.chattyAcks >= 1, 'the chatty-write-ack mode must be exercised')
-  assert.strictEqual(counters.sabotagedWrites, 1, 'the content-mangled write mode must fire exactly once')
+  assert.strictEqual(counters.sabotagedWrites, 1, 'the content-mangled compose-terminal verdict must fire exactly once')
   assert.ok(counters.mangledAnswers >= 2, 'the mangled persist answer must be retried (>=2 helper calls)')
   assert.ok(counters.fencedHelpers >= 1, 'the fenced-runHelper answer mode must be exercised')
   assert.ok(counters.releaseImprovised >= 1, 'the improvising release courier mode must be exercised')
 
   // the live failure mode: the phase completed its panel but no terminal record was written.
   // Both review phases must end with a WRITTEN terminal-record carrying the correct verdict —
-  // including the one whose staged payload was sabotaged on the first attempt.
+  // including review-plan, whose compose-terminal verdict was mangled on its first attempt (the
+  // --verdict-hash self-check refused it and writeTerminalRecord retried to the honest verdict).
   for (const phase of ['review-plan', 'review-tasks']) {
     const rec = files[`/tmp/showrunner-wi-mis-${phase}/terminal-record.json`]
     assert.ok(rec, `${phase} terminal-record.json must be written despite the misbehaving courier`)
     const parsed = JSON.parse(rec)
     assert.strictEqual(parsed.terminal, 'clean', `${phase} terminal record carries the real verdict`)
-    assert.ok(!rec.includes('WRONG content'), `${phase} terminal record must not contain the sabotaged write`)
+    assert.ok(!rec.includes('MANGLED'), `${phase} terminal record must not persist the mangled verdict`)
   }
 
   console.log(`ok: misbehaving-courier full run reaches ready with written terminal records ` +

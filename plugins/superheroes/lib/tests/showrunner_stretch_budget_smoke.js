@@ -94,9 +94,10 @@ const PHASE_BUDGETS = {
   // read-gate exec (1) + fold 2 (#141) pre-round SETUP GATHER (1 — the run-dir mkdir + deferred-set
   // seed + load-summary+extras + coverage load, folded Python-side by review_setup_gather.py; the
   // round-1 deferred-set tally reuses the gathered set, no extra leaf) + persist-skeleton (1) +
-  // telemetry write (1) + save round state (1) + fold 1 (#141) terminal-record fenced write as ONE
-  // stage+verify leaf (1) + save phase progress (1). Was 12 post-D3 (4 separate entry reads + a
-  // 2-leaf fenced write), 35 pre-D3, 14 pre-courier-hardening.
+  // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE
+  // leaf (1 — composed Python-side from on-disk state; the 2-leaf stage+verify fenced write was the
+  // payload-stage-failed park, run wf_94c879e0-747) + save phase progress (1). Was 12 post-D3
+  // (4 separate entry reads + a 2-leaf fenced write), 35 pre-D3, 14 pre-courier-hardening.
   'review-plan': 7,
   'review-tasks': 7,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
@@ -108,7 +109,8 @@ const PHASE_BUDGETS = {
   // (#141) pre-round SETUP GATHER (1 — run-dir mkdir + load-summary + coverage, folded Python-side;
   // the round-1 deferred tally reuses it, no extra leaf) + one panel round (run verify,
   // persist-skeleton, telemetry write = 3) + final/cwd head reads (2 exec) + stamp review coverage +
-  // save phase progress. Was 12 post-D3, 29 pre-D3.
+  // save phase progress. Was 12 post-D3, 29 pre-D3. (The clean green path parks nothing, so
+  // renderAndPostReadout's terminal-record compose-terminal write does not fire here.)
   'review-code': 9,
   // open draft PR + save phase progress
   'draft-PR': 2,
@@ -171,6 +173,21 @@ function runHelperResponse(cmdline) {
         throw new Error('update-round --updates-hash does not match --updates-json')
       }
       return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })
+    }
+    if (args[0] === 'compose-terminal') {
+      // the terminal record is composed Python-side from on-disk state in ONE leaf — the inline
+      // verdict must self-verify (verdict-hash == sha256 of verdict-json) and must never carry
+      // evidence bodies (findings ride round-records.json / round-bodies, never the courier).
+      const verdictJson = args[args.indexOf('--verdict-json') + 1]
+      if (sha256(verdictJson) !== args[args.indexOf('--verdict-hash') + 1]) {
+        throw new Error('compose-terminal --verdict-hash does not match --verdict-json')
+      }
+      if (verdictJson.includes('"evidence"') || verdictJson.includes('"findings"')) {
+        throw new Error('compose-terminal shipped an evidence-bodied verdict through the courier')
+      }
+      const p = args[args.indexOf('--path') + 1]
+      files[p] = verdictJson
+      return JSON.stringify({ ok: true, contentHash: sha256(files[p]) })
     }
   }
   if (script.endsWith('review_setup_gather.py')) {
