@@ -81,6 +81,12 @@ async function main() {
     reviewerPrompt.prompt.includes(RESOLVED_HEAD),
     `reviewer prompt names the resolved head (got: ${reviewerPrompt && reviewerPrompt.prompt.slice(0, 300)})`
   )
+  const synthesisPrompt = seenPrompts.find((p) => p.label === 'synthesis:r1')
+  assert.ok(synthesisPrompt, 'synthesis leaf was dispatched')
+  assert.ok(
+    synthesisPrompt.prompt.includes(`Absolute verification worktree: ${RESOLVED_WT}`),
+    `synthesis prompt names the absolute worktree to verify files in (got: ${synthesisPrompt && synthesisPrompt.prompt.slice(0, 500)})`
+  )
 
   // ─────────────────────────────────────────────────────────────────────────
   // (b) When resolveTarget returns null -> PARKS (changes-requested), names "could not resolve",

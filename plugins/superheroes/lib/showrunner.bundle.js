@@ -154,7 +154,11 @@ function __helperResult(s) {
   while ((m = re.exec(s)) !== null) last = m
   var status = last ? Number(last[1]) : 1
   var stdout = last ? s.slice(0, last.index) : s
+  var markerTail = last ? s.slice(last.index + last[0].length) : ''
   stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
+  if (/^\s*\x60/.test(stdout) && (/\x60\s*$/.test(stdout) || /^\s*\x60\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\s*\x60/, '').replace(/\x60\s*$/, '')
+  }
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
 globalThis.io = {
@@ -437,7 +441,8 @@ function consume(merged, leafVerdicts) {
   const survivors = []; const drops = []
   for (const f of merged) {
     const id = findingIdentity(f)
-    const v = byId[id]
+    let v = byId[id]
+    if (!v && f && typeof f.id === 'string') v = byId[f.id]
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
@@ -1290,10 +1295,19 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
 async function loadCoverageDecisions(target, ioApi) {
   const out = await ioApi.runHelper('python3', [libPath('coverage_decisions.py'), 'load',
     '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
+  const stdout = String((out && out.stdout) || '')
   try {
-    const parsed = JSON.parse((out && out.stdout) || '')
+    const parsed = JSON.parse(stdout)
     if (parsed && typeof parsed === 'object') return parsed
   } catch (_) { /* fall through to fail-closed */ }
+  const firstBrace = stdout.indexOf('{')
+  const lastBrace = stdout.lastIndexOf('}')
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      const parsed = JSON.parse(stdout.slice(firstBrace, lastBrace + 1))
+      if (parsed && typeof parsed === 'object') return parsed
+    } catch (_) { /* fall through to fail-closed */ }
+  }
   return { ok: false, state: 'unreadable', reason: 'coverage-load-helper-failed' }
 }
 
@@ -5772,11 +5786,18 @@ function reviewCodeLeaves(tiers, opts) {
   // would always parse as unreadable. reviewerAgent (review) and fixStep (fix) are the only two
   // engine-routed leaves (#38).
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
+    const contextTarget = (context && context.target && typeof context.target === 'object') ? context.target : {}
+    const verificationRoot = (context && context.synthesisVerificationRoot) || contextTarget.worktree || target.worktree || procCwd()
+    const promptContext = Object.assign({}, context || {}, { synthesisVerificationRoot: verificationRoot })
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
       `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `Absolute verification worktree: ${verificationRoot}\n` +
+      `Check finding file paths and file existence inside that worktree only; do not use the ` +
+      `showrunner/session cwd as the reality anchor.\n\n` +
+      `Prompt context: ${JSON.stringify(promptContext)}\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
       withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
     return out || null
@@ -7502,7 +7523,7 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, synthesisVerificationRoot: targetWorktree },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
     preloaded: setup || undefined,
