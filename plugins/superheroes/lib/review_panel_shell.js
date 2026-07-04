@@ -352,6 +352,44 @@ function _stripZeroUsage(out) {
   return cleaned
 }
 
+function _expectedReceiptIds(opts) {
+  opts = opts || {}
+  if (Array.isArray(opts.receiptCoverageDecisionIds)) return opts.receiptCoverageDecisionIds.filter(Boolean)
+  return (opts.coverageDecisions || []).map((d) => d && d.id).filter(Boolean)
+}
+
+function _reviewerReceiptIssue(result, opts) {
+  if (!result || result.confidence !== 'high' || result.externalReview) return null
+  const receipt = result.verificationReceipt
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return 'missing'
+  if (opts && opts.receiptArtifact && receipt.artifact !== opts.receiptArtifact) return 'stale'
+  if (!Array.isArray(receipt.coverageDecisionIds)) return 'stale'
+  const gotIds = new Set(receipt.coverageDecisionIds || [])
+  for (const id of _expectedReceiptIds(opts)) if (!gotIds.has(id)) return 'stale'
+  const neededSteps = new Set(['citation', 'reachability', 'missing-check', 'tooling'])
+  for (const step of Array.isArray(receipt.chain) ? receipt.chain : []) {
+    if (step && typeof step === 'object' && step.evidence) neededSteps.delete(step.step)
+  }
+  return neededSteps.size ? 'stale' : null
+}
+
+function _withReceiptFreshness(shaped, opts) {
+  if (!shaped || !Array.isArray(shaped.findings) || shaped.confidence !== 'high' || shaped.externalReview) return shaped
+  const issue = _reviewerReceiptIssue(shaped, opts || {})
+  if (!issue) return shaped
+  const out = Object.assign({}, shaped, { confidence: 'low' })
+  if (issue === 'missing') out.receiptMissing = true
+  else {
+    out.receiptStale = true
+    out.findings = []
+  }
+  return out
+}
+
+function _retryableReviewerIssue(out) {
+  return !_validReviewerResult(out) || !!(out && (out.receiptMissing || out.receiptStale))
+}
+
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   const leaves = (reviewerSet || []).map((name) => `${name}:r${round}`)
   if (legKind && legKind.panel) leaves.push(`synthesis:r${round}`)
@@ -658,21 +696,21 @@ function _shapeReviewerResult(out, opts) {
   }
   const shaped = _stripZeroUsage(out)
   if (!shaped || !Array.isArray(shaped.findings)) return shaped
-  return Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) })
+  return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
 }
 
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
-  if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
+  if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
     escalated = true
     const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
-    if (!_validReviewerResult(out) || out.receiptMissing) {
+    if (_retryableReviewerIssue(out)) {
       out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
     }
-  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
+  } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
   }
   if (!_validReviewerResult(out)) {

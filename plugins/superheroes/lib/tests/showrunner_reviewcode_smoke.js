@@ -7,6 +7,13 @@ const sr = require('../showrunner.js')
 
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q' } = {}) {
   let wtHeadCalls = 0
   return async (prompt, opts) => {
@@ -39,7 +46,7 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
     // reviewer-panel dimensions (architecture-reviewer:r1, code-reviewer:r1, ...): a genuinely clean
     // review needs a real verificationReceipt to avoid the receipt-fabrication fix's downgrade to low.
-    return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+    return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
   }
 }
 

@@ -1330,6 +1330,44 @@ function _stripZeroUsage(out) {
   return cleaned
 }
 
+function _expectedReceiptIds(opts) {
+  opts = opts || {}
+  if (Array.isArray(opts.receiptCoverageDecisionIds)) return opts.receiptCoverageDecisionIds.filter(Boolean)
+  return (opts.coverageDecisions || []).map((d) => d && d.id).filter(Boolean)
+}
+
+function _reviewerReceiptIssue(result, opts) {
+  if (!result || result.confidence !== 'high' || result.externalReview) return null
+  const receipt = result.verificationReceipt
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return 'missing'
+  if (opts && opts.receiptArtifact && receipt.artifact !== opts.receiptArtifact) return 'stale'
+  if (!Array.isArray(receipt.coverageDecisionIds)) return 'stale'
+  const gotIds = new Set(receipt.coverageDecisionIds || [])
+  for (const id of _expectedReceiptIds(opts)) if (!gotIds.has(id)) return 'stale'
+  const neededSteps = new Set(['citation', 'reachability', 'missing-check', 'tooling'])
+  for (const step of Array.isArray(receipt.chain) ? receipt.chain : []) {
+    if (step && typeof step === 'object' && step.evidence) neededSteps.delete(step.step)
+  }
+  return neededSteps.size ? 'stale' : null
+}
+
+function _withReceiptFreshness(shaped, opts) {
+  if (!shaped || !Array.isArray(shaped.findings) || shaped.confidence !== 'high' || shaped.externalReview) return shaped
+  const issue = _reviewerReceiptIssue(shaped, opts || {})
+  if (!issue) return shaped
+  const out = Object.assign({}, shaped, { confidence: 'low' })
+  if (issue === 'missing') out.receiptMissing = true
+  else {
+    out.receiptStale = true
+    out.findings = []
+  }
+  return out
+}
+
+function _retryableReviewerIssue(out) {
+  return !_validReviewerResult(out) || !!(out && (out.receiptMissing || out.receiptStale))
+}
+
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   const leaves = (reviewerSet || []).map((name) => `${name}:r${round}`)
   if (legKind && legKind.panel) leaves.push(`synthesis:r${round}`)
@@ -1636,21 +1674,21 @@ function _shapeReviewerResult(out, opts) {
   }
   const shaped = _stripZeroUsage(out)
   if (!shaped || !Array.isArray(shaped.findings)) return shaped
-  return Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) })
+  return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
 }
 
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
-  if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
+  if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
     escalated = true
     const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
-    if (!_validReviewerResult(out) || out.receiptMissing) {
+    if (_retryableReviewerIssue(out)) {
       out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
     }
-  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
+  } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
   }
   if (!_validReviewerResult(out)) {
@@ -5680,6 +5718,12 @@ function normalizeReviewerFindings(findings) {
   })
 }
 
+const REVIEW_CODE_DIFF_READ_INSTRUCTION =
+  'Read review diff artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
+
+const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
+  'Read definition-doc artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire artifact in one read; continue offsets until the document is covered.'
+
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
@@ -5738,7 +5782,7 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
     // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
@@ -5862,7 +5906,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
   })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
     Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null
