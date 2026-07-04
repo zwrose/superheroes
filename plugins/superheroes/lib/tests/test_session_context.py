@@ -254,6 +254,23 @@ def test_assemble_budget_truncates_and_accounts_omitted(tmp_path, monkeypatch, c
     assert len(out) <= 1000 + 250
 
 
+def test_assemble_review_discipline_survives_oversized_memory_head(tmp_path, monkeypatch):
+    # Review discipline precedes the variable-size memory head so a large head
+    # cannot silently omit the small constant-size discipline note.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    monkeypatch.setattr(sc.store_core, "run_git", lambda *a, **k: None)
+    monkeypatch.setattr(sc.store_core, "get_gitdir", lambda cwd: str(tmp_path / ".git"))
+    monkeypatch.setattr(sc, "_read_memory_head", lambda path: "M" * 20000)
+    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
+    main = str(tmp_path)
+    _mk_repo(main, claude_md="PROJECT\n")
+    out = sc.assemble(main, None, "/plug", "claude", char_budget=9000)
+    assert "### Review discipline" in out
+    assert "truncated" in out or "omitted for space" in out
+
+
 # ---------------------------------------------------------------- review discipline (#190)
 def test_review_discipline_injected_for_calibrated_project(tmp_path, monkeypatch):
     # A registry entry marks the project calibrated → the compact note is injected,
@@ -285,6 +302,21 @@ def test_review_discipline_absent_for_uncalibrated_project(tmp_path, monkeypatch
     monkeypatch.setattr(mode_registry, "hero_evidence",
                         lambda cwd, root=None, hero_roots=None: {"review-crew": "none"})
     assert sc.review_discipline(str(tmp_path), "/plug") == ""
+
+
+def test_review_discipline_probe_is_read_only(tmp_path, monkeypatch):
+    # The calibration probe must never invoke write-capable registry paths.
+    import mode_registry
+
+    def _write_tripwire(*a, **k):
+        raise AssertionError("write-capable registry path must not be called")
+
+    monkeypatch.setattr(mode_registry, "resolve", _write_tripwire)
+    monkeypatch.setattr(mode_registry, "write_registry", _write_tripwire)
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    note = sc.review_discipline(str(tmp_path), "/plug")
+    assert note
 
 
 def test_review_discipline_probe_error_skips_with_breadcrumb(tmp_path, monkeypatch, capsys):

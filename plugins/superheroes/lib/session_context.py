@@ -277,7 +277,7 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
     Priority order: resolved roots → project CLAUDE.md → env block → user
-    CLAUDE.md → MEMORY.md head → review discipline (calibrated projects only).
+    CLAUDE.md → review discipline (calibrated projects only) → MEMORY.md head.
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
@@ -301,9 +301,12 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
                  ", ".join(chain) or None),
             _Rec("Environment", env_block(cwd), None),
             _Rec("User CLAUDE.md", user_memory(), _user_claude_md_path()),
-            _Rec("Auto-memory (MEMORY.md head)", _read_memory_head(mem_path), mem_path),
+            # Precedes the variable-size memory head: this note is small and
+            # constant-size; the memory head already has truncate-with-marker
+            # handling and must absorb budget pressure, never this note.
             _Rec("Review discipline", review_discipline(cwd, plugin_root),
                  _discipline_doc(plugin_root)),
+            _Rec("Auto-memory (MEMORY.md head)", _read_memory_head(mem_path), mem_path),
         ]
     except Exception as exc:
         _breadcrumb("assemble", "source gather errored (%s)" % type(exc).__name__)
