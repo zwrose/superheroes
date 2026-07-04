@@ -212,7 +212,7 @@ Report it under "escalated" with the id and why.
 
 ## Verification Rules (for subagents)
 
-These are the base rubric's binding verification rules; they are restated in every subagent prompt and enforced again at compile time. See the base rubric's "Verification rules" and "In-pass verification & single-pass discipline" sections for the authoritative statement. Subagents that violate them produce findings that get dropped before the user ever sees them.
+These are the base rubric's binding verification rules; they are restated in every subagent prompt and enforced again at compile time. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement. Subagents that violate them produce findings that get dropped before the user ever sees them.
 
 1. **`file:line` citation required.** No citation → finding is dropped at compile time, before presentation.
 2. **Diff-scope rule.** Only `+` and `-` lines of `$SESSION_DIR/round-<N>/diff.txt` are in scope. Context lines (no prefix) and unchanged code in modified files are pre-existing — flagging them is the #1 source of false findings.
@@ -220,7 +220,7 @@ These are the base rubric's binding verification rules; they are restated in eve
 4. **Reachability check on Important findings.** Read the caller(s) of the affected symbol. If the only caller already guards the edge case, downgrade or drop.
 5. **Worktree-as-source-of-truth (PR mode).** All code verification reads go through `$SESSION_DIR/repo/`. The main working tree may be on a different branch with stale or missing code; using it for verification produces false findings against code that doesn't exist on the PR.
 6. **Trust nothing from project docs without spot-checking.** Project docs (`CLAUDE.md`, the profile, `docs/*`) can be outdated. If a finding's rationale depends on a doc claim, verify against source code or flag uncertainty.
-7. **Single-pass discipline.** Each specialist runs once per review. The orchestrator does not chain a verifier agent or re-run a specialist — published research on multi-turn agentic review shows F1 degrades and agents fabricate findings as real ones get exhausted.
+7. **Single-pass discipline.** Each specialist runs once per review and does not propose or chain a follow-up **finder** pass over its own output — a finder that has exhausted the real issues starts fabricating. This bans re-*finding*, not the orchestrator's separate keep/drop **synthesis** pass over the already-emitted findings (a verify stage that never searches for new issues).
 
 ---
 
