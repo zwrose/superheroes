@@ -649,6 +649,77 @@ def load_summary_result(path, dimensions, extras_path=None, sweep_stale=False):
     return result
 
 
+# The entry-bootstrap STUB (#193): the resume seed ships DECISIONS + the bounded minimum the loop's
+# prompts need, not record content. A summarize_record skeleton still keeps EVERY finding (blocking
+# and non-blocking, top-level AND per-dimension) — 8.8KB for two verbose rounds, over the shell's
+# receipt bound, so entry seeding paid a receipt + N chunk leaves (~34k fixed tokens apiece, #118
+# regression). The stub keeps only what the complete consumer map reads from PRIOR-run rounds:
+#   * the policy/confirmation/certification scalars (round, kind, confirmationPending,
+#     changedSubjects, per-dimension status/confidence/subjects/carriedFromRound/tier/hasFindings/
+#     blockingCount);
+#   * blocking-finding SKELETONS only (the circuit breaker, recurrence, and fix-context
+#     generalizeRequired ignore non-blocking findings entirely — _blocking() filters to
+#     {Critical, Important} and recurrent_classes() skips the rest);
+#   * the coverage-decision skeletons (id/classKey/challengedBy) the confirmation-marker check and
+#     the breaker's challenged-principle path read off the latest prior round.
+# Nothing consumes non-blocking prior-round finding bodies or titles, tokenUsage, or carriedFindings,
+# so they are dropped — a two-round bootstrap in this shape is ~1.5–3KB, ONE direct payload-tier
+# answer. summarize_record / _skeleton_finding are reused verbatim (no new finding shape), so stored
+# legacy classKeys ride through unclobbered exactly as on the durable persist side (#177).
+def _stub_dimension(dim):
+    """Per-dimension stub: _summarize_dimension with findings narrowed to blocking skeletons.
+    hasFindings is still computed from the ORIGINAL findings so the round policy's skip decision is
+    unchanged (a dimension that had only non-blocking findings still reads hasFindings=true)."""
+    if not isinstance(dim, dict):
+        return {}
+    findings = dim.get("findings") if isinstance(dim.get("findings"), list) else []
+    blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") in BLOCKING]
+    out = {k: dim[k] for k in ("dimension", "status", "confidence", "round", "subjects",
+                               "carriedFromRound", "escalated", "tier") if k in dim}
+    out["findings"] = [_skeleton_finding(f) for f in blocking]
+    out["hasFindings"] = bool(findings) or bool(dim.get("hasFindings"))
+    out["blockingCount"] = len(blocking)
+    return out
+
+
+def stub_record(record):
+    rec = record if isinstance(record, dict) else {}
+    findings = rec.get("findings") if isinstance(rec.get("findings"), list) else []
+    blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") in BLOCKING]
+    return {
+        "schemaVersion": rec.get("schemaVersion"),
+        "round": rec.get("round"),
+        "kind": rec.get("kind"),
+        "confirmationPending": bool(rec.get("confirmationPending")),
+        "changedSubjects": rec.get("changedSubjects"),
+        "coverageDecisions": _skeleton_coverage_decisions(rec.get("coverageDecisions") or []),
+        "findings": [_skeleton_finding(f) for f in blocking],
+        "dimensions": {name: _stub_dimension(d)
+                       for name, d in (rec.get("dimensions") or {}).items()},
+    }
+
+
+def entry_bootstrap(path, dimensions, extras_path=None, sweep_stale=False):
+    """Compute the resume bootstrap: the file's contentHash (the CAS token the first persist
+    expects), per-round STUBS, and the folded last-extras. The shell derives the resume round
+    itself from the stubs (they carry `round`), so no resume-round scalar rides back — one
+    computation, one source of truth. The fail-closed states of load_records_state
+    (missing/unreadable/corrupt) ride through UNCHANGED so an unverifiable seed still parks
+    round-memory-unreadable instead of a silent partial seed."""
+    if sweep_stale:
+        sweep_stale_staging(os.path.dirname(os.path.abspath(path)))
+    result = load_records_state(path, dimensions)
+    records = result.get("records") or []
+    result["records"] = [stub_record(r) for r in records]
+    if extras_path:
+        try:
+            with open(extras_path, encoding="utf-8") as fh:
+                result["extras"] = json.load(fh)
+        except (OSError, ValueError):
+            result["extras"] = None
+    return result
+
+
 def _write_text_atomic(path, text):
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
@@ -812,6 +883,19 @@ def main(argv=None):
                          help="when the summary is larger than --receipt-threshold, write it here "
                               "and answer a small receipt for verified chunk reads")
     loads_p.add_argument("--receipt-threshold", type=int, default=0)
+    boot_p = sub.add_parser("entry-bootstrap")
+    boot_p.add_argument("--path", required=True)
+    boot_p.add_argument("--dimensions", required=True)
+    boot_p.add_argument("--extras-path",
+                        help="also read this small side file (last-extras.json) and answer it as "
+                             "'extras' — folds the loop's two entry reads into one leaf")
+    boot_p.add_argument("--sweep-stale-staging", action="store_true",
+                        help="unlink a dead run's transient staging artifacts before loading")
+    boot_p.add_argument("--out-path",
+                        help="when the bootstrap is larger than --receipt-threshold, write it here "
+                             "and answer a small receipt for verified chunk reads (pathological "
+                             "histories only; the bounded stub is a direct answer)")
+    boot_p.add_argument("--receipt-threshold", type=int, default=0)
     chunk_p = sub.add_parser("read-chunk")
     chunk_p.add_argument("--path", required=True)
     chunk_p.add_argument("--index", required=True, type=int)
@@ -976,6 +1060,14 @@ def main(argv=None):
                                      extras_path=args.extras_path,
                                      sweep_stale=args.sweep_stale_staging)
         ok = _print_receipted_or_direct("load-summary", result,
+                                        out_path=args.out_path,
+                                        threshold=args.receipt_threshold)
+        return 0 if ok else 1
+    if args.cmd == "entry-bootstrap":
+        result = entry_bootstrap(args.path, dimensions,
+                                 extras_path=args.extras_path,
+                                 sweep_stale=args.sweep_stale_staging)
+        ok = _print_receipted_or_direct("entry-bootstrap", result,
                                         out_path=args.out_path,
                                         threshold=args.receipt_threshold)
         return 0 if ok else 1

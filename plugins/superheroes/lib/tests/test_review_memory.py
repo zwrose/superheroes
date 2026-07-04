@@ -697,3 +697,201 @@ def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):
         assert not (tmp_path / name).exists(), f"transient staging {name} must be swept"
     for name in durable + ["round-records.json"]:
         assert (tmp_path / name).exists(), f"durable state {name} must be preserved"
+
+
+# ---------------------------------------------------------------------------
+# entry_bootstrap (#193): resume seeding ships DECISIONS + the bounded minimum, not record
+# content. A prior-run round collapses to a STUB — the policy/confirmation/certification scalars
+# plus blocking-finding skeletons ONLY (nothing consumes non-blocking prior-round finding bodies
+# or titles). contentHash stays the file hash so the first persist CAS after a bootstrap-seeded
+# resume succeeds; the fail-closed states of load_records_state ride through unchanged.
+# ---------------------------------------------------------------------------
+def _verbose_round(rnd, blocking=1, minor=6, evidence_len=400):
+    findings = []
+    for i in range(blocking):
+        findings.append({"file": "a.py", "line": i + 1, "title": f"Blocking {i}",
+                         "severity": "Critical", "taxonomy": "bug", "dimension": "Code",
+                         "evidence": "b" * evidence_len})
+    for i in range(minor):
+        findings.append({"file": "b.py", "line": i + 1, "title": f"Nit number {i} with a chatty body",
+                         "severity": "Minor", "taxonomy": "style", "dimension": "Code",
+                         "evidence": "m" * evidence_len})
+    return {
+        "schemaVersion": 2, "round": rnd, "kind": "baseline", "confirmationPending": False,
+        "changedSubjects": ["Code"], "coverageDecisions": [], "tokenUsage": {"available": True},
+        "findings": findings, "carriedFindings": [],
+        "dimensions": {"code": {"dimension": "code", "status": "run", "confidence": "high",
+                                "round": rnd, "subjects": ["Code"], "tier": "reviewer-deep",
+                                "findings": findings, "hasFindings": True}},
+    }
+
+
+def test_entry_bootstrap_missing_file_is_empty(tmp_path):
+    rm = load_memory()
+    path = tmp_path / "round-records.json"  # never created
+    out = rm.entry_bootstrap(str(path), ["code"])
+    assert out["ok"] is True
+    assert out["state"] == "missing"
+    assert out["records"] == []
+    assert out["contentHash"] == rm.content_hash("")
+    assert out.get("extras") is None
+
+
+def test_entry_bootstrap_corrupt_fails_closed(tmp_path):
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    path.write_text("{not json", encoding="utf-8")
+    out = rm.entry_bootstrap(str(path), ["code"])
+    assert out["ok"] is False
+    assert out["state"] == "corrupt"
+    assert out["records"] == []
+
+
+def test_entry_bootstrap_unreadable_fails_closed(tmp_path):
+    rm = load_memory()
+    # a directory at the records path -> open() raises IsADirectoryError (OSError, not
+    # FileNotFound) -> 'unreadable' -> the shell parks round-memory-unreadable, never a partial seed.
+    path = tmp_path / "round-records.json"
+    path.mkdir()
+    out = rm.entry_bootstrap(str(path), ["code"])
+    assert out["ok"] is False
+    assert out["state"] == "unreadable"
+
+
+def test_entry_bootstrap_drops_nonblocking_keeps_blocking(tmp_path):
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    records = [_verbose_round(1), _verbose_round(2)]
+    text = json.dumps(records)
+    path.write_text(text, encoding="utf-8")
+
+    out = rm.entry_bootstrap(str(path), ["code"])
+    assert out["ok"] is True
+    assert out["state"] == "loaded"
+    assert len(out["records"]) == 2
+    # contentHash is the FILE hash (what persist-skeleton's CAS expects), not a hash of the stubs.
+    assert out["contentHash"] == rm.content_hash(text)
+
+    blob = json.dumps(out)
+    # the stub fits ONE direct payload-tier answer (under the shell's receipt bound)
+    assert len(blob) < 4000, f"bootstrap must stay under the receipt bound, got {len(blob)}B"
+    # no evidence bodies, and no non-blocking finding titles ride back
+    assert "b" * 400 not in blob and "m" * 400 not in blob
+    assert "Nit number" not in blob, "non-blocking finding titles must not ride the bootstrap"
+
+    for stub in out["records"]:
+        # top-level findings: blocking skeletons ONLY, no evidence
+        assert [f["severity"] for f in stub["findings"]] == ["Critical"]
+        assert "evidence" not in stub["findings"][0]
+        # the policy/confirmation scalars survive
+        assert stub["kind"] == "baseline"
+        assert stub["changedSubjects"] == ["Code"]
+        assert stub["confirmationPending"] is False
+        # per-dimension stub keeps the decision scalars + blocking-only findings + honest hasFindings
+        dim = stub["dimensions"]["code"]
+        assert dim["status"] == "run" and dim["confidence"] == "high"
+        assert dim["tier"] == "reviewer-deep" and dim["subjects"] == ["Code"]
+        assert dim["hasFindings"] is True and dim["blockingCount"] == 1
+        assert [f["severity"] for f in dim["findings"]] == ["Critical"]
+        # tokenUsage / carriedFindings are not resume-relevant and must not bloat the stub
+        assert "tokenUsage" not in stub and "carriedFindings" not in stub
+
+
+def test_entry_bootstrap_preserves_coverage_decision_identity(tmp_path):
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    rec = _verbose_round(1)
+    rec["coverageDecisions"] = [{"id": "RCD-1", "classKey": "Code::bug::blocking 0",
+                                 "challengedBy": "code", "text": "z" * 900}]
+    path.write_text(json.dumps([rec]), encoding="utf-8")
+    out = rm.entry_bootstrap(str(path), ["code"])
+    cov = out["records"][0]["coverageDecisions"]
+    # id/classKey/challengedBy survive for the confirmation-marker check + breaker challenged path;
+    # unbounded text is bounded (never rides unbounded).
+    assert cov[0]["id"] == "RCD-1"
+    assert cov[0]["classKey"] == "Code::bug::blocking 0"
+    assert cov[0]["challengedBy"] == "code"
+    assert len(cov[0]["text"]) <= 500
+
+
+def test_entry_bootstrap_keeps_matching_legacy_coverage_decisions(tmp_path):
+    """A legacy classKey (computed from the UNCLAMPED title) must ride the stub verbatim so
+    recurrence stays suppressed on resume — same guarantee as summarize_record (#177)."""
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    title = ("Finding title word " * 20).strip()
+    legacy_key = "Code::coverage::" + " ".join(title.lower().split())
+    finding = {"file": "a.py", "title": title, "severity": "Important",
+               "dimension": "Code", "taxonomy": "coverage", "classKey": legacy_key}
+    records = [{"schemaVersion": 2, "round": rnd, "kind": "baseline", "confirmationPending": False,
+                "changedSubjects": ["Code"], "coverageDecisions": [], "tokenUsage": {},
+                "findings": [dict(finding)], "carriedFindings": [], "dimensions": {}}
+               for rnd in (1, 2)]
+    path.write_text(json.dumps(records), encoding="utf-8")
+    out = rm.entry_bootstrap(str(path), ["code"])
+    stubs = out["records"]
+    assert stubs[0]["findings"][0]["classKey"] == legacy_key, "stored legacy classKey rides verbatim"
+    decisions = [{"id": "cd-1", "classKey": legacy_key}]
+    assert rm.recurrent_classes(stubs, decisions) == [], "legacy coverage still suppresses on the stub"
+
+
+def test_entry_bootstrap_cli_direct_under_bound(tmp_path):
+    path = tmp_path / "round-records.json"
+    path.write_text(json.dumps([_verbose_round(1), _verbose_round(2)]), encoding="utf-8")
+    out_path = tmp_path / "round-summary.json"
+    r = _cli("entry-bootstrap", "--path", str(path), "--dimensions", '["code"]',
+             "--out-path", str(out_path), "--receipt-threshold", "4000")
+    parsed = json.loads(r.stdout)
+    assert parsed["ok"] is True
+    assert "receipt" not in parsed, "a bounded bootstrap answers DIRECT (no receipt, no chunk reads)"
+    assert len(parsed["records"]) == 2
+    assert [f["severity"] for f in parsed["records"][0]["findings"]] == ["Critical"]
+
+
+def test_entry_bootstrap_receipt_round_trips_by_verified_chunks(tmp_path):
+    """A pathological history still rides the #191 verified chunk transport: force the receipt
+    path with a tiny threshold, then reassemble the staged file via read-chunk and confirm it is
+    the stub-shaped bootstrap (blocking-only records, the same contentHash the receipt
+    advertised) — never an oversized inline answer."""
+    rm = load_memory()
+    path = tmp_path / "round-records.json"
+    path.write_text(json.dumps([_verbose_round(1), _verbose_round(2)]), encoding="utf-8")
+    out_path = tmp_path / "bootstrap-receipt.json"
+    r = _cli("entry-bootstrap", "--path", str(path), "--dimensions", '["code"]',
+             "--out-path", str(out_path), "--receipt-threshold", "1")
+    receipt = json.loads(r.stdout)
+    assert receipt["ok"] is True and receipt["receipt"] == "entry-bootstrap"
+    assert "records" not in receipt, "receipt mode must not echo the bootstrap blob"
+    assert out_path.exists()
+    chunks = []
+    index = 0
+    while True:
+        cr = _cli("read-chunk", "--path", str(out_path), "--index", str(index), "--chunk-size", "300")
+        chunk = json.loads(cr.stdout)
+        assert chunk["ok"] is True
+        assert chunk["chunkHash"] == rm.content_hash(chunk["rb64"])
+        assert chunk["contentHash"] == receipt["contentHash"]
+        assert "b64" not in chunk  # #191 de-bait: only the reversed payload ships
+        chunks.append(base64.b64decode(chunk["rb64"][::-1]).decode("utf-8"))
+        if chunk["eof"]:
+            break
+        index += 1
+    text = "".join(chunks)
+    assert rm.content_hash(text) == receipt["contentHash"]
+    loaded = json.loads(text)
+    assert loaded["ok"] is True and len(loaded["records"]) == 2
+    # the reassembled records are the stub shape: blocking-only skeletons, no evidence bodies
+    for stub in loaded["records"]:
+        assert [f["severity"] for f in stub["findings"]] == ["Critical"]
+    assert "evidence" not in text and "Nit number" not in text
+
+
+def test_entry_bootstrap_cli_extras_folds(tmp_path):
+    path = tmp_path / "round-records.json"
+    path.write_text(json.dumps([_verbose_round(1)]), encoding="utf-8")
+    extras = tmp_path / "last-extras.json"
+    extras.write_text(json.dumps({"changedSubjects": ["Code"]}), encoding="utf-8")
+    r = _cli("entry-bootstrap", "--path", str(path), "--dimensions", '["code"]',
+             "--extras-path", str(extras))
+    parsed = json.loads(r.stdout)
+    assert parsed["extras"] == {"changedSubjects": ["Code"]}

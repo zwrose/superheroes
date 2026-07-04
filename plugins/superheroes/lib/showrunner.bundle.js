@@ -1475,12 +1475,16 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
-// load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
-// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never full findings bodies. Small summaries
-// still return directly. Once the summary is big enough to be courier-fragile, the helper writes it
+// entry-bootstrap (#193) is the read seam for a resume: it ships DECISIONS + the bounded minimum,
+// not record content. Each prior-run round comes back as a STUB — the policy/confirmation/
+// certification scalars plus BLOCKING-finding skeletons only (the breaker, recurrence, round policy,
+// and fix-context generalizeRequired never read non-blocking prior-round findings), so a two-round
+// resume is one direct payload-tier answer instead of a receipt + N ~34k-token chunk leaves (the
+// #118 courier-collapse bar). In-memory `records` are therefore a documented HYBRID: prior-run rounds
+// are stubs, this-run rounds stay full (mergeRoundRecords keeps the richer live record). Once the
+// bootstrap is big enough to be courier-fragile (pathological history), the helper writes it
 // Python-side and returns only a receipt; the shell reads base64 chunks and verifies each chunk plus
-// the reconstructed content hash before parsing.
+// the reconstructed content hash before parsing (the #191 fallback transport).
 const _SUMMARY_RECEIPT_BOUND = 4000
 const _READ_CHUNK_CHARS = 4000
 
@@ -1569,10 +1573,10 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
 }
 
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
   let parsed = _jsonFromStdout(out)
-  if (parsed && parsed.receipt === 'load-summary') {
-    const read = await _readReceiptText(ioApi, parsed, 'load-summary', 'round-memory-helper-failed')
+  if (parsed && parsed.receipt === 'entry-bootstrap') {
+    const read = await _readReceiptText(ioApi, parsed, 'entry-bootstrap', 'round-memory-helper-failed')
     if (!read.ok) return read
     try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
   }
@@ -1607,8 +1611,9 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
   }
 }
 
-// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — exactly
-// what load-summary seeds a resume with), persisted in ONE verified CAS leaf for the typical
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — a superset of
+// the entry-bootstrap stub that seeds a resume: the durable form keeps non-blocking findings, the
+// resume seed drops them), persisted in ONE verified CAS leaf for the typical
 // round: the skeleton rides the courier args inline, self-verified by --record-hash =
 // sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
 // corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
@@ -1868,7 +1873,7 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 }
 
 // gatherReviewSetup: fold 2 (#141) — run the review loop's decision-free entry stretch (run-dir
-// mkdir + deferred-set seed read + load-summary + coverage load) as ONE review_setup_gather.py leaf,
+// mkdir + deferred-set seed read + entry-bootstrap + coverage load) as ONE review_setup_gather.py leaf,
 // all Python-side. Returns the combined blob { ok, memory, deferredSet, coverage } for the caller to
 // hand reviewPanel as `preloaded` (and, on the doc leg, to seed runtimeDeferred). Returns null on a
 // gather transport failure — the caller then falls back to a plain mkdir + reviewPanel's own reads
@@ -1909,7 +1914,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   const lease = legKind && legKind.lease
   const ioApi = io()
   // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
-  // load-summary (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
+  // entry-bootstrap (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
   // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
   // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
   // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).
