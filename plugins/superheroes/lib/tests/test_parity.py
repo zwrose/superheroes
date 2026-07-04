@@ -90,6 +90,9 @@ BUNDLED_NON_TWINS = {
     "engine_dispatch.js",
     # #170: a JS-only compose-path helper (reads globalThis.__SR_LIB); no Python counterpart.
     "lib_root.js",
+    # #130: a JS-only in-memory cost accumulator (globalThis.__SR_COST); the durable Python side is
+    # the journal/cost_report/token_trend projection, not a line-by-line twin of this module.
+    "cost_meter.js",
 }
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ const LIB = __dirname
 // build_phase.js/showrunner.js, which require them in-process).
 // #170: lib_root.js first — it has no deps and is required by the compose modules (showrunner /
 // build_phase / engine_dispatch / review_panel_shell / fenced_json) to resolve __SR_LIB at call time.
-const MODULES = ['lib_root.js',
+const MODULES = ['lib_root.js', 'cost_meter.js',
                  'circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
                  'review_round_policy.js',
                  'ci_status.js', 'verify_gate.js',
@@ -105,10 +105,18 @@ globalThis.agent = function (prompt, opts) {
   if (!o.model) o.model = __safeSmartDefault()
   if (!o.phase && globalThis.__SR_PHASE) o.phase = globalThis.__SR_PHASE
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
+  // #130 token telemetry: count this dispatch under the current phase, keyed by the resolved model
+  // (the proxy backbone). This is the single dispatch choke-point. Best-effort — never break a
+  // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
+  // resets the phase before that leaf dispatches), not by any flag.
+  try { __require('cost_meter').record(o.model) } catch (_) {}
   return __realAgent(prompt, o)
 }
 globalThis.parallel = parallel
 globalThis.log = (typeof log === 'function') ? log : (() => {})
+// #130: expose the Workflow budget to the spine (runPhases reads budget.spent() at phase boundaries
+// via cost_meter). Absent outside the Workflow runtime -> null -> tokens stay unmeasured (proxy only).
+globalThis.__SR_BUDGET = (typeof budget !== 'undefined') ? budget : null
 // Leaf-bash io: every filesystem touch runs in a command-runner leaf, so the script body needs no fs.
 // __sh dispatches through globalThis.agent (the wrapper) so io leaves also get the model/phase enrichment.
 function __q(s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'" }

@@ -208,6 +208,7 @@ run for you; pick manual and the existing hand-off is unchanged.
 | --- | --- |
 | `/superheroes:showrunner` | Run an approved work-item end-to-end to a ready-for-review PR (pre-flight → bundle → ship). |
 | `python3 plugins/superheroes/lib/run_watch.py --work-item <work-item> --root "$(git rev-parse --show-toplevel)" --follow` | Watch a showrunner run from on-disk state without spending model tokens. |
+| `python3 plugins/superheroes/lib/token_trend.py --root "$(git rev-parse --show-toplevel)"` | See the token/dispatch cost trend across this checkout's runs — tokens-per-completed-work-item and tokens-per-park. |
 
 Once a spec is approved (the-architect offers this automatically):
 

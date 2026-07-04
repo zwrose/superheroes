@@ -19,6 +19,8 @@ const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const reviewMemory = require('./review_memory.js')
 const circuitBreaker = require('./circuit_breaker.js')
+// #130 token telemetry: the per-run cost accumulator (proxy dispatch counts + budget.spent() deltas).
+const costMeter = require('./cost_meter.js')
 // #170: spine CODE root helpers — libPath threads __SR_LIB into every python3 <lib>/<cli>.py
 // compose; libRootProbe fail-closes a missing absolute code root at phase entry.
 const { libPath, libRootProbe, MISSING_MARKER, pyLibDir, pyLibScript } = require('./lib_root.js')
@@ -1292,9 +1294,18 @@ async function persistPhase(workItem, opts) {
   const side = journalOnly ? null : (opts.sideEffect || null)
   const sideArg = side ? ` --json ${shq(JSON.stringify(side))}` : ''
   const joArg = journalOnly ? ' --journal-only' : ''
+  // #130: fold this phase's cost telemetry into the SAME durable write (no new leaf — #118). The
+  // phase_cost event is written best-effort inside phase_progress_entry.py, only when the phase
+  // record is freshly applied (so a resume never double-counts). Absent when there's nothing to
+  // record (no dispatches, unmeasured) or when the caller did not opt in (recordCost).
+  const costBody = opts.recordCost ? phaseCostPayload(phase) : null
+  const costArg = costBody ? ` --cost-payload ${shq(JSON.stringify(costBody))}` : ''
+  // #130: on a park (journalOnly), fold a `parked` terminal marker into this same save so the run is
+  // classifiable as parked (parkFromPhases journals nothing) — carrying its already-folded cost.
+  const parkArg = (journalOnly && opts.parkReason) ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
   // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
   // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
@@ -1323,6 +1334,17 @@ async function persistPhase(workItem, opts) {
   } catch (_e) {
     return { ok: false, error: 'phase progress read-back mismatch' }
   }
+}
+
+// #130: the phase_cost payload for a completed phase — the proxy dispatch counts (× resolved model)
+// + the budget-derived output-token delta. Folded into the phase's ONE durable write (the save leaf
+// for a normal phase, the readout_post hand-back for ship) so it rides no new courier leaf (#118).
+// Returns null when there is nothing worth recording (no dispatches, unmeasured).
+function phaseCostPayload(phase) {
+  try {
+    const body = costMeter.take(phase)
+    return costMeter.isEmpty(body) ? null : body
+  } catch (_e) { return null }
 }
 
 function inWorktree(cmd, worktree) {
@@ -1890,6 +1912,9 @@ async function runPhases(workItem, fromStep, deps) {
     // Progress-group every leaf dispatched during this phase under the phase name (read by the
     // bundle's agent wrapper). Purely cosmetic — no control-flow effect.
     if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = phase
+    // #130: baseline the output-token cursor at the phase boundary; the phase's cost payload
+    // (folded into its persist / hand-back write) diffs the budget delta against this mark.
+    costMeter.mark(phase)
     // FR-7: the native front-half ends at its boundary — park before entering the back-half
     // (the 'workhorse' build phase, renamed from 'build' in #107), on a FRESH run AND on a RESUME
     // (a resume re-enters at the build cursor, so the boundary must be checked at that phase, not
@@ -1898,6 +1923,8 @@ async function runPhases(workItem, fromStep, deps) {
       return deps.frontHalfBoundary(workItem)
     }
     if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
+      // #130: ship's cost + terminal marker fold into its hand-back readout_post leaf (park() /
+      // shipHandback take('ship') and pass --cost-payload + --terminal), so ship rides no new leaf.
       return (deps.ship || shipPhase)(workItem, await loadPr(workItem), deps.generation)
     }
     let phaseResult, gate, sideEffect = null, persist = null
@@ -1933,6 +1960,10 @@ async function runPhases(workItem, fromStep, deps) {
         { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
       step: i, phase, sideEffect,
       journalOnly: !proceed,
+      recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf
+      // #130: on a park, fold a `parked` terminal marker into the same save so token_trend/run_watch
+      // can classify the run (parkFromPhases journals nothing of its own).
+      parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
     })
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
@@ -2338,9 +2369,14 @@ async function pushCiFixRecheck(workItem, worktree) {
 
 async function postReadout(workItem, pr, args) {
   const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
+  // #130: the ship hand-back is the run's terminal leaf. Fold the terminal marker (completed vs
+  // parked — the durable signal token_trend.py buckets on) and ship's cost telemetry into it, so
+  // ship rides no new courier leaf (#118). Both are best-effort inside readout_post.py.
+  const termArg = args.terminal ? ` --terminal ${shq(args.terminal)}` : ''
+  const costArg = args.costBody ? ` --cost-payload ${shq(JSON.stringify(args.costBody))}` : ''
   const cmd = args.ctx
-    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(args.ctx))}`
-    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}`
+    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}`
   try {
     return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
   } catch (_e) {
@@ -2465,7 +2501,8 @@ async function shipPhase(workItem, pr, generation) {
 }
 
 async function park(workItem, pr, reason, mergeReady) {
-  const rPost = await postReadout(workItem, pr, { reason })
+  const rPost = await postReadout(workItem, pr,
+    { reason, terminal: mergeReady ? 'completed' : 'parked', costBody: phaseCostPayload('ship') })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered
     ? reason
@@ -2486,7 +2523,8 @@ async function shipHandback(workItem, pr, info) {
   if (info.integrated) {
     ctx.integration_note = 'the final commit carries base integration done after the code review (the merged-in base was check-vetted, not re-reviewed)'
   }
-  const rPost = await postReadout(workItem, pr, { ctx })
+  const rPost = await postReadout(workItem, pr,
+    { ctx, terminal: info.ready ? 'completed' : 'parked', costBody: phaseCostPayload('ship') })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered ? info.reason
     : `${info.reason} [warning: hand-back could not be delivered (${(rPost && rPost.error) || 'unknown'})]`
@@ -2509,6 +2547,7 @@ module.exports.runPhases = runPhases
 module.exports.PHASES = PHASES
 module.exports.exec = exec
 module.exports.persistPhase = persistPhase
+module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel

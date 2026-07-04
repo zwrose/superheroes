@@ -29,6 +29,46 @@ def _atomic_write(path, text):
         return {"ok": False, "reason": "write-failed", "detail": str(exc)}
 
 
+_BLOCKING = {"Critical", "Important"}
+
+
+def _finding_key(finding, dimension):
+    return finding.get("classKey") or "%s::%s::%s" % (
+        dimension, finding.get("taxonomy") or "",
+        str(finding.get("title") or finding.get("summary") or "").strip().lower())
+
+
+def finding_outcomes(rounds):
+    """#130 spike scope-add: per-reviewer (dimension) finding-outcome counts from the durable round
+    records — {raised, blocking, carried}. `raised` dedupes a finding across rounds by its class key
+    (a carried finding is the SAME finding, counted once); `blocking` is Critical/Important; `carried`
+    marks a finding that persisted across ≥1 round. Combined with per-leaf token usage this makes
+    tokens-per-finding per reviewer computable — the number panel-sizing (#174/#34/#33) is judged
+    against. Fixed-vs-deferred attribution stays with the loop's own readout; not fabricated here."""
+    seen = {}
+    for rec in rounds or []:
+        for name, dim in (rec.get("dimensions") or {}).items():
+            if not isinstance(dim, dict):
+                continue
+            for finding in (dim.get("findings") or []):
+                if not isinstance(finding, dict):
+                    continue
+                dimension = finding.get("dimension") or name
+                sk = (dimension, _finding_key(finding, dimension))
+                entry = seen.setdefault(sk, {"blocking": False, "carried": False})
+                if finding.get("severity") in _BLOCKING:
+                    entry["blocking"] = True
+                if finding.get("carried"):
+                    entry["carried"] = True
+    out = {}
+    for (dimension, _key), entry in seen.items():
+        row = out.setdefault(dimension, {"raised": 0, "blocking": 0, "carried": 0})
+        row["raised"] += 1
+        row["blocking"] += 1 if entry["blocking"] else 0
+        row["carried"] += 1 if entry["carried"] else 0
+    return out
+
+
 def build_record(rounds, expected_leaves, usage, benchmark=False, terminal=None):
     expected = list(expected_leaves or [])
     usage = usage or {}
@@ -66,6 +106,7 @@ def build_record(rounds, expected_leaves, usage, benchmark=False, terminal=None)
             "total": total,
         },
         "dimensionCounts": dimension_counts,
+        "findingOutcomes": finding_outcomes(rounds),
         "benchmarkValid": bool(complete or not benchmark),
     }
 

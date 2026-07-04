@@ -26,3 +26,29 @@ def test_run_outcome_is_the_machine_readable_projection():
     out = run_readout.run_outcome(STATE)
     assert out["status"] == "ready" and out["prUrl"].endswith("/pull/9")
     assert out["checks"] == "none" and out["phasesTraversed"] == STATE["phases"]
+
+
+def _seed_cost(tmp_path):
+    import journal
+    e = str(tmp_path / "events.jsonl")
+    journal.append(e, "phase_cost", payload={"phase": "workhorse",
+        "dispatches": {"total": 9, "byModel": {"claude-opus-4-8": 9}},
+        "tokens": {"output": 500, "measured": True, "source": "budget"}}, root=str(tmp_path))
+    return e
+
+
+def test_assemble_computes_cost_from_events_path(tmp_path):
+    # #130: the run readout surfaces a cost line derived from the run's own events.jsonl.
+    ctx = run_readout.assemble({**STATE, "events_path": _seed_cost(tmp_path)})
+    assert ctx["cost"]["totalDispatches"] == 9
+
+
+def test_readout_text_includes_cost_block_when_present(tmp_path):
+    import readout
+    text = readout.build_readout(run_readout.assemble({**STATE, "events_path": _seed_cost(tmp_path)}))
+    assert "Run cost" in text and "9 dispatches" in text
+
+
+def test_readout_omits_cost_block_when_absent():
+    import readout
+    assert "Run cost" not in readout.build_readout(run_readout.assemble(STATE))

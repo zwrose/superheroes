@@ -66,8 +66,11 @@ state is; a never-started showrunner pick simply re-enters here.
    python3 - "$ROOT" <<'PY'
    import sys
    sys.path.insert(0, sys.argv[1] + "/plugins/superheroes/lib")
-   import run_readout, readout
+   import run_readout, readout, control_plane
    # <state> is the run-end dict the Workflow run returned (PR record, CI decision, acceptance, etc.)
+   # #130: set events_path to the work-item's events.jsonl so the readout's run-cost line
+   # (dispatches + output tokens + the most expensive phases) renders from the run's own journal.
+   state.setdefault("events_path", control_plane.paths(sys.argv[1], "<work-item>")["events"])
    print(readout.build_readout(run_readout.assemble(state)))
    PY
    ```
@@ -75,6 +78,13 @@ state is; a never-started showrunner pick simply re-enters here.
    If pre-flight stopped the run or the pipeline parked, surface that reason instead of a readout
    (the blocking check's remediation, or the park reason) and stop. **Never instruct merging** —
    the final PR is yours to merge.
+
+   For the cross-run efficiency trend (tokens-per-completed-work-item and tokens-per-park across
+   this checkout's recorded runs), point the owner at:
+
+   ```bash
+   python3 "$LIB/token_trend.py" --root "$ROOT"
+   ```
 
 ## Resume / relaunch
 
