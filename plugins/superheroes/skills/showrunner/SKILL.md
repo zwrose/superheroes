@@ -34,7 +34,11 @@ state is; a never-started showrunner pick simply re-enters here.
    Parse the verdict JSON. On `ok: false`, print each `blocking` check's `cause` + `remediation`
    and **STOP** — do not launch. On `ok: true`, print the launch confirmation; when an
    `advisory` entry with `check: ci-visibility` is present, surface its `note` too (the run will
-   produce a PR but hand it back for you to confirm checks before merging).
+   produce a PR but hand it back for you to confirm checks before merging). The pre-flight is
+   **route-aware** (#25): it gates on the **spec** on the full route and on the **tasks** doc on
+   the quick route, and the verdict echoes the resolved `route` (`full` | `quick`) — a validated
+   literal the launch step (2) declares to the spine. Read `route` from the verdict; do not
+   free-type it.
 
 2. **Launch the bundle on the Workflow tool.** Read the committed, self-contained bundle and
    invoke the **Workflow tool** with that script and the work-item argument — never re-bundle or
@@ -47,9 +51,14 @@ state is; a never-started showrunner pick simply re-enters here.
    Invoke the Workflow tool with that script text and
    `args: {workItem: <work-item>, root: <ROOT>, libRoot: <LIB>}` — pass the resolved `$ROOT`
    (target repo) and `$LIB` (the versioned plugin-cache lib dir) so the run operates on this repo
-   while executing the spine from immutable cache code, portable to any project. The bundle
-   runs the native front-half → build → review → ship pipeline; it parks (never merges) on a red
-   gate and hands back a ready-for-review PR when the branch is base-current and CI is green.
+   while executing the spine from immutable cache code, portable to any project. **On the quick
+   route** (the pre-flight verdict's `route` is `quick`), also pass `route: "quick"` in that args
+   object so the spine's intake **declares** the route explicitly — it is validated by
+   construction (the verdict only ever emits `full`/`quick`, never a typo), and the spine refuses
+   fail-closed if a declared route ever conflicts with the on-disk artifact. A `full` verdict
+   launches with the args unchanged (no `route` key — the spine derives `full` from the spec). The
+   bundle runs the native front-half → build → review → ship pipeline; it parks (never merges) on
+   a red gate and hands back a ready-for-review PR when the branch is base-current and CI is green.
    Then print the zero-token watcher command for a second terminal:
 
    ```bash

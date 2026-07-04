@@ -215,7 +215,7 @@ schemaVersion: 1
 docType: spec | plan | tasks
 workItem: <work-item>                 # the frozen identity from §6.1
 issue: <github-issue-number | null>   # linked once an issue exists; NOT the path segment
-parent: { workItem: <id>, docType: spec | plan }   # plan→spec, tasks→plan; null for spec
+parent: { workItem: <id>, docType: spec | plan }   # plan→spec, tasks→plan; null for spec (and for a quick-discovery tasks doc)
 size: small | medium | large          # work-item sizing (see §6.4); "tier" is reserved for state substrates
 status: draft | in-review | approved  # DERIVED, human-facing: approved iff gates.review == passed
 gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review state for THIS doc
@@ -230,7 +230,9 @@ updated: <date>
   humans. Code reads `gates.review`.
 - **`parent`** is a resolver-relative reference (`{workItem, docType}`), **not** a file
   path — paths differ between storage modes (§2.3), so a path-based link would break on
-  a mode switch. The referent is fixed: `plan`→`spec`, `tasks`→`plan`, `null` for `spec`.
+  a mode switch. The referent is fixed: `plan`→`spec`, `tasks`→`plan`, `null` for `spec` —
+  **and `null` for a `tasks` doc authored directly by quick discovery** (§3.4), which has no
+  plan (or spec) ancestor: it is itself the showrunner's root input artifact.
 - The per-doc `gates.review` here is **aggregated** by `checkpoint.json` into a
   doc-type-keyed roll-up (§4.3); the frontmatter is the source of truth, the checkpoint
   is the projection.
@@ -290,6 +292,24 @@ updated: <date>
 - **Convertibility** to Spec-Kit is a documented field-mapping (`spec↔spec.md`,
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
   needs it.
+
+### 3.4 Discovery routes: full and quick
+
+Discovery (the-architect session) is the single front door for all work, and it always
+produces **the showrunner's input artifact**; the **route** decides which one:
+
+- **full** (default) — the-architect writes the **`spec`**, and the showrunner runs the
+  whole front half (plan → review-plan → tasks → review-tasks) before build.
+- **quick** — the-architect writes the **`tasks`** doc directly (a spec-less chore path), and
+  the showrunner starts at build, skipping the front half.
+
+The invariant: **spec present ⇒ full; else tasks present ⇒ quick** — the route is derivable
+from the on-disk input artifact (the showrunner's `resolveIntake` and the pre-flight both
+derive it this way), and a launch that *declares* a route must **agree** with that artifact or
+it is refused (fail-closed intake). Quick is **spec-less but never review-less**: the
+review-code panel, the verify gate, and the back-half are never skipped. A quick `tasks` doc
+has a **`null` parent** (§3.1) — it is the root input artifact, with no plan or spec ancestor —
+and its review gate is the owner's plain-language **direction** sign-off recorded at intake.
 
 ---
 
