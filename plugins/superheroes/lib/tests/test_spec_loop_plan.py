@@ -374,6 +374,51 @@ def test_confirmation_round_clean_exits(tmp_path, capsys):
     assert out["action"] == "exit_clean"
 
 
+def _finding(dim_label, severity):
+    return {"id": "y-002", "severity": severity, "dimension": dim_label,
+            "title": "new confirmation finding", "file": "spec.md", "line": 7,
+            "body": "b", "confidence": "High"}
+
+
+def _confirmation_round3_surfacing(tmp_path, capsys, severity):
+    """Drive to a full-deep confirmation round (3) that surfaces one new blocking finding of the
+    given severity, then a clean scoped round (4). Returns session_dir positioned to decide(4)."""
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)  # schedules the full-deep confirmation round 3
+    for dim in DIMS:
+        _write_findings(session_dir, dim,
+                        [_finding("Architecture", severity)] if dim == "architecture-reviewer" else [])
+    _record(capsys, session_dir, 3)
+    _write_compiled(session_dir, [_finding("Architecture", severity)])
+    _decide(capsys, session_dir, 3)  # blocking present → schedules scoped round 4
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 4)
+    _write_compiled(session_dir, [])
+    return session_dir
+
+
+def test_confirmation_surfacing_important_certifies_after_scoped_verify(tmp_path, capsys):
+    # #174 req 1/2: a confirmation that surfaces a new Important does NOT forfeit certification —
+    # the Important is fixed + scope-verified and the loop certifies without a second full panel.
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "exit_clean", out
+    assert out["nextRound"] is None
+
+
+def test_confirmation_surfacing_critical_rearms_one_more_confirmation(tmp_path, capsys):
+    # #174 req 2: a Critical surfaced by a confirmation triggers exactly one more full confirmation.
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Critical")
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+    assert out["nextRound"] == 5
+
+
 def test_cap_before_confirmation_halts(tmp_path, capsys):
     session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
     _write_findings(session_dir, "architecture-reviewer", [])

@@ -7,6 +7,11 @@ round kind, reviewer run/skip choices, tiers, and cheap-result escalation policy
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
+# #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
+# rework-breadth (distinct policy subjects the fix touched) at or above which a confirmation's
+# rework counts as "cross-cutting" and re-arms one more full confirmation.
+MAX_CONFIRMATIONS = 2
+CROSS_CUTTING_SUBJECTS = 3
 SUBJECT_FALLBACK = {
     "test": "Test",
     "security": "Security",
@@ -152,3 +157,49 @@ def plan_round(state):
         else:
             out[name] = {"action": "run", "tier": DEEP, "reason": "not skip eligible"}
     return {"roundKind": "intermediate", "dimensions": out, "escalationPolicy": "cheap-first"}
+
+
+def is_cross_cutting(changed_subjects, threshold=CROSS_CUTTING_SUBJECTS):
+    """#174: the rework of a confirmation's fix is 'cross-cutting' when it touched at least
+    `threshold` distinct policy subjects (default ≥3 of the 5). Reuses the shared changed-subjects
+    normalizer, so a malformed / unknown surface returns None → treated as cross-cutting (fail
+    toward one more confirmation, never toward a premature certify)."""
+    subjects = _changed_subjects(changed_subjects)
+    if subjects is None:
+        return True
+    return len(set(subjects)) >= threshold
+
+
+def confirmation_followup(surfaced_severities, confirmations_run, cross_cutting,
+                          max_confirmations=MAX_CONFIRMATIONS):
+    """#174 confirmation-bar economics — the follow-up decision after a FULL confirmation panel
+    surfaced blocking findings (which the fix loop still resolves + verifies, requirement 1).
+
+    Requirements 2 & 3:
+      - Only a Critical surfaced by the confirmation, OR cross-cutting rework, triggers one more
+        full confirmation panel.
+      - Hard cap: at most `max_confirmations` full confirmation panels per loop.
+      - A Critical still owed at the cap parks (certification withheld, fail-safe direction
+        unchanged); a non-Critical at the cap is resolved by a scoped verify, then certified.
+
+    Returns {rearm, park, atCap, reason} — all deterministic; the caller schedules another full
+    confirmation iff `rearm`, and withholds certification (parks) iff `park`."""
+    sevs = [s for s in (surfaced_severities or []) if isinstance(s, str)]
+    has_critical = "Critical" in sevs
+    trigger = has_critical or bool(cross_cutting)
+    at_cap = confirmations_run >= max_confirmations
+    if not trigger:
+        return {"rearm": False, "park": False, "atCap": at_cap,
+                "reason": "non-Critical findings, rework not cross-cutting — resolve by scoped "
+                          "verify; no further confirmation panel"}
+    if at_cap:
+        if has_critical:
+            return {"rearm": False, "park": True, "atCap": True,
+                    "reason": "Critical surfaced at the confirmation-panel cap — park; "
+                              "certification withheld"}
+        return {"rearm": False, "park": False, "atCap": True,
+                "reason": "confirmation-panel cap reached — resolve remaining by scoped verify; "
+                          "no further panel"}
+    return {"rearm": True, "park": False, "atCap": False,
+            "reason": ("Critical surfaced by confirmation" if has_critical else "cross-cutting "
+                       "rework") + " — one more full confirmation panel required"}

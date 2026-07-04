@@ -132,10 +132,34 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
   return out
 }
 
+// #174 confirmation-bar economics helpers. A FULL confirmation panel is a round whose record
+// kind is 'confirmation'. The severities a confirmation surfaced are the NEW (non-carried)
+// blocking findings on that round's record.
+function surfacedBlockingSeverities(record) {
+  const findings = (record && Array.isArray(record.findings)) ? record.findings : []
+  return findings.filter((f) => f && BLOCKING.has(f.severity)).map((f) => f.severity)
+}
+// Is a FURTHER full confirmation panel still owed? Before any confirmation has run, the mandatory
+// first panel is owed. After one has run, another is owed only when that confirmation's follow-up
+// (severity + rework breadth, delegated to the shared review_round_policy twin) demands it —
+// bounded by the hard cap. A Critical still owed at the cap → park (certification withheld).
+function furtherConfirmationOwed(records) {
+  const confirmations = (records || []).filter((r) => r && r.kind === 'confirmation')
+  if (!confirmations.length) return { owed: true, park: false, panels: 0 }
+  const last = confirmations[confirmations.length - 1]
+  const followup = roundPolicy.confirmationFollowup(
+    surfacedBlockingSeverities(last), confirmations.length, roundPolicy.isCrossCutting(last.changedSubjects))
+  return { owed: followup.rearm, park: followup.park, panels: confirmations.length, reason: followup.reason }
+}
+
 function confirmationReady(records, round, justMarked) {
   if (justMarked) return false
   const marked = (records || []).filter((r) => r && r.confirmationPending)
   if (!marked.length) return false
+  // #174: once a full confirmation has run, only RE-ENTER another when the economics demand it
+  // (a Critical surfaced, or cross-cutting rework, under the cap). Otherwise the confirmation
+  // obligation is satisfied and no further full panel runs — the terminal guard certifies.
+  if (!furtherConfirmationOwed(records).owed) return false
   const markedRound = Math.max(...marked.map((r) => Number(r.round) || 0))
   const hasIntermediateAfterMarker = (records || []).some((r) => Number(r.round) > markedRound)
   if (!hasIntermediateAfterMarker) return true
@@ -980,14 +1004,35 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     }
     const markedPending = (records || []).some((r) => r && r.confirmationPending)
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
-      terminal = 'continue'
-      reason = 'awaiting final confirmation round'
+      // #174: a clean intermediate that owes a confirmation either forces one more full panel
+      // (owed), parks when a Critical is still owed at the cap (park), or — when the confirmation
+      // obligation is satisfied — certifies as-is (the ran confirmation + scoped verify suffice).
+      const owe = furtherConfirmationOwed(records)
+      if (owe.park) {
+        terminal = 'halted'
+        reason = owe.reason || 'Critical surfaced at the confirmation-panel cap — certification withheld'
+      } else if (owe.owed) {
+        terminal = 'continue'
+        reason = 'awaiting final confirmation round'
+      }
     }
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && policy.roundKind === 'confirmation') {
       // confirmation round succeeded — clear marker on persisted record handled next round
     }
-    return Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
+    const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, terminal, reason, round }, safeExtras)
+    // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
+    // established — how many FULL confirmation panels ran and whether the last one surfaced findings
+    // that were resolved by a scoped verify (never implying a pristine fresh pass occurred).
+    if (terminal === 'clean' || terminal === 'clean-with-skips') {
+      const confirmationRecords = (records || []).filter((r) => r && r.kind === 'confirmation')
+      const lastConfirmation = confirmationRecords[confirmationRecords.length - 1]
+      verdictOut.certification = {
+        fullPanels: confirmationRecords.length,
+        lastPanelSurfacedResolved: !!(lastConfirmation && surfacedBlockingSeverities(lastConfirmation).length),
+      }
+    }
+    return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
       findings: [], missing: [], drops: [], terminal: 'halted', round,

@@ -110,6 +110,16 @@ def test_resume_memory_corrupt_state_cannot_certify():
     assert observed["terminal"] != "clean"
 
 
+def test_confirmation_surfaced_important_certifies_after_scope_verify():
+    # #174: a full confirmation panel that surfaces a NEW Important scope-verifies it (the surfaced
+    # dimension re-runs the next scoped round) and certifies with ONE panel — no ratchet to a fresh
+    # fully-clean confirmation.
+    observed = run_fixture("confirmation_important_certifies.json")
+    assert observed["terminal"] == "clean"
+    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
+    assert len(confirmations) == 1, "an Important surfaced by a confirmation is scope-verified, not re-confirmed"
+
+
 def test_resume_memory_restores_fix_context():
     observed = run_fixture("resume_memory.json")
     ctx = observed["fixContexts"][0]["context"]
@@ -135,6 +145,11 @@ def test_wrong_principle_probe_uses_shell_runner():
 
 
 def test_skipped_dimension_regression_uses_shell_runner():
+    # #174: a dimension skipped in an intermediate round is still caught by the full confirmation
+    # panel (the safety property preserved). The confirmation-bar economics scope-verifies a
+    # surfaced Important and certifies (deliberate trade), so the fail-safe pinned here is a
+    # recurring CRITICAL in the skipped dimension — it re-arms one more confirmation and, still
+    # unresolved at the cap, PARKS (terminal halted) rather than slipping through as clean.
     observed = run_fixture("skipped_dimension_regression.json")
     assert observed["terminal"] != "clean"
     assert any(call["reviewer"] == "security-reviewer" and call["roundKind"] == "confirmation" for call in observed["seen"])

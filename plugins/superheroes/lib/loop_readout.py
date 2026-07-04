@@ -71,6 +71,18 @@ def render(record):
                 lines.append("%s: raised %d, blocking %d, carried %d"
                              % (name, o.get("raised", 0), o.get("blocking", 0), o.get("carried", 0)))
         lines.append("")
+    # #174 req 4 (honest readout): state what certification actually established — how many FULL
+    # confirmation panels ran and, when the last one surfaced findings, that they were resolved by a
+    # scoped verify (never implying a pristine fresh pass occurred).
+    certification = record.get("certification")
+    if isinstance(certification, dict) and isinstance(certification.get("fullPanels"), int):
+        panels = certification["fullPanels"]
+        cert_line = "Certification: %d full confirmation panel%s ran" % (
+            panels, "" if panels == 1 else "s")
+        if certification.get("lastPanelSurfacedResolved"):
+            cert_line += ("; the last panel surfaced findings that were resolved with scoped "
+                          "verification (not a pristine fresh pass)")
+        lines += [cert_line + ".", ""]
     fixes = record.get("fixes") or []
     lines += ["### Fixes made"] + (["- %s" % f for f in fixes] if fixes else ["- (none)"]) + [""]
     deferred = record.get("deferred") or []

@@ -783,6 +783,11 @@ __modules["review_round_policy"] = function (module, exports, require) {
 // plugins/superheroes/lib/review_round_policy.js
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
+// #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
+// rework-breadth (distinct policy subjects the fix touched) at or above which a confirmation's
+// rework counts as "cross-cutting" and re-arms one more full confirmation.
+const MAX_CONFIRMATIONS = 2
+const CROSS_CUTTING_SUBJECTS = 3
 const SUBJECT_FALLBACK = {
   test: 'Test',
   security: 'Security',
@@ -906,7 +911,44 @@ function planRound(state) {
   return { roundKind: 'intermediate', dimensions: out, escalationPolicy: 'cheap-first' }
 }
 
-module.exports = { planRound }
+function isCrossCutting(changedSubjects, threshold = CROSS_CUTTING_SUBJECTS) {
+  // #174: the rework of a confirmation's fix is "cross-cutting" when it touched at least
+  // `threshold` distinct policy subjects (default ≥3 of the 5). Reuses the shared changed-subjects
+  // normalizer, so a malformed / unknown surface returns null → treated as cross-cutting (fail
+  // toward one more confirmation, never toward a premature certify).
+  const subjects = _changedSubjects(changedSubjects)
+  if (subjects === null || subjects === undefined) return true
+  return new Set(subjects).size >= threshold
+}
+
+function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting,
+  maxConfirmations = MAX_CONFIRMATIONS) {
+  // #174 confirmation-bar economics — the follow-up decision after a FULL confirmation panel
+  // surfaced blocking findings (which the fix loop still resolves + verifies, requirement 1).
+  // Only a Critical surfaced, OR cross-cutting rework, triggers one more full confirmation; hard
+  // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
+  // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
+  const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
+  const hasCritical = sevs.includes('Critical')
+  const trigger = hasCritical || !!crossCutting
+  const atCap = confirmationsRun >= maxConfirmations
+  if (!trigger) {
+    return { rearm: false, park: false, atCap,
+      reason: 'non-Critical findings, rework not cross-cutting — resolve by scoped verify; no further confirmation panel' }
+  }
+  if (atCap) {
+    if (hasCritical) {
+      return { rearm: false, park: true, atCap: true,
+        reason: 'Critical surfaced at the confirmation-panel cap — park; certification withheld' }
+    }
+    return { rearm: false, park: false, atCap: true,
+      reason: 'confirmation-panel cap reached — resolve remaining by scoped verify; no further panel' }
+  }
+  return { rearm: true, park: false, atCap: false,
+    reason: (hasCritical ? 'Critical surfaced by confirmation' : 'cross-cutting rework') + ' — one more full confirmation panel required' }
+}
+
+module.exports = { planRound, isCrossCutting, confirmationFollowup, MAX_CONFIRMATIONS, CROSS_CUTTING_SUBJECTS }
 
 };
 
@@ -1323,10 +1365,34 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
   return out
 }
 
+// #174 confirmation-bar economics helpers. A FULL confirmation panel is a round whose record
+// kind is 'confirmation'. The severities a confirmation surfaced are the NEW (non-carried)
+// blocking findings on that round's record.
+function surfacedBlockingSeverities(record) {
+  const findings = (record && Array.isArray(record.findings)) ? record.findings : []
+  return findings.filter((f) => f && BLOCKING.has(f.severity)).map((f) => f.severity)
+}
+// Is a FURTHER full confirmation panel still owed? Before any confirmation has run, the mandatory
+// first panel is owed. After one has run, another is owed only when that confirmation's follow-up
+// (severity + rework breadth, delegated to the shared review_round_policy twin) demands it —
+// bounded by the hard cap. A Critical still owed at the cap → park (certification withheld).
+function furtherConfirmationOwed(records) {
+  const confirmations = (records || []).filter((r) => r && r.kind === 'confirmation')
+  if (!confirmations.length) return { owed: true, park: false, panels: 0 }
+  const last = confirmations[confirmations.length - 1]
+  const followup = roundPolicy.confirmationFollowup(
+    surfacedBlockingSeverities(last), confirmations.length, roundPolicy.isCrossCutting(last.changedSubjects))
+  return { owed: followup.rearm, park: followup.park, panels: confirmations.length, reason: followup.reason }
+}
+
 function confirmationReady(records, round, justMarked) {
   if (justMarked) return false
   const marked = (records || []).filter((r) => r && r.confirmationPending)
   if (!marked.length) return false
+  // #174: once a full confirmation has run, only RE-ENTER another when the economics demand it
+  // (a Critical surfaced, or cross-cutting rework, under the cap). Otherwise the confirmation
+  // obligation is satisfied and no further full panel runs — the terminal guard certifies.
+  if (!furtherConfirmationOwed(records).owed) return false
   const markedRound = Math.max(...marked.map((r) => Number(r.round) || 0))
   const hasIntermediateAfterMarker = (records || []).some((r) => Number(r.round) > markedRound)
   if (!hasIntermediateAfterMarker) return true
@@ -2171,14 +2237,35 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     }
     const markedPending = (records || []).some((r) => r && r.confirmationPending)
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
-      terminal = 'continue'
-      reason = 'awaiting final confirmation round'
+      // #174: a clean intermediate that owes a confirmation either forces one more full panel
+      // (owed), parks when a Critical is still owed at the cap (park), or — when the confirmation
+      // obligation is satisfied — certifies as-is (the ran confirmation + scoped verify suffice).
+      const owe = furtherConfirmationOwed(records)
+      if (owe.park) {
+        terminal = 'halted'
+        reason = owe.reason || 'Critical surfaced at the confirmation-panel cap — certification withheld'
+      } else if (owe.owed) {
+        terminal = 'continue'
+        reason = 'awaiting final confirmation round'
+      }
     }
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && policy.roundKind === 'confirmation') {
       // confirmation round succeeded — clear marker on persisted record handled next round
     }
-    return Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
+    const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, terminal, reason, round }, safeExtras)
+    // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
+    // established — how many FULL confirmation panels ran and whether the last one surfaced findings
+    // that were resolved by a scoped verify (never implying a pristine fresh pass occurred).
+    if (terminal === 'clean' || terminal === 'clean-with-skips') {
+      const confirmationRecords = (records || []).filter((r) => r && r.kind === 'confirmation')
+      const lastConfirmation = confirmationRecords[confirmationRecords.length - 1]
+      verdictOut.certification = {
+        fullPanels: confirmationRecords.length,
+        lastPanelSurfacedResolved: !!(lastConfirmation && surfacedBlockingSeverities(lastConfirmation).length),
+      }
+    }
+    return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
       findings: [], missing: [], drops: [], terminal: 'halted', round,

@@ -192,6 +192,7 @@ def _read_findings(session_dir, dimension, tier):
         "confidence": confidence,
         "hasFindings": len(findings) > 0,
         "blocking": sum(1 for f in findings if f.get("severity") in BLOCKING),
+        "critical": sum(1 for f in findings if f.get("severity") == "Critical"),
     }
 
 
@@ -267,6 +268,52 @@ def _previous_dims(state, upto_round):
             if isinstance(rec, dict):
                 previous[name] = rec
     return previous
+
+
+def _confirmation_rounds(state):
+    """(round_no, entry) for every recorded round whose PLAN kind was 'confirmation' — the full
+    confirmation panels this loop has run, in ascending round order."""
+    out = []
+    for key in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
+        if not str(key).isdigit():
+            continue
+        entry = (state["rounds"][key] or {})
+        plan = entry.get("plan") or {}
+        if plan.get("roundKind") == "confirmation":
+            out.append((int(key), entry))
+    return out
+
+
+def _surfaced_severities(entry):
+    """The severities a confirmation round surfaced — 'Critical' when any executed dimension flagged
+    a Critical, else 'Important' for any other blocker. Carried/skipped dims never count."""
+    sevs = []
+    for rec in (entry.get("dims") or {}).values():
+        if not isinstance(rec, dict) or rec.get("status") != "run":
+            continue
+        if rec.get("criticalCount"):
+            sevs.append("Critical")
+        elif rec.get("blockingCount"):
+            sevs.append("Important")
+    return sevs
+
+
+def _further_confirmation_owed(session_dir, state):
+    """#174: is a FURTHER full confirmation panel owed? The mandatory first panel is always owed;
+    after one has run, another is owed only when its follow-up (severity + rework breadth, via the
+    shared review_round_policy twin) demands it — bounded by the hard cap. A Critical still owed at
+    the cap parks. Rework breadth = the changed spec surface since that confirmation (the script's
+    own snapshots), so an unknown surface fails toward one more panel, never toward a premature
+    certify."""
+    confirmations = _confirmation_rounds(state)
+    if not confirmations:
+        return {"owed": True, "park": False, "panels": 0}
+    last_round, last_entry = confirmations[-1]
+    surfaced = _surfaced_severities(last_entry)
+    cross = review_round_policy.is_cross_cutting(_diff_changed_surface(session_dir, last_round))
+    followup = review_round_policy.confirmation_followup(surfaced, len(confirmations), cross)
+    return {"owed": followup["rearm"], "park": followup["park"],
+            "panels": len(confirmations), "reason": followup["reason"]}
 
 
 def _full_deep_executed(state, round_no, dimensions):
@@ -419,7 +466,7 @@ def cmd_record(session_dir, round_no, dimensions):
             continue
         dims[d] = {"dimension": d, "status": "run", "tier": tier,
                    "confidence": result["confidence"], "hasFindings": result["hasFindings"],
-                   "blockingCount": result["blocking"],
+                   "blockingCount": result["blocking"], "criticalCount": result["critical"],
                    "subjects": _subjects(d, result["findings"]),
                    "escalated": already, "round": round_no}
     save_state(session_dir, state)
@@ -461,7 +508,30 @@ def cmd_decide(session_dir, round_no, max_rounds, compiled, skipped_blocking, di
         if state_ok and _full_deep_executed(state, round_no, dimensions):
             return {"action": action, "mandatory": mandatory, "reason": reason,
                     "round": round_no, "nextRound": None, "roundKind": None,
-                    "dims_to_run": [], "skipped": []}
+                    "dims_to_run": [], "skipped": [],
+                    "certification": {"fullPanels": len(_confirmation_rounds(state)),
+                                      "lastPanelSurfacedResolved": False}}
+        # #174 confirmation-bar economics: once a full confirmation panel has run, another is owed
+        # ONLY when its follow-up (a Critical surfaced, or cross-cutting rework, under the cap)
+        # demands it. When the obligation is satisfied, certify off the scoped verify rather than
+        # ratcheting a fresh fully-clean panel; a Critical still owed at the cap parks.
+        owe = _further_confirmation_owed(session_dir, state) if state_ok \
+            else {"owed": True, "park": False, "panels": 0}
+        if owe["park"]:
+            return {"action": "halt", "mandatory": True,
+                    "reason": "%s — report this round's findings; do NOT declare SPEC READY."
+                              % owe.get("reason", "confirmation-panel cap reached with a Critical"),
+                    "round": round_no, "nextRound": None, "roundKind": None,
+                    "dims_to_run": [], "skipped": [],
+                    "certification": {"fullPanels": owe["panels"], "lastPanelSurfacedResolved": True}}
+        if owe["panels"] >= 1 and not owe["owed"]:
+            return {"action": action, "mandatory": mandatory,
+                    "reason": "%s (%d full confirmation panel(s) ran; the last panel's findings "
+                              "were resolved with scoped verification)."
+                              % (reason, owe["panels"]),
+                    "round": round_no, "nextRound": None, "roundKind": None,
+                    "dims_to_run": [], "skipped": [],
+                    "certification": {"fullPanels": owe["panels"], "lastPanelSurfacedResolved": True}}
         if round_no >= max_rounds:
             return {"action": "halt", "mandatory": True,
                     "reason": "round cap (%d) reached before the mandatory full "
