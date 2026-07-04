@@ -74,20 +74,48 @@ def _read_lease(root):
         return None
 
 
+def _lease_payload(stamp):
+    return {
+        "stamp": stamp,
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "bootId": hostinfo.boot_id(),
+        "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ttl": _LEASE_TTL,
+    }
+
+
 def _write_lease(root, stamp):
+    """Overwrite the lease unconditionally. Only ever called after this invocation has
+    already WON the atomic acquire in `_try_acquire_lease` (or on the fixed reclaim path
+    where a confirmed-dead holder's lease was already unlinked) — never a substitute for
+    the exclusive-create race-free acquire itself."""
     path = _lease_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({
-            "stamp": stamp,
-            "pid": os.getpid(),
-            "host": socket.gethostname(),
-            "bootId": hostinfo.boot_id(),
-            "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "ttl": _LEASE_TTL,
-        }, fh)
+        json.dump(_lease_payload(stamp), fh)
     os.replace(tmp, path)
+
+
+def _try_acquire_lease(root, stamp):
+    """Atomically create the lease file with this invocation's stamp using the same
+    race-free `O_CREAT|O_EXCL` primitive `file_lock.acquire` uses (this module's own
+    docstring names it as the model to follow) — closing the probe-then-write TOCTOU
+    window: reading "no lease" and writing one are now a single indivisible step, so two
+    concurrent invocations can never both observe "free" and both proceed.
+
+    Returns True if this invocation now holds the lease (freshly created), False if an
+    existing lease file is already present (caller must probe/decide on it)."""
+    path = _lease_path(root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as fh:
+        json.dump(_lease_payload(stamp), fh)
+    return True
 
 
 def _lease_liveness(lease):
@@ -112,8 +140,29 @@ def _lease_liveness(lease):
     return "alive"
 
 
-def real_reclaim_probe(root):
-    """`deps["reclaim_probe"]`: read the lease file and confirm liveness for real."""
+def real_reclaim_probe(root, reserved_stamp=None):
+    """`deps["reclaim_probe"]`: atomically claim the lease for real, folding the
+    read-and-decide-liveness probe together with the exclusive-create acquire into one
+    indivisible step (premortem-001) — closing the check-then-act TOCTOU where a probe at
+    lifecycle step 1 and a non-exclusive `os.replace` write at step 2 let two concurrent
+    invocations both observe "no lease" and both proceed.
+
+    `reserved_stamp` is the stamp THIS invocation would use if it wins the acquire (its
+    caller in `build()` mints it once, up front, so the same stamp that decides the
+    acquire is the one `materialize()` later stamps its fixture with — probe and acquire
+    share a single stamp rather than reserving one identity and materializing another).
+
+    Tries the atomic `O_CREAT|O_EXCL` create FIRST (mirroring `file_lock.acquire`'s
+    race-free primitive, the model this module's own docstring names): if it wins, no
+    other lease existed a moment ago and none can appear between this call and
+    `materialize()` reusing the win, so `proceed` is safe by construction — no separate
+    read-then-write window remains for a second invocation to slip through. Only on
+    `FileExistsError` (another lease is already there) does this fall into the existing
+    read/liveness-classify path, exactly as before.
+    """
+    if reserved_stamp is not None and _try_acquire_lease(root, reserved_stamp):
+        return {"in_flight": False, "stamp": None, "has_record": False,
+                "lease_acquired": True}, "dead"
     lease = _read_lease(root)
     if lease is None:
         return {"in_flight": False, "stamp": None, "has_record": False}, "dead"
@@ -133,14 +182,34 @@ def real_release_lease(root):
 # --- materialize / preflight -----------------------------------------------------------
 
 
-def real_materialize(fixture_dir, root):
-    """`deps["materialize"]`: stamp a fresh unique id, write the lease, and copy the
-    committed fixture triple into the throwaway work-item slug."""
-    stamp_id = uuid.uuid4().hex
+def real_materialize(fixture_dir, root, reserved_stamp=None, lease_acquired=False):
+    """`deps["materialize"]`: copy the committed fixture triple into the throwaway
+    work-item slug, stamped with the identity this invocation already reserved.
+
+    `reserved_stamp` is the SAME stamp `real_reclaim_probe` decided against
+    (premortem-001) — reusing it here means the lease that guarded proceed and the
+    fixture that gets materialized always refer to the same run. `lease_acquired=True`
+    means `real_reclaim_probe` already won the atomic `O_CREAT|O_EXCL` create for that
+    stamp (the genuine no-prior-lease race), so this step must NOT write the lease again
+    (a second write here would be exactly the non-atomic re-write premortem-001 flags).
+    `lease_acquired=False` with a `reserved_stamp` covers the `reclaim` path (a confirmed
+    -dead prior lease was found, not raced for) — this invocation still owns the identity
+    it reserved but the lease file itself was never claimed under it, so it's written
+    here for the first time. No `reserved_stamp` at all (legacy/direct callers with no
+    atomic acquire upstream) falls back to minting + writing a fresh one, preserving
+    prior behavior for those callers.
+    """
+    if reserved_stamp is not None:
+        stamp = reserved_stamp
+        stamp_id = stamp[len(acceptance_fixture.RESERVED_PREFIX):]
+        if not lease_acquired:
+            _write_lease(root, stamp)
+    else:
+        stamp_id = uuid.uuid4().hex
+        stamp = acceptance_fixture.make_stamp(stamp_id)
+        _write_lease(root, stamp)
     stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, _harness_dir(root))
-    stamp = acceptance_fixture.make_stamp(stamp_id)
     stamped["stamp"] = stamp
-    _write_lease(root, stamp)
     return stamped
 
 
@@ -434,11 +503,33 @@ def build(fixture_dir, root):
     Every seam here is a real primitive (control-plane store, git/gh subprocess reads,
     the live launcher) — not a fake. `acceptance_run._cli` is what actually calls
     `invoke(deps)` with the dict this returns.
+
+    premortem-001: `reclaim_probe` and the FIRST `materialize()` share one atomically-
+    reserved stamp (`state["reserved_stamp"]`, minted once here and consumed exactly
+    once) so the exclusive-create acquire in `real_reclaim_probe` and the fixture writer
+    in `real_materialize` always agree on which identity won the race — there is no
+    second, independent lease write for the first attempt. A retry's second
+    `materialize()` call (this invocation already holds the lease from the first) mints
+    and writes its own fresh stamp the ordinary way, since no second concurrent
+    invocation needs arbitrating at that point — only the initial proceed/refuse decision
+    is a genuine multi-invocation race.
     """
-    state = {"stamped": None}
+    state = {
+        "stamped": None,
+        "reserved_stamp": acceptance_fixture.make_stamp(uuid.uuid4().hex),
+        "lease_acquired": False,
+    }
+
+    def reclaim_probe():
+        recorded_state, liveness = real_reclaim_probe(root, reserved_stamp=state["reserved_stamp"])
+        state["lease_acquired"] = bool(recorded_state.get("lease_acquired"))
+        return recorded_state, liveness
 
     def materialize():
-        stamped = real_materialize(fixture_dir, root)
+        reserved = state.pop("reserved_stamp", None)
+        lease_acquired = state.pop("lease_acquired", False)
+        stamped = real_materialize(fixture_dir, root, reserved_stamp=reserved,
+                                   lease_acquired=lease_acquired)
         state["stamped"] = stamped
         return stamped
 
@@ -452,7 +543,7 @@ def build(fixture_dir, root):
         return (state["stamped"] or {}).get("stamp")
 
     return {
-        "reclaim_probe": lambda: real_reclaim_probe(root),
+        "reclaim_probe": reclaim_probe,
         "materialize": materialize,
         "preflight_ok": real_preflight_ok(fixture_dir, root),
         "launcher": real_launcher(root),
