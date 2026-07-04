@@ -46,7 +46,7 @@ its small JSON file; it never loads the diff or the transcript.
    - action: "keep" or "drop". "drop" ONLY when the finding clearly does NOT hold up (it is
      wrong, not in the changed material, or already handled) and a non-empty reason is given.
      If you are UNCERTAIN it holds, you MUST keep it — never drop on a hunch.
-   - reason: one sentence. Required for a drop.
+   - reason: one sentence. Required for a drop and for a blocking→non-blocking downgrade.
    - severity: the single rubric tier the finding's EVIDENCE justifies (Critical/Important/
      Minor/Nit) — raise or lower the merged tag as warranted; invent no tiers.
 
@@ -69,16 +69,17 @@ its small JSON file; it never loads the diff or the transcript.
      > "$SESSION_DIR/round-<N>/synthesized.json"
    ```
 
-   It emits `{"findings":[survivors], "drops":[{id,file,title,reason,was_blocking_tagged}]}`
+   It emits `{"findings":[survivors], "drops":[{id,file,title,reason,was_blocking_tagged}], "downgrades":[{id,file,title,from,to,reason?}]}`
    under the fail-closed contract: **KEEP-ON-UNCERTAIN** (a finding with no verdict, or a
    malformed/ambiguous one, is kept at its pre-synthesis severity — a model's silence never
    drops a finding); **DROP-WITH-REASON** (a finding is dropped only on a clear `drop` carrying
-   a non-empty reason, which is recorded); and **`was_blocking_tagged`** (a dropped finding any
+   a non-empty reason, which is recorded); **`was_blocking_tagged`** (a dropped finding any
    reviewer tagged Critical/Important is flagged, so an all-drop or confidently-wrong judge can
-   never make a silent clean).
+   never make a silent clean); and **`downgrades`** (a survivor the judge re-tiered from blocking
+   down to non-blocking — a silent downgrade is a silent-drop equivalent, so it is recorded too).
 
-4. **Use the survivors.** `synthesized.findings` become `compiled.findings` — compute the
-   verdict on THEM. Carry `synthesized.drops` into `compiled.json`'s `drops` field.
+4. **Use the survivors.** `synthesized.findings` become `compiled.findings` — compute the verdict
+   on THEM. Carry `synthesized.drops` and `synthesized.downgrades` into `compiled.json`.
 
 ## Fallback — fail toward keeping everything
 
@@ -88,9 +89,11 @@ finding and drops nothing — i.e. the raw mechanical compile. **A synthesis fai
 a finding and never aborts the review.** (This mirrors the spine's rule: synthesis threw /
 produced no result → raw compile, no findings dropped.)
 
-## Surfacing — a dropped blocker is never silently gone
+## Surfacing — a dropped or demoted blocker is never silently gone
 
-Every drop rides into `compiled.json.drops` and the **End-of-Loop Summary**: list the findings
-dropped as unsubstantiated (each with its reason) and — **distinctly, flagged for the owner's
-scrutiny** — any `was_blocking_tagged` drop (a reviewer had tagged it Critical/Important). The
-loop may filter false positives; it may never silently discard a blocker.
+Drops ride into `compiled.json.drops`, blocking→non-blocking downgrades into
+`compiled.json.downgrades`; both reach the **End-of-Loop Summary**: list the findings dropped as
+unsubstantiated (each with its reason) and — **distinctly, flagged for the owner's scrutiny** —
+any `was_blocking_tagged` drop AND any `downgrades` entry (a reviewer had tagged it Critical/
+Important; synthesis then dropped it or demoted it below blocking). The loop may filter false
+positives or re-tier; it may never silently discard OR quietly demote a blocker.

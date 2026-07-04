@@ -75,6 +75,23 @@ def test_dropped_blocker_flagged_distinctly_ufr10():
     assert "real bug" in scrutiny and "nit" not in scrutiny
 
 
+def test_blocking_downgrade_surfaced_distinctly_186():
+    out = LR.render(_record(
+        downgrades=[{"title": "overstated race", "from": "Critical", "to": "Nit",
+                     "reason": "single-threaded path"}]))
+    # its own scrutiny section, naming the from→to and the reason
+    assert "DOWNGRADED from blocking" in out
+    scrutiny = out.split("DOWNGRADED from blocking")[1]
+    assert "overstated race" in scrutiny
+    assert "Critical" in scrutiny and "Nit" in scrutiny
+    assert "single-threaded path" in scrutiny
+
+
+def test_no_downgrade_section_when_none():
+    out = LR.render(_record(drops=[{"title": "x", "reason": "y", "was_blocking_tagged": False}]))
+    assert "DOWNGRADED" not in out
+
+
 def test_parent_origin_named_fr21():
     out = LR.render(_record(terminal="halted", parentOrigin="plan"))
     assert "plan" in out and "upstream" in out.lower()

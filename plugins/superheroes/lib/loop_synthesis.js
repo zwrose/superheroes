@@ -2,6 +2,7 @@
 const { findingIdentity } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
 const _BLOCKING = new Set(['Critical', 'Important'])
+const _NON_BLOCKING = new Set(['Minor', 'Nit'])
 const _DEFAULT_BLOCKING_SEVERITY = 'Important'
 
 function _keptSeverity(f, v) {
@@ -18,7 +19,7 @@ function consume(merged, leafVerdicts) {
       if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
     }
   }
-  const survivors = []; const drops = []
+  const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
     let v = byId[id]
@@ -33,7 +34,16 @@ function consume(merged, leafVerdicts) {
     const kept = Object.assign({}, f)
     kept.severity = _keptSeverity(f, v)
     survivors.push(kept)
+    // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
+    // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
+    const fromSeverity = f && f.severity
+    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+      const entry = { id, file: f.file === undefined ? null : f.file,
+        title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
+      if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()
+      downgrades.push(entry)
+    }
   }
-  return { findings: survivors, drops }
+  return { findings: survivors, drops, downgrades }
 }
 module.exports = { consume }

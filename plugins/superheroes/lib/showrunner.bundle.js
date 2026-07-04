@@ -594,6 +594,7 @@ __modules["loop_synthesis"] = function (module, exports, require) {
 const { findingIdentity } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
 const _BLOCKING = new Set(['Critical', 'Important'])
+const _NON_BLOCKING = new Set(['Minor', 'Nit'])
 const _DEFAULT_BLOCKING_SEVERITY = 'Important'
 
 function _keptSeverity(f, v) {
@@ -610,7 +611,7 @@ function consume(merged, leafVerdicts) {
       if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
     }
   }
-  const survivors = []; const drops = []
+  const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
     let v = byId[id]
@@ -625,8 +626,17 @@ function consume(merged, leafVerdicts) {
     const kept = Object.assign({}, f)
     kept.severity = _keptSeverity(f, v)
     survivors.push(kept)
+    // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
+    // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
+    const fromSeverity = f && f.severity
+    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+      const entry = { id, file: f.file === undefined ? null : f.file,
+        title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
+      if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()
+      downgrades.push(entry)
+    }
   }
-  return { findings: survivors, drops }
+  return { findings: survivors, drops, downgrades }
 }
 module.exports = { consume }
 
@@ -2228,7 +2238,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
   try {
     if (!roster || roster.length === 0) {
       return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
-        findings: [], missing: [], drops: [], terminal: 'cannot-certify', round,
+        findings: [], missing: [], drops: [], downgrades: [], terminal: 'cannot-certify', round,
         reason: 'empty reviewer set — nothing to certify' }, safeExtras)
     }
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: (coverageDecisions || []).map((d) => d.id).filter(Boolean) }
@@ -2237,13 +2247,17 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const gate = gateOut.gate
     const confidence = gateOut.confidence
     const missing = gateOut.incomplete
-    let compiled, drops
+    let compiled, drops, downgrades
     if (synthesized && typeof synthesized === 'object') {
       compiled = synthesized.findings || []
       drops = synthesized.drops || []
+      // #186: blocking→non-blocking severity downgrades ride alongside drops for the readout's
+      // owner-scrutiny section (visibility only; the severity change itself already applied).
+      downgrades = synthesized.downgrades || []
     } else {
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
+      downgrades = []
     }
     // fold 2 (#141): the round-1 tally reuses the gathered deferred-set; every later round reads it
     // fresh (a fix may have deferred findings since the gather).
@@ -2294,7 +2308,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
       // confirmation round succeeded — clear marker on persisted record handled next round
     }
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
-      missing, drops, terminal, reason, round }, safeExtras)
+      missing, drops, downgrades, terminal, reason, round }, safeExtras)
     // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
     // established — how many QUALIFYING full panels ran and whether findings surfaced since the last
     // one were resolved by scoped verify (never implying a pristine fresh pass occurred).
@@ -2304,7 +2318,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
-      findings: [], missing: [], drops: [], terminal: 'halted', round,
+      findings: [], missing: [], drops: [], downgrades: [], terminal: 'halted', round,
       reason: 'tally failed: ' + (exc && exc.message ? exc.message : exc) }, safeExtras)
   }
 }
@@ -2353,6 +2367,7 @@ const VERDICT_SCHEMA = {
     confidence: { enum: ['high', 'low'] },
     findings: { type: 'array' },
     drops: { type: 'array' },
+    downgrades: { type: 'array' },
     terminal: { enum: ['continue', 'clean', 'clean-with-skips', 'cannot-certify', 'halted'] },
     reason: { type: 'string' },
     recordMissing: { type: 'boolean' },
