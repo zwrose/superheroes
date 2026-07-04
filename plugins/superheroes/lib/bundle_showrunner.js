@@ -206,7 +206,11 @@ function __helperResult(s) {
   while ((m = re.exec(s)) !== null) last = m
   var status = last ? Number(last[1]) : 1
   var stdout = last ? s.slice(0, last.index) : s
+  var markerTail = last ? s.slice(last.index + last[0].length) : ''
   stdout = stdout.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').replace(/\\n$/, '')
+  if (/^\\s*\\x60/.test(stdout) && (/\\x60\\s*$/.test(stdout) || /^\\s*\\x60\\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\\s*\\x60/, '').replace(/\\x60\\s*$/, '')
+  }
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
 const __PAYLOAD_BOUND = 3000

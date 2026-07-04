@@ -324,11 +324,18 @@ function reviewCodeLeaves(tiers, opts) {
   // would always parse as unreadable. reviewerAgent (review) and fixStep (fix) are the only two
   // engine-routed leaves (#38).
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
+    const contextTarget = (context && context.target && typeof context.target === 'object') ? context.target : {}
+    const verificationRoot = (context && context.synthesisVerificationRoot) || contextTarget.worktree || target.worktree || procCwd()
+    const promptContext = Object.assign({}, context || {}, { synthesisVerificationRoot: verificationRoot })
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
       `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `Absolute verification worktree: ${verificationRoot}\n` +
+      `Check finding file paths and file existence inside that worktree only; do not use the ` +
+      `showrunner/session cwd as the reality anchor.\n\n` +
+      `Prompt context: ${JSON.stringify(promptContext)}\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
       withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
     return out || null
@@ -2054,7 +2061,7 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, synthesisVerificationRoot: targetWorktree },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
     preloaded: setup || undefined,

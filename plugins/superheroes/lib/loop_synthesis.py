@@ -57,12 +57,15 @@ def consume(merged, leaf_verdicts):
                 by_id[v["id"]] = v
     survivors, drops = [], []
     for f in merged:
-        v = by_id.get(_identity(f))
+        identity = _identity(f)
+        v = by_id.get(identity)
+        if v is None and isinstance(f, dict) and isinstance(f.get("id"), str):
+            v = by_id.get(f["id"])
         action = v.get("action") if isinstance(v, dict) else None
         reason = v.get("reason") if isinstance(v, dict) else None
         # DROP only on a clear, well-formed drop with a reason; everything else KEEPS.
         if action == "drop" and isinstance(reason, str) and reason.strip():
-            drops.append({"id": _identity(f), "file": f.get("file"), "title": f.get("title"),
+            drops.append({"id": identity, "file": f.get("file"), "title": f.get("title"),
                           "reason": reason.strip(),
                           "was_blocking_tagged": f.get("severity") in _BLOCKING})
             continue

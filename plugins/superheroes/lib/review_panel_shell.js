@@ -393,10 +393,19 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
 async function loadCoverageDecisions(target, ioApi) {
   const out = await ioApi.runHelper('python3', [libPath('coverage_decisions.py'), 'load',
     '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
+  const stdout = String((out && out.stdout) || '')
   try {
-    const parsed = JSON.parse((out && out.stdout) || '')
+    const parsed = JSON.parse(stdout)
     if (parsed && typeof parsed === 'object') return parsed
   } catch (_) { /* fall through to fail-closed */ }
+  const firstBrace = stdout.indexOf('{')
+  const lastBrace = stdout.lastIndexOf('}')
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      const parsed = JSON.parse(stdout.slice(firstBrace, lastBrace + 1))
+      if (parsed && typeof parsed === 'object') return parsed
+    } catch (_) { /* fall through to fail-closed */ }
+  }
   return { ok: false, state: 'unreadable', reason: 'coverage-load-helper-failed' }
 }
 

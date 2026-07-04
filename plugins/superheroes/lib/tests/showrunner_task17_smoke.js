@@ -159,6 +159,7 @@ async function partB() {
   sandbox.global = sandbox
   sandbox.agent = async function(prompt, opts) {
     received.push(Object.assign({ prompt }, opts || {}))
+    if (String(prompt).includes('single-backtick-probe')) return '`{"ok":true}\n__SR_EXIT:0`'
     if (typeof sandbox.__payloadHarness === 'function') return sandbox.__payloadHarness(prompt, opts || {})
     throw new Error('STOP')  // stop after first real agent call
   }
@@ -172,6 +173,19 @@ async function partB() {
   // Now manually set __SR_LEAF_MODEL to 'sonnet' (as if args.model='sonnet' was passed)
   sandbox.globalThis.__SR_LEAF_MODEL = 'sonnet'
   const cheapest = modelTier.DEFAULT_TIERS.mechanical  // 'haiku'
+
+  // (b0) A live courier wrapped the whole helper response in a single inline backtick pair:
+  // `{"ok":true}\n__SR_EXIT:0`. The marker slice leaves the leading backtick in stdout unless
+  // __helperResult strips this inline wrapper too.
+  received.length = 0
+  const helper = await sandbox.globalThis.io.runHelper('single-backtick-probe', [])
+  assert.strictEqual(helper.status, 0, 'FAIL (b0): single-backtick helper answer should preserve exit status 0')
+  assert.strictEqual(helper.stdout, '{"ok":true}', 'FAIL (b0): helper stdout should strip one inline backtick wrapper')
+  assert.strictEqual(
+    received[0].model,
+    cheapest,
+    `FAIL (b0): io.runHelper must still be pinned to cheapest ('${cheapest}'), got '${received[0].model}'`,
+  )
 
   // (b1) Call globalThis.agent with label='exec' -> wrapper must pass cheapest to __realAgent
   received.length = 0
