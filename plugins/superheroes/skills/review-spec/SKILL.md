@@ -240,9 +240,10 @@ REQUIREMENTS (the *what*) for a work-item. NOT code, NOT a technical design.
 
 ## Your assignment
 Review the spec at $SESSION_DIR/spec.md for your dimension, reframed to
-requirements quality (below). Read the base rubric (absolute path below) for
-severity calibration, verification rules, and the findings output format. Read
-the project profile and CLAUDE.md for calibration.
+requirements quality (below). Read the spec in bounded chunks (<=800 lines):
+use Read offset/limit when available, or an equivalent bounded shell range;
+never one whole-file read. Read the base rubric (absolute path below) for severity
+calibration, verification rules, and findings output format. Read the project profile and CLAUDE.md for calibration.
 
 ## Context files
 - Spec (the doc under review): $SESSION_DIR/spec.md

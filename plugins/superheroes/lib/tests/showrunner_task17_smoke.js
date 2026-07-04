@@ -20,6 +20,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const crypto = require('crypto')
 
 // ---------------------------------------------------------------------------
 // PART A: showrunner() startup plants __SR_OVERRIDES via exec(model_tier_overrides.py)
@@ -157,7 +158,8 @@ async function partB() {
   sandbox.globalThis = sandbox
   sandbox.global = sandbox
   sandbox.agent = async function(prompt, opts) {
-    received.push({ label: opts && opts.label, model: opts && opts.model })
+    received.push(Object.assign({ prompt }, opts || {}))
+    if (typeof sandbox.__payloadHarness === 'function') return sandbox.__payloadHarness(prompt, opts || {})
     throw new Error('STOP')  // stop after first real agent call
   }
   sandbox.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
@@ -258,7 +260,88 @@ async function partB() {
   assert.strictEqual(received[0].label, 'read gate', 'FAIL (b8): the descriptive label is preserved for display (not relabelled)')
   assert.ok(!('courier' in received[0]), 'FAIL (b8): the courier marker is stripped before the real agent() call')
 
-  console.log('OK (b): bundle wrapper — exec/io + courier:true always cheapest regardless of __SR_LEAF_MODEL; non-dumb gets __SR_LEAF_MODEL')
+
+  // (b9) Payload-carrying dumb pipes are still couriers, but they must use a copy-faithful fixer tier
+  // rather than the cheapest mechanical tier.
+  sandbox.globalThis.__SR_LEAF_MODEL = 'haiku'
+  received.length = 0
+  try { await sandbox.globalThis.agent('stage payload chunk', { label: 'io', courier: true, payload: true }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b9): no call to underlying agent for payload courier')
+  assert.strictEqual(
+    received[0].model,
+    modelTier.DEFAULT_TIERS.fixer,
+    `FAIL (b9): payload courier must use fixer tier ('${modelTier.DEFAULT_TIERS.fixer}'), got '${received[0].model}'`,
+  )
+
+  // (b10) The live bundle path for oversized stageAndRunHelper payloads chunks, verifies,
+  // reassembles, and runs the helper against the exact original payload.
+  function sha(text) {
+    return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex')
+  }
+  function commandFromPrompt(prompt) {
+    const text = String(prompt || '')
+    const idx = text.lastIndexOf('\n\n')
+    return idx >= 0 ? text.slice(idx + 2) : text
+  }
+  function argValue(cmd, flag) {
+    const match = String(cmd).match(new RegExp("'" + flag + "'\\s+'([^']*)'"))
+    return match ? match[1] : null
+  }
+  const staged = Object.create(null)
+  const partsByPath = Object.create(null)
+  const stageCalls = []
+  const finishCalls = []
+  sandbox.__payloadHarness = async function(prompt) {
+    const cmd = commandFromPrompt(prompt)
+    const current = received[received.length - 1]
+    if (cmd.includes("'stage-chunk'")) {
+      assert.strictEqual(current.model, modelTier.DEFAULT_TIERS.fixer, 'FAIL (b10): stage-chunk courier must use fixer tier')
+      const target = argValue(cmd, '--path')
+      const index = Number(argValue(cmd, '--index'))
+      const total = Number(argValue(cmd, '--total'))
+      const b64 = argValue(cmd, '--chunk-b64')
+      const hash = argValue(cmd, '--chunk-hash')
+      assert.strictEqual(sha(b64), hash, 'FAIL (b10): stage-chunk hash must cover the base64 chunk')
+      const bucket = partsByPath[target] || (partsByPath[target] = { total, chunks: [] })
+      bucket.chunks[index] = Buffer.from(b64, 'base64').toString('utf8')
+      stageCalls.push({ target, index, total })
+      return JSON.stringify({ ok: true, index, total }) + '\n__SR_EXIT:0'
+    }
+    if (cmd.includes("'finish-chunks'")) {
+      assert.strictEqual(current.model, modelTier.DEFAULT_TIERS.fixer, 'FAIL (b10): finish/helper courier must use fixer tier')
+      const target = argValue(cmd, '--path')
+      const total = Number(argValue(cmd, '--total'))
+      const payloadHash = argValue(cmd, '--payload-hash')
+      const bucket = partsByPath[target]
+      assert.ok(bucket, 'FAIL (b10): finish-chunks ran before any chunks were staged')
+      assert.strictEqual(bucket.chunks.length, total, 'FAIL (b10): finish-chunks total must match staged chunks')
+      const text = bucket.chunks.join('')
+      assert.strictEqual(sha(text), payloadHash, 'FAIL (b10): finish-chunks hash must cover the assembled payload')
+      // The mock fabricates the helper's stdout from its own bucket, so this branch would pass
+      // even if the bundle forgot to chain the helper. Pin the COMMAND SHAPE: the helper must be
+      // chained after a verified finish, with the exit marker last.
+      const helperSegment = " >/dev/null && 'cat' '" + target + "' 2>&1; echo __SR_EXIT:$?"
+      assert.ok(cmd.endsWith(helperSegment),
+        'FAIL (b10): finish-chunks must gate the chained helper on a verified finish, got: ' + cmd.slice(-160))
+      staged[target] = text
+      finishCalls.push({ target, total })
+      return staged[target] + '\n__SR_EXIT:0'
+    }
+    throw new Error('unexpected payload courier command: ' + cmd)
+  }
+  sandbox.globalThis.__SR_LEAF_MODEL = 'haiku'
+  received.length = 0
+  const stagedPath = '/tmp/staged-large-payload.txt'
+  const payload = ('chunked payload \u2014 \u{1f3a1} ' + 'x'.repeat(1800) + '\n').repeat(3)
+  const result = await sandbox.globalThis.io.stageAndRunHelper(stagedPath, payload, 'cat', [stagedPath])
+  assert.strictEqual(result.ok, true, 'FAIL (b10): oversized stageAndRunHelper should report a clean helper exit')
+  assert.strictEqual(result.stdout, payload, 'FAIL (b10): helper must see the exact staged payload')
+  assert.ok(stageCalls.length > 1, 'FAIL (b10): oversized payload must be split across multiple stage-chunk calls')
+  assert.strictEqual(finishCalls.length, 1, 'FAIL (b10): finish-chunks must run exactly once before the helper')
+  assert.ok(received.every((c) => c.model === modelTier.DEFAULT_TIERS.fixer), 'FAIL (b10): every oversized payload courier call must use fixer tier')
+  sandbox.__payloadHarness = null
+
+  console.log('OK (b): bundle wrapper — exec/io + courier:true model pinning, payload courier fixer tier, smart leaves get __SR_LEAF_MODEL')
 }
 
 ;(async () => {

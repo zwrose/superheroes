@@ -11,7 +11,7 @@ import os
 import re
 import sys
 
-from review_memory import class_key
+from review_memory import clamp_title, canonical_class_key, class_key_aliases
 
 BLOCKING = {"Critical", "Important"}
 
@@ -31,16 +31,22 @@ def finding_label(finding):
 
 
 def finding_identity(finding):
-    return f"{finding.get('file') or ''}::{normalize_title(finding_label(finding))}"
+    return f"{finding.get('file') or ''}::{normalize_title(clamp_title(finding_label(finding)))}"
 
 
 def recurrence_key(finding):
+    if finding.get("dimension") or finding.get("taxonomy"):
+        return canonical_class_key(finding)
     if finding.get("classKey"):
         return finding["classKey"]
-    key = class_key(finding)
-    if finding.get("dimension") or finding.get("taxonomy"):
-        return key
     return finding_identity(finding)
+
+
+def recurrence_aliases(finding):
+    aliases = {recurrence_key(finding)}
+    if finding.get("dimension") or finding.get("taxonomy"):
+        aliases |= class_key_aliases(finding)
+    return aliases
 
 
 def _blocking(round_findings):
@@ -58,7 +64,7 @@ def _blocking_count_excluding_generalize(round_rec):
     blocking = _blocking(round_rec)
     if not generalize:
         return len(blocking)
-    return len([f for f in blocking if recurrence_key(f) not in generalize])
+    return len([f for f in blocking if not (recurrence_aliases(f) & generalize)])
 
 
 def _round_reviewed(round_rec):
@@ -111,9 +117,11 @@ def check_circuit_breaker(rounds, max_rounds):
         latest_generalize = {g.get("classKey") for g in latest_rec.get("generalizeRequired", []) if isinstance(g, dict)}
         challenged = {d.get("classKey") for d in latest_rec.get("coverageDecisions", []) if isinstance(d, dict) and d.get("challengedBy")}
         latest_blocking = _blocking(latest_rec)
-        prev_ids = {recurrence_key(f) for f in _blocking(reviewed[rn - 2])}
-        recurring = [f for f in latest_blocking if recurrence_key(f) in prev_ids]
-        challenged_recurring = [f for f in recurring if recurrence_key(f) in challenged]
+        prev_ids = set()
+        for f in _blocking(reviewed[rn - 2]):
+            prev_ids |= recurrence_aliases(f)
+        recurring = [f for f in latest_blocking if recurrence_aliases(f) & prev_ids]
+        challenged_recurring = [f for f in recurring if recurrence_aliases(f) & challenged]
         if challenged_recurring:
             ids = "; ".join(recurrence_key(f) for f in challenged_recurring)
             return {"halt": True, "reason": "challenged-principle-recurring", "detail": f"{len(challenged_recurring)} challenged coverage decision class recurred after being recorded: {ids}"}

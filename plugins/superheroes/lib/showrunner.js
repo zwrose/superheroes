@@ -226,6 +226,12 @@ function normalizeReviewerFindings(findings) {
   })
 }
 
+const REVIEW_CODE_DIFF_READ_INSTRUCTION =
+  'Review the target worktree diff in bounded chunks (<=800 lines per read): use the provided target worktree/head context and bounded git diff shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
+
+const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
+  'Read definition-doc artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire artifact in one read; continue offsets until the document is covered.'
+
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
@@ -284,7 +290,7 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
     // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
@@ -408,7 +414,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
   })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
     Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null

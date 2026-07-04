@@ -36,6 +36,9 @@ function __safeSmartDefault() {
   if (__safeSmartDefaultCache === null) __safeSmartDefaultCache = __require('model_tier').resolveModel('synthesis', null, null)
   return __safeSmartDefaultCache
 }
+function __payloadModel() {
+  return __require('model_tier').resolveModel('fixer', globalThis.__SR_OVERRIDES || null, 'code') || __safeSmartDefault()
+}
 const __realAgent = agent
 globalThis.agent = function (prompt, opts) {
   var o = Object.assign({}, opts || {})
@@ -47,10 +50,14 @@ globalThis.agent = function (prompt, opts) {
   // unconditionally, independent of __SR_LEAF_MODEL or any session default. Genuine-LLM (smart) leaves
   // get __SR_LEAF_MODEL when set (throwaway/test run override).
   var __lbl = (typeof o.label === 'string') ? o.label : ''
+  var __payload = o.payload === true
   var __isDumb = (o.courier === true || __lbl === 'exec' || __lbl === 'io' ||
                   __lbl.indexOf('exec:') === 0 || __lbl.indexOf('io:') === 0)
   if (o.courier !== undefined) delete o.courier   // courier marker is preamble-only, never forwarded
-  if (__isDumb) {
+  if (o.payload !== undefined) delete o.payload   // payload marker is preamble-only, never forwarded
+  if (__isDumb && __payload) {
+    o.model = __payloadModel()
+  } else if (__isDumb) {
     o.model = __cheapest()
   } else if (globalThis.__SR_LEAF_MODEL) {
     o.model = globalThis.__SR_LEAF_MODEL
@@ -72,7 +79,12 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
-async function __sh(cmd) { return globalThis.agent('Run exactly this command and return ONLY its stdout, unchanged:\n\n' + __sc(cmd), { label: 'io' }) }
+async function __sh(cmd, opts) {
+  return globalThis.agent(
+    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd),
+    Object.assign({ label: 'io', courier: true }, opts || {}),
+  )
+}
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
 // hashlib.sha256(text.encode('utf-8')).hexdigest() and io_seam's crypto twin. Parity is
@@ -157,6 +169,50 @@ function __helperResult(s) {
   stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
+const __PAYLOAD_BOUND = 3000
+const __PAYLOAD_CHARS = 1200
+const __NL = String.fromCharCode(10)
+function __libPath(name) {
+  return __require('lib_root').libPath(name)
+}
+function __argv(cmd, args) { return [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ') }
+function __textChunks(text, size) {
+  var chunks = []
+  for (var i = 0; i < text.length;) {
+    var end = Math.min(text.length, i + size)
+    var last = text.charCodeAt(end - 1)
+    if (end < text.length && last >= 0xd800 && last < 0xdc00) end -= 1
+    if (end <= i) end = Math.min(text.length, i + size)
+    chunks.push(text.slice(i, end)); i = end
+  }
+  if (!chunks.length) chunks.push('')
+  return chunks
+}
+async function __runHelperCommand(args, payload) {
+  var parts = __argv('python3', args)
+  return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', payload ? { payload: true } : {}) || ''))
+}
+async function __stageChunkFile(stagedPath, index, total, chunkText) {
+  var b64 = __b64(chunkText)
+  var args = [__libPath('review_memory.py'), 'stage-chunk', '--path', stagedPath,
+              '--index', String(index), '--total', String(total),
+              '--chunk-b64', b64, '--chunk-hash', __contentHash(b64)]
+  for (var attempt = 0; attempt < 2; attempt++) {
+    var out = await __runHelperCommand(args, true)
+    try { var parsed = JSON.parse(out.stdout || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return
+  }
+  throw new Error('payload-stage-failed')
+}
+async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
+  var chunks = __textChunks(text, __PAYLOAD_CHARS)
+  for (var i = 0; i < chunks.length; i++) await __stageChunkFile(stagedPath, i, chunks.length, chunks[i])
+  var finish = __argv('python3', [__libPath('review_memory.py'), 'finish-chunks', '--path', stagedPath,
+                                 '--total', String(chunks.length), '--payload-hash', __contentHash(text)])
+  var helper = __argv(cmd, args || [])
+  var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
+  return __helperResult(String(await __sh(chain, { payload: true }) || ''))
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -168,7 +224,14 @@ globalThis.io = {
   // Python-side staged-hash checks keep the one-newline tolerance for old-bundle compat).
   async writeFile(p, s) {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
-    await __sh("python3 - <<'__SR_EOF__'\nimport base64\nwith open(" + JSON.stringify(p) + ", 'wb') as fh:\n    fh.write(base64.b64decode('" + __b64(b) + "'))\nprint('ok')\n__SR_EOF__")
+    const encoded = __b64(b)
+    const script = "python3 - <<'__SR_EOF__'" + __NL +
+      "import base64" + __NL +
+      "with open(" + JSON.stringify(p) + ", 'wb') as fh:" + __NL +
+      "    fh.write(base64.b64decode('" + encoded + "'))" + __NL +
+      "print('ok')" + __NL +
+      "__SR_EOF__"
+    await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
   },
   // stageAndRunHelper: fold 1 (#141) — the single-leaf twin of writeFile(stagedPath)+runHelper. ONE
   // command chains: mkdir -p <parent> && <opaque base64 stage-write, stdout to /dev/null> && <helper>.
@@ -178,17 +241,22 @@ globalThis.io = {
   // Python-side --payload-hash check then fails closed exactly as before, one retry. D3 byte-identical.
   async stageAndRunHelper(stagedPath, text, cmd, args) {
     const b = (typeof text === 'string') ? text : JSON.stringify(text)
+    if (__b64(b).length > __PAYLOAD_BOUND) return __chunkedStageAndRun(stagedPath, b, cmd, args)
     var dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
     var mk = dir ? ('mkdir -p ' + __q(dir) + ' && ') : ''
-    var helper = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
-    var chain = mk + "python3 - <<'__SR_EOF__' >/dev/null && " + helper + ' 2>&1; echo __SR_EXIT:$?\nimport base64\nwith open(' + JSON.stringify(stagedPath) + ", 'wb') as fh:\n    fh.write(base64.b64decode('" + __b64(b) + "'))\n__SR_EOF__"
+    var helper = __argv(cmd, args || [])
+    var chain = mk + "python3 - <<'__SR_EOF__' >/dev/null && " + helper + ' 2>&1; echo __SR_EXIT:$?' + __NL +
+      'import base64' + __NL +
+      'with open(' + JSON.stringify(stagedPath) + ", 'wb') as fh:" + __NL +
+      "    fh.write(base64.b64decode('" + __b64(b) + "'))" + __NL +
+      '__SR_EOF__'
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
-    var parts = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
+    var parts = __argv(cmd, args || [])
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in ``` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
     // end-anchored match misses and a clean exit-0 helper is falsely read as FAILED (coverage-
@@ -295,7 +363,7 @@ module.exports = {
 // ===== circuit_breaker.js =====
 __modules["circuit_breaker"] = function (module, exports, require) {
 // plugins/superheroes/lib/circuit_breaker.js
-const { classKey } = require('./review_memory.js')
+const { clampTitle, canonicalClassKey, classKeyAliases } = require('./review_memory.js')
 const BLOCKING = new Set(['Critical', 'Important'])
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
@@ -312,13 +380,23 @@ function findingLabel(finding) {
   return finding.title || finding.summary || ''
 }
 function findingIdentity(finding) {
-  return `${(finding && finding.file) || ''}::${normalizeTitle(findingLabel(finding))}`
+  return `${(finding && finding.file) || ''}::${normalizeTitle(clampTitle(findingLabel(finding)))}`
 }
 function recurrenceKey(finding) {
+  if (finding && (finding.dimension || finding.taxonomy)) return canonicalClassKey(finding)
   if (finding && finding.classKey) return finding.classKey
-  const key = classKey(finding)
-  if (finding && (finding.dimension || finding.taxonomy)) return key
   return findingIdentity(finding)
+}
+function recurrenceAliases(finding) {
+  const aliases = new Set([recurrenceKey(finding)])
+  if (finding && (finding.dimension || finding.taxonomy)) {
+    for (const alias of classKeyAliases(finding)) aliases.add(alias)
+  }
+  return aliases
+}
+function intersects(a, b) {
+  for (const x of a) if (b.has(x)) return true
+  return false
 }
 function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
 function _generalizeKeys(roundRec) {
@@ -328,7 +406,7 @@ function _blockingCountExcludingGeneralize(roundRec) {
   const generalize = _generalizeKeys(roundRec)
   const blocking = _blocking(roundRec)
   if (!generalize.size) return blocking.length
-  return blocking.filter((f) => !generalize.has(recurrenceKey(f))).length
+  return blocking.filter((f) => !intersects(recurrenceAliases(f), generalize)).length
 }
 function _roundReviewed(roundRec) {
   const dims = roundRec && roundRec.dimensions
@@ -364,9 +442,10 @@ function checkCircuitBreaker(rounds, maxRounds) {
     const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
     const challenged = new Set((latestRec.coverageDecisions || []).filter((d) => d && d.classKey && d.challengedBy).map((d) => d.classKey))
     const latestBlocking = _blocking(latestRec)
-    const prevIds = new Set(_blocking(reviewed[rn - 2]).map(recurrenceKey))
-    const recurring = latestBlocking.filter((f) => prevIds.has(recurrenceKey(f)))
-    const challengedRecurring = recurring.filter((f) => challenged.has(recurrenceKey(f)))
+    const prevIds = new Set()
+    for (const f of _blocking(reviewed[rn - 2])) for (const alias of recurrenceAliases(f)) prevIds.add(alias)
+    const recurring = latestBlocking.filter((f) => intersects(recurrenceAliases(f), prevIds))
+    const challengedRecurring = recurring.filter((f) => intersects(recurrenceAliases(f), challenged))
     if (challengedRecurring.length) {
       const ids = challengedRecurring.map(recurrenceKey).join('; ')
       return { halt: true, reason: 'challenged-principle-recurring',
@@ -386,7 +465,7 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, checkCircuitBreaker, BLOCKING }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING }
 
 };
 
@@ -798,10 +877,42 @@ function _norm(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+const _MAX_TITLE = 160
+const _TITLE_ELLIPSIS = '...'
+function clampTitle(title) {
+  if (typeof title !== 'string') return title
+  if (title.length <= _MAX_TITLE) return title
+  const limit = _MAX_TITLE - _TITLE_ELLIPSIS.length
+  let prefix = title.slice(0, limit).replace(/[ \t\n\r\f\v]+$/, '')
+  let boundary = -1
+  for (const ch of [' ', '\t', '\n', '\r', '\f', '\v']) boundary = Math.max(boundary, prefix.lastIndexOf(ch))
+  if (boundary > 0) prefix = prefix.slice(0, boundary).replace(/[ \t\n\r\f\v]+$/, '')
+  if (!prefix) prefix = title.slice(0, limit).replace(/[ \t\n\r\f\v]+$/, '')
+  return prefix + _TITLE_ELLIPSIS
+}
+
+function _titleText(finding) {
+  if (!finding || typeof finding !== 'object') return ''
+  return finding.title || finding.summary || ''
+}
+
 function classKey(finding) {
   finding = finding || {}
-  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(finding.title || finding.summary)}`
+  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(clampTitle(_titleText(finding)))}`
 }
+
+function canonicalClassKey(finding) {
+  if (!finding || typeof finding !== 'object') return classKey({})
+  if (finding.title || finding.summary || finding.dimension || finding.taxonomy) return classKey(finding)
+  return finding.classKey || classKey(finding)
+}
+
+function classKeyAliases(finding) {
+  const aliases = new Set([canonicalClassKey(finding)])
+  if (finding && typeof finding === 'object' && finding.classKey) aliases.add(finding.classKey)
+  return aliases
+}
+
 
 function recurrentClasses(records, coverageDecisions) {
   const covered = new Set((coverageDecisions || []).map((d) => d && d.classKey).filter(Boolean))
@@ -810,8 +921,10 @@ function recurrentClasses(records, coverageDecisions) {
     for (const finding of (rec && rec.findings) || []) {
       if (finding.carried) continue
       if (!BLOCKING.has(finding.severity)) continue
-      const key = finding.classKey || classKey(finding)
-      if (covered.has(key)) continue
+      const key = canonicalClassKey(finding)
+      let isCovered = false
+      for (const alias of classKeyAliases(finding)) if (covered.has(alias)) isCovered = true
+      if (isCovered) continue
       if (!seen[key]) seen[key] = new Set()
       seen[key].add(rec.round)
     }
@@ -886,19 +999,21 @@ function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, 
 }
 
 // skeletonRecord: the JS twin of review_memory.py summarize_record — the bounded durable form
-// of a round record (D3). Findings keep only identity/class/severity (title<=300); dimension
+// of a round record (D3). Findings keep only identity/class/severity (title<=160); dimension
 // records keep their scheduling scalars + skeleton findings. This is what persist-skeleton
 // ships inline (Python re-applies summarize_record on arrival, so a drift here can widen the
 // leaf payload but can never widen the on-disk contract).
 const _SKELETON_FIELDS = ['file', 'line', 'title', 'severity', 'taxonomy', 'dimension',
                           'classKey', 'carried', 'sourceRound']
-const _MAX_TITLE = 300
-
 function _skeletonFinding(finding) {
   if (!finding || typeof finding !== 'object') return {}
   const out = {}
   for (const k of _SKELETON_FIELDS) if (k in finding) out[k] = finding[k]
-  if (typeof out.title === 'string' && out.title.length > _MAX_TITLE) out.title = out.title.slice(0, _MAX_TITLE)
+  if (typeof out.title === 'string') out.title = clampTitle(out.title)
+  // A stored classKey is preserved verbatim (legacy unclamped-title keys must survive
+  // skeletonization for classKeyAliases to match legacy coverage decisions); only a
+  // key-less finding gets the canonical stamp.
+  if (!('classKey' in out) && (finding.dimension || finding.taxonomy)) out.classKey = canonicalClassKey(finding)
   return out
 }
 
@@ -970,7 +1085,7 @@ function skeletonRecord(record) {
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred, skeletonCoverageDecisions }
+module.exports = { clampTitle, classKey, canonicalClassKey, classKeyAliases, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred, skeletonCoverageDecisions }
 
 };
 
@@ -1122,19 +1237,96 @@ function confirmationReady(records, round, justMarked) {
 
 // load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
 // per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never full findings bodies —
-// echoing a multi-round evidence-laden file through the courier stdout is the same
-// mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
-// the loop's second entry read (last-extras.json) into the same leaf; it comes back as
-// `extras` (null when missing/corrupt — the old readJson-default parity).
-async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
-  try {
-    const parsed = JSON.parse(out.stdout || '{}')
-    return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
-  } catch (_) {
-    return { ok: false, reason: 'round-memory-helper-failed' }
+// recurrence, policy, and fix-context need in memory), never full findings bodies. Small summaries
+// still return directly. Once the summary is big enough to be courier-fragile, the helper writes it
+// Python-side and returns only a receipt; the shell reads base64 chunks and verifies each chunk plus
+// the reconstructed content hash before parsing.
+const _SUMMARY_RECEIPT_BOUND = 4000
+const _READ_CHUNK_CHARS = 1600
+
+function _b64Bytes(b64) {
+  const clean = String(b64 || '').replace(/[\r\n\t ]/g, '')
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  const out = []
+  for (let i = 0; i < clean.length; i += 4) {
+    const c0 = A.indexOf(clean[i]); const c1 = A.indexOf(clean[i + 1])
+    const c2 = clean[i + 2] === '=' ? -1 : A.indexOf(clean[i + 2])
+    const c3 = clean[i + 3] === '=' ? -1 : A.indexOf(clean[i + 3])
+    if (c0 < 0 || c1 < 0 || (c2 < 0 && clean[i + 2] !== '=') || (c3 < 0 && clean[i + 3] !== '=')) throw new Error('bad base64')
+    out.push((c0 << 2) | (c1 >> 4))
+    if (c2 >= 0) out.push(((c1 & 15) << 4) | (c2 >> 2))
+    if (c3 >= 0) out.push(((c2 & 3) << 6) | c3)
   }
+  return out
+}
+
+function _utf8FromBytes(bytes) {
+  let out = ''
+  for (let i = 0; i < bytes.length;) {
+    const b0 = bytes[i++]
+    if (b0 < 0x80) { out += String.fromCharCode(b0); continue }
+    if ((b0 & 0xe0) === 0xc0) {
+      const b1 = bytes[i++] || 0
+      out += String.fromCharCode(((b0 & 31) << 6) | (b1 & 63))
+      continue
+    }
+    if ((b0 & 0xf0) === 0xe0) {
+      const b1 = bytes[i++] || 0; const b2 = bytes[i++] || 0
+      out += String.fromCharCode(((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63))
+      continue
+    }
+    const b1 = bytes[i++] || 0; const b2 = bytes[i++] || 0; const b3 = bytes[i++] || 0
+    let cp = ((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63)
+    cp -= 0x10000
+    out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023))
+  }
+  return out
+}
+
+function _decodeBase64Utf8(b64) {
+  if (typeof Buffer !== 'undefined') return Buffer.from(String(b64 || ''), 'base64').toString('utf8')
+  return _utf8FromBytes(_b64Bytes(b64))
+}
+
+function _jsonFromStdout(out) {
+  try { return JSON.parse((out && out.stdout) || '') } catch (_) { return null }
+}
+
+async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) {
+  if (!receipt || receipt.receipt !== expectedReceipt || !receipt.path || !receipt.contentHash) return { ok: false, reason: corruptReason }
+  const chunkSize = receipt.chunkSize || _READ_CHUNK_CHARS
+  let index = 0
+  let text = ''
+  for (let guard = 0; guard < 10000; guard += 1) {
+    let parsed = null
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'read-chunk', '--path', receipt.path, '--index', String(index), '--chunk-size', String(chunkSize)])
+      parsed = _jsonFromStdout(out)
+      if (!parsed || !parsed.ok || parsed.index !== index) { parsed = null; continue }
+      if (parsed.contentHash !== receipt.contentHash) { parsed = null; continue }
+      if (parsed.chunkHash !== ioApi.contentHash(parsed.b64 || '')) { parsed = null; continue }
+      break
+    }
+    if (!parsed) return { ok: false, reason: corruptReason }
+    try { text += _decodeBase64Utf8(parsed.b64 || '') } catch (_) { return { ok: false, reason: corruptReason } }
+    if (parsed.eof) break
+    index = Number(parsed.nextIndex)
+    if (!Number.isFinite(index)) return { ok: false, reason: corruptReason }
+  }
+  if (ioApi.contentHash(text) !== receipt.contentHash) return { ok: false, reason: corruptReason }
+  return { ok: true, text }
+}
+
+async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)])
+  let parsed = _jsonFromStdout(out)
+  if (parsed && parsed.receipt === 'load-summary') {
+    const read = await _readReceiptText(ioApi, parsed, 'load-summary', 'round-memory-helper-failed')
+    if (!read.ok) return read
+    try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
+  }
+  if (parsed && typeof parsed === 'object') return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
+  return { ok: false, reason: 'round-memory-helper-failed' }
 }
 
 async function probeRoundRecords(runDir, ioApi) {
@@ -1185,16 +1377,20 @@ const _INLINE_RECORD_BOUND = 6000
 // converges instead of dying 'stale'.
 async function _selfVerifiedHelper(ioApi, args, stagedPath, stagedText, corruptReason) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    let out
     if (stagedPath) {
-      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) {
+      try {
+        out = await ioApi.stageAndRunHelper(stagedPath, stagedText, 'python3', args)
+      } catch (_) {
         // a missing parent dir is the common first-attempt failure (fresh run dir); create it
         // and let the retry re-stage.
         const dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
         if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
         continue
       }
+    } else {
+      out = await ioApi.runHelper('python3', args)
     }
-    const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
     if (parsed && parsed.ok) return parsed
@@ -1330,6 +1526,44 @@ function _stripZeroUsage(out) {
   return cleaned
 }
 
+function _expectedReceiptIds(opts) {
+  opts = opts || {}
+  if (Array.isArray(opts.receiptCoverageDecisionIds)) return opts.receiptCoverageDecisionIds.filter(Boolean)
+  return (opts.coverageDecisions || []).map((d) => d && d.id).filter(Boolean)
+}
+
+function _reviewerReceiptIssue(result, opts) {
+  if (!result || result.confidence !== 'high' || result.externalReview) return null
+  const receipt = result.verificationReceipt
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return 'missing'
+  if (opts && opts.receiptArtifact && receipt.artifact !== opts.receiptArtifact) return 'stale'
+  if (!Array.isArray(receipt.coverageDecisionIds)) return 'stale'
+  const gotIds = new Set(receipt.coverageDecisionIds || [])
+  for (const id of _expectedReceiptIds(opts)) if (!gotIds.has(id)) return 'stale'
+  const neededSteps = new Set(['citation', 'reachability', 'missing-check', 'tooling'])
+  for (const step of Array.isArray(receipt.chain) ? receipt.chain : []) {
+    if (step && typeof step === 'object' && step.evidence) neededSteps.delete(step.step)
+  }
+  return neededSteps.size ? 'stale' : null
+}
+
+function _withReceiptFreshness(shaped, opts) {
+  if (!shaped || !Array.isArray(shaped.findings) || shaped.confidence !== 'high' || shaped.externalReview) return shaped
+  const issue = _reviewerReceiptIssue(shaped, opts || {})
+  if (!issue) return shaped
+  const out = Object.assign({}, shaped, { confidence: 'low' })
+  if (issue === 'missing') out.receiptMissing = true
+  else {
+    out.receiptStale = true
+    out.findings = []
+  }
+  return out
+}
+
+function _retryableReviewerIssue(out) {
+  return !_validReviewerResult(out) || !!(out && (out.receiptMissing || out.receiptStale))
+}
+
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   const leaves = (reviewerSet || []).map((name) => `${name}:r${round}`)
   if (legKind && legKind.panel) leaves.push(`synthesis:r${round}`)
@@ -1390,15 +1624,20 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
     '--extras-path', api.join(runDir, 'last-extras.json'),
     '--deferred-path', api.join(runDir, 'deferred-set.json'),
     '--coverage-path', target.path,
-    '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code']
+    '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code',
+    '--out-path', api.join(runDir, 'review-setup-gather.json'),
+    '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)]
   const out = await api.runHelper('python3', args)
-  try {
-    const parsed = JSON.parse((out && out.stdout) || '')
-    if (parsed && parsed.ok && parsed.memory && parsed.coverage) {
-      if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
-      return parsed
-    }
-  } catch (_) { /* fall through — caller uses the unfolded path */ }
+  let parsed = _jsonFromStdout(out)
+  if (parsed && parsed.receipt === 'review-setup-gather') {
+    const read = await _readReceiptText(api, parsed, 'review-setup-gather', 'review-setup-gather-unreadable')
+    if (!read.ok) return null
+    try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
+  }
+  if (parsed && parsed.ok && parsed.memory && parsed.coverage) {
+    if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
+    return parsed
+  }
   return null
 }
 
@@ -1636,21 +1875,21 @@ function _shapeReviewerResult(out, opts) {
   }
   const shaped = _stripZeroUsage(out)
   if (!shaped || !Array.isArray(shaped.findings)) return shaped
-  return Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) })
+  return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
 }
 
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
-  if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
+  if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
     escalated = true
     const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
-    if (!_validReviewerResult(out) || out.receiptMissing) {
+    if (_retryableReviewerIssue(out)) {
       out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
     }
-  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
+  } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
   }
   if (!_validReviewerResult(out)) {
@@ -5680,6 +5919,12 @@ function normalizeReviewerFindings(findings) {
   })
 }
 
+const REVIEW_CODE_DIFF_READ_INSTRUCTION =
+  'Review the target worktree diff in bounded chunks (<=800 lines per read): use the provided target worktree/head context and bounded git diff shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
+
+const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
+  'Read definition-doc artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire artifact in one read; continue offsets until the document is covered.'
+
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
@@ -5738,7 +5983,7 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
     // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
@@ -5862,7 +6107,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
   })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
     Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null

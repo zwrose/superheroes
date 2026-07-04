@@ -239,7 +239,7 @@ Sweep the entire codebase under the project's source dirs for accumulated issues
 diff-scope rule does NOT apply — you are auditing existing code.
 
 ## Context files
-- File list: $SESSION_DIR/sweep-prep/files.txt
+- File list: $SESSION_DIR/sweep-prep/files.txt (read in bounded chunks, <=800 lines; use Read offset/limit when available, or an equivalent bounded shell range; never one whole-file read)
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
 - Core + layer calibration: <CORE_PATH> (threat model, patterns); <LAYER_PATH> (scope, focus, conventions)
 - CLAUDE.md (project conventions): CLAUDE.md
