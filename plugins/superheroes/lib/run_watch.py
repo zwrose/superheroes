@@ -302,7 +302,7 @@ def _read_run(root, work_item, events):
             state = "parked"
         elif typ in ("run_started", "resumed", "lease_acquired", "lease_reclaimed",
                      "step_entered", "step_completed", "gate", "ci_fix_attempt",
-                     "phase_record", "external_dispatch", "notify"):
+                     "phase_record", "external_dispatch", "notify", "phases_skipped"):
             state = "active"
         elif typ == "error":
             state = "error"
@@ -525,6 +525,13 @@ def format_journal_event(evt):
         return "%s  ▶ resumed%s" % (clock, _detail_suffix(evt))
     if typ == "run_completed":
         return "%s  ✓ run completed%s" % (clock, _detail_suffix(evt))
+    if typ == "phases_skipped":
+        # #25: surface the quick route's skipped front-half phases in the live readout — never silent.
+        payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
+        route = payload.get("route") or "quick"
+        skipped = payload.get("skipped")
+        names = ", ".join(skipped) if isinstance(skipped, list) and skipped else "front-half phases"
+        return "%s  ⏭ %s route — skipped %s" % (clock, route, names)
     if typ in ("lease_acquired", "lease_reclaimed"):
         return "%s  · %s%s" % (clock, typ.replace("_", " "), _detail_suffix(evt))
     return "%s  · %s%s" % (clock, typ.replace("_", " "), _detail_suffix(evt))

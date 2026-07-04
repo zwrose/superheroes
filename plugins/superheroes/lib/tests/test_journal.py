@@ -203,3 +203,31 @@ def test_journal_entry_cli_defaults_to_phase_record(tmp_path, monkeypatch):
     assert out.returncode == 0 and _json.loads(out.stdout) == {"ok": True}
     evs = journal.read_events(control_plane.paths(str(tmp_path), "wi-y")["events"])
     assert evs[-1]["type"] == "phase_record"
+
+
+def test_phases_skipped_event_is_recorded_with_payload(tmp_path, monkeypatch):
+    # #25: the quick route's skipped-phase record rides the journal_entry.py seam with a structured,
+    # non-secret payload written AS-IS — so the skip is durable and honest, never silently absent.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    import journal
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    payload = {"route": "quick", "skipped": ["plan", "review-plan", "tasks", "review-tasks"],
+               "entryPhase": "workhorse"}
+    out = _sp.run(
+        [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+         "--work-item", "wi-q", "--event-type", "phases_skipped", "--payload", _json.dumps(payload)],
+        capture_output=True, text=True)
+    assert out.returncode == 0 and _json.loads(out.stdout) == {"ok": True}
+    evs = journal.read_events(control_plane.paths(str(tmp_path), "wi-q")["events"])
+    assert evs[-1]["type"] == "phases_skipped"
+    assert evs[-1]["payload"] == payload
+
+
+def test_phases_skipped_is_a_known_event_type():
+    # An unknown type would fail closed (DurableWriteError); phases_skipped must be registered.
+    assert "phases_skipped" in journal.EVENT_TYPES
