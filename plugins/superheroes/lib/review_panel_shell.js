@@ -132,10 +132,75 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
   return out
 }
 
+// #174 confirmation-bar economics helpers.
+// The NEW (non-carried) blocking severities a round surfaced.
+function surfacedBlockingSeverities(record) {
+  const findings = (record && Array.isArray(record.findings)) ? record.findings : []
+  return findings.filter((f) => f && BLOCKING.has(f.severity)).map((f) => f.severity)
+}
+// A confirmation counts as a qualifying FULL panel only when every dimension ran FRESH at
+// reviewer-deep with high confidence (the #167 invariant #174 preserves). A degraded attempt
+// (low-confidence / carried / non-deep dim — possible on a resumed prior-run record) neither
+// satisfies the panel obligation nor consumes the hard cap.
+function confirmationQualifies(record) {
+  const dims = (record && record.dimensions && typeof record.dimensions === 'object' && !Array.isArray(record.dimensions))
+    ? record.dimensions : null
+  if (!dims) return false
+  const names = Object.keys(dims)
+  if (!names.length) return false
+  return names.every((n) => {
+    const d = dims[n] || {}
+    return d.status === 'run' && d.confidence === 'high' && d.tier === 'reviewer-deep'
+  })
+}
+// Union of rework (changedSubjects) across a set of records. Any missing/non-array changed surface
+// is unknown → null → treated as cross-cutting by the twin (fail toward one more panel).
+function reworkAcross(records) {
+  const out = []
+  for (const r of records) {
+    const cs = r && r.changedSubjects
+    if (!Array.isArray(cs)) return null
+    out.push(...cs)
+  }
+  return out
+}
+// Is a FURTHER full confirmation panel still owed? The follow-up decision is computed over
+// EVERYTHING SINCE THE LAST QUALIFYING PANEL — the panel itself plus every later round — because
+// findings surfaced and rework applied by post-confirmation scoped rounds land on THOSE rounds'
+// records, not the panel's. Before any qualifying panel has run, the mandatory first panel is
+// owed. A Critical still owed at the cap → park (certification withheld).
+function panelWindow(records) {
+  const all = records || []
+  const qualifying = all.filter((r) => r && r.kind === 'confirmation' && confirmationQualifies(r))
+  if (!qualifying.length) return { qualifying, since: [] }
+  const lastRound = Number(qualifying[qualifying.length - 1].round) || 0
+  const since = all.filter((r) => r && (Number(r.round) || 0) >= lastRound)
+  return { qualifying, since }
+}
+function furtherConfirmationOwed(records) {
+  const { qualifying, since } = panelWindow(records)
+  if (!qualifying.length) return { owed: true, park: false, panels: 0 }
+  const surfaced = since.flatMap(surfacedBlockingSeverities)
+  const followup = roundPolicy.confirmationFollowup(
+    surfaced, qualifying.length, roundPolicy.isCrossCutting(reworkAcross(since)))
+  return { owed: followup.rearm, park: followup.park, panels: qualifying.length, reason: followup.reason }
+}
+// The honest certification summary (#174 req 4): how many QUALIFYING full panels ran and whether
+// any blocking finding surfaced since the last one (resolved by scoped verify — not a pristine pass).
+function certificationSummary(records) {
+  const { qualifying, since } = panelWindow(records)
+  return { fullPanels: qualifying.length,
+    lastPanelSurfacedResolved: since.some((r) => surfacedBlockingSeverities(r).length > 0) }
+}
+
 function confirmationReady(records, round, justMarked) {
   if (justMarked) return false
   const marked = (records || []).filter((r) => r && r.confirmationPending)
   if (!marked.length) return false
+  // #174: once a full confirmation has run, only RE-ENTER another when the economics demand it
+  // (a Critical surfaced, or cross-cutting rework, under the cap). Otherwise the confirmation
+  // obligation is satisfied and no further full panel runs — the terminal guard certifies.
+  if (!furtherConfirmationOwed(records).owed) return false
   const markedRound = Math.max(...marked.map((r) => Number(r.round) || 0))
   const hasIntermediateAfterMarker = (records || []).some((r) => Number(r.round) > markedRound)
   if (!hasIntermediateAfterMarker) return true
@@ -980,14 +1045,30 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     }
     const markedPending = (records || []).some((r) => r && r.confirmationPending)
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
-      terminal = 'continue'
-      reason = 'awaiting final confirmation round'
+      // #174: a clean intermediate that owes a confirmation either forces one more full panel
+      // (owed), parks when a Critical is still owed at the cap (park), or — when the confirmation
+      // obligation is satisfied — certifies as-is (the ran confirmation + scoped verify suffice).
+      const owe = furtherConfirmationOwed(records)
+      if (owe.park) {
+        terminal = 'halted'
+        reason = owe.reason || 'Critical surfaced at the confirmation-panel cap — certification withheld'
+      } else if (owe.owed) {
+        terminal = 'continue'
+        reason = 'awaiting final confirmation round'
+      }
     }
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && policy.roundKind === 'confirmation') {
       // confirmation round succeeded — clear marker on persisted record handled next round
     }
-    return Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
+    const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, terminal, reason, round }, safeExtras)
+    // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
+    // established — how many QUALIFYING full panels ran and whether findings surfaced since the last
+    // one were resolved by scoped verify (never implying a pristine fresh pass occurred).
+    if (terminal === 'clean' || terminal === 'clean-with-skips') {
+      verdictOut.certification = certificationSummary(records)
+    }
+    return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
       findings: [], missing: [], drops: [], terminal: 'halted', round,

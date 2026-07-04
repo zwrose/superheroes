@@ -374,6 +374,123 @@ def test_confirmation_round_clean_exits(tmp_path, capsys):
     assert out["action"] == "exit_clean"
 
 
+def _finding(dim_label, severity):
+    return {"id": "y-002", "severity": severity, "dimension": dim_label,
+            "title": "new confirmation finding", "file": "spec.md", "line": 7,
+            "body": "b", "confidence": "High"}
+
+
+def _confirmation_round3_surfacing(tmp_path, capsys, severity):
+    """Drive to a full-deep confirmation round (3) that surfaces one new blocking finding of the
+    given severity, then a clean scoped round (4). Returns session_dir positioned to decide(4)."""
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)  # schedules the full-deep confirmation round 3
+    for dim in DIMS:
+        _write_findings(session_dir, dim,
+                        [_finding("Architecture", severity)] if dim == "architecture-reviewer" else [])
+    _record(capsys, session_dir, 3)
+    _write_compiled(session_dir, [_finding("Architecture", severity)])
+    _decide(capsys, session_dir, 3)  # blocking present → schedules scoped round 4
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 4)
+    _write_compiled(session_dir, [])
+    return session_dir
+
+
+def _record_with_escalation(capsys, session_dir, rnd, findings_by_dim):
+    """Record a round, satisfying a single cheap→deep escalation (a scoped dim carrying a finding
+    starts at `reviewer` and escalates once) by re-writing the escalated dims and recording again."""
+    for dim in DIMS:
+        _write_findings(session_dir, dim, findings_by_dim.get(dim, []))
+    rec = _record(capsys, session_dir, rnd)
+    if rec.get("escalate"):
+        for esc in rec["escalate"]:
+            _write_findings(session_dir, esc["dimension"], findings_by_dim.get(esc["dimension"], []))
+        rec = _record(capsys, session_dir, rnd)
+    return rec
+
+
+def test_confirmation_surfacing_important_certifies_after_scoped_verify(tmp_path, capsys):
+    # #174 req 1/2: a confirmation that surfaces a new Important does NOT forfeit certification —
+    # the Important is fixed + scope-verified and the loop certifies without a second full panel.
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "exit_clean", out
+    assert out["nextRound"] is None
+    # #174 finding 4: the honest-readout flag is COMPUTED from what the panel surfaced, not hardcoded.
+    assert out["certification"]["fullPanels"] == 1
+    assert out["certification"]["lastPanelSurfacedResolved"] is True
+
+
+def test_spec_postconfirmation_scoped_critical_rearms(tmp_path, capsys):
+    # #174 finding 2 (spec): a Critical surfaced by a post-confirmation SCOPED round (not the panel
+    # itself) must re-arm one more full confirmation — the follow-up unions surfaced severities
+    # across the panel and every later round, not the panel round alone.
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)  # → confirmation round 3
+    for dim in DIMS:
+        _write_findings(session_dir, dim,
+                        [_finding("Architecture", "Important")] if dim == "architecture-reviewer" else [])
+    _record(capsys, session_dir, 3)
+    _write_compiled(session_dir, [_finding("Architecture", "Important")])
+    _decide(capsys, session_dir, 3)  # review → scoped round 4
+    _record_with_escalation(capsys, session_dir, 4, {"architecture-reviewer": [_finding("Architecture", "Critical")]})
+    _write_compiled(session_dir, [_finding("Architecture", "Critical")])
+    _decide(capsys, session_dir, 4)  # review (blocking present) → scoped round 5
+    _record_with_escalation(capsys, session_dir, 5, {})
+    _write_compiled(session_dir, [])
+    out = _decide(capsys, session_dir, 5)
+    assert out["action"] == "review" and out["roundKind"] == "confirmation", out
+
+
+def test_spec_degraded_confirmation_owes_proper_panel(tmp_path, capsys):
+    # #174 finding 3 (spec): a confirmation with a low-confidence dimension is NOT a qualifying full
+    # panel (#167 bar) and must not anchor certification — the loop owes a proper panel.
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)  # → confirmation round 3
+    # round 3 confirmation: architecture comes back low-confidence (object-shaped result), rest clean
+    for dim in DIMS:
+        if dim == "architecture-reviewer":
+            path = os.path.join(session_dir, "findings-architecture.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"findings": [], "confidence": "low"}, fh)
+        else:
+            _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 3)
+    _write_compiled(session_dir, [])
+    out = _decide(capsys, session_dir, 3)
+    assert out["action"] == "review" and out["roundKind"] == "confirmation", out
+
+
+def test_spec_surfaced_severities_missing_criticalcount_fails_toward_critical():
+    # #174 finding 5: state records written before this PR have no criticalCount; a surfaced blocker
+    # with a missing criticalCount must read as Critical (fail-open), never silently as Important.
+    entry = {"dims": {"architecture-reviewer": {"status": "run", "blockingCount": 1}}}
+    assert SLP._surfaced_severities(entry) == ["Critical"]
+    # present-and-zero criticalCount stays Important
+    entry2 = {"dims": {"architecture-reviewer": {"status": "run", "blockingCount": 1, "criticalCount": 0}}}
+    assert SLP._surfaced_severities(entry2) == ["Important"]
+
+
+def test_confirmation_surfacing_critical_rearms_one_more_confirmation(tmp_path, capsys):
+    # #174 req 2: a Critical surfaced by a confirmation triggers exactly one more full confirmation.
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Critical")
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+    assert out["nextRound"] == 5
+
+
 def test_cap_before_confirmation_halts(tmp_path, capsys):
     session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
     _write_findings(session_dir, "architecture-reviewer", [])

@@ -30,6 +30,21 @@ def test_non_dict_record_is_safe():
     assert "unreadable" in LR.render(None).lower()
 
 
+def test_certification_states_panel_count_and_scoped_resolution():
+    # #174 req 4: the certification record states what was established — how many full confirmation
+    # panels ran and, honestly, that the last panel's findings were resolved by a scoped verify
+    # (never implying a pristine fresh pass).
+    out = LR.render(_record(certification={"fullPanels": 1, "lastPanelSurfacedResolved": True}))
+    assert "1 full confirmation panel" in out
+    assert "scoped verification" in out.lower()
+
+
+def test_certification_pristine_panel_does_not_claim_scoped_resolution():
+    out = LR.render(_record(certification={"fullPanels": 1, "lastPanelSurfacedResolved": False}))
+    assert "1 full confirmation panel" in out
+    assert "scoped verification" not in out.lower()
+
+
 def test_names_fixes_drops_and_deferrals():
     out = LR.render(_record(
         terminal="clean-with-skips",
