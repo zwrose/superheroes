@@ -36,6 +36,13 @@ compute at the moment the reviewer answers arrive*, not content:
     the live answers.
 Everything else (breaker, terminal, confirmation follow-up, certification) the deciders compute
 from disk. Every fail-closed path in the shell stays fail-closed here.
+
+Staging note: in this first stacked PR these deciders are DORMANT — the live shell still runs its
+own in-memory copies, so nothing here decides a real run yet and there is no production drift. The
+stacked PR-2 wires the shell to these deciders, deletes the in-memory record model, and lands the
+decider ≡ shell equivalence smoke (Phase 4a) — the drift guard that pins this port against the
+shell functions it replaces, where both paths coexist for the comparison. The unit tests here pin
+each decider's answer against expected values derived from the shell's logic in the meantime.
 """
 import argparse
 import json
@@ -50,6 +57,21 @@ import review_round_policy
 SCHEMA_VERSION = 1
 BLOCKING = {"Critical", "Important"}
 _VERIFY_OK = {"pass", "skipped"}
+# The breaker's recurring-finding / challenged-principle detail joins ALL recurring blocking class
+# keys ("; ".join(sorted(keys))) — unbounded in the finding count. It rides both the answer's
+# `reason` (on a breaker halt) and `breaker.detail`, so an N-class recurrence would grow the answer
+# ~N × a clamped title, re-creating the #211 scaled-courier-payload class on the one verdict that
+# most needs to reach the shell intact. Bound it in the ANSWER here (never in the shared twin, which
+# other legs read in memory): the machine-readable `breaker.reason` code stays intact; the full id
+# list stays on disk for the readout. The shell twin gets the matching clamp in PR-2 for parity.
+_MAX_REASON = 480
+
+
+def _clamp_reason(text):
+    s = "" if text is None else str(text)
+    if len(s) <= _MAX_REASON:
+        return s
+    return s[:_MAX_REASON].rstrip() + " …(truncated)"
 
 
 # ── faithful ports of the shell's in-memory record consumers (Phase-0 census) ──
@@ -407,7 +429,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         terminal, reason = panel_tally.decide_terminal(
             gate, present_blocking, pdef, fix_status, round_no, max_rounds, breaker_halt)
         if terminal == "halted" and breaker_halt and brk.get("detail"):
-            reason = brk["detail"]
+            reason = _clamp_reason(brk["detail"])
         if terminal in ("clean", "clean-with-skips") and verify_result is not None \
                 and verify_result not in _VERIFY_OK:
             terminal = "halted"
@@ -439,7 +461,8 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
             "missing": safe_missing,
             "presentBlocking": present_blocking,
             "presentDeferred": pdef,
-            "breaker": {"halt": breaker_halt, "reason": brk.get("reason"), "detail": brk.get("detail")},
+            "breaker": {"halt": breaker_halt, "reason": brk.get("reason"),
+                        "detail": _clamp_reason(brk.get("detail"))},
         }
         if terminal in ("clean", "clean-with-skips"):
             out["certification"] = _certification_summary(records)
@@ -510,7 +533,8 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
         "priorFindings": all_findings,
         "classKeys": [f.get("classKey") or review_memory.class_key(f) for f in all_findings],
         "generalizeRequired": review_memory.recurrent_classes(records, coverage_decisions),
-        "changedSubjects": sorted(set(changed_subjects)),
+        # insertion-order dedupe, matching the shell's Array.from(new Set(changedSubjects))
+        "changedSubjects": list(dict.fromkeys(changed_subjects)),
         "coverageDecisions": coverage_decisions,
     }
     text = json.dumps(worklist, sort_keys=True)

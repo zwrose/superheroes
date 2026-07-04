@@ -66,6 +66,16 @@ def _run(*argv):
     return json.loads(out), len(out.encode("utf-8"))
 
 
+def _max_list_len(value):
+    """Deepest list length anywhere in an answer — an anti-leak guard: no decider answer field may
+    grow with finding count, so on a big fixture every list must stay small (bounded by roster)."""
+    if isinstance(value, list):
+        return max([len(value)] + [_max_list_len(v) for v in value])
+    if isinstance(value, dict):
+        return max([0] + [_max_list_len(v) for v in value.values()])
+    return 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # entry-bootstrap
 # ─────────────────────────────────────────────────────────────────────────────
@@ -317,6 +327,112 @@ def test_tally_clean_intermediate_owes_a_confirmation_panel(tmp_path):
     assert ans["reason"] == "awaiting final confirmation round"
 
 
+def test_tally_parks_when_critical_surfaces_at_confirmation_cap(tmp_path):
+    # The fail-closed direction of the #174 economics: two QUALIFYING full-deep confirmation panels
+    # have run (the hard cap) and a Critical surfaced since the last one — certification must be
+    # WITHHELD (halted), never certified clean. A dropped park branch would certify a should-halt run.
+    crit = [{"title": "still critical", "file": "a.js", "severity": "Critical", "dimension": "Code"}]
+    recs = [
+        _skeleton_round(1, {n: _dim() for n in FULL_ROSTER}, changed_subjects=["Code"]),
+        _skeleton_round(2, {n: _dim() for n in FULL_ROSTER}, kind="confirmation",
+                        confirmation_pending=True, changed_subjects=["Code"]),
+        _skeleton_round(3, {n: _dim() for n in FULL_ROSTER}, kind="intermediate",
+                        changed_subjects=["Code"]),
+        # second qualifying confirmation panel that surfaces a Critical
+        _skeleton_round(4, dict({n: _dim() for n in FULL_ROSTER},
+                                **{"code-reviewer": _dim(findings=crit)}),
+                        kind="confirmation", confirmation_pending=True, changed_subjects=["Code"]),
+        _skeleton_round(5, {n: _dim() for n in FULL_ROSTER}, kind="intermediate",
+                        changed_subjects=["Code"]),
+    ]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 5, roster=FULL_ROSTER, gate="clean", present_blocking=0,
+                 enter_confirmation=False)
+    assert ans["terminal"] == "halted"
+    assert "withheld" in ans["reason"]
+
+
+def test_tally_challenged_coverage_decision_changes_breaker_verdict(tmp_path):
+    # tally-round threads each round's coverageDecisions into the breaker; a challenged-and-recurring
+    # coverage decision must produce the distinct `challenged-principle-recurring` halt, not the plain
+    # `recurring-finding` one. Pins that the decider actually forwards coverageDecisions to the breaker.
+    finding = {"title": "recurs", "file": "a.js", "severity": "Critical", "dimension": "Code",
+               "classKey": "Code::x::recurs"}
+    challenged_cov = [{"id": "RCD-1", "classKey": "Code::x::recurs", "challengedBy": "code-reviewer"}]
+
+    def _fixture(coverage):
+        recs = [
+            _skeleton_round(1, {"code-reviewer": _dim(findings=[finding])}, changed_subjects=["Code"]),
+            _skeleton_round(2, {"code-reviewer": _dim(findings=[finding])},
+                            coverage=coverage, changed_subjects=["Code"]),
+        ]
+        return _write_records(tmp_path, recs, name=f"rr-{'ch' if coverage else 'plain'}.json")
+
+    challenged = _tally(_fixture(challenged_cov), 2, gate="blocking", present_blocking=1)
+    plain = _tally(_fixture([]), 2, gate="blocking", present_blocking=1)
+    assert challenged["breaker"]["reason"] == "challenged-principle-recurring"
+    assert plain["breaker"]["reason"] == "recurring-finding"
+
+
+def test_tally_deferred_blocker_does_not_block_a_clean_round(tmp_path):
+    # The deferred set removes a present blocker from the terminal accounting (present − deferred).
+    # With deferral the round exits; without it, the same present blocker forces continue.
+    finding = {"title": "known issue", "file": "a.js", "severity": "Critical", "dimension": "Code"}
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[finding]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    identity = circuit_breaker.finding_identity(finding)
+    deferred = tmp_path / "deferred-set.json"
+    deferred.write_text(json.dumps({identity: "Critical"}))
+
+    with_defer = _tally(path, 1, gate="clean", present_blocking=1, deferred_path=str(deferred))
+    assert with_defer["presentDeferred"] == 1
+    assert with_defer["terminal"] in ("clean", "clean-with-skips")
+    without = _tally(path, 1, gate="clean", present_blocking=1, deferred_path=None)
+    assert without["presentDeferred"] == 0
+    assert without["terminal"] == "continue", "the deferral is what let the round exit"
+
+
+def test_tally_fix_failed_halts(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="clean", present_blocking=0, fix_status="failed")
+    assert ans["terminal"] == "halted"
+    assert "fix step" in ans["reason"]
+
+
+def test_tally_internal_error_fails_closed(tmp_path, monkeypatch):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("breaker exploded")
+    monkeypatch.setattr(rlp.circuit_breaker, "check_circuit_breaker", _boom)
+    ans = _tally(path, 1, gate="clean", present_blocking=0)
+    assert ans["terminal"] == "halted"
+    assert ans["reason"].startswith("tally failed")
+
+
+def test_tally_answer_bounded_even_on_recurring_finding_halt(tmp_path):
+    # The premortem hole: on a recurring-finding halt the breaker detail joins EVERY recurring class
+    # key. With 40 verbose-keyed recurring blockers the unclamped detail is multi-KB — the answer
+    # must stay < 2 KB and keep the machine-readable breaker.reason intact.
+    findings = [{"title": ("recurring blocker %d " % i) + ("x" * 120), "file": f"m{i}.js",
+                 "severity": "Critical", "dimension": "Code",
+                 "classKey": f"Code::cls{i}::recurring blocker {i} " + ("x" * 120)} for i in range(40)]
+    recs = [
+        _skeleton_round(1, {"code-reviewer": _dim(findings=findings)}, changed_subjects=["Code"]),
+        _skeleton_round(2, {"code-reviewer": _dim(findings=findings)}, changed_subjects=["Code"]),
+    ]
+    path = _write_records(tmp_path, recs)
+    ans, size = _run("tally-round", "--path", path, "--round", "2", "--roster", json.dumps(DIMS),
+                     "--gate", "blocking", "--confidence", "high", "--present-blocking", "40")
+    assert ans["terminal"] == "halted"
+    assert ans["breaker"]["reason"] == "recurring-finding"
+    assert size < LIMIT, f"a 40-recurring-class halt answer is {size}B — must clamp to < {LIMIT}B"
+    assert len(ans["breaker"]["detail"]) <= rlp._MAX_REASON + 32
+
+
 def test_tally_certifies_after_qualifying_confirmation(tmp_path):
     # Round 1 fix marked confirmation; round 2 is a QUALIFYING full-deep confirmation panel that is
     # clean → the confirmation obligation is satisfied → certify (no repeat-until-pristine ratchet).
@@ -415,16 +531,19 @@ def test_entry_bootstrap_answer_is_small(tmp_path):
 
 def test_plan_round_answer_is_small(tmp_path):
     path = _verbose_fixture(tmp_path)
-    _ans, size = _run("plan-round", "--path", path, "--round", "4",
-                      "--dimensions", json.dumps(DIMS), "--changed-subjects", json.dumps(["Code"]))
+    ans, size = _run("plan-round", "--path", path, "--round", "4",
+                     "--dimensions", json.dumps(DIMS), "--changed-subjects", json.dumps(["Code"]))
     assert size < LIMIT, f"plan-round answer {size}B must stay < {LIMIT}B on a big fixture"
+    # anti-leak: with 50 findings/round on disk, no answer list may approach the finding count
+    assert _max_list_len(ans) < 50, "a decider answer list must not scale with finding count"
 
 
 def test_tally_round_answer_is_small(tmp_path):
     path = _verbose_fixture(tmp_path)
-    _ans, size = _run("tally-round", "--path", path, "--round", "3", "--roster", json.dumps(DIMS),
-                      "--gate", "blocking", "--confidence", "high", "--present-blocking", "30")
+    ans, size = _run("tally-round", "--path", path, "--round", "3", "--roster", json.dumps(DIMS),
+                     "--gate", "blocking", "--confidence", "high", "--present-blocking", "30")
     assert size < LIMIT, f"tally-round answer {size}B must stay < {LIMIT}B on a big fixture"
+    assert _max_list_len(ans) < 50, "a decider answer list must not scale with finding count"
 
 
 def test_compose_fix_context_answer_is_small(tmp_path):
