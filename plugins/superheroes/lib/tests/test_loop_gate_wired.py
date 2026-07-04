@@ -14,13 +14,20 @@ SKILLS = os.path.normpath(os.path.join(HERE, "..", "..", "skills"))
 # The skills whose loops fix/revise and then must re-review until clean. (audit-debt's loop
 # is loop-until-dry discovery, not fix-then-re-review; it is intentionally not in this set.)
 # review-spec's gate runs THROUGH its script-owned scheduler (#164): `spec_loop_plan.py decide`
-# wraps loop_state.decide and additionally emits the next round's dims_to_run.
-LOOPING_SKILLS = ("review-code", "review-plan", "review-tasks")
+# wraps loop_state.decide and additionally emits the next round's dims_to_run. review-code's
+# gate now runs THROUGH `code_loop_plan.py decide` the same way (#174 PR 2) — so it moved from
+# LOOPING_SKILLS to GATE_WRAPPED_SKILLS.
+LOOPING_SKILLS = ("review-plan", "review-tasks")
 GATE_WRAPPED_SKILLS = {
     "review-spec": [
         'spec_loop_plan.py" decide --session-dir',
         'spec_loop_plan.py" record --session-dir',
         'spec_loop_plan.py" plan --session-dir',
+    ],
+    "review-code": [
+        'code_loop_plan.py" decide --session-dir',
+        'code_loop_plan.py" record --session-dir',
+        'code_loop_plan.py" plan --session-dir',
     ],
 }
 
@@ -53,6 +60,17 @@ def test_spec_loop_plan_wires_the_continuation_gate():
     round schedule to the parity-locked shared policy) — not reimplement either. A source-level
     pin so the wiring can't silently drop while the SKILL.md marker still matches."""
     path = os.path.join(SKILLS, "..", "lib", "spec_loop_plan.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "import loop_state" in src and "loop_state.decide(" in src
+    assert "import review_round_policy" in src and "review_round_policy.plan_round(" in src
+
+
+def test_code_loop_plan_wires_the_continuation_gate():
+    """review-code's wrapper (#174 PR 2) must genuinely delegate the continue/exit decision to
+    loop_state and the round schedule to the parity-locked shared policy — not reimplement
+    either. Source-level pin so the wiring can't silently drop while the SKILL.md marker matches."""
+    path = os.path.join(SKILLS, "..", "lib", "code_loop_plan.py")
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
     assert "import loop_state" in src and "loop_state.decide(" in src
