@@ -87,6 +87,17 @@ most 5 reported per agent). If you have nothing to flag, write an empty array
 (`[]`) — do not skip writing the file.
 ```
 
+> **External-engine reviewers — stdout shape contract (#38, #196).** When `$REVIEWER_ENGINE` is
+> `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
+> instead of a named subagent, and it returns its findings on **stdout** rather than writing the
+> findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
+> the subagent would have written, wrapped once as the `findings` value) with **nothing printed after
+> it** — `engine_adapter.parse_result(role="review")` reads the last top-level JSON value. Emit the
+> canonical object; the parser also **tolerates a bare top-level array** `[...]` of finding objects as
+> of #196, but anything else (prose, a trailing line, an empty stream, an array of non-objects) parses
+> as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
+> cost. State this shape verbatim in the dispatch prompt so orchestrators stop re-guessing it per run.
+
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
 ---
