@@ -730,7 +730,6 @@ def test_entry_bootstrap_missing_file_is_empty(tmp_path):
     assert out["ok"] is True
     assert out["state"] == "missing"
     assert out["records"] == []
-    assert out["resumeRound"] == 1
     assert out["contentHash"] == rm.content_hash("")
     assert out.get("extras") is None
 
@@ -766,7 +765,7 @@ def test_entry_bootstrap_drops_nonblocking_keeps_blocking(tmp_path):
     out = rm.entry_bootstrap(str(path), ["code"])
     assert out["ok"] is True
     assert out["state"] == "loaded"
-    assert out["resumeRound"] == 3
+    assert len(out["records"]) == 2
     # contentHash is the FILE hash (what persist-skeleton's CAS expects), not a hash of the stubs.
     assert out["contentHash"] == rm.content_hash(text)
 
@@ -842,21 +841,45 @@ def test_entry_bootstrap_cli_direct_under_bound(tmp_path):
     parsed = json.loads(r.stdout)
     assert parsed["ok"] is True
     assert "receipt" not in parsed, "a bounded bootstrap answers DIRECT (no receipt, no chunk reads)"
-    assert parsed["resumeRound"] == 3
+    assert len(parsed["records"]) == 2
+    assert [f["severity"] for f in parsed["records"][0]["findings"]] == ["Critical"]
 
 
-def test_entry_bootstrap_cli_receipt_fallback(tmp_path):
+def test_entry_bootstrap_receipt_round_trips_by_verified_chunks(tmp_path):
+    """A pathological history still rides the #191 verified chunk transport: force the receipt
+    path with a tiny threshold, then reassemble the staged file via read-chunk and confirm it is
+    the stub-shaped bootstrap (blocking-only records, the same contentHash the receipt
+    advertised) — never an oversized inline answer."""
+    rm = load_memory()
     path = tmp_path / "round-records.json"
-    path.write_text(json.dumps([_verbose_round(1)]), encoding="utf-8")
-    out_path = tmp_path / "round-summary.json"
-    # force the receipt path with a tiny threshold — pathological histories still ride the #191
-    # verified chunk transport rather than an oversized inline answer.
+    path.write_text(json.dumps([_verbose_round(1), _verbose_round(2)]), encoding="utf-8")
+    out_path = tmp_path / "bootstrap-receipt.json"
     r = _cli("entry-bootstrap", "--path", str(path), "--dimensions", '["code"]',
              "--out-path", str(out_path), "--receipt-threshold", "1")
-    parsed = json.loads(r.stdout)
-    assert parsed["ok"] is True
-    assert parsed["receipt"] == "entry-bootstrap"
+    receipt = json.loads(r.stdout)
+    assert receipt["ok"] is True and receipt["receipt"] == "entry-bootstrap"
+    assert "records" not in receipt, "receipt mode must not echo the bootstrap blob"
     assert out_path.exists()
+    chunks = []
+    index = 0
+    while True:
+        cr = _cli("read-chunk", "--path", str(out_path), "--index", str(index), "--chunk-size", "300")
+        chunk = json.loads(cr.stdout)
+        assert chunk["ok"] is True
+        assert chunk["chunkHash"] == rm.content_hash(chunk["b64"])
+        assert chunk["contentHash"] == receipt["contentHash"]
+        chunks.append(base64.b64decode(chunk["b64"]).decode("utf-8"))
+        if chunk["eof"]:
+            break
+        index += 1
+    text = "".join(chunks)
+    assert rm.content_hash(text) == receipt["contentHash"]
+    loaded = json.loads(text)
+    assert loaded["ok"] is True and len(loaded["records"]) == 2
+    # the reassembled records are the stub shape: blocking-only skeletons, no evidence bodies
+    for stub in loaded["records"]:
+        assert [f["severity"] for f in stub["findings"]] == ["Critical"]
+    assert "evidence" not in text and "Nit number" not in text
 
 
 def test_entry_bootstrap_cli_extras_folds(tmp_path):

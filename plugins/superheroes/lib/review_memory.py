@@ -696,29 +696,18 @@ def stub_record(record):
     }
 
 
-def _resume_round(records):
-    best = 0
-    for rec in records or []:
-        try:
-            n = int(rec.get("round"))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if n > best:
-            best = n
-    return best + 1
-
-
 def entry_bootstrap(path, dimensions, extras_path=None, sweep_stale=False):
     """Compute the resume bootstrap: the file's contentHash (the CAS token the first persist
-    expects), the resume round, per-round STUBS, and the folded last-extras. The fail-closed
-    states of load_records_state (missing/unreadable/corrupt) ride through UNCHANGED so an
-    unverifiable seed still parks round-memory-unreadable instead of a silent partial seed."""
+    expects), per-round STUBS, and the folded last-extras. The shell derives the resume round
+    itself from the stubs (they carry `round`), so no resume-round scalar rides back — one
+    computation, one source of truth. The fail-closed states of load_records_state
+    (missing/unreadable/corrupt) ride through UNCHANGED so an unverifiable seed still parks
+    round-memory-unreadable instead of a silent partial seed."""
     if sweep_stale:
         sweep_stale_staging(os.path.dirname(os.path.abspath(path)))
     result = load_records_state(path, dimensions)
     records = result.get("records") or []
     result["records"] = [stub_record(r) for r in records]
-    result["resumeRound"] = _resume_round(records)
     if extras_path:
         try:
             with open(extras_path, encoding="utf-8") as fh:

@@ -99,8 +99,7 @@ def test_gather_is_byte_parity_with_separate_helpers(tmp_path):
     assert out["deferredSet"] == {"a.py::bug": "Critical"}, "the deferred-set seed rides the gather"
     # the durable bodies never ride back through the gather (the entry-bootstrap stub contract)
     assert "y" * 500 not in json.dumps(out["memory"]), "evidence bodies must not ride the gather stdout"
-    # #193: the gather now ships the bootstrap STUB — the resume round + blocking-only skeletons.
-    assert out["memory"]["resumeRound"] == 2, "the gather ships the resume round"
+    # #193: the gather now ships the bootstrap STUB — blocking-only finding skeletons.
     assert out["memory"]["records"][0]["findings"][0]["severity"] == "Critical"
 
 

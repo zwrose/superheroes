@@ -9,7 +9,7 @@ in a single Python process and answers a combined, BOUNDED blob:
 
   { "ok": true,
     "memory":      <review_memory entry-bootstrap result — records are STUBS (decision scalars +
-                    blocking-only finding skeletons), contentHash + resumeRound + extras folded>,
+                    blocking-only finding skeletons), contentHash + extras folded>,
     "deferredSet": <parsed deferred-set.json, or {} when absent>,
     "coverage":    <coverage_decisions load result — decisions + the fence hash of the on-disk bytes> }
 
@@ -50,8 +50,8 @@ def gather(run_dir, records_path, dimensions, extras_path, deferred_path,
     if run_dir:
         os.makedirs(run_dir, exist_ok=True)
     # (2) entry-bootstrap (#193): sweep a dead run's stale staging, then compute the resume
-    # bootstrap — the contentHash + resume round + per-round STUBS (decision scalars + blocking-only
-    # finding skeletons) + the folded last-extras.json. Byte-identical to `review_memory.py
+    # bootstrap — the contentHash + per-round STUBS (decision scalars + blocking-only finding
+    # skeletons) + the folded last-extras.json. Byte-identical to `review_memory.py
     # entry-bootstrap --sweep-stale-staging --extras-path`. The stub replaces the full summarize
     # skeleton so entry seeding fits ONE direct payload-tier answer instead of a receipt + N chunk
     # leaves; the durable evidence bodies (and now non-blocking prior-round findings) never ride back.
