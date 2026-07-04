@@ -15,8 +15,9 @@ the `plan` skill owns the **how**.
 Discovery is the **single front door**, and it **routes** (CONVENTIONS §3.4): it always
 produces the showrunner's input artifact, and the route decides which — **full** discovery
 writes the **`spec`** (this document's default flow), **quick** discovery writes a **`tasks`**
-doc directly for a genuine chore (the reference flow below). Choose the route **first** (next
-section); everything after `## Checklist` is the **full** route.
+doc directly for a genuine chore (the reference flow below). Make the routing call **up front**,
+right after your first look at the item (next section); everything after `## Checklist` is the
+**full** route.
 
 The audience is a product-minded owner who may not be technical. Speak their
 language. Translate every non-functional concern into a plain-language outcome.
@@ -35,9 +36,9 @@ approve on your own behalf.
 
 ## Choose the route (full or quick)
 
-After the initial context gathering + scope check (step 1), **assess the item and recommend a
-route**, then let the owner sign off — this is part of the normal discovery flow, not a
-separate gate:
+After that first look at the item — the initial context-gathering + scope check the full-route
+checklist also opens with (step 1) — **assess the item and recommend a route**, then let the
+owner sign off. This is part of the normal discovery flow, not a separate gate:
 
 - **Default to `full`.** Recommend `full` for anything that is not a genuine chore — anything
   with real requirements to elicit, unhappy paths worth mapping, owner-visible behavior to

@@ -38,7 +38,10 @@ def decide(probes, work_item):
         probes = {}
     blocking = []
 
-    route = probes.get("route") or "full"
+    # Normalize to exactly full/quick so the echoed route is always a valid literal (the launcher
+    # declares it verbatim): any non-'quick' value — a typo, None, garbage — is treated as 'full' (the
+    # safe default), and the quick gate fires only on an exact 'quick'.
+    route = "quick" if probes.get("route") == "quick" else "full"
     if route == "quick":
         gate_check, gate_val = "tasks-approved", probes.get("tasks_gate")
     else:

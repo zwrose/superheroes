@@ -57,6 +57,17 @@ def test_quick_route_unapproved_tasks_blocks():
     assert f["status"] == "fail" and f["remediation"]
 
 
+def test_decide_normalizes_any_unrecognized_route_to_full():
+    # #25 nit: decide() is pure — a caller passing a non-'quick' route (typo/None/empty/garbage) must
+    # echo the safe 'full' literal and gate on the SPEC, so the "verdict only ever emits full/quick"
+    # guarantee holds of the function itself, not merely of the shipped probe->decide path.
+    for bogus in ("quik", "FULL", "", None, "banana"):
+        out = preflight.decide({**_all_good(), "route": bogus}, "wi")
+        assert out["route"] == "full", bogus
+        assert any(b["check"] == "spec-approved" for b in out["blocking"]), bogus
+        assert not any(b["check"] == "tasks-approved" for b in out["blocking"]), bogus
+
+
 def test_derive_route_prefers_spec_then_tasks(tmp_path, monkeypatch):
     # The route is derived from which input artifact is on disk, through the SAME resolver the tasks
     # phase writes through: spec present => full; else tasks present => quick; neither => full.
