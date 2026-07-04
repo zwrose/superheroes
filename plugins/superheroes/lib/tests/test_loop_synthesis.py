@@ -103,3 +103,69 @@ def test_kept_finding_without_any_severity_defaults_to_important():
     v = {"id": "a.py::severity missing everywhere", "action": "keep", "reason": "still applies"}
     out = LS.consume([f], [v])
     assert out["findings"][0]["severity"] == "Important"
+
+
+# --- CLI wiring (the exact invocation standalone review-code's compile step runs) -------------
+# review-code (#174 PR 3) shells out to `loop_synthesis.py --merged <file> --leaf <file>` and
+# reads back `{findings, drops}`. These pin the fail-closed contract AT THE CLI SEAM the
+# standalone path depends on — not just the in-process consume().
+import json
+
+
+def _write_json(path, obj):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh)
+
+
+def _run_cli(tmp_path, merged, leaf, capsys, *, leaf_exists=True):
+    mpath = os.path.join(str(tmp_path), "merged.json")
+    lpath = os.path.join(str(tmp_path), "synthesis-verdicts.json")
+    _write_json(mpath, merged)
+    if leaf_exists:
+        _write_json(lpath, leaf)
+    rc = LS.main(["loop_synthesis.py", "--merged", mpath, "--leaf", lpath])
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_cli_missing_leaf_file_is_raw_compile_no_drops(tmp_path, capsys):
+    """Synthesis failure (the judge wrote no verdict file) → raw mechanical compile, every
+    finding kept, nothing dropped. This is the standalone fallback the SKILL relies on."""
+    merged = [_f("a.py", "real bug", "Critical"), _f("b.py", "another", "Important")]
+    rc, out = _run_cli(tmp_path, merged, None, capsys, leaf_exists=False)
+    assert rc == 0
+    assert len(out["findings"]) == 2
+    assert out["drops"] == []
+
+
+def test_cli_empty_leaf_keeps_all_no_drops(tmp_path, capsys):
+    merged = [_f("a.py", "real bug", "Critical")]
+    rc, out = _run_cli(tmp_path, merged, [], capsys)
+    assert rc == 0
+    assert len(out["findings"]) == 1 and out["drops"] == []
+
+
+def test_cli_keep_on_uncertain(tmp_path, capsys):
+    """A drop with no reason is ambiguous → the finding is KEPT (never dropped on a hunch)."""
+    f = _f("a.py", "weak", "Important")
+    v = {"id": CB.finding_identity(f), "action": "drop", "reason": ""}
+    rc, out = _run_cli(tmp_path, [f], [v], capsys)
+    assert len(out["findings"]) == 1 and out["drops"] == []
+
+
+def test_cli_drop_with_reason_recorded(tmp_path, capsys):
+    f = _f("a.py", "weak", "Minor")
+    v = {"id": CB.finding_identity(f), "action": "drop", "reason": "does not hold against the code"}
+    rc, out = _run_cli(tmp_path, [f], [v], capsys)
+    assert out["findings"] == []
+    assert out["drops"][0]["reason"] == "does not hold against the code"
+    assert out["drops"][0]["was_blocking_tagged"] is False
+
+
+def test_cli_dropped_blocker_is_flagged(tmp_path, capsys):
+    """A dropped Critical/Important rides out flagged, so an all-drop leaf can never make a
+    silent clean in the standalone readout."""
+    f = _f("a.py", "real bug", "Critical")
+    v = {"id": CB.finding_identity(f), "action": "drop", "reason": "stale — path removed"}
+    rc, out = _run_cli(tmp_path, [f], [v], capsys)
+    assert out["findings"] == []
+    assert out["drops"][0]["was_blocking_tagged"] is True
