@@ -258,7 +258,20 @@ async function partB() {
   assert.strictEqual(received[0].label, 'read gate', 'FAIL (b8): the descriptive label is preserved for display (not relabelled)')
   assert.ok(!('courier' in received[0]), 'FAIL (b8): the courier marker is stripped before the real agent() call')
 
-  console.log('OK (b): bundle wrapper — exec/io + courier:true always cheapest regardless of __SR_LEAF_MODEL; non-dumb gets __SR_LEAF_MODEL')
+
+  // (b9) Payload-carrying dumb pipes are still couriers, but they must use a copy-faithful fixer tier
+  // rather than the cheapest mechanical tier.
+  sandbox.globalThis.__SR_LEAF_MODEL = 'haiku'
+  received.length = 0
+  try { await sandbox.globalThis.agent('stage payload chunk', { label: 'io', courier: true, payload: true }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b9): no call to underlying agent for payload courier')
+  assert.strictEqual(
+    received[0].model,
+    modelTier.DEFAULT_TIERS.fixer,
+    `FAIL (b9): payload courier must use fixer tier ('${modelTier.DEFAULT_TIERS.fixer}'), got '${received[0].model}'`,
+  )
+
+  console.log('OK (b): bundle wrapper — exec/io + courier:true model pinning, payload courier fixer tier, smart leaves get __SR_LEAF_MODEL')
 }
 
 ;(async () => {

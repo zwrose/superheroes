@@ -2,6 +2,7 @@
 """Pure memory helpers for review-loop recurrence and v2 round records."""
 import re
 import argparse
+import base64
 import glob
 import hashlib
 import json
@@ -20,12 +21,62 @@ def content_hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_MAX_TITLE = 160
+_TITLE_ELLIPSIS = "..."
+
+
+def clamp_title(title):
+    """Bound finding titles for every durable identity surface.
+
+    The courier is bad at byte-faithfully copying long prose-ish strings, and those strings also
+    flow into class keys / deferred identities. Clamp once, at a word boundary when possible, and
+    let every identity derivation consume the same bounded form.
+    """
+    if not isinstance(title, str):
+        return title
+    if len(title) <= _MAX_TITLE:
+        return title
+    limit = _MAX_TITLE - len(_TITLE_ELLIPSIS)
+    prefix = title[:limit].rstrip()
+    boundary = max(prefix.rfind(ch) for ch in " \t\n\r\f\v")
+    if boundary > 0:
+        prefix = prefix[:boundary].rstrip()
+    if not prefix:
+        prefix = title[:limit].rstrip()
+    return prefix + _TITLE_ELLIPSIS
+
+
+def _title_text(finding):
+    if not isinstance(finding, dict):
+        return ""
+    return finding.get("title") or finding.get("summary") or ""
+
+
 def class_key(finding):
+    finding = finding or {}
     return "::".join([
         str(finding.get("dimension") or ""),
         str(finding.get("taxonomy") or ""),
-        _norm(finding.get("title") or finding.get("summary")),
+        _norm(clamp_title(_title_text(finding))),
     ])
+
+
+def canonical_class_key(finding):
+    if not isinstance(finding, dict):
+        return class_key({})
+    if finding.get("title") or finding.get("summary") or finding.get("dimension") or finding.get("taxonomy"):
+        return class_key(finding)
+    return finding.get("classKey") or class_key(finding)
+
+
+def class_key_aliases(finding):
+    if not isinstance(finding, dict):
+        return {class_key({})}
+    aliases = {canonical_class_key(finding)}
+    stored = finding.get("classKey")
+    if stored:
+        aliases.add(stored)
+    return aliases
 
 
 def recurrent_classes(records, coverage_decisions=None):
@@ -38,8 +89,8 @@ def recurrent_classes(records, coverage_decisions=None):
                 continue
             if finding.get("severity") not in BLOCKING:
                 continue
-            key = finding.get("classKey") or class_key(finding)
-            if key in covered:
+            key = canonical_class_key(finding)
+            if class_key_aliases(finding) & covered:
                 continue
             seen.setdefault(key, set()).add(rnd)
     out = []
@@ -161,7 +212,6 @@ def load_records(path, dimensions):
 # (and re-persist) cleanly through the same path.
 _SKELETON_FIELDS = ("file", "line", "title", "severity", "taxonomy", "dimension",
                     "classKey", "carried", "sourceRound")
-_MAX_TITLE = 300
 
 
 def _skeleton_finding(finding):
@@ -169,8 +219,10 @@ def _skeleton_finding(finding):
         return {}
     out = {k: finding[k] for k in _SKELETON_FIELDS if k in finding}
     title = out.get("title")
-    if isinstance(title, str) and len(title) > _MAX_TITLE:
-        out["title"] = title[:_MAX_TITLE]
+    if isinstance(title, str):
+        out["title"] = clamp_title(title)
+    if finding.get("dimension") or finding.get("taxonomy"):
+        out["classKey"] = canonical_class_key(finding)
     return out
 
 
@@ -574,6 +626,161 @@ def _strip_records(result):
     return {k: v for k, v in result.items() if k != "records"}
 
 
+_READ_CHUNK_CHARS = 1600
+
+
+def load_summary_result(path, dimensions, extras_path=None, sweep_stale=False):
+    if sweep_stale:
+        sweep_stale_staging(os.path.dirname(os.path.abspath(path)))
+    result = load_records_state(path, dimensions)
+    result["records"] = [summarize_record(r) for r in result.get("records") or []]
+    if extras_path:
+        try:
+            with open(extras_path, encoding="utf-8") as fh:
+                result["extras"] = json.load(fh)
+        except (OSError, ValueError):
+            result["extras"] = None
+    return result
+
+
+def _write_text_atomic(path, text):
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".transport-", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _print_receipted_or_direct(kind, result, out_path=None, threshold=None):
+    text = json.dumps(result)
+    limit = threshold if threshold is not None else 0
+    if out_path and len(text) > limit:
+        try:
+            _write_text_atomic(out_path, text)
+        except OSError as exc:
+            print(json.dumps({"ok": False, "reason": "receipt-write-failed", "detail": str(exc)}))
+            return False
+        print(json.dumps({
+            "ok": True,
+            "receipt": kind,
+            "path": out_path,
+            "bytes": len(text.encode("utf-8")),
+            "chars": len(text),
+            "contentHash": content_hash(text),
+            "chunkSize": _READ_CHUNK_CHARS,
+        }))
+        return True
+    print(text)
+    return bool(result.get("ok"))
+
+
+def read_chunk(path, index, chunk_size=_READ_CHUNK_CHARS):
+    try:
+        index = int(index)
+        chunk_size = int(chunk_size)
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "bad-chunk-request"}
+    if index < 0 or chunk_size <= 0:
+        return {"ok": False, "reason": "bad-chunk-request"}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return {"ok": False, "reason": "chunk-unreadable", "detail": str(exc)}
+    start = index * chunk_size
+    if start > len(text):
+        return {"ok": False, "reason": "chunk-out-of-range"}
+    chunk = text[start:start + chunk_size]
+    b64 = base64.b64encode(chunk.encode("utf-8")).decode("ascii")
+    next_index = index + 1
+    eof = start + chunk_size >= len(text)
+    total = (len(text) + chunk_size - 1) // chunk_size if text else 1
+    return {
+        "ok": True,
+        "index": index,
+        "nextIndex": next_index,
+        "totalChunks": total,
+        "eof": eof,
+        "b64": b64,
+        "chunkHash": content_hash(b64),
+        "contentHash": content_hash(text),
+    }
+
+
+def _chunk_dir(path):
+    return path + ".chunks"
+
+
+def stage_chunk(path, index, total, chunk_b64, chunk_hash):
+    try:
+        index = int(index)
+        total = int(total)
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "bad-chunk-request"}
+    if index < 0 or total <= 0 or index >= total:
+        return {"ok": False, "reason": "bad-chunk-request"}
+    if content_hash(chunk_b64 or "") != (chunk_hash or ""):
+        return {"ok": False, "reason": "chunk-corrupt"}
+    try:
+        data = base64.b64decode((chunk_b64 or "").encode("ascii"), validate=True)
+    except Exception as exc:
+        return {"ok": False, "reason": "chunk-corrupt", "detail": str(exc)}
+    directory = _chunk_dir(path)
+    try:
+        os.makedirs(directory, exist_ok=True)
+        part = os.path.join(directory, "%06d-of-%06d.part" % (index, total))
+        with open(part, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as exc:
+        return {"ok": False, "reason": "chunk-write-failed", "detail": str(exc)}
+    return {"ok": True, "index": index, "total": total}
+
+
+def finish_chunks(path, total, payload_hash):
+    try:
+        total = int(total)
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "bad-chunk-request"}
+    directory = _chunk_dir(path)
+    parts = []
+    try:
+        for index in range(total):
+            part = os.path.join(directory, "%06d-of-%06d.part" % (index, total))
+            with open(part, "rb") as fh:
+                parts.append(fh.read())
+        payload = b"".join(parts).decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"ok": False, "reason": "chunk-unreadable", "detail": str(exc)}
+    if content_hash(payload) != (payload_hash or ""):
+        return {"ok": False, "reason": "payload-corrupt"}
+    try:
+        _write_text_atomic(path, payload)
+        for index in range(total):
+            try:
+                os.unlink(os.path.join(directory, "%06d-of-%06d.part" % (index, total)))
+            except OSError:
+                pass
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+    except OSError as exc:
+        return {"ok": False, "reason": "payload-write-failed", "detail": str(exc)}
+    return {"ok": True, "contentHash": content_hash(payload)}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -589,6 +796,24 @@ def main(argv=None):
     loads_p.add_argument("--sweep-stale-staging", action="store_true",
                          help="unlink a dead run's transient staging artifacts in the records "
                               "file's directory before loading (durable loop state preserved)")
+    loads_p.add_argument("--out-path",
+                         help="when the summary is larger than --receipt-threshold, write it here "
+                              "and answer a small receipt for verified chunk reads")
+    loads_p.add_argument("--receipt-threshold", type=int, default=0)
+    chunk_p = sub.add_parser("read-chunk")
+    chunk_p.add_argument("--path", required=True)
+    chunk_p.add_argument("--index", required=True, type=int)
+    chunk_p.add_argument("--chunk-size", type=int, default=_READ_CHUNK_CHARS)
+    stage_p = sub.add_parser("stage-chunk")
+    stage_p.add_argument("--path", required=True)
+    stage_p.add_argument("--index", required=True, type=int)
+    stage_p.add_argument("--total", required=True, type=int)
+    stage_p.add_argument("--chunk-b64", required=True)
+    stage_p.add_argument("--chunk-hash", required=True)
+    finish_p = sub.add_parser("finish-chunks")
+    finish_p.add_argument("--path", required=True)
+    finish_p.add_argument("--total", required=True, type=int)
+    finish_p.add_argument("--payload-hash", required=True)
     skel_p = sub.add_parser("persist-skeleton")
     skel_p.add_argument("--path", required=True)
     skel_p.add_argument("--record-json",
@@ -640,6 +865,18 @@ def main(argv=None):
     hash_p = sub.add_parser("hash")
     hash_p.add_argument("--path", required=True)
     args = parser.parse_args(argv)
+    if args.cmd == "read-chunk":
+        result = read_chunk(args.path, args.index, args.chunk_size)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
+    if args.cmd == "stage-chunk":
+        result = stage_chunk(args.path, args.index, args.total, args.chunk_b64, args.chunk_hash)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
+    if args.cmd == "finish-chunks":
+        result = finish_chunks(args.path, args.total, args.payload_hash)
+        print(json.dumps(result))
+        return 0 if result.get("ok") else 1
     if args.cmd == "compose-terminal":
         result = compose_terminal_record(args.path, args.verdict_json,
                                          verdict_hash=args.verdict_hash,
@@ -723,18 +960,13 @@ def main(argv=None):
         return 0 if result.get("ok") else 1
     dimensions = json.loads(args.dimensions)
     if args.cmd == "load-summary":
-        if args.sweep_stale_staging:
-            sweep_stale_staging(os.path.dirname(os.path.abspath(args.path)))
-        result = load_records_state(args.path, dimensions)
-        result["records"] = [summarize_record(r) for r in result.get("records") or []]
-        if args.extras_path:
-            try:
-                with open(args.extras_path, encoding="utf-8") as fh:
-                    result["extras"] = json.load(fh)
-            except (OSError, ValueError):
-                result["extras"] = None
-        print(json.dumps(result))
-        return 0 if result.get("ok") else 1
+        result = load_summary_result(args.path, dimensions,
+                                     extras_path=args.extras_path,
+                                     sweep_stale=args.sweep_stale_staging)
+        ok = _print_receipted_or_direct("load-summary", result,
+                                        out_path=args.out_path,
+                                        threshold=args.receipt_threshold)
+        return 0 if ok else 1
     result = load_records_state(args.path, dimensions)
     print(json.dumps(result))
     return 0 if result.get("ok") else 1

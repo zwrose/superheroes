@@ -1,156 +1,156 @@
 {
-  "input": [
-    {
-      "schemaVersion": 2,
-      "round": 2,
-      "kind": "targeted",
-      "confirmationPending": true,
-      "changedSubjects": [
-        "Code"
-      ],
-      "coverageDecisions": [
-        {
-          "id": "cd-1",
-          "classKey": "k"
-        }
-      ],
-      "tokenUsage": {
-        "code:r2": {
-          "total": 9
-        }
-      },
-      "findings": [
-        {
-          "file": "a.py",
-          "line": 3,
-          "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-          "severity": "Critical",
-          "taxonomy": "bug",
-          "dimension": "Code",
-          "classKey": "Code::bug::t"
-        },
-        {
-          "file": "b.py",
-          "title": "minor",
-          "severity": "Minor"
-        }
-      ],
-      "carriedFindings": [
-        {
-          "file": "c.py",
-          "title": "carried one",
-          "severity": "Important",
-          "carried": true,
-          "sourceRound": 1
-        }
-      ],
-      "dimensions": {
-        "code-reviewer": {
-          "dimension": "code-reviewer",
-          "status": "run",
-          "confidence": "high",
-          "round": 2,
-          "subjects": [
-            "Code"
-          ],
-          "escalated": true,
-          "tier": "reviewer",
-          "findings": [
-            {
-              "file": "a.py",
-              "line": 3,
-              "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-              "severity": "Critical"
-            }
-          ],
-          "hasFindings": true,
-          "blockingCount": 1
-        },
-        "test-reviewer": {
-          "dimension": "test-reviewer",
-          "status": "skipped",
-          "carriedFromRound": 1,
-          "findings": [],
-          "hasFindings": false,
-          "blockingCount": 0
-        }
-      }
-    }
-  ],
   "expected": {
-    "schemaVersion": 2,
-    "round": 2,
-    "kind": "targeted",
-    "confirmationPending": true,
+    "carriedFindings": [
+      {
+        "carried": true,
+        "file": "c.py",
+        "severity": "Important",
+        "sourceRound": 1,
+        "title": "carried one"
+      }
+    ],
     "changedSubjects": [
       "Code"
     ],
+    "confirmationPending": true,
     "coverageDecisions": [
       {
-        "id": "cd-1",
-        "classKey": "k"
-      }
-    ],
-    "tokenUsage": {
-      "code:r2": {
-        "total": 9
-      }
-    },
-    "findings": [
-      {
-        "file": "a.py",
-        "line": 3,
-        "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-        "severity": "Critical",
-        "taxonomy": "bug",
-        "dimension": "Code",
-        "classKey": "Code::bug::t"
-      },
-      {
-        "file": "b.py",
-        "title": "minor",
-        "severity": "Minor"
-      }
-    ],
-    "carriedFindings": [
-      {
-        "file": "c.py",
-        "title": "carried one",
-        "severity": "Important",
-        "carried": true,
-        "sourceRound": 1
+        "classKey": "k",
+        "id": "cd-1"
       }
     ],
     "dimensions": {
       "code-reviewer": {
-        "dimension": "code-reviewer",
-        "status": "run",
+        "blockingCount": 1,
         "confidence": "high",
-        "round": 2,
-        "subjects": [
-          "Code"
-        ],
+        "dimension": "code-reviewer",
         "escalated": true,
-        "tier": "reviewer",
         "findings": [
           {
             "file": "a.py",
             "line": 3,
-            "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-            "severity": "Critical"
+            "severity": "Critical",
+            "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT..."
           }
         ],
         "hasFindings": true,
-        "blockingCount": 1
+        "round": 2,
+        "status": "run",
+        "subjects": [
+          "Code"
+        ],
+        "tier": "reviewer"
       },
       "test-reviewer": {
-        "dimension": "test-reviewer",
-        "status": "skipped",
+        "blockingCount": 0,
         "carriedFromRound": 1,
+        "dimension": "test-reviewer",
         "findings": [],
         "hasFindings": false,
-        "blockingCount": 0
+        "status": "skipped"
+      }
+    },
+    "findings": [
+      {
+        "classKey": "Code::bug::ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt...",
+        "dimension": "Code",
+        "file": "a.py",
+        "line": 3,
+        "severity": "Critical",
+        "taxonomy": "bug",
+        "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT..."
+      },
+      {
+        "file": "b.py",
+        "severity": "Minor",
+        "title": "minor"
+      }
+    ],
+    "kind": "targeted",
+    "round": 2,
+    "schemaVersion": 2,
+    "tokenUsage": {
+      "code:r2": {
+        "total": 9
       }
     }
-  }
+  },
+  "input": [
+    {
+      "carriedFindings": [
+        {
+          "carried": true,
+          "file": "c.py",
+          "severity": "Important",
+          "sourceRound": 1,
+          "title": "carried one"
+        }
+      ],
+      "changedSubjects": [
+        "Code"
+      ],
+      "confirmationPending": true,
+      "coverageDecisions": [
+        {
+          "classKey": "k",
+          "id": "cd-1"
+        }
+      ],
+      "dimensions": {
+        "code-reviewer": {
+          "blockingCount": 1,
+          "confidence": "high",
+          "dimension": "code-reviewer",
+          "escalated": true,
+          "findings": [
+            {
+              "file": "a.py",
+              "line": 3,
+              "severity": "Critical",
+              "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"
+            }
+          ],
+          "hasFindings": true,
+          "round": 2,
+          "status": "run",
+          "subjects": [
+            "Code"
+          ],
+          "tier": "reviewer"
+        },
+        "test-reviewer": {
+          "blockingCount": 0,
+          "carriedFromRound": 1,
+          "dimension": "test-reviewer",
+          "findings": [],
+          "hasFindings": false,
+          "status": "skipped"
+        }
+      },
+      "findings": [
+        {
+          "classKey": "Code::bug::t",
+          "dimension": "Code",
+          "file": "a.py",
+          "line": 3,
+          "severity": "Critical",
+          "taxonomy": "bug",
+          "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"
+        },
+        {
+          "file": "b.py",
+          "severity": "Minor",
+          "title": "minor"
+        }
+      ],
+      "kind": "targeted",
+      "round": 2,
+      "schemaVersion": 2,
+      "tokenUsage": {
+        "code:r2": {
+          "total": 9
+        }
+      }
+    }
+  ]
 }

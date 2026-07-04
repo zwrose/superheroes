@@ -77,13 +77,19 @@ def main(argv=None):
     g.add_argument("--deferred-path")
     g.add_argument("--coverage-path", required=True)
     g.add_argument("--coverage-mode", choices=["doc", "code"], default="code")
+    g.add_argument("--out-path",
+                   help="when the gathered blob is larger than --receipt-threshold, write it here "
+                        "and answer a small receipt for verified chunk reads")
+    g.add_argument("--receipt-threshold", type=int, default=0)
     args = parser.parse_args(argv)
     if args.cmd == "gather":
         result = gather(args.run_dir, args.records_path, json.loads(args.dimensions),
                         args.extras_path, args.deferred_path, args.coverage_path,
                         args.coverage_mode)
-        print(json.dumps(result))
-        return 0
+        ok = review_memory._print_receipted_or_direct("review-setup-gather", result,
+                                                      out_path=args.out_path,
+                                                      threshold=args.receipt_threshold)
+        return 0 if ok else 1
     return 1
 
 
