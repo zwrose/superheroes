@@ -8,6 +8,23 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _cost_summary(state):
+    """#130: the run-cost rollup for the readout. Prefer a precomputed `cost` dict; otherwise
+    derive it from the run's own events.jsonl (`events_path`). Best-effort — any failure yields
+    None and the readout simply omits the cost block (telemetry is never load-bearing)."""
+    if isinstance(state.get("cost"), dict):
+        return state["cost"]
+    ev_path = state.get("events_path")
+    if not ev_path:
+        return None
+    try:
+        import journal
+        import cost_report
+        return cost_report.summarize(journal.read_events(ev_path))
+    except Exception:
+        return None
+
+
 def assemble(state):
     """Map run-end state -> the build_readout context dict (FR-10 elements)."""
     state = state or {}
@@ -22,6 +39,7 @@ def assemble(state):
         "dev_url": state.get("dev_url"),
         "smoke": state.get("smoke") or [],
         "raw_ci_excerpt": state.get("raw_ci_excerpt"),
+        "cost": _cost_summary(state),
         "root": state.get("root"),
     }
 

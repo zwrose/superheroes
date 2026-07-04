@@ -134,6 +134,10 @@ SHOWRUNNER_SMOKES = [
     # an absolute __SR_LIB resolves composes under it, and a missing absolute code root fails closed
     # to a named park.
     "plugins/superheroes/lib/tests/showrunner_compose_libroot_smoke.js",
+    # #130 token telemetry: the cost_meter accumulator (proxy dispatch counts + budget-measured
+    # output-token deltas) and the spine's best-effort phase_cost / run_completed emit path.
+    "plugins/superheroes/lib/tests/showrunner_cost_meter_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_cost_emit_smoke.js",
 ]
 
 

@@ -61,6 +61,15 @@ def render(record):
             missing = usage.get("missing") or []
             if missing:
                 lines.append("Missing token usage: " + ", ".join(str(x) for x in missing))
+        # #130: per-reviewer finding outcomes (raised/blocking/carried) — the denominator for
+        # tokens-per-finding; rendered independent of token completeness.
+        outcomes = telemetry.get("findingOutcomes") or {}
+        if outcomes:
+            lines.append("")
+            lines.append("Findings by reviewer:")
+            for name, o in sorted(outcomes.items()):
+                lines.append("%s: raised %d, blocking %d, carried %d"
+                             % (name, o.get("raised", 0), o.get("blocking", 0), o.get("carried", 0)))
         lines.append("")
     fixes = record.get("fixes") or []
     lines += ["### Fixes made"] + (["- %s" % f for f in fixes] if fixes else ["- (none)"]) + [""]

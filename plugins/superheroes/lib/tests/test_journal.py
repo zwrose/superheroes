@@ -56,6 +56,21 @@ def test_ci_attempts_over_counts_a_torn_tail_failsafe(tmp_path, monkeypatch):
     assert rounds == 2   # 1 parsed + 1 conservative for the torn tail (NEVER under-counts)
 
 
+def test_phase_cost_is_a_valid_additive_event_type(tmp_path, monkeypatch):
+    # #130: token telemetry extends the §4.6 vocabulary additively (no schemaVersion bump). A
+    # phase_cost event carries structured non-secret accounting written as-is (like ci_fix_attempt).
+    monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
+    e = str(tmp_path / "events.jsonl")
+    payload = {"phase": "workhorse",
+               "dispatches": {"total": 12, "byModel": {"claude-opus-4-8": 3, "claude-haiku-4-5-20251001": 9}},
+               "tokens": {"output": 84000, "input": None, "measured": True, "source": "budget"}}
+    journal.append(e, "phase_cost", payload=payload, root=str(tmp_path))
+    evs = journal.read_events(e)
+    assert evs[0]["type"] == "phase_cost"
+    assert evs[0]["payload"]["dispatches"]["total"] == 12
+    assert evs[0]["payload"]["tokens"]["output"] == 84000
+
+
 def test_render_brief_has_required_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
     e = str(tmp_path / "events.jsonl")

@@ -41,6 +41,16 @@ def test_names_fixes_drops_and_deferrals():
     assert "phantom" in out and "not in the diff" in out
 
 
+def test_renders_per_reviewer_finding_outcomes():
+    # #130: findingOutcomes from the telemetry record renders even when token usage is incomplete.
+    out = LR.render(_record(telemetry={
+        "roundCount": 2,
+        "tokenUsage": {"complete": False, "total": 0, "missing": ["code-reviewer:r1"]},
+        "findingOutcomes": {"code-reviewer": {"raised": 3, "blocking": 1, "carried": 2}}}))
+    assert "Findings by reviewer" in out
+    assert "code-reviewer: raised 3, blocking 1, carried 2" in out
+
+
 def test_dropped_blocker_flagged_distinctly_ufr10():
     out = LR.render(_record(
         drops=[{"title": "real bug", "reason": "stale", "was_blocking_tagged": True},

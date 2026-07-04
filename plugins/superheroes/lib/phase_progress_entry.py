@@ -43,9 +43,22 @@ def _reflects(paths, step, phase, payload):
     }
 
 
-def _apply(paths, work_item, step, phase, payload, side):
+def _append_cost(paths, cost):
+    # #130: fold the phase_cost telemetry event into the SAME durable write as the phase record (no
+    # new courier leaf — #118). Written only on the fresh-apply path (a resume never double-counts),
+    # and best-effort — a cost-write failure must NEVER fail the phase-progress save (measurement only).
+    if not cost:
+        return
+    try:
+        journal.append(paths["events"], "phase_cost", payload=cost, root=os.getcwd())
+    except Exception:   # noqa: BLE001 — telemetry is best-effort; the phase save stands regardless
+        pass
+
+
+def _apply(paths, work_item, step, phase, payload, side, cost=None):
     if not any(record == payload for record in _phase_records(paths["events"])):
         journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
+    _append_cost(paths, cost)
     cp = checkpoint.read(paths["checkpoint"]) or checkpoint.new(work_item, "")
     cp["lastGoodStep"] = step
     cp["lastGoodPhase"] = phase
@@ -63,9 +76,10 @@ def _reflects_journal(paths, payload):
     return journal_ok, {"journal_confirmed": journal_ok}
 
 
-def _apply_journal(paths, payload):
+def _apply_journal(paths, payload, cost=None):
     if not any(record == payload for record in _phase_records(paths["events"])):
         journal.append(paths["events"], "phase_record", payload=payload, root=os.getcwd())
+    _append_cost(paths, cost)
     return _reflects_journal(paths, payload)
 
 
@@ -75,6 +89,13 @@ def save(args):
         side = json.loads(args.side) if args.side else {}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
+    # #130: the folded phase_cost payload (best-effort — a malformed value is dropped, never fatal).
+    cost = None
+    if getattr(args, "cost_payload", None):
+        try:
+            cost = json.loads(args.cost_payload)
+        except ValueError:
+            cost = None
     paths = control_plane.paths(os.getcwd(), args.work_item)
     step = int(args.step)
     journal_only = bool(getattr(args, "journal_only", False))
@@ -91,7 +112,7 @@ def save(args):
         result = idempotent_write.idempotent_apply(
             key + ":journal-only",
             lambda: _reflects_journal(paths, payload),
-            lambda: _apply_journal(paths, payload),
+            lambda: _apply_journal(paths, payload, cost),
         )
         detail = result.get("detail") or {}
         return {
@@ -104,7 +125,7 @@ def save(args):
     result = idempotent_write.idempotent_apply(
         key,
         lambda: _reflects(paths, step, args.phase, payload),
-        lambda: _apply(paths, args.work_item, step, args.phase, payload, side),
+        lambda: _apply(paths, args.work_item, step, args.phase, payload, side, cost),
     )
     detail = result.get("detail") or {}
     return {
@@ -129,6 +150,8 @@ def main(argv):
     s.add_argument("--payload", required=True)
     s.add_argument("--json", dest="side", default=None)
     s.add_argument("--journal-only", dest="journal_only", action="store_true")
+    s.add_argument("--cost-payload", dest="cost_payload", default=None,
+                   help="#130: JSON phase_cost telemetry, folded into this save (best-effort)")
     args = parser.parse_args(argv[1:])
     if args.cmd == "save":
         print(json.dumps(save(args), sort_keys=True))

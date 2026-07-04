@@ -480,7 +480,7 @@ JSON object per line, written under the single-writer model (§4.5) via an atomi
 - `seq` — monotonic, 1-based.
 - `type` — one of `run_started`, `step_entered`, `step_completed`, `notify`, `gate`,
   `error`, `resumed`, `lease_acquired`, `lease_reclaimed`, `ci_fix_attempt`, `parked`,
-  `run_completed`.
+  `run_completed`, `phase_record`, `external_dispatch`, `phase_cost`.
 - optional `step` — the step number (0–9) the event belongs to.
 - optional `detail` — free-text, **scrubbed fail-closed** (`readout.scrub`) before write.
 - optional `world` — a dict of reality facts; string values scrubbed fail-closed.
@@ -492,6 +492,18 @@ is reconstructed by replaying `ci_fix_attempt` events, written **write-ahead** (
 the fix push); a torn trailing line counts **+1** — a conservative over-count, so the
 bound trips earlier and is never bypassed by a crash-loop (it never under-counts). A
 failed durable append raises `DurableWriteError` and the orchestrator parks (fail-closed).
+
+**Token telemetry** (`phase_cost`, #130) — an additive extension of this vocabulary (no
+schemaVersion; the schema is versionless). Each `phase_cost` `payload` carries one phase's
+`{phase, dispatches: {total, byModel}, tokens: {output, input, measured, source}}`: the
+dispatch count × resolved model tier is the always-exact **proxy**; `tokens.output` is the
+budget-derived (`budget.spent()`) output-token delta over the phase, present only when the
+runtime surfaced it (`measured: true`) and **never fabricated**. It is written best-effort,
+**folded into the phase's existing durable write** — the per-phase `phase_progress_entry.py`
+save leaf, and `readout_post.py` for the terminal `ship` phase — so it rides no new courier
+leaf (§ the #118 one-leaf-per-phase budget). A ready hand-back journals `run_completed`
+(parks journal `parked`); `cost_report.py` projects the run total + top phases into the
+readout, and `token_trend.py` renders tokens-per-completed-work-item across runs.
 
 **`resume-brief.md`** — the rehydration brief (workhorse `journal.render_brief`),
 refreshed at the compaction boundary (the PreCompact hook) and on every park. Required
