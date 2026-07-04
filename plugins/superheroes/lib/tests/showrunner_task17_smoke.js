@@ -460,7 +460,60 @@ async function partC() {
   assert.ok(!('agentType' in received[2]), 'FAIL (c5): the fallback drops agentType (default dispatch)')
   assert.strictEqual(c5.ok, true, 'FAIL (c5): the fallback answer (real marker) parses as a clean exit')
 
-  console.log('OK (c): courier leaves dispatch on superheroes:courier; guard (missing + echoed marker) falls back to default; smart leaves never carry it')
+  // (c6) Dispatch REJECTION fallback (live 2026-07-04, run wf_b408ece1-0ed): on a plugin cache
+  // older than the courier agent, agent() REJECTS with "agent type 'superheroes:courier' not
+  // found" — a THROW the __SR_EXIT answer guard never sees (it only inspects returned answers).
+  // The wrapper must catch exactly that rejection at the dispatch choke-point and re-dispatch
+  // ONCE without agentType. Fresh sandbox: __realAgent is captured at bundle eval, so the
+  // rejecting agent must be installed BEFORE the eval. Covers BOTH leaf shapes: a non-marker
+  // leaf (mkdir — the run-29 test-pilot writeStatus crash class) and a marker leaf (runHelper).
+  const sandbox2 = {
+    console, args: JSON.stringify({ workItem: 'c-probe-2', model: 'sonnet' }),
+    process: { env: {}, cwd: () => '/' },
+  }
+  sandbox2.globalThis = sandbox2
+  sandbox2.global = sandbox2
+  const received2 = []
+  let rejectMode = 'not-found'
+  sandbox2.agent = async function(prompt, opts) {
+    received2.push(Object.assign({ prompt }, opts || {}))
+    if (opts && opts.agentType) {
+      if (rejectMode === 'not-found') {
+        throw new Error("agent type 'superheroes:courier' not found. Available agents: claude, general-purpose")
+      }
+      throw new Error('rate limited — try again')
+    }
+    return '{"ok":true}\n__SR_EXIT:0'
+  }
+  sandbox2.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
+  sandbox2.log = () => {}
+  vm.createContext(sandbox2)
+  vm.runInContext('globalThis.__SR_RUN = false;\n;(async () => {\n' + text + '\n})();', sandbox2, { timeout: 5000 })
+
+  received2.length = 0
+  await sandbox2.globalThis.io.mkdirp('/tmp/c6-probe')          // non-marker leaf: run-29's crash shape
+  assert.strictEqual(received2.length, 2, 'FAIL (c6): a not-found rejection must re-dispatch exactly once')
+  assert.strictEqual(received2[0].agentType, 'superheroes:courier', 'FAIL (c6): first dispatch carries agentType')
+  assert.ok(!('agentType' in received2[1]), 'FAIL (c6): the fallback re-dispatch drops agentType')
+  assert.strictEqual(received2[1].model, cheapest, 'FAIL (c6): the fallback keeps the cheapest-model pin')
+
+  received2.length = 0
+  const c6h = await sandbox2.globalThis.io.runHelper('c6-helper-probe', [])
+  assert.strictEqual(c6h.status, 0, 'FAIL (c6): a marker leaf must parse the fallback answer cleanly')
+  assert.strictEqual(received2.length, 2, 'FAIL (c6): marker leaf — not-found rejection means 2 dispatches (no extra marker retries)')
+  assert.ok(!('agentType' in received2[1]), 'FAIL (c6): marker-leaf fallback drops agentType')
+
+  // (c7) Any OTHER rejection with agentType present must PROPAGATE — the fallback is scoped to
+  // the not-found shape only, never a blanket swallow of dispatch errors.
+  rejectMode = 'other'
+  received2.length = 0
+  let c7threw = null
+  try { await sandbox2.globalThis.io.mkdirp('/tmp/c7-probe') } catch (e) { c7threw = e }
+  assert.ok(c7threw && /rate limited/.test(String((c7threw && c7threw.message) || c7threw)),
+    'FAIL (c7): a non-not-found rejection must propagate, not silently fall back')
+  assert.strictEqual(received2.length, 1, 'FAIL (c7): no fallback re-dispatch for a non-not-found rejection')
+
+  console.log('OK (c): courier leaves dispatch on superheroes:courier; guard (missing + echoed marker) falls back to default; a not-found dispatch REJECTION falls back at the wrapper; smart leaves never carry it')
 }
 
 ;(async () => {
