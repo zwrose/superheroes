@@ -87,11 +87,44 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
+// __badCourierAnswer: TRUE when a courier answer to a marker-carrying command signals the command
+// DID NOT run. Two observed dispatch-failure shapes, both from the plugin-subagent prompt-drop bug:
+//   (a) the answer omits the __SR_EXIT marker entirely (echo/empty shape); or
+//   (b) the leaf echoes the command back as text instead of running it, so the answer contains the
+//       LITERAL unexpanded '__SR_EXIT:$?' (live 2026-07-03 run wf_1494a8fa-e28, agent aecd0b3ad) —
+//       the marker STRING is present, so a bare presence check would wrongly pass.
+// A genuinely-executed command can never print '$?' unexpanded (the shell expands it to a number),
+// so the literal '__SR_EXIT:$?' is an unambiguous did-not-run tell.
+function __badCourierAnswer(a) {
+  var s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
 async function __sh(cmd, opts) {
-  return globalThis.agent(
-    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd),
-    Object.assign({ label: 'io', courier: true }, opts || {}),
-  )
+  // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
+  // A restricted-tool agent carries NO deferred_tools_delta / skill_listing attachments (measured:
+  // ~55.5KB, ~13.9k tokens per leaf) and a tiny tool-schema prefix, cutting the fixed per-leaf context
+  // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
+  // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
+  var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
+  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd)
+  // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
+  // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
+  // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both
+  // did-not-run shapes (missing marker OR the command echoed back with the literal '__SR_EXIT:$?').
+  // Retry ONCE on the courier agent, then fall back to the DEFAULT dispatch (drop agentType, keep
+  // courier:true so the cheap-model pin holds) so a courier-agent dispatch bug degrades to today's
+  // cost instead of parking the run. Non-marker leaves (mkdir/cat/writeFile) already degrade
+  // fail-soft or via their caller's own hash check, so they need no marker guard.
+  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  var ans = await globalThis.agent(prompt, o)
+  if (__expectMarker && __badCourierAnswer(ans)) {
+    ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
+    if (__badCourierAnswer(ans)) {
+      var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
+      ans = await globalThis.agent(prompt, fo)
+    }
+  }
+  return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
@@ -1475,12 +1508,16 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
-// load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
-// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never full findings bodies. Small summaries
-// still return directly. Once the summary is big enough to be courier-fragile, the helper writes it
+// entry-bootstrap (#193) is the read seam for a resume: it ships DECISIONS + the bounded minimum,
+// not record content. Each prior-run round comes back as a STUB — the policy/confirmation/
+// certification scalars plus BLOCKING-finding skeletons only (the breaker, recurrence, round policy,
+// and fix-context generalizeRequired never read non-blocking prior-round findings), so a two-round
+// resume is one direct payload-tier answer instead of a receipt + N ~34k-token chunk leaves (the
+// #118 courier-collapse bar). In-memory `records` are therefore a documented HYBRID: prior-run rounds
+// are stubs, this-run rounds stay full (mergeRoundRecords keeps the richer live record). Once the
+// bootstrap is big enough to be courier-fragile (pathological history), the helper writes it
 // Python-side and returns only a receipt; the shell reads base64 chunks and verifies each chunk plus
-// the reconstructed content hash before parsing.
+// the reconstructed content hash before parsing (the #191 fallback transport).
 const _SUMMARY_RECEIPT_BOUND = 4000
 const _READ_CHUNK_CHARS = 4000
 
@@ -1569,10 +1606,10 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
 }
 
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
   let parsed = _jsonFromStdout(out)
-  if (parsed && parsed.receipt === 'load-summary') {
-    const read = await _readReceiptText(ioApi, parsed, 'load-summary', 'round-memory-helper-failed')
+  if (parsed && parsed.receipt === 'entry-bootstrap') {
+    const read = await _readReceiptText(ioApi, parsed, 'entry-bootstrap', 'round-memory-helper-failed')
     if (!read.ok) return read
     try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
   }
@@ -1607,8 +1644,9 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
   }
 }
 
-// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — exactly
-// what load-summary seeds a resume with), persisted in ONE verified CAS leaf for the typical
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — a superset of
+// the entry-bootstrap stub that seeds a resume: the durable form keeps non-blocking findings, the
+// resume seed drops them), persisted in ONE verified CAS leaf for the typical
 // round: the skeleton rides the courier args inline, self-verified by --record-hash =
 // sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
 // corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
@@ -1868,7 +1906,7 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 }
 
 // gatherReviewSetup: fold 2 (#141) — run the review loop's decision-free entry stretch (run-dir
-// mkdir + deferred-set seed read + load-summary + coverage load) as ONE review_setup_gather.py leaf,
+// mkdir + deferred-set seed read + entry-bootstrap + coverage load) as ONE review_setup_gather.py leaf,
 // all Python-side. Returns the combined blob { ok, memory, deferredSet, coverage } for the caller to
 // hand reviewPanel as `preloaded` (and, on the doc leg, to seed runtimeDeferred). Returns null on a
 // gather transport failure — the caller then falls back to a plain mkdir + reviewPanel's own reads
@@ -1909,7 +1947,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   const lease = legKind && legKind.lease
   const ioApi = io()
   // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
-  // load-summary (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
+  // entry-bootstrap (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
   // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
   // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
   // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).

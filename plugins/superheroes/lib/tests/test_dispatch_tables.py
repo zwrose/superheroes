@@ -1,9 +1,11 @@
 """Structural guard: per-agent dispatch tables and prose enumerations stay in
 sync with the bundled agents and the rubric's dimension list.
 
-- review-plan and review-code dispatch ALL bundled agents: their substitution
-  tables have exactly one row per file in agents/, and their "Specialists to
-  dispatch" prose enumerations name every slug.
+- review-plan and review-code dispatch every bundled REVIEWER agent: their
+  substitution tables have exactly one row per `*-reviewer` file in agents/, and
+  their "Specialists to dispatch" prose enumerations name every reviewer slug.
+  Internal non-reviewer leaf agents (e.g. `courier`, the showrunner spine's
+  command pipe) are NOT review specialists and are excluded.
 - audit-debt intentionally dispatches only the ORIGINAL FOUR (Failure-Mode
   whole-repo sweep deferred) — guarded here so a four->five sweep cannot
   silently change it.
@@ -33,8 +35,11 @@ def _read(rel):
 
 
 def _agent_slugs():
+    # The review dispatch tables/prose enumerate the review SPECIALISTS — the panel of
+    # `*-reviewer` agents. Internal non-reviewer leaf agents (e.g. `courier`) live in agents/
+    # too but are never a review dimension, so scope this to the `-reviewer` panel.
     adir = os.path.join(PLUGIN, "agents")
-    return {fn[:-3] for fn in os.listdir(adir) if fn.endswith(".md")}
+    return {fn[:-3] for fn in os.listdir(adir) if fn.endswith(".md") and fn[:-3].endswith("-reviewer")}
 
 
 def _table_rows(rel):

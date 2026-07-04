@@ -142,15 +142,25 @@ async function main() {
   for (const arg of fjCall) assert.ok(String(arg).length <= ARG_BOUND, 'fenced write arg too large')
   assert.ok(!fs.existsSync(recPath + '.payload'), 'staged payload file consumed on success')
 
-  // (d) the RESUME read is bounded too: a large on-disk history loads as summaries via
-  // load-summary — the evidence bodies never ride the courier stdout back (the read twin
-  // of the persist-skeleton write side; pre-D3 full-bodied files load the same way).
+  // (d) #193: the RESUME read is the entry-bootstrap DECIDER — a large verbose on-disk history
+  // (a couple blocking findings + many non-blocking, every body chatty) collapses to per-round
+  // STUBS (blocking-only skeletons + decision scalars) that fit ONE direct payload-tier answer.
+  // Entry seeding is ≤2 courier leaves (one bootstrap, one retry at most) with ZERO read-chunk
+  // calls — down from the pre-#193 receipt + N ~34k-token chunk leaves (the #118 courier-collapse
+  // bar). Non-blocking finding bodies AND titles never ride back.
   const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resume-'))
+  const RESUME_BLOCKING = Array.from({ length: 2 }, (_, i) => ({
+    file: 'a.py', line: i + 1, title: `blocker ${i}`, severity: 'Critical',
+    taxonomy: 'bug', dimension: 'Code', evidence: BIG_EVIDENCE }))
+  const RESUME_MINOR = Array.from({ length: 40 }, (_, i) => ({
+    file: 'b.py', line: i + 1, title: `nit number ${i} with a chatty verbose body`, severity: 'Minor',
+    taxonomy: 'style', dimension: 'Code', evidence: BIG_EVIDENCE }))
+  const RESUME_FINDINGS = RESUME_BLOCKING.concat(RESUME_MINOR)
   const bigRecs = [1, 2].map((rnd) => ({
     schemaVersion: 2, round: rnd, kind: 'baseline', confirmationPending: false,
     changedSubjects: ['Code'], coverageDecisions: [], tokenUsage: {},
-    findings: BIG_FINDINGS, carriedFindings: [],
-    dimensions: { code: { dimension: 'code', status: 'run', confidence: 'high', round: rnd, findings: BIG_FINDINGS, subjects: ['Code'] } },
+    findings: RESUME_FINDINGS, carriedFindings: [],
+    dimensions: { code: { dimension: 'code', status: 'run', confidence: 'high', round: rnd, tier: 'reviewer-deep', findings: RESUME_FINDINGS, hasFindings: true, subjects: ['Code'] } },
   }))
   fs.writeFileSync(`${rdir}/round-records.json`, JSON.stringify(bigRecs))
   const onDisk = fs.statSync(`${rdir}/round-records.json`).size
@@ -163,25 +173,25 @@ async function main() {
     maxRounds: 7, legKind: { panel: true, code: false },
   })
   assert.ok(rv && typeof rv.terminal === 'string', 'resume run reaches a terminal')
-  const loadCall = helperResults.find((h) => h.args.includes('load-summary'))
-  assert.ok(loadCall, 'the resume seed goes through load-summary')
-  assert.ok(loadCall.stdout.length < onDisk / 5,
-    `resume load stdout must be bounded (${loadCall.stdout.length}B vs ${onDisk}B on disk)`)
-  assert.ok(!loadCall.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the load stdout')
-  const loadReceipt = JSON.parse(loadCall.stdout)
-  assert.strictEqual(loadReceipt.receipt, 'load-summary', 'oversized resume summaries return a small receipt')
+  // the resume seed goes through entry-bootstrap, in ≤2 invocations, with ZERO chunk reads
+  const bootstrapCalls = helperResults.filter((h) => h.args.includes('entry-bootstrap'))
+  assert.ok(bootstrapCalls.length >= 1, 'the resume seed goes through entry-bootstrap')
+  assert.ok(bootstrapCalls.length <= 2, `entry seeding is ≤2 leaves (one retry max), got ${bootstrapCalls.length}`)
+  assert.ok(!helperResults.some((h) => h.args.includes('load-summary')),
+    '#193: the resume no longer pays the full load-summary skeleton')
   const chunkReads = helperResults.filter((h) => h.args.includes('read-chunk'))
-  assert.ok(chunkReads.length > 0, 'oversized resume summaries are fetched through verified read chunks')
-  for (const chunkRead of chunkReads) {
-    assert.ok(chunkRead.stdout.length < 6656, `read chunk stdout stayed bounded (${chunkRead.stdout.length}B)`)
-    const parsed = JSON.parse(chunkRead.stdout)
-    assert.strictEqual(parsed.chunkHash, defaultIo.contentHash(parsed.rb64), 'each read chunk self-verifies')
-    // #191 de-bait: no directly-decodable b64 payload may ride a chunk answer — a live courier
-    // model decodes recognizable base64-of-JSON and returns the content instead of the stdout
-    // (run wf_fd9b5edc-e80). The reversed form is opaque; a bare b64 field is a regression.
-    assert.ok(!('b64' in parsed), 'chunk answers must ship the reversed payload only (no b64 bait)')
-    const decodedBait = Buffer.from(String(parsed.rb64 || ''), 'base64').toString('utf8')
-    assert.ok(!decodedBait.includes('"schemaVersion"'), 'shipped payload must not decode as-is into content')
+  assert.strictEqual(chunkReads.length, 0, `a bounded bootstrap needs ZERO chunk reads (got ${chunkReads.length})`)
+  const seed = bootstrapCalls[0]
+  assert.ok(seed.stdout.length < 4000 && seed.stdout.length < onDisk / 10,
+    `resume bootstrap stdout must be a small direct answer (${seed.stdout.length}B vs ${onDisk}B on disk)`)
+  const seedAnswer = JSON.parse(seed.stdout)
+  assert.ok(!('receipt' in seedAnswer), 'the bounded bootstrap answers DIRECT, not as a receipt')
+  assert.ok(Array.isArray(seedAnswer.records) && seedAnswer.records.length === 2, 'the bootstrap ships the two prior-round stubs')
+  assert.ok(!seed.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the bootstrap stdout')
+  assert.ok(!seed.stdout.includes('nit number'), 'non-blocking finding titles never ride the bootstrap stdout')
+  for (const stub of seedAnswer.records) {
+    assert.deepStrictEqual(stub.findings.map((f) => f.severity), ['Critical', 'Critical'],
+      'the stub keeps blocking-finding skeletons only')
   }
   const plainLoad = helperResults.find((h) =>
     String(h.args[0] || '').includes('review_memory.py') && h.args.includes('load') && !h.args.includes('load-summary'))
