@@ -969,6 +969,18 @@ read-back parks fail-closed. **Best-effort** writes (round-state snapshots, defe
 backups, readout posting) must be explicitly named and must **not** gate advancement on their
 delivery alone.
 
+**Leaf Bash timeout floor.** The Bash tool's 120s default kills long spine commands
+(verify_gate wrapping a full test gate) when a courier omits the prompt-requested `timeout`
+parameter — prompt compliance is stochastic. On Claude Code the plugin makes the floor
+structural: a `PreToolUse(Bash)` hook (`hooks/bash_timeout.py`, wired in `hooks.json` after
+the fail-closed enforcer entry) injects `timeout: 600000` via `updatedInput` **only when the
+call carries no explicit timeout** (an explicit value is never touched; a `null` counts as
+omitted). It matches `verify_gate.py`'s own 600s bound, so the gate reports `timeout` cleanly
+instead of being killed underneath. The hook is **fail-open** (parse error → no output, exit 0,
+`|| true` at the wiring) — worst case is the pre-hook default, never a broken Bash call — and
+it fires inside subagent leaves, so every consumer project gets the floor from the plugin
+alone, with no repo-side settings trace.
+
 The `superheroes:showrunner` skill turns the merged spine **on** for one approved work-item.
 The launch path is **pre-flight → bundle → Workflow tool**:
 
