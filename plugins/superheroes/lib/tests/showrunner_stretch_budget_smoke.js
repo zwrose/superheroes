@@ -31,6 +31,16 @@ const path = require('path')
 const vm = require('vm')
 
 const CHEAPEST = require('../model_tier.js').DEFAULT_TIERS.mechanical
+const PAYLOAD_TIER = require('../model_tier.js').DEFAULT_TIERS.fixer
+
+// #191: payload-carrying couriers (receipt-emitting entry loads + chunk relays) ride the
+// copy-faithful fixer tier — plain-cheapest couriers regenerate/transform large relay answers.
+// The payload marker is preamble-only (stripped before the runtime call), so the smoke
+// recognizes the sanctioned exception by label + tier.
+const PAYLOAD_COURIERS = [/^review_setup_gather\.py$/, /^review_memory\.py$/]
+function isPayloadCourier(label, model) {
+  return model === PAYLOAD_TIER && PAYLOAD_COURIERS.some((re) => re.test(label))
+}
 
 // ── The #118 Labels matrix, as the fixture ─────────────────────────────────────────────────────
 // Genuine-model agents (spec "Genuine-model agents (judgment)") — never pinned to the cheapest tier.
@@ -166,7 +176,7 @@ function runHelperResponse(cmdline) {
       const p = args[args.indexOf('--path') + 1]
       return JSON.stringify({ ok: true, contentHash: sha256(files[p] != null ? files[p] : '') })
     }
-    if (args[0] === 'load-summary') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
+    if (args[0] === 'load-summary' || args[0] === 'entry-bootstrap') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
     if (args[0] === 'persist-skeleton') {
       // D3: the ONE verified round-record leaf — the inline skeleton must self-verify
       // (record-hash == sha256 of record-json) and must never carry evidence bodies.
@@ -435,7 +445,7 @@ async function main() {
 
   // (1) MODEL PIN: every non-genuine leaf resolves to the cheapest (mechanical) tier; no genuine
   // agent is ever pinned there.
-  const unpinned = calls.filter((c) => !isGenuine(c.label) && c.model !== CHEAPEST)
+  const unpinned = calls.filter((c) => !isGenuine(c.label) && c.model !== CHEAPEST && !isPayloadCourier(c.label, c.model))
   assert.deepStrictEqual(
     unpinned.map((c) => `${c.phase}/${c.label}=${c.model}`), [],
     'every dumb-pipe leaf must resolve to the mechanical (cheapest) model tier')

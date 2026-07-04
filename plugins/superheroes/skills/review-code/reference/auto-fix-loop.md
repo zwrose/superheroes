@@ -87,6 +87,29 @@ most 5 reported per agent). If you have nothing to flag, write an empty array
 (`[]`) — do not skip writing the file.
 ```
 
+> **External-engine reviewers — stdout shape contract (#38, #196).** When `$REVIEWER_ENGINE` is
+> `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
+> instead of a named subagent, and it returns its findings on **stdout** rather than writing the
+> findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
+> the subagent would have written, wrapped once as the `findings` value) with **nothing printed after
+> it** — `engine_adapter.parse_result(role="review")` reads the last top-level JSON value. Emit the
+> canonical object; the parser also **tolerates a bare top-level array** `[...]` of finding objects as
+> of #196, but anything else (prose, a trailing line, an empty stream, an array of non-objects) parses
+> as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
+> cost. State this shape verbatim in the dispatch prompt so orchestrators stop re-guessing it per run.
+
+> **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
+> Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
+> runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
+> `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`, #204) injects a 600s `timeout` on any dispatch
+> that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
+> `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
+> per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
+> dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
+> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-Claude path;
+> a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
+> bounded cost, never a stuck loop.
+
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
 ---

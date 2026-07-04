@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.7.0...superheroes-v0.8.0) (2026-07-04)
+
+
+### Features
+
+* **superheroes:** entry-bootstrap resume decider — ship decisions, not record content ([#193](https://github.com/zwrose/superheroes/issues/193)) ([#199](https://github.com/zwrose/superheroes/issues/199)) ([1d9438c](https://github.com/zwrose/superheroes/commit/1d9438cec480d20660ab196a1d8536401ecd10fa))
+* **superheroes:** lean courier agent — cut the ~34k fixed context every one-command leaf pays ([#194](https://github.com/zwrose/superheroes/issues/194)) ([#198](https://github.com/zwrose/superheroes/issues/198)) ([0770830](https://github.com/zwrose/superheroes/commit/0770830539b461f5fea0d6cd8b091ce4fe45047b))
+
+
+### Bug Fixes
+
+* **superheroes:** de-bait chunk relay payloads + payload-tier read pins ([#192](https://github.com/zwrose/superheroes/issues/192)) ([31e2fa4](https://github.com/zwrose/superheroes/commit/31e2fa459a9f7dc2ef13a755398736cfa28e9617))
+* **superheroes:** fall back to default dispatch when the courier agent type is unknown ([#206](https://github.com/zwrose/superheroes/issues/206)) ([44ee2e5](https://github.com/zwrose/superheroes/commit/44ee2e562acf137887eb23adca1d8f0f1a652435))
+* **superheroes:** push the build branch before draft-PR creation ([#203](https://github.com/zwrose/superheroes/issues/203)) ([a7ebb84](https://github.com/zwrose/superheroes/commit/a7ebb84c26b3bb5e4b961b82f3f7dcf5fd6040c4))
+* **superheroes:** state the engine-dispatch timeout expiry contract (structural via [#204](https://github.com/zwrose/superheroes/issues/204)) ([#202](https://github.com/zwrose/superheroes/issues/202)) ([#207](https://github.com/zwrose/superheroes/issues/207)) ([fe5fc2b](https://github.com/zwrose/superheroes/commit/fe5fc2b2e479130300e1f2f8763d233508fb5d72))
+* **superheroes:** structural Bash timeout floor via PreToolUse updatedInput hook ([#204](https://github.com/zwrose/superheroes/issues/204)) ([d220280](https://github.com/zwrose/superheroes/commit/d22028011501cb8e7dc04c88ab4f4a589f489f79))
+* **superheroes:** tolerate bare-array reviewer output + state the stdout shape contract ([#196](https://github.com/zwrose/superheroes/issues/196)) ([#201](https://github.com/zwrose/superheroes/issues/201)) ([db08e3e](https://github.com/zwrose/superheroes/commit/db08e3e3dec43abc4a235771b5f077fdfc793e8f))
+* **superheroes:** verify read-back must survive a thrown courier ([#195](https://github.com/zwrose/superheroes/issues/195)) ([8802019](https://github.com/zwrose/superheroes/commit/8802019efb1ae779c7932be6a784b776edbe41b5))
+
 ## [0.7.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.6.0...superheroes-v0.7.0) (2026-07-04)
 
 

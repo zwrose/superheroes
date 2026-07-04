@@ -762,6 +762,16 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
 - the project `CLAUDE.md` chain, the user `~/.claude/CLAUDE.md`, an env block (date + git
   email), and the auto-memory `MEMORY.md` head (keyed to the **main** repo, shared across
   worktrees) — parity with a native start.
+- a compact **review-discipline note** — ONLY when the project is superheroes-calibrated
+  (and, like this whole bootstrap, only on Claude Code — Codex wires no `SessionStart`
+  hook, so on that host the `configure`-written in-repo CLAUDE.md copy is the only carrier)
+  (a storage-mode registry entry or hero calibration evidence; the probe is strictly
+  read-only — never `mode_registry.resolve()`, which can backfill-write). It states the
+  no-unreviewed-PRs convention and points at the canonical
+  `rubric/review-discipline.md`. This is the storage-mode-respecting carrier: it reaches
+  every session (including ad-hoc direct builds) with zero repo traces, in both storage
+  modes. `configure` can additionally write a durable copy into an **in-repo** project's
+  `CLAUDE.md` (owner-gated, idempotent); it never offers that in out-of-repo mode.
 
 It is **fail-soft**: each source is gathered independently; a missing/erroring one is omitted
 with a one-line stderr breadcrumb (never the file contents) and the hook always exits 0, never
@@ -951,11 +961,35 @@ unverified premise*, not a status note.
 **Courier stretch contract (#118).** Deterministic showrunner stretches use **at most one
 courier leaf by default**; genuine model work (authoring, review panels, fixers) remains
 separate leaves. The lease/reconcile **world snapshot** at startup is the named exception —
-it may batch multiple reads in one courier call. Every **advancing durable write** must be
+it may batch multiple reads in one courier call.
+
+**Lean courier agent (#194).** Every dumb-pipe courier leaf dispatches on the restricted
+`superheroes:courier` agent (`tools: Bash` only), not the default full-surface worker. A
+Bash-only agent has neither ToolSearch nor the Skill tool, so it carries **no
+`deferred_tools_delta` / `skill_listing` attachments** (~13.9k tokens/leaf, measured) and only
+a tiny tool-schema prefix — cutting the fixed per-leaf context ~2.6× (≈33k → ≈13k tokens).
+This is orthogonal to the cheapest-model pin (§ the model wrapper). A **prompt-drop guard**
+covers the known plugin-subagent failure where a dispatch starts without the task prompt: for
+a command that echoes `__SR_EXIT`, an answer that either omits the marker **or** echoes the
+command back with the literal unexpanded `__SR_EXIT:$?` (both did-not-run shapes) triggers one
+retry on the courier agent, then a fall-back to the default dispatch — so a courier-agent
+dispatch bug degrades to today's cost instead of parking the run. Every **advancing durable write** must be
 **idempotent** and **read-back confirmed** before the run advances past that step; a failed
 read-back parks fail-closed. **Best-effort** writes (round-state snapshots, deferred-finding
 backups, readout posting) must be explicitly named and must **not** gate advancement on their
 delivery alone.
+
+**Leaf Bash timeout floor.** The Bash tool's 120s default kills long spine commands
+(verify_gate wrapping a full test gate) when a courier omits the prompt-requested `timeout`
+parameter — prompt compliance is stochastic. On Claude Code the plugin makes the floor
+structural: a `PreToolUse(Bash)` hook (`hooks/bash_timeout.py`, wired in `hooks.json` after
+the fail-closed enforcer entry) injects `timeout: 600000` via `updatedInput` **only when the
+call carries no explicit timeout** (an explicit value is never touched; a `null` counts as
+omitted). It matches `verify_gate.py`'s own 600s bound, so the gate reports `timeout` cleanly
+instead of being killed underneath. The hook is **fail-open** (parse error → no output, exit 0,
+`|| true` at the wiring) — worst case is the pre-hook default, never a broken Bash call — and
+it fires inside subagent leaves, so every consumer project gets the floor from the plugin
+alone, with no repo-side settings trace.
 
 The `superheroes:showrunner` skill turns the merged spine **on** for one approved work-item.
 The launch path is **pre-flight → bundle → Workflow tool**:

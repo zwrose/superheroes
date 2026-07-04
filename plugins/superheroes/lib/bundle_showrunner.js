@@ -110,6 +110,22 @@ globalThis.agent = function (prompt, opts) {
   // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
   // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
+  // #194 residual (live 2026-07-04, run wf_b408ece1-0ed): an UNKNOWN agentType makes agent() REJECT
+  // ("agent type 'superheroes:courier' not found") — a dispatch THROW, which __sh's answer-shape
+  // fallback never sees (it only inspects returned answers). On any plugin cache older than the
+  // courier agent (< 0.8.0) the first agentType-carrying leaf crashed its caller (test-pilot's
+  // status write parked run 29). Centralize the degrade at the single dispatch choke-point: catch
+  // the not-found rejection and re-dispatch ONCE without agentType (default full-surface agent,
+  // model pin and label unchanged). Only the not-found shape falls back — every other rejection
+  // still propagates (fail-closed for real dispatch errors).
+  if (o.agentType) {
+    var __fallbackOpts = Object.assign({}, o); delete __fallbackOpts.agentType
+    return Promise.resolve().then(function () { return __realAgent(prompt, o) }).catch(function (e) {
+      var __msg = String((e && e.message) || e)
+      if (/agent type '[^']*' not found/i.test(__msg)) return __realAgent(prompt, __fallbackOpts)
+      throw e
+    })
+  }
   return __realAgent(prompt, o)
 }
 globalThis.parallel = parallel
@@ -127,11 +143,44 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
+// __badCourierAnswer: TRUE when a courier answer to a marker-carrying command signals the command
+// DID NOT run. Two observed dispatch-failure shapes, both from the plugin-subagent prompt-drop bug:
+//   (a) the answer omits the __SR_EXIT marker entirely (echo/empty shape); or
+//   (b) the leaf echoes the command back as text instead of running it, so the answer contains the
+//       LITERAL unexpanded '__SR_EXIT:$?' (live 2026-07-03 run wf_1494a8fa-e28, agent aecd0b3ad) —
+//       the marker STRING is present, so a bare presence check would wrongly pass.
+// A genuinely-executed command can never print '$?' unexpanded (the shell expands it to a number),
+// so the literal '__SR_EXIT:$?' is an unambiguous did-not-run tell.
+function __badCourierAnswer(a) {
+  var s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
 async function __sh(cmd, opts) {
-  return globalThis.agent(
-    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd),
-    Object.assign({ label: 'io', courier: true }, opts || {}),
-  )
+  // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
+  // A restricted-tool agent carries NO deferred_tools_delta / skill_listing attachments (measured:
+  // ~55.5KB, ~13.9k tokens per leaf) and a tiny tool-schema prefix, cutting the fixed per-leaf context
+  // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
+  // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
+  var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
+  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd)
+  // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
+  // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
+  // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both
+  // did-not-run shapes (missing marker OR the command echoed back with the literal '__SR_EXIT:$?').
+  // Retry ONCE on the courier agent, then fall back to the DEFAULT dispatch (drop agentType, keep
+  // courier:true so the cheap-model pin holds) so a courier-agent dispatch bug degrades to today's
+  // cost instead of parking the run. Non-marker leaves (mkdir/cat/writeFile) already degrade
+  // fail-soft or via their caller's own hash check, so they need no marker guard.
+  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  var ans = await globalThis.agent(prompt, o)
+  if (__expectMarker && __badCourierAnswer(ans)) {
+    ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
+    if (__badCourierAnswer(ans)) {
+      var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
+      ans = await globalThis.agent(prompt, fo)
+    }
+  }
+  return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
@@ -222,7 +271,7 @@ function __helperResult(s) {
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
 const __PAYLOAD_BOUND = 3000
-const __PAYLOAD_CHARS = 1200
+const __PAYLOAD_CHARS = 2400
 const __NL = String.fromCharCode(10)
 function __libPath(name) {
   return __require('lib_root').libPath(name)
@@ -265,6 +314,29 @@ async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
   var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
   return __helperResult(String(await __sh(chain, { payload: true }) || ''))
 }
+// __jsonFromText: fence-tolerant JSON parse for readJson. On the verify read-back path (and every
+// other bundle read) the file content rides back through a haiku 'cat' courier that STOCHASTICALLY
+// wraps the JSON in \`\`\` (or single-backtick) fences or prose — a bare JSON.parse then silently
+// defaults and the round-stamped pass evidence goes unseen (live wf_1ed21465-6f3: a clean verify round
+// halted). Mirrors __helperResult's fence tolerance + extractJson's brace-slice: direct parse, then
+// strip ONE wrapping fence pair (triple or single backtick), then a first-{…last-} brace slice. A
+// genuinely empty answer (missing file: cat ... || true -> '') falls straight to the silent default
+// (anti-fabrication: a missing verify file must NOT parse into a pass).
+function __jsonFromText(t, dflt) {
+  var s = String(t == null ? '' : t)
+  if (!s.trim()) return dflt
+  try { return JSON.parse(s) } catch (_) {}
+  var stripped = s.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').trim()
+  if (/^\\x60/.test(stripped) && /\\x60$/.test(stripped)) {
+    stripped = stripped.replace(/^\\x60/, '').replace(/\\x60$/, '').trim()
+  }
+  try { return JSON.parse(stripped) } catch (_) {}
+  var first = stripped.indexOf('{'), last = stripped.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(stripped.slice(first, last + 1)) } catch (_) {}
+  }
+  return dflt
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -305,9 +377,9 @@ globalThis.io = {
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
-  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
+  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); return __jsonFromText(t, dflt) },
   contentHash(text) { return __contentHash(text) },
-  async runHelper(cmd, args) {
+  async runHelper(cmd, args, opts) {
     var parts = __argv(cmd, args || [])
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in \`\`\` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
@@ -316,7 +388,9 @@ globalThis.io = {
     // __helperResult finds the LAST marker anywhere, slices stdout up to it, strips one wrapping
     // fence pair. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
     // payload is arbitrary text that may legitimately contain fences).
-    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || ''))
+    // opts.payload: the answer is a relay payload (e.g. a read-chunk) — ride the copy-faithful
+    // payload tier instead of the cheapest courier tier (#191).
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', (opts && opts.payload) ? { payload: true } : {}) || ''))
   },
 }
 // Full-run mode (read by showrunner() in Task 8): inject native authoring WITHOUT frontHalfBoundary.
