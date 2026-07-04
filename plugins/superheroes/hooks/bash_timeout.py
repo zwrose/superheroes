@@ -21,7 +21,8 @@ Two deliberate bounds:
 import json
 import sys
 
-DEFAULT_TIMEOUT_MS = 600000  # mirrors verify_gate.DEFAULT_TIMEOUT (600s) and BASH_MAX_TIMEOUT_MS
+DEFAULT_TIMEOUT_MS = 600000  # mirrors verify_gate.DEFAULT_TIMEOUT (600s); a project that lowers
+# BASH_MAX_TIMEOUT_MS below this gets the harness's clamp, not an error — still fail-open.
 
 
 def decide(payload):
