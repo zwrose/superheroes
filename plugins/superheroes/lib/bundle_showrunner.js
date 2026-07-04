@@ -110,6 +110,22 @@ globalThis.agent = function (prompt, opts) {
   // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
   // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
+  // #194 residual (live 2026-07-04, run wf_b408ece1-0ed): an UNKNOWN agentType makes agent() REJECT
+  // ("agent type 'superheroes:courier' not found") — a dispatch THROW, which __sh's answer-shape
+  // fallback never sees (it only inspects returned answers). On any plugin cache older than the
+  // courier agent (< 0.8.0) the first agentType-carrying leaf crashed its caller (test-pilot's
+  // status write parked run 29). Centralize the degrade at the single dispatch choke-point: catch
+  // the not-found rejection and re-dispatch ONCE without agentType (default full-surface agent,
+  // model pin and label unchanged). Only the not-found shape falls back — every other rejection
+  // still propagates (fail-closed for real dispatch errors).
+  if (o.agentType) {
+    var __fallbackOpts = Object.assign({}, o); delete __fallbackOpts.agentType
+    return Promise.resolve().then(function () { return __realAgent(prompt, o) }).catch(function (e) {
+      var __msg = String((e && e.message) || e)
+      if (/agent type '[^']*' not found/i.test(__msg)) return __realAgent(prompt, __fallbackOpts)
+      throw e
+    })
+  }
   return __realAgent(prompt, o)
 }
 globalThis.parallel = parallel
