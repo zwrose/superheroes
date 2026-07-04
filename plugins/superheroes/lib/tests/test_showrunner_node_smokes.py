@@ -60,8 +60,11 @@ SHOWRUNNER_SMOKES = [
     # #157 follow-up: circuit breaker ignores transport-failed (all-missing) rounds.
     "plugins/superheroes/lib/tests/showrunner_circuit_breaker_reviewed_rounds_smoke.js",
     # #141 fold 2: reviewPanel honors the preloaded review_setup_gather.py result (mkdir + deferred
-    # seed + load-summary + coverage folded into ONE leaf); no preloaded -> unfolded fallback.
+    # seed + entry-bootstrap + coverage folded into ONE leaf); no preloaded -> unfolded fallback.
     "plugins/superheroes/lib/tests/showrunner_review_setup_gather_smoke.js",
+    # #193: entry-bootstrap resume-equivalence — the stub seed drives the loop identically to the
+    # full load-summary skeleton (scheduling / generalizeRequired / breaker / recurrence).
+    "plugins/superheroes/lib/tests/showrunner_bootstrap_equivalence_smoke.js",
     # #115 Task 13a: args-based front-half selector (globalThis flags + bundle ENTRY text assertion).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).

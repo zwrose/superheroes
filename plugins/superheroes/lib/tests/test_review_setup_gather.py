@@ -23,9 +23,9 @@ def gather(args):
     return json.loads(proc.stdout)
 
 
-def load_summary(records_path, dimensions, extras_path):
+def entry_bootstrap(records_path, dimensions, extras_path):
     proc = subprocess.run(
-        [sys.executable, os.path.join(LIB, "review_memory.py"), "load-summary",
+        [sys.executable, os.path.join(LIB, "review_memory.py"), "entry-bootstrap",
          "--path", records_path, "--dimensions", json.dumps(dimensions),
          "--extras-path", extras_path, "--sweep-stale-staging"],
         capture_output=True, text=True)
@@ -91,14 +91,17 @@ def test_gather_is_byte_parity_with_separate_helpers(tmp_path):
         json.dumps([{"id": "RCD-1", "classKey": "Code::bug::x", "sourceRound": 1}]), encoding="utf-8")
 
     out = gather(_args(run_dir))
-    mem = load_summary(str(run_dir / "round-records.json"), ["code"], str(run_dir / "last-extras.json"))
+    mem = entry_bootstrap(str(run_dir / "round-records.json"), ["code"], str(run_dir / "last-extras.json"))
     cov = load_coverage(str(run_dir / "review-coverage-decisions.json"), "code")
 
-    assert out["memory"] == mem, "memory field must be byte-parity with review_memory load-summary"
+    assert out["memory"] == mem, "memory field must be byte-parity with review_memory entry-bootstrap"
     assert out["coverage"] == cov, "coverage field must be byte-parity with coverage_decisions load"
     assert out["deferredSet"] == {"a.py::bug": "Critical"}, "the deferred-set seed rides the gather"
-    # the durable bodies never ride back through the gather (the load-summary skeleton contract)
+    # the durable bodies never ride back through the gather (the entry-bootstrap stub contract)
     assert "y" * 500 not in json.dumps(out["memory"]), "evidence bodies must not ride the gather stdout"
+    # #193: the gather now ships the bootstrap STUB — the resume round + blocking-only skeletons.
+    assert out["memory"]["resumeRound"] == 2, "the gather ships the resume round"
+    assert out["memory"]["records"][0]["findings"][0]["severity"] == "Critical"
 
 
 def test_doc_mode_coverage_parses_from_the_doc(tmp_path):

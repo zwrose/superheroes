@@ -57,7 +57,7 @@ async function main() {
     calls.length = 0
     const v = await reviewPanel({ ...base(dir), preloaded: emptyPreload() })
     assert.strictEqual(v.terminal, 'clean', `preloaded clean run must converge (got ${v.terminal})`)
-    assert.ok(!calls.some((c) => c.includes('load-summary')), 'preloaded: no load-summary leaf on round 1')
+    assert.ok(!calls.some((c) => c.includes('entry-bootstrap')), 'preloaded: no entry-bootstrap leaf on round 1')
     assert.ok(!calls.some((c) => c.includes('coverage_decisions.py') && c.includes('load')),
       'preloaded: no coverage-load leaf on round 1')
   }
@@ -68,7 +68,7 @@ async function main() {
     calls.length = 0
     const v = await reviewPanel({ ...base(dir) })
     assert.strictEqual(v.terminal, 'clean')
-    assert.ok(calls.some((c) => c.includes('load-summary')), 'no preloaded: load-summary fires')
+    assert.ok(calls.some((c) => c.includes('entry-bootstrap')), 'no preloaded: entry-bootstrap fires')
     assert.ok(calls.some((c) => c.includes('coverage_decisions.py') && c.includes('load')),
       'no preloaded: coverage-load fires')
   }

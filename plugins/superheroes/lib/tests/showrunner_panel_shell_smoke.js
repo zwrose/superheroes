@@ -262,7 +262,7 @@ async function main() {
     let loadCalls = 0
     let reviewerCalls = 0
     global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
-      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('load-summary')) {
+      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('entry-bootstrap')) {
         loadCalls += 1
         return { ok: true, stdout: 'courier wrapped a non-json answer' }
       }

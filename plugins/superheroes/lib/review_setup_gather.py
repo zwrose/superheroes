@@ -8,15 +8,17 @@ the #118 stretch definition they are ONE stretch and should be ONE leaf. This ga
 in a single Python process and answers a combined, BOUNDED blob:
 
   { "ok": true,
-    "memory":      <review_memory load-summary result — records are SKELETONS, extras folded>,
+    "memory":      <review_memory entry-bootstrap result — records are STUBS (decision scalars +
+                    blocking-only finding skeletons), contentHash + resumeRound + extras folded>,
     "deferredSet": <parsed deferred-set.json, or {} when absent>,
     "coverage":    <coverage_decisions load result — decisions + the fence hash of the on-disk bytes> }
 
 Everything is computed Python-side (no courier prose ever enters an integrity field — the live
 2026-07-02 poison class), so `memory` / `coverage` are byte-parity with the separate helpers and the
 shell drops them straight into memoryState / coverageState / the deferred seed. The evidence bodies
-never ride back (the load-summary skeleton contract is reused verbatim), so the fold reintroduces no
-mega-JSON through the courier (the #141 constraint).
+never ride back (the entry-bootstrap stub contract is reused verbatim), and #193 further collapses the
+resume seed to one direct payload-tier answer, so the fold reintroduces no mega-JSON through the
+courier (the #141 constraint).
 """
 import argparse
 import json
@@ -47,18 +49,14 @@ def gather(run_dir, records_path, dimensions, extras_path, deferred_path,
     # (1) the run-dir mkdir fold — the shell no longer mkdirs separately.
     if run_dir:
         os.makedirs(run_dir, exist_ok=True)
-    # (2) load-summary: sweep a dead run's stale staging, then read the bounded per-round summaries
-    # (+ the folded last-extras.json). Byte-identical to `review_memory.py load-summary
-    # --sweep-stale-staging --extras-path`.
-    review_memory.sweep_stale_staging(os.path.dirname(os.path.abspath(records_path)))
-    memory = review_memory.load_records_state(records_path, dimensions)
-    memory["records"] = [review_memory.summarize_record(r) for r in memory.get("records") or []]
-    if extras_path:
-        try:
-            with open(extras_path, encoding="utf-8") as fh:
-                memory["extras"] = json.load(fh)
-        except (OSError, ValueError):
-            memory["extras"] = None
+    # (2) entry-bootstrap (#193): sweep a dead run's stale staging, then compute the resume
+    # bootstrap — the contentHash + resume round + per-round STUBS (decision scalars + blocking-only
+    # finding skeletons) + the folded last-extras.json. Byte-identical to `review_memory.py
+    # entry-bootstrap --sweep-stale-staging --extras-path`. The stub replaces the full summarize
+    # skeleton so entry seeding fits ONE direct payload-tier answer instead of a receipt + N chunk
+    # leaves; the durable evidence bodies (and now non-blocking prior-round findings) never ride back.
+    memory = review_memory.entry_bootstrap(records_path, dimensions,
+                                           extras_path=extras_path, sweep_stale=True)
     # (3) the deferred-set seed.
     deferred_set = _load_deferred_set(deferred_path)
     # (4) the coverage read — decisions + the fence hash over the exact on-disk bytes, Python-side.
