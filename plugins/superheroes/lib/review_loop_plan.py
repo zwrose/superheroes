@@ -338,8 +338,13 @@ def entry_bootstrap(path, dimensions, extras_path=None):
 def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked):
     """Answer the next round's schedule: whether it is the full confirmation panel, the run/skip/
     tier per dimension (via the plan_round twin over disk-read previous state), and the carried
-    dimension state for each skip. Small, meaningful JSON — no findings beyond blocking-only
-    carried skeletons. A load failure fails toward MORE review (run-all-deep, unknown surface)."""
+    dimension state for each skip. Small, meaningful JSON — the carried dimension state carries NO
+    findings: `plan_round` skips a dimension only when it is high-confidence AND has no findings
+    (review_round_policy.plan_round), so a carried dim is structurally CLEAN and `carried[name]
+    ["findings"]` is always empty. That is what keeps this answer O(1) — if the skip policy ever
+    changed to skip dims WITH findings, the answer would silently start scaling with finding count,
+    which the `carried[...]["findings"] == []` pin turns into a loud test failure. A load failure
+    fails toward MORE review (run-all-deep, unknown surface)."""
     state = _load_records(path, dimensions)
     if not state.get("ok"):
         # Fail-closed direction: unreadable memory → run every dimension deep, no confirmation.
@@ -480,11 +485,15 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
     """Write the fixer's worklist to a runDir FILE and answer only {ok, path, bytes, sha256}.
 
     Content flows disk → the fixer's Read, never through a courier answer. The worklist mirrors
-    `review_panel_shell.buildFixContext`: prior rounds' blocking-skeleton findings (from the
-    durable records — the #193 hybrid already drops non-blocking prior findings, decision-neutral)
-    PLUS this round's FULL findings (the shell staged the live reviewer answer down to
-    `current_findings_path`), the classKeys, the recurrence-derived generalizeRequired, the union
-    of changedSubjects, and the coverage decisions. A load failure fails closed (ok:false)."""
+    `review_panel_shell.buildFixContext`. Its `findings` array holds, in round order: prior rounds'
+    durable-skeleton findings (all severities, evidence BODIES stripped — the classKeys are
+    preserved, so classKeys/generalizeRequired stay faithful) followed by THIS round's full-bodied
+    findings (the shell staged the live reviewer answer down to `current_findings_path`). The list
+    is named `findings`, not `priorFindings`, precisely because it holds both — the current round's
+    findings are the actionable fix targets (they carry evidence), the prior ones are recurrence
+    context. Alongside: the classKeys over all of them, the recurrence-derived generalizeRequired,
+    the union of changedSubjects, and the coverage decisions. A load failure fails closed
+    (ok:false)."""
     state = _load_records(records_path, dimensions)
     if not state.get("ok"):
         return {"ok": False, "reason": state.get("reason") or "round-memory-unreadable"}
@@ -526,11 +535,12 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
         except (OSError, ValueError):
             current_findings = []
 
+    # round order: prior rounds' skeletons first, then this round's full-bodied findings.
     all_findings = prior_findings + current_findings
     worklist = {
         "schemaVersion": SCHEMA_VERSION,
         "round": round_no,
-        "priorFindings": all_findings,
+        "findings": all_findings,
         "classKeys": [f.get("classKey") or review_memory.class_key(f) for f in all_findings],
         "generalizeRequired": review_memory.recurrent_classes(records, coverage_decisions),
         # insertion-order dedupe, matching the shell's Array.from(new Set(changedSubjects))

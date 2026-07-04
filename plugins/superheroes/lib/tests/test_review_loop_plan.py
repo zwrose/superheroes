@@ -157,6 +157,25 @@ def test_plan_round_intermediate_skips_clean_untouched(tmp_path):
         ans["dimensions"]["security-reviewer"]["carriedFromRound"]
 
 
+def test_plan_round_carried_dimension_is_structurally_clean(tmp_path):
+    # The structural guarantee that keeps the plan-round answer O(1): plan_round skips a dimension
+    # only when it is high-confidence AND has NO findings, so a carried dim is clean — its findings
+    # list is always empty (never "blocking-only"). This pin is the insurance: if the skip policy
+    # ever changed to skip dims WITH findings, the answer would start scaling with finding count and
+    # THIS assertion would fail loudly. The skipped dim below has a most-recent prior state on disk.
+    recs = [_skeleton_round(1, {
+        "code-reviewer": _dim(findings=[{"title": "bug", "file": "a.js", "severity": "Critical",
+                                         "dimension": "Code"}]),
+        "security-reviewer": _dim(findings=[]),
+    }, changed_subjects=["Code"])]
+    path = _write_records(tmp_path, recs)
+    ans = rlp.plan_round_decider(path, 2, DIMS, ["Code"], just_marked=False)
+    assert ans["dimensions"]["security-reviewer"]["action"] == "skip"
+    assert "security-reviewer" in ans["carried"]
+    assert ans["carried"]["security-reviewer"]["findings"] == [], \
+        "a carried (skipped) dimension is high-confidence-clean by construction — no findings"
+
+
 def test_plan_round_unknown_surface_runs_all_deep(tmp_path):
     recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
     path = _write_records(tmp_path, recs)
@@ -468,10 +487,13 @@ def test_compose_fix_context_writes_worklist_and_answers_pointer(tmp_path):
     assert ans["path"] == str(out)
     assert ans["sha256"] == review_memory.content_hash(out.read_text())
     worklist = json.loads(out.read_text())
-    titles = [f["title"] for f in worklist["priorFindings"]]
+    # the combined list is `findings` (prior skeletons + this round's full findings), not
+    # `priorFindings` — it holds both, and PR-2's fixer consumes it.
+    assert "priorFindings" not in worklist
+    titles = [f["title"] for f in worklist["findings"]]
     assert "prior bug" in titles and "live bug" in titles, "prior skeletons + current full findings"
     # the current finding keeps its evidence body (staged full), the prior one is a skeleton
-    live = next(f for f in worklist["priorFindings"] if f["title"] == "live bug")
+    live = next(f for f in worklist["findings"] if f["title"] == "live bug")
     assert live.get("evidence") == "x" * 500
     assert worklist["changedSubjects"] == ["Code"]
 
