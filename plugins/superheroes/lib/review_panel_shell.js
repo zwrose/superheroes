@@ -945,7 +945,16 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
     `(result/code/tail); do not nest the JSON as a string.\n\n` +
     command
   const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  const out = await runCourier()
+  // A THROWN verify courier must be treated EXACTLY like an unusable answer — never collapsed to 'fail'
+  // before the file read-back runs. Live (harness-run 26, wf_1ed21465-6f3): the haiku courier ran
+  // verify_gate.py correctly (round-stamped file written, result PASS) but never called its
+  // StructuredOutput tool (emitted the tag as literal text), so agent() THREW; the call-site catch
+  // then collapsed a clean round to 'fail' with the pass evidence sitting on disk. Swallowing the throw
+  // to null here keeps the round-stamped file authoritative in BOTH directions: it is still REQUIRED to
+  // grant pass (anti-fabrication, unchanged) AND is now consulted before we ever conclude fail. The
+  // call-site catch remains only as a last-resort backstop.
+  const tryCourier = async () => { try { return await runCourier() } catch (_) { return null } }
+  const out = await tryCourier()
   const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
   if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
   const readBack = await ioApi.readJson(outPath, null)
@@ -953,10 +962,11 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   if (fromFile) return fromFile
   const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
   if (fromDirect) return fromDirect
-  const retryOut = await runCourier()
+  const retryOut = await tryCourier()
   const retryReadBack = await ioApi.readJson(outPath, null)
   const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
   if (fromRetryFile) return fromRetryFile
+  // Both couriers AND both read-backs yielded nothing usable -> the anti-fabrication fail-closed default.
   return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
 }
 
