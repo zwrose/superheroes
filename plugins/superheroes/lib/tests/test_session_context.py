@@ -252,3 +252,62 @@ def test_assemble_budget_truncates_and_accounts_omitted(tmp_path, monkeypatch, c
     assert "Environment" in capsys.readouterr().err   # ...and breadcrumbed
     # body stays within budget; the small omitted-line accounting note may follow it
     assert len(out) <= 1000 + 250
+
+
+# ---------------------------------------------------------------- review discipline (#190)
+def test_review_discipline_injected_for_calibrated_project(tmp_path, monkeypatch):
+    # A registry entry marks the project calibrated → the compact note is injected,
+    # pointing at the canonical rubric doc under the plugin root.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    note = sc.review_discipline(str(tmp_path), "/plug")
+    assert "every pr gets a real review" in note.lower()
+    assert "/superheroes:review-code" in note
+    assert os.path.join("/plug", "rubric", "review-discipline.md") in note
+
+
+def test_review_discipline_via_hero_evidence_when_registry_absent(tmp_path, monkeypatch):
+    # No registry record, but hero calibration evidence exists → still calibrated.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mode_registry, "hero_evidence",
+                        lambda cwd, root=None, hero_roots=None: {"review-crew": "global"})
+    note = sc.review_discipline(str(tmp_path), "/plug")
+    assert "review-discipline.md" in note
+
+
+def test_review_discipline_absent_for_uncalibrated_project(tmp_path, monkeypatch):
+    # No registry, no hero evidence → no note (guidance never leaks into
+    # non-superheroes projects).
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mode_registry, "hero_evidence",
+                        lambda cwd, root=None, hero_roots=None: {"review-crew": "none"})
+    assert sc.review_discipline(str(tmp_path), "/plug") == ""
+
+
+def test_review_discipline_probe_error_skips_with_breadcrumb(tmp_path, monkeypatch, capsys):
+    # The probe is best-effort: an erroring registry read skips the note (absence is
+    # the status quo) and breadcrumbs to stderr without leaking content.
+    import mode_registry
+    def _boom(cwd, root=None):
+        raise OSError("store unreadable")
+    monkeypatch.setattr(mode_registry, "read_registry", _boom)
+    assert sc.review_discipline(str(tmp_path), "/plug") == ""
+    err = capsys.readouterr().err
+    assert "Review discipline" in err and "OSError" in err
+
+
+def test_assemble_includes_review_discipline_section_when_calibrated(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "global"})
+    monkeypatch.setattr(sc.store_core, "run_git", lambda *a, **k: None)
+    monkeypatch.setattr(sc.store_core, "get_gitdir", lambda cwd: str(tmp_path / ".git"))
+    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
+    main = str(tmp_path)
+    _mk_repo(main, claude_md="PROJECT\n")
+    out = sc.assemble(main, None, "/plug", "claude")
+    assert "### Review discipline" in out
+    assert "/superheroes:review-code" in out

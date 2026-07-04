@@ -762,6 +762,14 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
 - the project `CLAUDE.md` chain, the user `~/.claude/CLAUDE.md`, an env block (date + git
   email), and the auto-memory `MEMORY.md` head (keyed to the **main** repo, shared across
   worktrees) — parity with a native start.
+- a compact **review-discipline note** — ONLY when the project is superheroes-calibrated
+  (a storage-mode registry entry or hero calibration evidence; the probe is strictly
+  read-only — never `mode_registry.resolve()`, which can backfill-write). It states the
+  no-unreviewed-PRs convention and points at the canonical
+  `rubric/review-discipline.md`. This is the storage-mode-respecting carrier: it reaches
+  every session (including ad-hoc direct builds) with zero repo traces, in both storage
+  modes. `configure` can additionally write a durable copy into an **in-repo** project's
+  `CLAUDE.md` (owner-gated, idempotent); it never offers that in out-of-repo mode.
 
 It is **fail-soft**: each source is gathered independently; a missing/erroring one is omitted
 with a one-line stderr breadcrumb (never the file contents) and the hook always exits 0, never

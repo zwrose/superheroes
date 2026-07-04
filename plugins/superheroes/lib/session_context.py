@@ -234,6 +234,41 @@ def auto_memory_head(cwd, transcript_path):
     return _read_memory_head(path)
 
 
+# ----------------------------------------------------------------- review discipline
+def _discipline_doc(plugin_root):
+    return os.path.join(os.path.abspath(plugin_root or "."), "rubric", "review-discipline.md")
+
+
+def review_discipline(cwd, plugin_root):
+    """Compact review-discipline note, injected ONLY for a superheroes-calibrated project
+    (a storage-mode registry entry, or any hero calibration evidence). The probe is strictly
+    READ-ONLY — never mode_registry.resolve(), which can backfill-WRITE the registry; a
+    session-start hook must not mutate project state. Any probe error → '' with a breadcrumb
+    (this is guidance; absence is the status quo, and injecting it into non-superheroes
+    projects would be noise)."""
+    try:
+        import mode_registry
+        calibrated = mode_registry.read_registry(cwd) is not None
+        if not calibrated:
+            verdict = mode_registry.evidence_verdict(mode_registry.hero_evidence(cwd))
+            calibrated = verdict != "none"
+    except Exception as exc:
+        _breadcrumb("Review discipline", "calibration probe errored (%s)" % type(exc).__name__)
+        return ""
+    if not calibrated:
+        return ""
+    return (
+        "This project is calibrated with superheroes, whose review convention applies to "
+        "every session working here: **every PR gets a real review before handback**, no "
+        "matter how small the diff or how it was built. Pipeline work reviews itself; a "
+        "direct build ends with `/superheroes:review-code` (or an explicit owner-directed "
+        "review) before the PR is handed back; a review that halts with an open blocker is "
+        "resolved or explicitly owner-accepted in the PR body — never quietly merged. "
+        "\"Too small to review\" is never a reason to skip. Full statement: %s"
+        % _discipline_doc(plugin_root)
+    )
+
+
 # ----------------------------------------------------------------- assemble
 _Rec = collections.namedtuple("_Rec", "name text hint")
 
@@ -242,7 +277,8 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
     Priority order: resolved roots → project CLAUDE.md → env block → user
-    CLAUDE.md → MEMORY.md head. The block stays under char_budget; an oversized
+    CLAUDE.md → MEMORY.md head → review discipline (calibrated projects only).
+    The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
     (finding C2)."""
@@ -266,6 +302,8 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
             _Rec("Environment", env_block(cwd), None),
             _Rec("User CLAUDE.md", user_memory(), _user_claude_md_path()),
             _Rec("Auto-memory (MEMORY.md head)", _read_memory_head(mem_path), mem_path),
+            _Rec("Review discipline", review_discipline(cwd, plugin_root),
+                 _discipline_doc(plugin_root)),
         ]
     except Exception as exc:
         _breadcrumb("assemble", "source gather errored (%s)" % type(exc).__name__)

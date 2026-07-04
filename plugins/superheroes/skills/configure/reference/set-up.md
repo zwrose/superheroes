@@ -5,6 +5,7 @@
 - §3 — Verify command first (UFR-5)
 - §4 — Offer the heavier heroes (FR-3), decline still completes
 - §4.5 — Offer an external engine per role (FR-11/12/13/14), decline still completes
+- §4.6 — Offer the review-discipline CLAUDE.md section (in-repo only), decline still completes
 - §5 — Secrets stay out of shared calibration (NFR)
 - Recovering an interrupted set-up (UFR-7)
 
@@ -112,6 +113,17 @@ completes.
 **Headless (`INTERACTIVE=false`).** Take the strict/provisional posture: probe and record what is
 detectable, but never block and never apply the authorization — leave any external implementation engine
 not-ready until an interactive run can grant + test it.
+
+## 4.6 — Offer the review-discipline CLAUDE.md section (in-repo mode only), decline still completes
+
+When the storage mode decided in §1 is **in-repo**, offer to append the band's review-discipline
+section to the project's `CLAUDE.md` (source of truth:
+`$ROOT_DIR/rubric/review-discipline.md`) — a durable copy visible to
+human collaborators and non-superheroes tooling. Owner-gated; show the text before writing;
+idempotent (an existing `Review discipline` heading means report-and-skip). **Never offer this in
+out-of-repo mode** — that mode exists to keep the repo free of superheroes traces; there the
+SessionStart bootstrap note is the sole carrier. A decline is recorded like a declined hero and
+still completes set-up. Headless: never write; note the offer as un-made.
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 

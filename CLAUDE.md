@@ -104,6 +104,12 @@ fix PR, fast-follow):
 - A review that **halts with an open blocker** (circuit breaker, park) is resolved
   or explicitly owner-accepted in the PR body — never quietly merged.
 
+The convention also ships to plugin users: the canonical statement lives in
+`plugins/superheroes/rubric/review-discipline.md`, the SessionStart bootstrap injects
+a compact note into every session on a superheroes-calibrated project (both storage
+modes, zero repo traces), and `configure` offers an in-repo project a durable
+`CLAUDE.md` copy (see CONVENTIONS §7.4).
+
 ## Branch protection
 
 `main` requires a PR with passing CI. The repo owner may bypass when needed —

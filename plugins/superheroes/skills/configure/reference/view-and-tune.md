@@ -63,6 +63,13 @@ action that owns it, leaving the rest of the calibration untouched:
   never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
+- **Write the review-discipline section into the project's `CLAUDE.md`** — offered ONLY when
+  the storage mode is **in-repo** (out-of-repo mode exists to keep the repo free of superheroes
+  traces; there the SessionStart bootstrap note is the sole carrier). Owner-gated like every
+  write: show the section text (source of truth:
+  `$ROOT_DIR/rubric/review-discipline.md`), and on explicit confirm
+  append it under a `## Review discipline` heading. Idempotent — if a `Review discipline`
+  heading already exists in the project's `CLAUDE.md`, report that and change nothing.
 - **Switch the storage mode** → the confirmed switch below.
 - **Change the per-role engine** (reviewer engine / implementation engine / plan-author engine) → the
   engine step in `reference/set-up.md` §4.5 (availability → preference → show-authorization →
