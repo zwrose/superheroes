@@ -317,6 +317,12 @@ async function partB() {
       assert.strictEqual(bucket.chunks.length, total, 'FAIL (b10): finish-chunks total must match staged chunks')
       const text = bucket.chunks.join('')
       assert.strictEqual(sha(text), payloadHash, 'FAIL (b10): finish-chunks hash must cover the assembled payload')
+      // The mock fabricates the helper's stdout from its own bucket, so this branch would pass
+      // even if the bundle forgot to chain the helper. Pin the COMMAND SHAPE: the helper must be
+      // chained after a verified finish, with the exit marker last.
+      const helperSegment = " >/dev/null && 'cat' '" + target + "' 2>&1; echo __SR_EXIT:$?"
+      assert.ok(cmd.endsWith(helperSegment),
+        'FAIL (b10): finish-chunks must gate the chained helper on a verified finish, got: ' + cmd.slice(-160))
       staged[target] = text
       finishCalls.push({ target, total })
       return staged[target] + '\n__SR_EXIT:0'

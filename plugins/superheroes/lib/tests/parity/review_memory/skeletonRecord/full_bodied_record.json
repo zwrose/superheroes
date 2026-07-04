@@ -52,7 +52,7 @@
     },
     "findings": [
       {
-        "classKey": "Code::bug::ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt...",
+        "classKey": "Code::bug::t",
         "dimension": "Code",
         "file": "a.py",
         "line": 3,

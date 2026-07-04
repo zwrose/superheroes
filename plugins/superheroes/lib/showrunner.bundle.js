@@ -1010,7 +1010,10 @@ function _skeletonFinding(finding) {
   const out = {}
   for (const k of _SKELETON_FIELDS) if (k in finding) out[k] = finding[k]
   if (typeof out.title === 'string') out.title = clampTitle(out.title)
-  if (finding.dimension || finding.taxonomy) out.classKey = canonicalClassKey(finding)
+  // A stored classKey is preserved verbatim (legacy unclamped-title keys must survive
+  // skeletonization for classKeyAliases to match legacy coverage decisions); only a
+  // key-less finding gets the canonical stamp.
+  if (!('classKey' in out) && (finding.dimension || finding.taxonomy)) out.classKey = canonicalClassKey(finding)
   return out
 }
 

@@ -97,8 +97,31 @@ def test_title_clamp_bounds_identity_and_skeleton_titles():
                                                       "severity": "Critical"}]}}
     })
     assert skeleton["findings"][0]["title"] == clamped
-    assert skeleton["findings"][0]["classKey"].endswith("::" + " ".join(clamped.lower().split()))
+    # a STORED (legacy, unclamped-title) classKey is preserved verbatim — class_key_aliases
+    # needs that form to keep matching legacy coverage decisions after skeletonization
+    assert skeleton["findings"][0]["classKey"] == "Security::auth::" + " ".join(title.lower().split())
+    # a key-LESS finding gets the canonical CLAMPED stamp
+    assert skeleton["dimensions"]["Security"]["findings"][0]["classKey"] == \
+        "Security::auth::" + " ".join(clamped.lower().split())
     assert skeleton["dimensions"]["Security"]["findings"][0]["title"] == clamped
+
+
+def test_summarized_records_keep_matching_legacy_coverage_decisions():
+    """#177 handoff repro: a legacy coverage decision (classKey computed from the UNCLAMPED
+    title) must suppress recurrence for RAW and SUMMARIZED records alike — skeletonization
+    must not clobber the stored key the alias match relies on. load-summary feeds the loop
+    summarized records, so a clobber re-reports every legacy-covered class on resume."""
+    rm = load_memory()
+    title = _long_title()
+    legacy_key = "Test::coverage::" + " ".join(title.lower().split())
+    finding = {"file": "a.py", "title": title, "severity": "Important",
+               "dimension": "Test", "taxonomy": "coverage", "classKey": legacy_key}
+    records = [{"schemaVersion": 2, "round": rnd, "kind": "baseline", "findings": [dict(finding)],
+                "carriedFindings": [], "dimensions": {}} for rnd in (1, 2)]
+    decisions = [{"id": "cd-1", "classKey": legacy_key}]
+    assert rm.recurrent_classes(records, decisions) == []
+    summarized = [rm.summarize_record(r) for r in records]
+    assert rm.recurrent_classes(summarized, decisions) == []
 
 
 def test_load_summary_receipt_round_trips_by_verified_chunks(tmp_path):

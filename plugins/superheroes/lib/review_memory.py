@@ -221,7 +221,10 @@ def _skeleton_finding(finding):
     title = out.get("title")
     if isinstance(title, str):
         out["title"] = clamp_title(title)
-    if finding.get("dimension") or finding.get("taxonomy"):
+    if "classKey" not in out and (finding.get("dimension") or finding.get("taxonomy")):
+        # A stored classKey is preserved verbatim: legacy records carry keys computed from the
+        # UNCLAMPED title, and class_key_aliases needs that stored form to keep matching legacy
+        # coverage decisions after skeletonization. Only a key-less finding gets the canonical stamp.
         out["classKey"] = canonical_class_key(finding)
     return out
 
