@@ -48,29 +48,40 @@ function base(dir) {
 
 function verifyPath(dir, round) { return path.join(dir, `verify-result-r${round}.json`) }
 
-async function runVerifyCase({ writeCurrentResult = false, writeNestedCurrentResult = false, staleResult = false, directPass = false } = {}) {
+async function runVerifyCase({ writeCurrentResult = false, writeNestedCurrentResult = false, staleResult = false, directPass = false, throwWithFile = false, throwNoFile = false } = {}) {
   const dir = freshDir()
   if (staleResult) {
     fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: 'pass', code: 0, tail: 'stale' }))
   }
   let verifyPrompt = ''
+  let verifyCalls = 0
   global.reviewerAgent = async (_reviewer, _context, _rubric, runDir, round, opts) => cleanResult(runDir, round, opts)
   global.agent = async (_prompt, opts) => {
     if (opts && opts.label === 'run verify') {
       verifyPrompt = _prompt
+      verifyCalls += 1
       if (writeCurrentResult) {
         fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: 'pass', code: 0, tail: '' }))
       }
       if (writeNestedCurrentResult) {
         fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: JSON.stringify({ result: 'pass', code: 0, tail: '' }) }))
       }
+      // A verify courier that ran verify_gate.py correctly (durable pass file written) but THREW because
+      // it never emitted its StructuredOutput tool call (live wf_1ed21465-6f3, harness-run 26). The throw
+      // must be absorbed like an unusable answer so the file-authoritative read-back still arbitrates.
+      if (throwWithFile) {
+        fs.writeFileSync(verifyPath(dir, 1), JSON.stringify({ result: 'pass', code: 0, tail: '' }))
+        throw new Error('verify courier never called its StructuredOutput tool')
+      }
+      // A thrown courier with NO durable file on either attempt must stay fail-closed.
+      if (throwNoFile) throw new Error('verify courier never called its StructuredOutput tool')
       if (directPass) return { result: 'pass', code: 0, tail: '' }
       return 'The process is running and stdout is redirected to the output file. The command is still executing...'
     }
     return null
   }
   const verdict = await reviewPanel(base(dir))
-  return { dir, verdict, verifyPrompt }
+  return { dir, verdict, verifyPrompt, verifyCalls: () => verifyCalls }
 }
 
 async function main() {
@@ -94,6 +105,23 @@ async function main() {
   assert.strictEqual(res.verdict.terminal, 'halted',
     'a direct courier {"result":"pass"} without a process-written file must not certify clean')
   assert.match(res.verdict.reason || '', /verify command failed/)
+
+  // A THROWN verify courier must be treated exactly like an unusable answer, not collapsed to 'fail'
+  // before the file read-back runs (live wf_1ed21465-6f3, harness-run 26). With the round-stamped file
+  // saying pass, the round must certify clean from the durable evidence despite the throw.
+  res = await runVerifyCase({ throwWithFile: true })
+  assert.strictEqual(res.verdict.terminal, 'clean',
+    'a thrown verify courier must not bypass the read-back — a round-stamped pass file certifies clean')
+  assert.strictEqual(res.verifyCalls(), 1,
+    'the file read-back after the thrown courier certifies without a second verify attempt')
+
+  // The companion: a thrown courier that leaves NO durable file (on either attempt) still fails closed.
+  res = await runVerifyCase({ throwNoFile: true })
+  assert.strictEqual(res.verdict.terminal, 'halted',
+    'a thrown verify courier with no read-back file still fails closed')
+  assert.match(res.verdict.reason || '', /verify command failed/)
+  assert.strictEqual(res.verifyCalls(), 2,
+    'a thrown courier with no file gets the one bounded retry before failing closed')
 
   res = await runVerifyCase()
   assert.strictEqual(res.verdict.terminal, 'halted',

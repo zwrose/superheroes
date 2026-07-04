@@ -44,7 +44,12 @@ text = text.replace(/export\s+const\s+meta/, 'const meta')
 const sandbox = { console, args: { workItem: 'x' } }
 sandbox.globalThis = sandbox
 sandbox.global = sandbox
-sandbox.agent = async () => ({})
+// The preamble captures `const __realAgent = agent` AT EVAL, so a post-eval reassignment of
+// sandbox.agent would never be seen. Route every leaf answer through a mutable dispatcher installed
+// BEFORE eval — the io.readJson fence-tolerance check (d, below) flips __cannedLeafResponse to drive
+// the 'cat' courier's answer.
+let __cannedLeafResponse = null
+sandbox.agent = async () => (__cannedLeafResponse !== null ? __cannedLeafResponse : {})
 sandbox.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
 sandbox.log = () => {}
 vm.createContext(sandbox)
@@ -67,4 +72,36 @@ for (const sample of ['', 'abc', 'hello\nworld', 'x'.repeat(200),
     crypto.createHash('sha256').update(sample).digest('hex'),
     'bundle __contentHash diverges from sha-256 for ' + JSON.stringify(sample))
 }
-console.log('OK: bundle composes + executes in a no-require sandbox + exports showrunner')
+// (d) io.readJson fence tolerance — the verify read-back path. In the Workflow sandbox a file read is
+//     a 'cat' courier, and a haiku courier STOCHASTICALLY wraps the JSON in ``` fences or prose; a bare
+//     JSON.parse then silently defaults and the round-stamped verify pass evidence goes unseen (live
+//     wf_1ed21465-6f3: a clean verify round halted). readJson must parse a fenced/prose-wrapped answer,
+//     yet keep the silent default for a genuinely empty (missing-file) answer (anti-fabrication).
+;(async () => {
+  const BT = String.fromCharCode(96)
+  const pass = { result: 'pass', code: 0, tail: '' }
+  const cases = [
+    [JSON.stringify(pass), pass, 'plain JSON'],
+    [BT + BT + BT + 'json\n' + JSON.stringify(pass) + '\n' + BT + BT + BT, pass, 'triple-fenced json'],
+    [BT + BT + BT + '\n' + JSON.stringify(pass) + '\n' + BT + BT + BT, pass, 'triple-fenced bare'],
+    [BT + JSON.stringify(pass) + BT, pass, 'single-backtick wrapped'],
+    ['Here is the verify result:\n' + JSON.stringify(pass), pass, 'prose-prefixed (brace slice)'],
+  ]
+  for (const [resp, want, desc] of cases) {
+    __cannedLeafResponse = resp
+    const got = await sandbox.globalThis.io.readJson('/tmp/verify-result-r1.json', null)
+    // Compare by JSON shape, not deepStrictEqual: the object is minted in the vm context's realm, so it
+    // carries that realm's Object.prototype and would fail deepStrictEqual's prototype identity check.
+    assert.strictEqual(JSON.stringify(got), JSON.stringify(want),
+      'readJson must parse a ' + desc + ' verify read-back')
+  }
+  // a genuinely missing file: `cat ... 2>/dev/null || true` -> '' -> the silent default. A missing
+  // verify file must NEVER parse into a pass.
+  __cannedLeafResponse = ''
+  assert.strictEqual(await sandbox.globalThis.io.readJson('/tmp/missing.json', null), null,
+    'readJson keeps the silent default for a genuinely empty (missing-file) answer')
+  __cannedLeafResponse = 'The command completed with no output, which means the file does not exist.'
+  assert.strictEqual(await sandbox.globalThis.io.readJson('/tmp/missing.json', null), null,
+    'readJson keeps the silent default for a prose answer carrying no JSON')
+  console.log('OK: bundle composes + executes in a no-require sandbox + exports showrunner + fence-tolerant readJson')
+})().catch((e) => { console.error('FAIL:', (e && e.message) || e); process.exit(1) })

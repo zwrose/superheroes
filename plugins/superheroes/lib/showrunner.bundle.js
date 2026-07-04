@@ -70,6 +70,22 @@ globalThis.agent = function (prompt, opts) {
   // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
   // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
+  // #194 residual (live 2026-07-04, run wf_b408ece1-0ed): an UNKNOWN agentType makes agent() REJECT
+  // ("agent type 'superheroes:courier' not found") — a dispatch THROW, which __sh's answer-shape
+  // fallback never sees (it only inspects returned answers). On any plugin cache older than the
+  // courier agent (< 0.8.0) the first agentType-carrying leaf crashed its caller (test-pilot's
+  // status write parked run 29). Centralize the degrade at the single dispatch choke-point: catch
+  // the not-found rejection and re-dispatch ONCE without agentType (default full-surface agent,
+  // model pin and label unchanged). Only the not-found shape falls back — every other rejection
+  // still propagates (fail-closed for real dispatch errors).
+  if (o.agentType) {
+    var __fallbackOpts = Object.assign({}, o); delete __fallbackOpts.agentType
+    return Promise.resolve().then(function () { return __realAgent(prompt, o) }).catch(function (e) {
+      var __msg = String((e && e.message) || e)
+      if (/agent type '[^']*' not found/i.test(__msg)) return __realAgent(prompt, __fallbackOpts)
+      throw e
+    })
+  }
   return __realAgent(prompt, o)
 }
 globalThis.parallel = parallel
@@ -87,11 +103,44 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
+// __badCourierAnswer: TRUE when a courier answer to a marker-carrying command signals the command
+// DID NOT run. Two observed dispatch-failure shapes, both from the plugin-subagent prompt-drop bug:
+//   (a) the answer omits the __SR_EXIT marker entirely (echo/empty shape); or
+//   (b) the leaf echoes the command back as text instead of running it, so the answer contains the
+//       LITERAL unexpanded '__SR_EXIT:$?' (live 2026-07-03 run wf_1494a8fa-e28, agent aecd0b3ad) —
+//       the marker STRING is present, so a bare presence check would wrongly pass.
+// A genuinely-executed command can never print '$?' unexpanded (the shell expands it to a number),
+// so the literal '__SR_EXIT:$?' is an unambiguous did-not-run tell.
+function __badCourierAnswer(a) {
+  var s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
 async function __sh(cmd, opts) {
-  return globalThis.agent(
-    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd),
-    Object.assign({ label: 'io', courier: true }, opts || {}),
-  )
+  // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
+  // A restricted-tool agent carries NO deferred_tools_delta / skill_listing attachments (measured:
+  // ~55.5KB, ~13.9k tokens per leaf) and a tiny tool-schema prefix, cutting the fixed per-leaf context
+  // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
+  // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
+  var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
+  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd)
+  // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
+  // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
+  // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both
+  // did-not-run shapes (missing marker OR the command echoed back with the literal '__SR_EXIT:$?').
+  // Retry ONCE on the courier agent, then fall back to the DEFAULT dispatch (drop agentType, keep
+  // courier:true so the cheap-model pin holds) so a courier-agent dispatch bug degrades to today's
+  // cost instead of parking the run. Non-marker leaves (mkdir/cat/writeFile) already degrade
+  // fail-soft or via their caller's own hash check, so they need no marker guard.
+  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  var ans = await globalThis.agent(prompt, o)
+  if (__expectMarker && __badCourierAnswer(ans)) {
+    ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
+    if (__badCourierAnswer(ans)) {
+      var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
+      ans = await globalThis.agent(prompt, fo)
+    }
+  }
+  return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
@@ -182,7 +231,7 @@ function __helperResult(s) {
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
 const __PAYLOAD_BOUND = 3000
-const __PAYLOAD_CHARS = 1200
+const __PAYLOAD_CHARS = 2400
 const __NL = String.fromCharCode(10)
 function __libPath(name) {
   return __require('lib_root').libPath(name)
@@ -225,6 +274,29 @@ async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
   var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
   return __helperResult(String(await __sh(chain, { payload: true }) || ''))
 }
+// __jsonFromText: fence-tolerant JSON parse for readJson. On the verify read-back path (and every
+// other bundle read) the file content rides back through a haiku 'cat' courier that STOCHASTICALLY
+// wraps the JSON in ``` (or single-backtick) fences or prose — a bare JSON.parse then silently
+// defaults and the round-stamped pass evidence goes unseen (live wf_1ed21465-6f3: a clean verify round
+// halted). Mirrors __helperResult's fence tolerance + extractJson's brace-slice: direct parse, then
+// strip ONE wrapping fence pair (triple or single backtick), then a first-{…last-} brace slice. A
+// genuinely empty answer (missing file: cat ... || true -> '') falls straight to the silent default
+// (anti-fabrication: a missing verify file must NOT parse into a pass).
+function __jsonFromText(t, dflt) {
+  var s = String(t == null ? '' : t)
+  if (!s.trim()) return dflt
+  try { return JSON.parse(s) } catch (_) {}
+  var stripped = s.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').trim()
+  if (/^\x60/.test(stripped) && /\x60$/.test(stripped)) {
+    stripped = stripped.replace(/^\x60/, '').replace(/\x60$/, '').trim()
+  }
+  try { return JSON.parse(stripped) } catch (_) {}
+  var first = stripped.indexOf('{'), last = stripped.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(stripped.slice(first, last + 1)) } catch (_) {}
+  }
+  return dflt
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -265,9 +337,9 @@ globalThis.io = {
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
-  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
+  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); return __jsonFromText(t, dflt) },
   contentHash(text) { return __contentHash(text) },
-  async runHelper(cmd, args) {
+  async runHelper(cmd, args, opts) {
     var parts = __argv(cmd, args || [])
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in ``` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
@@ -276,7 +348,9 @@ globalThis.io = {
     // __helperResult finds the LAST marker anywhere, slices stdout up to it, strips one wrapping
     // fence pair. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
     // payload is arbitrary text that may legitimately contain fences).
-    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || ''))
+    // opts.payload: the answer is a relay payload (e.g. a read-chunk) — ride the copy-faithful
+    // payload tier instead of the cheapest courier tier (#191).
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', (opts && opts.payload) ? { payload: true } : {}) || ''))
   },
 }
 // Full-run mode (read by showrunner() in Task 8): inject native authoring WITHOUT frontHalfBoundary.
@@ -1450,14 +1524,18 @@ function confirmationReady(records, round, justMarked) {
   return round > markedRound + 1
 }
 
-// load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
-// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never full findings bodies. Small summaries
-// still return directly. Once the summary is big enough to be courier-fragile, the helper writes it
+// entry-bootstrap (#193) is the read seam for a resume: it ships DECISIONS + the bounded minimum,
+// not record content. Each prior-run round comes back as a STUB — the policy/confirmation/
+// certification scalars plus BLOCKING-finding skeletons only (the breaker, recurrence, round policy,
+// and fix-context generalizeRequired never read non-blocking prior-round findings), so a two-round
+// resume is one direct payload-tier answer instead of a receipt + N ~34k-token chunk leaves (the
+// #118 courier-collapse bar). In-memory `records` are therefore a documented HYBRID: prior-run rounds
+// are stubs, this-run rounds stay full (mergeRoundRecords keeps the richer live record). Once the
+// bootstrap is big enough to be courier-fragile (pathological history), the helper writes it
 // Python-side and returns only a receipt; the shell reads base64 chunks and verifies each chunk plus
-// the reconstructed content hash before parsing.
+// the reconstructed content hash before parsing (the #191 fallback transport).
 const _SUMMARY_RECEIPT_BOUND = 4000
-const _READ_CHUNK_CHARS = 1600
+const _READ_CHUNK_CHARS = 4000
 
 function _b64Bytes(b64) {
   const clean = String(b64 || '').replace(/[\r\n\t ]/g, '')
@@ -1507,6 +1585,15 @@ function _jsonFromStdout(out) {
   try { return JSON.parse((out && out.stdout) || '') } catch (_) { return null }
 }
 
+// The chunk payload rides REVERSED (`rb64`, #191): plain base64-of-JSON is decode-bait — a
+// live courier model recognizes it and answers with the DECODED content instead of the raw
+// stdout, failing every hash check (run wf_fd9b5edc-e80: all chunk attempts transformed this
+// way). Reversing makes the payload semantically opaque; reverse back before decoding.
+// b64 is ASCII, so a naive character reverse is byte-safe.
+function _unreverse(rb64) {
+  return String(rb64 || '').split('').reverse().join('')
+}
+
 async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) {
   if (!receipt || receipt.receipt !== expectedReceipt || !receipt.path || !receipt.contentHash) return { ok: false, reason: corruptReason }
   const chunkSize = receipt.chunkSize || _READ_CHUNK_CHARS
@@ -1514,16 +1601,18 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
   let text = ''
   for (let guard = 0; guard < 10000; guard += 1) {
     let parsed = null
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'read-chunk', '--path', receipt.path, '--index', String(index), '--chunk-size', String(chunkSize)])
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // payload marker: chunk answers are ~2KB relay payloads — they ride the copy-faithful
+      // payload tier, not the cheapest courier tier (#191 gap: the read leg missed the pin).
+      const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'read-chunk', '--path', receipt.path, '--index', String(index), '--chunk-size', String(chunkSize)], { payload: true })
       parsed = _jsonFromStdout(out)
       if (!parsed || !parsed.ok || parsed.index !== index) { parsed = null; continue }
       if (parsed.contentHash !== receipt.contentHash) { parsed = null; continue }
-      if (parsed.chunkHash !== ioApi.contentHash(parsed.b64 || '')) { parsed = null; continue }
+      if (parsed.chunkHash !== ioApi.contentHash(parsed.rb64 || '')) { parsed = null; continue }
       break
     }
     if (!parsed) return { ok: false, reason: corruptReason }
-    try { text += _decodeBase64Utf8(parsed.b64 || '') } catch (_) { return { ok: false, reason: corruptReason } }
+    try { text += _decodeBase64Utf8(_unreverse(parsed.rb64)) } catch (_) { return { ok: false, reason: corruptReason } }
     if (parsed.eof) break
     index = Number(parsed.nextIndex)
     if (!Number.isFinite(index)) return { ok: false, reason: corruptReason }
@@ -1533,10 +1622,10 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
 }
 
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)])
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
   let parsed = _jsonFromStdout(out)
-  if (parsed && parsed.receipt === 'load-summary') {
-    const read = await _readReceiptText(ioApi, parsed, 'load-summary', 'round-memory-helper-failed')
+  if (parsed && parsed.receipt === 'entry-bootstrap') {
+    const read = await _readReceiptText(ioApi, parsed, 'entry-bootstrap', 'round-memory-helper-failed')
     if (!read.ok) return read
     try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
   }
@@ -1571,8 +1660,9 @@ async function loadRoundRecords(runDir, reviewerSet, ioApi) {
   }
 }
 
-// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — exactly
-// what load-summary seeds a resume with), persisted in ONE verified CAS leaf for the typical
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — a superset of
+// the entry-bootstrap stub that seeds a resume: the durable form keeps non-blocking findings, the
+// resume seed drops them), persisted in ONE verified CAS leaf for the typical
 // round: the skeleton rides the courier args inline, self-verified by --record-hash =
 // sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
 // corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
@@ -1832,7 +1922,7 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 }
 
 // gatherReviewSetup: fold 2 (#141) — run the review loop's decision-free entry stretch (run-dir
-// mkdir + deferred-set seed read + load-summary + coverage load) as ONE review_setup_gather.py leaf,
+// mkdir + deferred-set seed read + entry-bootstrap + coverage load) as ONE review_setup_gather.py leaf,
 // all Python-side. Returns the combined blob { ok, memory, deferredSet, coverage } for the caller to
 // hand reviewPanel as `preloaded` (and, on the doc leg, to seed runtimeDeferred). Returns null on a
 // gather transport failure — the caller then falls back to a plain mkdir + reviewPanel's own reads
@@ -1851,7 +1941,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
     '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code',
     '--out-path', api.join(runDir, 'review-setup-gather.json'),
     '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)]
-  const out = await api.runHelper('python3', args)
+  const out = await api.runHelper('python3', args, { payload: true })
   let parsed = _jsonFromStdout(out)
   if (parsed && parsed.receipt === 'review-setup-gather') {
     const read = await _readReceiptText(api, parsed, 'review-setup-gather', 'review-setup-gather-unreadable')
@@ -1873,7 +1963,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   const lease = legKind && legKind.lease
   const ioApi = io()
   // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
-  // load-summary (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
+  // entry-bootstrap (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
   // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
   // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
   // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).
@@ -2177,7 +2267,16 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
     `(result/code/tail); do not nest the JSON as a string.\n\n` +
     command
   const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  const out = await runCourier()
+  // A THROWN verify courier must be treated EXACTLY like an unusable answer — never collapsed to 'fail'
+  // before the file read-back runs. Live (harness-run 26, wf_1ed21465-6f3): the haiku courier ran
+  // verify_gate.py correctly (round-stamped file written, result PASS) but never called its
+  // StructuredOutput tool (emitted the tag as literal text), so agent() THREW; the call-site catch
+  // then collapsed a clean round to 'fail' with the pass evidence sitting on disk. Swallowing the throw
+  // to null here keeps the round-stamped file authoritative in BOTH directions: it is still REQUIRED to
+  // grant pass (anti-fabrication, unchanged) AND is now consulted before we ever conclude fail. The
+  // call-site catch remains only as a last-resort backstop.
+  const tryCourier = async () => { try { return await runCourier() } catch (_) { return null } }
+  const out = await tryCourier()
   const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
   if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
   const readBack = await ioApi.readJson(outPath, null)
@@ -2185,10 +2284,11 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   if (fromFile) return fromFile
   const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
   if (fromDirect) return fromDirect
-  const retryOut = await runCourier()
+  const retryOut = await tryCourier()
   const retryReadBack = await ioApi.readJson(outPath, null)
   const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
   if (fromRetryFile) return fromRetryFile
+  // Both couriers AND both read-backs yielded nothing usable -> the anti-fabrication fail-closed default.
   return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
 }
 
