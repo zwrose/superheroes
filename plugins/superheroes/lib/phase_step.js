@@ -11,7 +11,12 @@ function pyReprStr(v) {
 function decide(phaseResult, gate) {
   const pr = phaseResult || {}
   if (pr.assumptions && pr.assumptions.length) {
-    return { action: 'park_assumption', reason: 'phase recorded a material assumption' }
+    // #212: name WHICH assumption(s) — the payload carries the list. The infra parkReason override
+    // still wins at the consumer; this richer reason surfaces where no override was set.
+    const detail = pr.assumptions.map((a) => String(a)).join('; ')
+    let reason = 'phase recorded a material assumption'
+    if (detail) reason += ': ' + detail
+    return { action: 'park_assumption', reason }
   }
   if (pr.confidence === 'low') {
     return { action: 'park_low_confidence', reason: 'phase recorded confidence below the parking threshold' }
@@ -19,7 +24,12 @@ function decide(phaseResult, gate) {
   if (gate === null || gate === undefined || gate === 'passed') {
     return { action: 'proceed', reason: (gate === null || gate === undefined) ? 'no review gate' : 'gate passed' }
   }
-  if (gate === 'changes-requested') return { action: 'park_changes_requested', reason: 'review requested changes' }
+  if (gate === 'changes-requested') {
+    // #212: thread the named terminal reason (parkDetail) so the workflow park survives the flatten.
+    let reason = 'review requested changes'
+    if (pr.parkDetail) reason += ' — ' + String(pr.parkDetail)
+    return { action: 'park_changes_requested', reason }
+  }
   if (gate === 'pending') return { action: 'park_pending', reason: 'gate not passed (pending / not yet approved)' }
   return { action: 'park_unexpected_gate', reason: 'unexpected or unreadable gate value: ' + pyReprStr(gate) }
 }

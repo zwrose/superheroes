@@ -530,9 +530,57 @@ async function main() {
       'severity-less kept findings default to Important before persistence')
   }
 
+  // #212 fix-before-park (receipt-missing replay of run 6): a reviewer that answers high WITHOUT a
+  // receipt is downgraded to low+receiptMissing (findings KEPT). A round-1 answer that STILL holds a
+  // blocker must NOT park-without-fix — it routes to the fix leg. When the seat still can't produce a
+  // receipt but the blocker is gone next round, THEN it parks, naming the seat + defect class honestly.
+  {
+    const dir = freshDir()
+    const fixRounds = []
+    global.reviewerAgent = async (_r, _c, _rub, _rd, round, _opts) => (
+      // r1 (+ its retries): blocker, no receipt -> low+receiptMissing, blocker kept.
+      // r2 (+ retries):     no blocker, no receipt -> low+receiptMissing, only the coverage gap remains.
+      round === 1 ? { findings: BLOCKER, confidence: 'high' } : { findings: [], confidence: 'high' })
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code'], legKind: { panel: true, code: false },
+      fixStep: async (_ctx, verdict) => { fixRounds.push(verdict && verdict.round); return { fixed: ['a.py::bug'], changedSubjects: ['Code'], coverageDecisions: [] } } })
+    assert.strictEqual(v.terminal, 'cannot-certify',
+      '#212: an uncertified round holding a blocker fixes first, then parks cannot-certify once only the coverage gap remains')
+    // Pin the ORDERING directly (not just "a fix happened"): the fix leg ran on the uncertified
+    // round-1 that held the blocker, and the park returns on a LATER round — fix strictly BEFORE park.
+    assert.ok(fixRounds.includes(1), '#212: the fix leg ran on the uncertified round-1 that held the blocker')
+    assert.ok((v.round || 0) > Math.max(...fixRounds), '#212: the park returns AFTER the fix round (fix-before-park)')
+    assert.strictEqual(v.uncertified, true, '#212: the verdict carries the uncertified flag')
+    assert.match(v.reason || '', /receipt-missing — uncertifiable/, '#212: the park reason names the receipt-missing defect class')
+    assert.match(v.reason || '', /^code /, '#212: the park reason names the uncertifiable seat')
+  }
+
+  // #212 composite (addendum item 4): seat X answers MALFORMED twice (the corrective retry fires,
+  // carrying retryReason 'malformed') and ends status:'missing', while another seat holds a blocker.
+  // The round FIXES the blocker first (fix-before-park), then parks cannot-certify naming BOTH the
+  // malformed seat and its cause — exercising all four changes plus the addendum in one fixture.
+  {
+    const dir = freshDir()
+    const retryReasons = []
+    let fixCalls = 0
+    global.reviewerAgent = async (reviewer, _c, _rub, runDir, round, opts) => {
+      if (opts && opts.retryReason) retryReasons.push({ reviewer, retryReason: opts.retryReason })
+      if (reviewer === 'code-reviewer') return { notFindings: true }   // malformed every attempt -> status:missing
+      return round === 1 ? blockerResult(runDir, round, opts) : cleanResult(runDir, round, opts)
+    }
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer', 'security-reviewer'], legKind: { panel: true, code: false },
+      fixStep: async () => { fixCalls += 1; return { fixed: ['a.py::bug'], changedSubjects: ['Code'], coverageDecisions: [] } } })
+    assert.ok(retryReasons.some((x) => x.reviewer === 'code-reviewer' && x.retryReason === 'malformed'),
+      '#212: a malformed answer gets a CORRECTIVE retry (retryReason=malformed), not a blind one')
+    assert.ok(fixCalls >= 1, '#212: the healthy seat\'s blocker is fixed before the park')
+    assert.strictEqual(v.terminal, 'cannot-certify', '#212: the round stays uncertifiable (gate changes-requested)')
+    assert.strictEqual(v.uncertified, true)
+    assert.match(v.reason || '', /code-reviewer did not return a usable result after retry \(malformed — uncertifiable\)/,
+      '#212: the park reason names the malformed seat AND its cause')
+  }
+
   global.synthesisLeaf = async () => ({ verdicts: [], usage: { total: 1 } })
 
-  console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator + verify-coercion + policy/memory/coverage')
+  console.log('ok: in-memory loop shell sentinel + passthrough + continue/fix/clean + extras + accumulator + verify-coercion + policy/memory/coverage + #212 fix-before-park/corrective-retry/honest-reason')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
