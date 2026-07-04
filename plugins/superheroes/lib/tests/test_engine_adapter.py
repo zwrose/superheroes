@@ -101,6 +101,60 @@ def test_parse_result_cursor_review_stream_json_last_object():
     assert res["findings"][0]["severity"] == "Important"
 
 
+def test_parse_result_review_bare_array_is_tolerated_and_scrubbed():
+    # #196: engines commonly emit the findings list as a bare top-level JSON array instead of
+    # {"findings": [...]}. The live failure (PR #190) had five codex reviewers return clean bare
+    # arrays and all five slots parse "unreadable" — one step from UFR-7 re-running the whole panel
+    # on Claude. The tolerated shape is accepted AND scrubbed exactly like the canonical object.
+    stdout = json.dumps([
+        {"severity": "Important", "title": "leak",
+         "file": "a.py", "line": 7,
+         "body": "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+         "suggestion": "drop the header"}])
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    f = res["findings"][0]
+    assert f["severity"] == "Important" and f["title"] == "leak"
+    assert f["file"] == "a.py" and f["line"] == 7          # structural keys untouched
+    # scrubbing applied to the tolerated shape, not just passed through
+    assert "sk-EXAMPLEfakenotarealsecret0" not in f["body"]
+    assert "[REDACTED]" in f["body"]
+
+
+def test_parse_result_review_bare_empty_array_is_clean_zero_findings():
+    # An empty bare array is a clean review with nothing to flag — it must NOT be unreadable
+    # (that would forfeit the slot to a needless UFR-7 re-run), it is ok:true with no findings.
+    assert EA.parse_result("codex", "review", "[]") == {"ok": True, "findings": []}
+
+
+def test_parse_result_review_canonical_object_unchanged_by_tolerance():
+    # The object path is byte-identical to before the #196 tolerance was added.
+    stdout = json.dumps({"findings": [
+        {"severity": "Critical", "title": "t", "body": "b", "suggestion": "s"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["findings"] == [{"severity": "Critical", "title": "t", "body": "b", "suggestion": "s"}]
+
+
+def test_parse_result_review_bare_array_of_non_objects_is_unreadable():
+    # A bare array whose entries are not finding objects is noise, not findings — fail closed
+    # (never a silent empty pass), the same direction as garbage/empty stdout.
+    assert EA.parse_result("codex", "review", "[1, 2, 3]") == {"ok": False, "reason": "unreadable"}
+    assert EA.parse_result("codex", "review", '["a", "b"]') == {"ok": False, "reason": "unreadable"}
+    # a mixed array (some objects, some not) is also rejected — the tolerated shape is a clean
+    # array of finding objects, not a scrub-and-hope filter (that stays the object path's behavior).
+    assert EA.parse_result("codex", "review", '[{"severity":"Minor"}, 7]') == \
+        {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_bare_array_tolerance_is_review_only():
+    # The tolerance is scoped to role_kind='review'. A bare array under build/fix/author-plan is
+    # not a valid result for those object-shaped contracts and stays unreadable/empty as before.
+    assert EA.parse_result("codex", "build", "[]").get("ok") is False
+    assert EA.parse_result("codex", "fix", '[{"evidence":{}}]').get("ok") is False
+    assert EA.parse_result("cursor", "author-plan", "[]").get("ok") is False
+
+
 def test_parse_result_review_empty_is_unreadable():
     assert EA.parse_result("codex", "review", "") == {"ok": False, "reason": "unreadable"}
     assert EA.parse_result("cursor", "review", "   ") == {"ok": False, "reason": "unreadable"}
@@ -240,3 +294,16 @@ def test_build_argv_cli_author_plan_model(capsys):
                   "--effort", "composer", "--model", "fable"])
     argv = json.loads(capsys.readouterr().out)
     assert rc == 0 and argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"
+
+
+def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
+    # #196: the stdout shape contract must live where orchestrators read it when composing the
+    # engine-dispatch prompt — not only in this parser's source. Structural pin so the prose
+    # contract can't silently vanish and let orchestrators re-guess the shape per run.
+    ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(ref, encoding="utf-8") as fh:
+        text = fh.read()
+    # the canonical required shape, verbatim
+    assert '{"findings": [...]}' in text
+    # and the tolerated bare-array note (kept in sync with parse_result's #196 tolerance)
+    assert "bare" in text and "array" in text

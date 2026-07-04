@@ -111,6 +111,37 @@ def _last_json_object(stdout):
     return last
 
 
+def _last_json_array(stdout):
+    """Return the LAST top-level JSON array in a (possibly line-delimited / streamed) blob,
+    or None. Mirrors _last_json_object exactly, but for the tolerated bare-array reviewer
+    shape (an engine emits `[...]` directly instead of `{"findings": [...]}`, #196)."""
+    s = (stdout or "").strip()
+    if not s:
+        return None
+    try:
+        val = json.loads(s)
+        if isinstance(val, list):
+            return val
+    except ValueError:
+        pass
+    dec = json.JSONDecoder()
+    last = None
+    i, n = 0, len(s)
+    while i < n:
+        while i < n and s[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+        try:
+            val, end = dec.raw_decode(s, i)
+            if isinstance(val, list):
+                last = val
+            i = end
+        except ValueError:
+            i += 1  # skip a non-JSON char (stream noise) and keep scanning
+    return last
+
+
 def _scrub(text):
     if not isinstance(text, str) or not text:
         return text
@@ -153,20 +184,31 @@ def _scrub_notify(notify):
 
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
-    findings; build|fix → {ok,signal,evidence{testFailed,testPassed}}; author-plan →
+    findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
+    array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}};
+    author-plan →
     {ok,notify[]} (the doc itself is verified downstream by the deterministic usableDraft
     post-check — this parse only confirms the engine ran to completion and surfaces NOTIFY
     defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
     scrubbed HERE (Secret-hygiene). Never raises."""
     try:
         obj = _last_json_object(stdout)
-        if obj is None:
-            return {"ok": False, "reason": "unreadable"}
         if role_kind == "review":
-            findings = obj.get("findings")
+            findings = obj.get("findings") if isinstance(obj, dict) else None
+            if not isinstance(findings, list):
+                # Shape tolerance (#196): engines commonly emit the findings list as a bare
+                # top-level array instead of wrapping it in {"findings": [...]}. Accept that
+                # only when it is a list of objects — an empty list is a clean, zero-finding
+                # review; a bare array containing any non-object is treated as unreadable, the
+                # same fail direction as any other unparseable stdout (never a silent empty pass).
+                arr = _last_json_array(stdout)
+                if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
+                    findings = arr
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
             return {"ok": True, "findings": _scrub_findings(findings)}
+        if obj is None:
+            return {"ok": False, "reason": "unreadable"}
         if role_kind == "author-plan":
             return {"ok": True, "notify": _scrub_notify(obj.get("notify"))}
         # build | fix
