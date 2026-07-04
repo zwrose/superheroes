@@ -443,28 +443,34 @@ def _state(session_dir):
         return json.load(fh)
 
 
-def test_critical_at_cap_parks(tmp_path, capsys, monkeypatch):
-    """#174 requirement 3: a Critical still owed at the 2-panel cap parks (certification
-    withheld); the fail-safe direction is unchanged."""
-    session_dir = _session(tmp_path)
-    _round1(capsys, session_dir)
-    # forge state: two qualifying confirmation panels already ran, and a Critical surfaced since
+# The cap tests forge the two prior qualifying panels (driving two REAL panels is a ~7-round
+# flow) but the DECIDING round is genuinely clean — the reachable shape: a blocker surfaced +
+# was fixed at round 4, round 5 is a clean scoped round, and the gate consults the economics
+# there (empty fix-batch → exit → cap check). The pure cap/park logic is also unit-tested in
+# test_review_round_policy.py; these pin the cmd_decide integration.
+def _forge_two_panels_then_post_panel_blocker(session_dir, critical):
     st = {"schemaVersion": 1, "rounds": {}}
-    deep_high = lambda blk=0, crit=0: {  # noqa: E731
-        d: {"dimension": d, "status": "run", "tier": DEEP, "confidence": "high",
-            "blockingCount": blk, "criticalCount": crit, "round": None} for d in DIMS}
+    clean = {d: {"dimension": d, "status": "run", "tier": DEEP, "confidence": "high",
+                 "blockingCount": 0, "criticalCount": 0, "round": None} for d in DIMS}
     for rnd in (2, 3):
-        st["rounds"][str(rnd)] = {"plan": {"roundKind": "confirmation"},
-                                  "dims": {**deep_high()}}
-    # a post-panel scoped round surfaced a Critical
+        st["rounds"][str(rnd)] = {"plan": {"roundKind": "confirmation"}, "dims": dict(clean)}
     st["rounds"]["4"] = {"plan": {"roundKind": "intermediate"},
                          "dims": {"code-reviewer": {"dimension": "code-reviewer", "status": "run",
                                                     "tier": DEEP, "confidence": "high",
-                                                    "blockingCount": 1, "criticalCount": 1,
+                                                    "blockingCount": 1,
+                                                    "criticalCount": 1 if critical else 0,
                                                     "round": 4}}}
     with open(os.path.join(session_dir, "loop-state.json"), "w", encoding="utf-8") as fh:
         json.dump(st, fh)
-    out = _decide(capsys, session_dir, 4, fix_batch=_write_fix_batch(session_dir, 4, []))
+
+
+def test_critical_at_cap_parks(tmp_path, capsys):
+    """#174 requirement 3: a Critical still owed at the 2-panel cap parks (certification
+    withheld); the fail-safe direction is unchanged. Deciding round (5) is clean."""
+    session_dir = _session(tmp_path)
+    _round1(capsys, session_dir)
+    _forge_two_panels_then_post_panel_blocker(session_dir, critical=True)
+    out = _decide(capsys, session_dir, 5, fix_batch=_write_fix_batch(session_dir, 5, []))
     assert out["action"] == "halt"
     assert out["certification"]["fullPanels"] == 2
 
@@ -472,46 +478,133 @@ def test_critical_at_cap_parks(tmp_path, capsys, monkeypatch):
 def test_non_critical_at_cap_certifies_with_scoped_verify(tmp_path, capsys):
     session_dir = _session(tmp_path)
     _round1(capsys, session_dir)
-    st = {"schemaVersion": 1, "rounds": {}}
-    deep_high = {d: {"dimension": d, "status": "run", "tier": DEEP, "confidence": "high",
-                     "blockingCount": 0, "criticalCount": 0, "round": None} for d in DIMS}
-    for rnd in (2, 3):
-        st["rounds"][str(rnd)] = {"plan": {"roundKind": "confirmation"}, "dims": dict(deep_high)}
-    st["rounds"]["4"] = {"plan": {"roundKind": "intermediate"},
-                         "dims": {"code-reviewer": {"dimension": "code-reviewer", "status": "run",
-                                                    "tier": DEEP, "confidence": "high",
-                                                    "blockingCount": 1, "criticalCount": 0,
-                                                    "round": 4}}}
-    with open(os.path.join(session_dir, "loop-state.json"), "w", encoding="utf-8") as fh:
-        json.dump(st, fh)
-    out = _decide(capsys, session_dir, 4, fix_batch=_write_fix_batch(session_dir, 4, []))
+    _forge_two_panels_then_post_panel_blocker(session_dir, critical=False)
+    out = _decide(capsys, session_dir, 5, fix_batch=_write_fix_batch(session_dir, 5, []))
     assert out["action"] == "exit_clean"
     assert out["certification"]["fullPanels"] == 2
     assert out["certification"]["lastPanelSurfacedResolved"] is True
 
 
-def test_cross_cutting_rework_rearms_one_more_confirmation(tmp_path, capsys):
-    """#174 deferred-decision default: rework touching ≥3 policy subjects is cross-cutting and
-    re-arms one more full confirmation, even when no Critical surfaced."""
+# Per-file diff bodies for the reachable cross-cutting/mirror flow: the round-3 panel diff
+# (what the panel reviewed, pre-fix) vs the reworked (post-fix) body. A file counts as changed
+# between two diffs iff its section text differs.
+_PANEL_BODY = {"fileA.py": "@@ -1 +1 @@\n-a\n+A", "fileB.py": "@@ -1 +1 @@\n-b\n+B",
+               "fileC.py": "@@ -1 +1 @@\n-c\n+C"}
+_REWORK_BODY = {"fileA.py": "@@ -1 +2 @@\n-a\n+A\n+A2", "fileB.py": "@@ -1 +2 @@\n-b\n+B\n+B2",
+                "fileC.py": "@@ -1 +2 @@\n-c\n+C\n+C2"}
+
+
+def _drive_to_scoped_after_panel(capsys, session_dir):
+    """Reach — via REAL plan/record/decide, no forged loop-state.json — a scoped round 4 that
+    follows a QUALIFYING confirmation panel at round 3. Round 1 (baseline) surfaces a Code finding
+    on fileA → fix → scoped round 2 clean → mandatory confirmation round 3. Round 3 is the
+    qualifying panel: it surfaces one Important each in code/security/test (fileA/fileB/fileC),
+    all fixed this round → decide(3) schedules scoped round 4. Leaves the session at round 4."""
+    _round1(capsys, session_dir, {"code-reviewer": [_finding("Code", file="fileA.py")]})
+    _write_compiled(session_dir, 1, [_finding("Code", file="fileA.py")])
+    _write_diff(session_dir, 1, [("fileA.py", _PANEL_BODY["fileA.py"])])
+    _write_head_diff(session_dir, 1, [("fileA.py", _REWORK_BODY["fileA.py"])])
+    o1 = _decide(capsys, session_dir, 1,
+                 fix_batch=_write_fix_batch(session_dir, 1, [_finding("Code", file="fileA.py")]))
+    assert o1["action"] == "review" and o1["roundKind"] == "intermediate"
+    _plan(capsys, session_dir, 2)
+    _write_findings(session_dir, 2, "code-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, 2, [])
+    o2 = _decide(capsys, session_dir, 2, fix_batch=_write_fix_batch(session_dir, 2, []))
+    assert o2["action"] == "review" and o2["roundKind"] == "confirmation"
+    _plan(capsys, session_dir, 3)
+    panel = {"code-reviewer": [_finding("Code", file="fileA.py")],
+             "security-reviewer": [_finding("Security", file="fileB.py")],
+             "test-reviewer": [_finding("Test", file="fileC.py")]}
+    for dim in DIMS:
+        _write_findings(session_dir, 3, dim, panel.get(dim, []))
+    _record(capsys, session_dir, 3)
+    panel_findings = [_finding("Code", file="fileA.py"), _finding("Security", file="fileB.py"),
+                      _finding("Test", file="fileC.py")]
+    _write_compiled(session_dir, 3, panel_findings)
+    _write_diff(session_dir, 3, [(f, _PANEL_BODY[f]) for f in ("fileA.py", "fileB.py", "fileC.py")])
+    _write_head_diff(session_dir, 3, [(f, _REWORK_BODY[f]) for f in ("fileA.py", "fileB.py", "fileC.py")])
+    o3 = _decide(capsys, session_dir, 3, fix_batch=_write_fix_batch(session_dir, 3, panel_findings))
+    assert o3["action"] == "review" and o3["roundKind"] == "intermediate"  # scoped fix-verify
+
+
+def _scoped_round4_clean(capsys, session_dir):
+    plan4 = _plan(capsys, session_dir, 4)
+    for d in plan4["dims_to_run"]:
+        _write_findings(session_dir, 4, d["dimension"], [])
+    _record(capsys, session_dir, 4)
+    _write_compiled(session_dir, 4, [])  # the deciding round is CLEAN — the realistic certify path
+
+
+def test_cross_cutting_rework_rearms_reachable(tmp_path, capsys):
+    """#174 req 2 / deferred default (reachable, no forged state): after a qualifying confirmation
+    panel, rework touching ≥3 policy subjects is cross-cutting and re-arms one more full panel —
+    even with no Critical. The subjects are attributed via the UNION of prior-round findings, so
+    the clean deciding round (empty compiled) does not make the rule inert."""
     session_dir = _session(tmp_path)
-    _round1(capsys, session_dir)
-    st = {"schemaVersion": 1, "rounds": {}}
-    deep_high = {d: {"dimension": d, "status": "run", "tier": DEEP, "confidence": "high",
-                     "blockingCount": 0, "criticalCount": 0, "round": None} for d in DIMS}
-    st["rounds"]["2"] = {"plan": {"roundKind": "confirmation"}, "dims": dict(deep_high)}
-    with open(os.path.join(session_dir, "loop-state.json"), "w", encoding="utf-8") as fh:
-        json.dump(st, fh)
-    # rework since the panel touched 3 files mapped to 3 distinct subjects
-    _write_diff(session_dir, 2, [("a.py", "@@ -1 +1 @@\n-x\n+y")])
-    _write_head_diff(session_dir, 3, [("a.py", "@@ -1 +2 @@\n-x\n+y\n+z"),
-                                      ("b.py", "@@ -1 +1 @@\n-p\n+q"),
-                                      ("c.py", "@@ -1 +1 @@\n-m\n+n")])
-    _write_compiled(session_dir, 3, [_finding("Code", file="a.py"),
-                                     _finding("Security", file="b.py"),
-                                     _finding("Test", file="c.py")])
-    out = _decide(capsys, session_dir, 3, fix_batch=_write_fix_batch(session_dir, 3, []))
+    _drive_to_scoped_after_panel(capsys, session_dir)
+    _scoped_round4_clean(capsys, session_dir)
+    # rework since the panel (round 3) touched all THREE cited files → Code+Security+Test
+    _write_head_diff(session_dir, 4, [(f, _REWORK_BODY[f]) for f in ("fileA.py", "fileB.py", "fileC.py")])
+    out = _decide(capsys, session_dir, 4, fix_batch=_write_fix_batch(session_dir, 4, []))
+    assert out["action"] == "review" and out["roundKind"] == "confirmation"
+    assert "cross-cutting" in out["reason"]  # #174 finding 2: honest re-arm reason
+
+
+def test_narrow_rework_after_panel_certifies_fullpanels_one(tmp_path, capsys):
+    """Mirror (reachable): same shape, but rework touching ONE cited file → one subject → not
+    cross-cutting, no Critical → certifies with fullPanels 1 (no ratchet)."""
+    session_dir = _session(tmp_path)
+    _drive_to_scoped_after_panel(capsys, session_dir)
+    _scoped_round4_clean(capsys, session_dir)
+    # rework touched only fileA (Code); fileB/fileC identical to the panel diff → unchanged
+    _write_head_diff(session_dir, 4, [("fileA.py", _REWORK_BODY["fileA.py"]),
+                                      ("fileB.py", _PANEL_BODY["fileB.py"]),
+                                      ("fileC.py", _PANEL_BODY["fileC.py"])])
+    out = _decide(capsys, session_dir, 4, fix_batch=_write_fix_batch(session_dir, 4, []))
+    assert out["action"] == "exit_clean"
+    assert out["certification"]["fullPanels"] == 1
+    assert out["certification"]["lastPanelSurfacedResolved"] is True
+
+
+def test_changed_subjects_unions_prior_round_findings(tmp_path):
+    """The union fix (BLOCKING review finding): a file changed since an earlier round is attributed
+    to that round's finding even when the DECIDING round's compiled.json is empty (the certify
+    path). Without the union this returns [] and cross-cutting is structurally inert."""
+    session_dir = _session(tmp_path)
+    _write_compiled(session_dir, 1, [_finding("Security", file="fileB.py")])
+    _write_compiled(session_dir, 2, [])  # deciding round is clean
+    _write_diff(session_dir, 1, [("fileB.py", "@@ -1 +1 @@\n-b\n+B")])
+    _write_head_diff(session_dir, 2, [("fileB.py", "@@ -1 +2 @@\n-b\n+B\n+B2")])
+    assert CLP._changed_subjects(session_dir, 1, 2) == ["Security"]
+
+
+def test_quoted_diff_path_is_unknown_surface(tmp_path):
+    """#174 finding 3: git quotes paths with spaces/special chars — an unparseable `diff --git`
+    header is an unknown surface, never silently mis-attributed."""
+    session_dir = _session(tmp_path)
+    _round_dir(session_dir, 1)
+    with open(os.path.join(session_dir, "round-1", "diff.txt"), "w", encoding="utf-8") as fh:
+        fh.write('diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n')
+    _write_head_diff(session_dir, 1, [("fileA.py", "@@ -1 +1 @@\n-a\n+b")])
+    _write_compiled(session_dir, 1, [_finding("Code", file="fileA.py")])
+    assert CLP._changed_subjects(session_dir, 1, 1) is None
+
+
+def test_quoted_diff_path_decide_runs_all(tmp_path, capsys):
+    """The unknown surface from a quoted path fails toward run-all at the gate."""
+    session_dir = _session(tmp_path)
+    _round1(capsys, session_dir, {"code-reviewer": [_finding("Code")]})
+    _write_compiled(session_dir, 1, [_finding("Code")])
+    _round_dir(session_dir, 1)
+    with open(os.path.join(session_dir, "round-1", "diff.txt"), "w", encoding="utf-8") as fh:
+        fh.write('diff --git "a/x y.py" "b/x y.py"\n@@ -1 +1 @@\n-a\n+b\n')
+    _write_head_diff(session_dir, 1, [("fileA.py", "@@ -1 +2 @@\n-a\n+b\n+c")])
+    out = _decide(capsys, session_dir, 1, fix_batch=_write_fix_batch(session_dir, 1, [_finding("Code")]))
     assert out["action"] == "review"
-    assert out["roundKind"] == "confirmation"
+    dims = _dims_map(out)
+    assert sorted(dims) == sorted(DIMS) and all(d["tier"] == DEEP for d in dims.values())
 
 
 # --- fail-safe direction ------------------------------------------------------

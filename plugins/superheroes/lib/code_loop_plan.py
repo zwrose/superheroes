@@ -114,7 +114,12 @@ def _read_text(path):
 def _files_in_diff(text):
     """Map each file in a unified diff to its per-file section text (index + hunks). Comparing
     a file's section between two diffs-vs-base tells us whether the fix touched it: the section
-    (blob-hash `index` line included) differs iff the file's content changed."""
+    (blob-hash `index` line included) differs iff the file's content changed.
+
+    Returns None if any `diff --git` header fails to parse — git quotes paths that contain
+    spaces or special chars (`diff --git "a/x y" "b/x y"`), and silently mis-attributing such a
+    file's hunks to the previous file (or dropping them) would corrupt the changed-file set. An
+    unparseable header is an unknown surface, and the caller fails toward run-all/cross-cutting."""
     files = {}
     path = None
     buf = []
@@ -124,8 +129,10 @@ def _files_in_diff(text):
             files[path] = "\n".join(buf)
 
     for line in (text or "").splitlines():
-        m = _DIFF_GIT.match(line)
-        if m:
+        if line.startswith("diff --git "):
+            m = _DIFF_GIT.match(line)
+            if not m:
+                return None
             _flush()
             path = m.group(2)
             buf = []
@@ -138,6 +145,8 @@ def _files_in_diff(text):
 def _changed_files(old_text, new_text):
     old = _files_in_diff(old_text)
     new = _files_in_diff(new_text)
+    if old is None or new is None:
+        return None
     return {p for p in set(old) | set(new) if old.get(p) != new.get(p)}
 
 
@@ -155,27 +164,57 @@ def _subjects_for_dimension(dimension):
     return out
 
 
+def _prior_findings(session_dir, upto_round):
+    """The UNION of compiled findings across every round 1..`upto_round` — the prose twin of the
+    spine's `fixContext.priorFindings` (`showrunner.js _policyChangedSubjects`). A changed file is
+    attributed to a policy subject when ANY round's reviewer cited it, not only the deciding
+    round's. This matters on the realistic certify path: the deciding round is clean (that is why
+    it reached exit), so its own compiled findings are empty; attributing rework through the
+    accumulated history is what lets a confirmation panel's own surfaced findings attribute the
+    post-panel rework files, so the cross-cutting-rework re-arm is not structurally inert. A file
+    never cited by any reviewer stays unattributed (matches the spine; accepted). Returns
+    (findings, ok); ok=False if a present compiled.json is unreadable/malformed → caller fails
+    toward run-all."""
+    findings = []
+    ok = True
+    for k in range(1, upto_round + 1):
+        path = _compiled_path(session_dir, k)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            ok = False
+            continue
+        fs = data.get("findings") if isinstance(data, dict) else None
+        if not isinstance(fs, list):
+            ok = False
+            continue
+        findings.extend(f for f in fs if isinstance(f, dict))
+    return findings, ok
+
+
 def _changed_subjects(session_dir, old_round, new_round):
     """The policy subjects the fix touched between `old_round`'s reviewed diff and the current
-    (post-fix) tree captured in `new_round`'s head-diff, mapped through `new_round`'s compiled
-    findings. Returns a KNOWN list (possibly empty) or None (unknown → the policy runs all
-    dimensions). Any missing/unreadable diff or compiled file → None."""
+    (post-fix) tree captured in `new_round`'s head-diff — the FILES whose hunks differ, mapped to
+    subjects through the UNION of all rounds' compiled findings (`_prior_findings`), never the
+    fixer's self-report (#157/#158). Returns a KNOWN list (possibly empty) or None (unknown → the
+    policy runs all dimensions). Any missing/unreadable diff, unparseable diff header, or
+    unreadable compiled file → None."""
     old_text = _read_text(_diff_path(session_dir, old_round))
     new_text = _read_text(_head_diff_path(session_dir, new_round))
     if old_text is None or new_text is None:
         return None
     changed = _changed_files(old_text, new_text)
-    try:
-        with open(_compiled_path(session_dir, new_round), encoding="utf-8") as fh:
-            compiled = json.load(fh)
-    except (OSError, ValueError):
+    if changed is None:
         return None
-    findings = compiled.get("findings") if isinstance(compiled, dict) else None
-    if not isinstance(findings, list):
+    findings, ok = _prior_findings(session_dir, new_round)
+    if not ok:
         return None
     subjects = set()
     for finding in findings:
-        if isinstance(finding, dict) and finding.get("file") in changed:
+        if finding.get("file") in changed:
             subjects |= _subjects_for_dimension(finding.get("dimension"))
     return sorted(subjects)
 
@@ -338,15 +377,21 @@ def cmd_decide(session_dir, round_no, max_rounds, fix_batch, resolutions, breake
                               "NOT declare READY FOR PR." % (max_rounds, DEEP),
                     "round": round_no, "nextRound": None, "roundKind": None,
                     "dims_to_run": [], "skipped": []}
+        if owe.get("panels", 0) >= 1 and owe.get("owed"):
+            # #174 finding 2 (honest readout): a RE-ARMED confirmation names WHY it re-armed
+            # (a Critical surfaced since the last panel, or cross-cutting rework), not the generic
+            # "reduced round" reason — the first mandatory panel below keeps the generic reason.
+            reason = ("MANDATORY: %s — run one more full %s confirmation panel before exit."
+                      % (owe.get("reason", "confirmation follow-up owed"), DEEP))
+        else:
+            reason = ("MANDATORY: this round was reduced or under-evidenced (skipped dimensions, "
+                      "%s-tier results, missing receipts, or unreadable scheduler state) — a full "
+                      "%s confirmation round must come back clean before exit." % (CHEAP, DEEP))
         plan = review_round_policy.plan_round(
             {"round": round_no + 1, "dimensions": dimensions, "confirmation": True,
              "changedSubjects": None, "previous": {}})
         return _next_round_out(
-            session_dir, state, state_ok, round_no, plan, "review", True,
-            "MANDATORY: this round was reduced or under-evidenced (skipped dimensions, "
-            "%s-tier results, missing receipts, or unreadable scheduler state) — a full "
-            "%s confirmation round must come back clean before exit." % (CHEAP, DEEP),
-            dimensions)
+            session_dir, state, state_ok, round_no, plan, "review", True, reason, dimensions)
 
     if action == "review":
         changed = _changed_subjects(session_dir, round_no, round_no) if state_ok else None
