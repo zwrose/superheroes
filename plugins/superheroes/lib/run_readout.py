@@ -45,7 +45,12 @@ def assemble(state):
 
 
 def run_outcome(state):
-    """The machine-readable projection #112 asserts against (status/PR/checks/phases)."""
+    """The machine-readable projection #112 asserts against (status/PR/checks/phases).
+
+    #25: also surfaces the route and, on the quick route, the front-half phases it skipped — so the
+    outcome is honest that plan/review-plan/tasks/review-tasks were skipped-by-route, not merely
+    not-yet-reached. `route` defaults to full and `skippedPhases` to [] (byte-identical for a full run).
+    """
     state = state or {}
     return {
         "status": state.get("status"),
@@ -54,5 +59,7 @@ def run_outcome(state):
         "prUrl": state.get("pr_url"),
         "checks": state.get("ci") or "none",
         "phasesTraversed": state.get("phases") or [],
+        "route": state.get("route") or "full",
+        "skippedPhases": state.get("skipped_phases") or [],
         "readoutPath": state.get("readout_path"),
     }

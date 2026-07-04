@@ -26,6 +26,17 @@ def test_run_outcome_is_the_machine_readable_projection():
     out = run_readout.run_outcome(STATE)
     assert out["status"] == "ready" and out["prUrl"].endswith("/pull/9")
     assert out["checks"] == "none" and out["phasesTraversed"] == STATE["phases"]
+    # #25: full route (no route/skipped in state) defaults honestly — byte-identical outcome.
+    assert out["route"] == "full" and out["skippedPhases"] == []
+
+def test_run_outcome_surfaces_the_quick_route_and_its_skips():
+    # #25: a quick run's outcome names its route and the skipped front-half phases, so the readout
+    # is honest that they were skipped-by-route (not merely not-yet-reached).
+    quick = dict(STATE, route="quick",
+                 skipped_phases=["plan", "review-plan", "tasks", "review-tasks"])
+    out = run_readout.run_outcome(quick)
+    assert out["route"] == "quick"
+    assert out["skippedPhases"] == ["plan", "review-plan", "tasks", "review-tasks"]
 
 
 def _seed_cost(tmp_path):

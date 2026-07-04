@@ -43,6 +43,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    # #25 quick discovery (PR 1 — showrunner leg): route decider + fresh-quick skip journaling +
+    # loop entry at build + fail-closed refuse of a missing/malformed tasks artifact + full unchanged.
+    "plugins/superheroes/lib/tests/showrunner_quick_route_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_front_half_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_label_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
