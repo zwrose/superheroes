@@ -147,6 +147,38 @@ def test_parse_result_review_bare_array_of_non_objects_is_unreadable():
         {"ok": False, "reason": "unreadable"}
 
 
+def test_parse_result_review_bare_array_via_streaming_scan_is_tolerated_and_scrubbed():
+    # #196: the bare array need not be a clean whole-blob parse — the raw_decode scan path in
+    # _last_json_array (mirroring the tested object stream-scan) recovers it past leading stream
+    # noise. Exercises that branch (not just the whole-blob fast path) and confirms it still scrubs.
+    stream = ('codex: starting review\n'
+              '[{"severity":"Minor","title":"leak","file":"a.py","line":2,'
+              '"body":"log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"}]')
+    res = EA.parse_result("codex", "review", stream)
+    assert res["ok"] is True
+    f = res["findings"][0]
+    assert f["severity"] == "Minor" and f["file"] == "a.py"
+    assert "sk-EXAMPLEfakenotarealsecret0" not in f["body"]
+    assert "[REDACTED]" in f["body"]
+
+
+def test_parse_result_review_findingsless_object_is_not_rescued_by_a_stray_array():
+    # #196 premortem fix: the bare-array tolerance is gated on `obj is None` (no top-level object
+    # at all), NOT merely on a missing `findings` key. A present-but-findings-less result object
+    # (a crashed/errored reviewer) must stay unreadable and fall open to a Claude re-run — the
+    # stream must NOT be hunted for some other array to reinterpret as findings. Otherwise a
+    # crashed slot with a stray (esp. empty) array earlier in the stream would be silently
+    # certified as a clean, zero-finding review (a fail-OPEN — the exact hazard #196 fixes).
+    findingsless_then_stray = ('[{"severity":"Minor","title":"stray","body":"b"}]\n'
+                               '{"error":"reviewer crashed"}')
+    assert EA.parse_result("codex", "review", findingsless_then_stray) == \
+        {"ok": False, "reason": "unreadable"}
+    # the scariest variant: an EMPTY stray array must not become a false clean-zero pass
+    empty_stray_then_error = '[]\n{"type":"result","status":"error"}'
+    assert EA.parse_result("codex", "review", empty_stray_then_error) == \
+        {"ok": False, "reason": "unreadable"}
+
+
 def test_parse_result_bare_array_tolerance_is_review_only():
     # The tolerance is scoped to role_kind='review'. A bare array under build/fix/author-plan is
     # not a valid result for those object-shaped contracts and stays unreadable/empty as before.

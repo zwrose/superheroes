@@ -81,46 +81,17 @@ def build_argv(engine, role_kind, effort, opts):
     return []
 
 
-def _last_json_object(stdout):
-    """Return the LAST top-level JSON object in a (possibly line-delimited / streamed) blob,
-    or None. Tries whole-blob parse first, then a raw_decode scan, then a per-line fallback."""
-    s = (stdout or "").strip()
-    if not s:
-        return None
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
-    except ValueError:
-        pass
-    dec = json.JSONDecoder()
-    last = None
-    i, n = 0, len(s)
-    while i < n:
-        while i < n and s[i] in " \t\r\n":
-            i += 1
-        if i >= n:
-            break
-        try:
-            obj, end = dec.raw_decode(s, i)
-            if isinstance(obj, dict):
-                last = obj
-            i = end
-        except ValueError:
-            i += 1  # skip a non-JSON char (stream noise) and keep scanning
-    return last
-
-
-def _last_json_array(stdout):
-    """Return the LAST top-level JSON array in a (possibly line-delimited / streamed) blob,
-    or None. Mirrors _last_json_object exactly, but for the tolerated bare-array reviewer
-    shape (an engine emits `[...]` directly instead of `{"findings": [...]}`, #196)."""
+def _last_top_level_json(stdout, want_type):
+    """Return the LAST top-level JSON value of `want_type` (dict or list) in a (possibly
+    line-delimited / streamed) blob, or None. Tries a whole-blob parse first, then a
+    raw_decode scan that skips non-JSON stream noise a char at a time. Shared by
+    _last_json_object (dict) and _last_json_array (list) so the scan logic lives once."""
     s = (stdout or "").strip()
     if not s:
         return None
     try:
         val = json.loads(s)
-        if isinstance(val, list):
+        if isinstance(val, want_type):
             return val
     except ValueError:
         pass
@@ -134,12 +105,25 @@ def _last_json_array(stdout):
             break
         try:
             val, end = dec.raw_decode(s, i)
-            if isinstance(val, list):
+            if isinstance(val, want_type):
                 last = val
             i = end
         except ValueError:
             i += 1  # skip a non-JSON char (stream noise) and keep scanning
     return last
+
+
+def _last_json_object(stdout):
+    """Return the LAST top-level JSON object in a (possibly line-delimited / streamed) blob,
+    or None."""
+    return _last_top_level_json(stdout, dict)
+
+
+def _last_json_array(stdout):
+    """Return the LAST top-level JSON array in a (possibly line-delimited / streamed) blob,
+    or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
+    instead of `{"findings": [...]}`, #196)."""
+    return _last_top_level_json(stdout, list)
 
 
 def _scrub(text):
@@ -195,12 +179,18 @@ def parse_result(engine, role_kind, stdout):
         obj = _last_json_object(stdout)
         if role_kind == "review":
             findings = obj.get("findings") if isinstance(obj, dict) else None
-            if not isinstance(findings, list):
-                # Shape tolerance (#196): engines commonly emit the findings list as a bare
-                # top-level array instead of wrapping it in {"findings": [...]}. Accept that
-                # only when it is a list of objects — an empty list is a clean, zero-finding
-                # review; a bare array containing any non-object is treated as unreadable, the
-                # same fail direction as any other unparseable stdout (never a silent empty pass).
+            if obj is None:
+                # Shape tolerance (#196): the engine emitted NO top-level object at all — the
+                # genuine bare-array reviewer shape (`[...]` instead of {"findings": [...]}).
+                # Adopt that array as the findings list, but only when every element is an object
+                # (an empty array is a clean, zero-finding review; a bare array with any
+                # non-object is noise → unreadable, the same fail direction as any other
+                # unparseable stdout — never a silent empty pass). We gate on `obj is None`, NOT
+                # merely on a missing `findings` key: a present-but-findings-less result object
+                # (a crash/error object) must stay unreadable and fall open to a Claude re-run
+                # (UFR-7) rather than have the stream hunted for some other array to reinterpret
+                # as findings — that would fail OPEN, silently certifying a slot that never
+                # reviewed. This keeps the object path byte-identical to before the tolerance.
                 arr = _last_json_array(stdout)
                 if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
                     findings = arr
