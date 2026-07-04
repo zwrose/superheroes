@@ -12,16 +12,17 @@ function _g() { return (typeof globalThis !== 'undefined') ? globalThis : {} }
 
 function _state() {
   var g = _g()
-  if (!g.__SR_COST || typeof g.__SR_COST !== 'object') g.__SR_COST = { phases: {}, starts: {}, suspended: false }
+  if (!g.__SR_COST || typeof g.__SR_COST !== 'object') g.__SR_COST = { phases: {}, starts: {} }
   if (!g.__SR_COST.starts) g.__SR_COST.starts = {}
   return g.__SR_COST
 }
 
-// record(model): count one dispatch under the current phase, keyed by the resolved model. Skipped
-// while suspended, so the telemetry's OWN emit leaf never self-inflates the count it just captured.
+// record(model): count one dispatch under the current phase, keyed by the resolved model. The phase's
+// OWN persist leaf (which writes the folded phase_cost) is excluded by ORDERING, not a flag: take()
+// snapshots-and-resets the phase before that leaf dispatches, so the persist dispatch lands in a
+// freshly-reset bucket that is never emitted (documented as an inherent exclusion in CONVENTIONS §4.6).
 function record(model) {
   var s = _state()
-  if (s.suspended) return
   var phase = _g().__SR_PHASE || 'unknown'
   var p = s.phases[phase] || (s.phases[phase] = { dispatches: 0, byModel: {} })
   p.dispatches += 1
@@ -73,11 +74,7 @@ function isEmpty(body) {
   return !!body && !body.dispatches.total && !body.tokens.measured
 }
 
-// suspend/resume: bracket any telemetry-adjacent dispatch so it is excluded from the proxy count.
-function suspend() { _state().suspended = true }
-function resume() { _state().suspended = false }
-
 // reset(): clear all accumulated state (new-run guard / test helper).
-function reset() { _g().__SR_COST = { phases: {}, starts: {}, suspended: false } }
+function reset() { _g().__SR_COST = { phases: {}, starts: {} } }
 
-module.exports = { record: record, readSpent: readSpent, mark: mark, take: take, isEmpty: isEmpty, suspend: suspend, resume: resume, reset: reset }
+module.exports = { record: record, readSpent: readSpent, mark: mark, take: take, isEmpty: isEmpty, reset: reset }

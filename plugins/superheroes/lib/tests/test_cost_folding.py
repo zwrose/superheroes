@@ -13,6 +13,7 @@ LIB = os.path.dirname(HERE)
 sys.path.insert(0, LIB)
 import control_plane  # noqa: E402
 import journal  # noqa: E402
+import token_trend  # noqa: E402
 
 
 @pytest.fixture
@@ -28,14 +29,19 @@ def _events(repo, work_item):
     return journal.read_events(control_plane.paths(repo, work_item)["events"])
 
 
-def _save(repo, work_item, cost=None, journal_only=False):
+PAYLOAD = {"phase": "workhorse", "confidence": "high"}   # the phase_record _save writes
+
+
+def _save(repo, work_item, cost=None, journal_only=False, terminal_park=None):
     cmd = ["python3", os.path.join(LIB, "phase_progress_entry.py"), "save",
            "--work-item", work_item, "--step", "4", "--phase", "workhorse",
-           "--payload", json.dumps({"phase": "workhorse", "confidence": "high"})]
+           "--payload", json.dumps(PAYLOAD)]
     if cost is not None:
         cmd += ["--cost-payload", json.dumps(cost)]
     if journal_only:
         cmd += ["--journal-only"]
+    if terminal_park is not None:
+        cmd += ["--terminal-park", terminal_park]
     return subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
 
 
@@ -64,6 +70,43 @@ def test_resave_does_not_double_count_cost(repo):
 def test_save_without_cost_writes_no_phase_cost(repo):
     _save(repo, "wi-c")
     assert not any(e["type"] == "phase_cost" for e in _events(repo, "wi-c"))
+
+
+def test_crash_resume_does_not_double_append_cost(repo):
+    # Crash AFTER the phase_record+cost append but BEFORE the checkpoint write: pre-seed the record +
+    # cost and leave the checkpoint absent, then re-run save (the resume). _apply re-runs because
+    # reflects() is false on the stale checkpoint — but must dedupe BOTH the record and the cost, or
+    # cost_report.summarize would sum a duplicate phase into an inflated run total.
+    ev = control_plane.paths(repo, "wi-cr")["events"]
+    journal.append(ev, "phase_record", payload=PAYLOAD, root=repo)
+    journal.append(ev, "phase_cost", payload=COST, root=repo)
+    _save(repo, "wi-cr", cost=COST)
+    costs = [e for e in _events(repo, "wi-cr") if e["type"] == "phase_cost"]
+    assert len(costs) == 1
+
+
+def test_journal_only_park_save_still_records_cost(repo):
+    # A PARK (journal-only) records the in-flight phase's cost too — persistPhase runs
+    # journalOnly+recordCost before parkFromPhases, so tokens-per-park does NOT lose it.
+    _save(repo, "wi-jo", cost=COST, journal_only=True)
+    assert any(e["type"] == "phase_cost" for e in _events(repo, "wi-jo"))
+
+
+def test_terminal_park_marker_makes_a_midphase_park_classifiable(repo):
+    # parkFromPhases journals nothing itself; the folded `parked` marker (on the journal-only save)
+    # is what lets token_trend classify a mid-phase park as parked (not 'other').
+    _save(repo, "wi-tp", cost=COST, journal_only=True, terminal_park="build failed — park")
+    evs = _events(repo, "wi-tp")
+    assert any(e["type"] == "parked" and "build failed" in (e.get("detail") or "") for e in evs)
+    assert any(e["type"] == "phase_cost" for e in evs)
+    assert token_trend.classify(evs) == "parked"
+
+
+def test_terminal_park_marker_is_exactly_once_on_resume(repo):
+    _save(repo, "wi-tp2", cost=COST, journal_only=True, terminal_park="park reason")
+    _save(repo, "wi-tp2", cost=COST, journal_only=True, terminal_park="park reason")
+    parks = [e for e in _events(repo, "wi-tp2") if e["type"] == "parked"]
+    assert len(parks) == 1
 
 
 def _readout(repo, work_item, terminal, cost=None):

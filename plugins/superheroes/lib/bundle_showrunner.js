@@ -100,7 +100,8 @@ globalThis.agent = function (prompt, opts) {
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
   // #130 token telemetry: count this dispatch under the current phase, keyed by the resolved model
   // (the proxy backbone). This is the single dispatch choke-point. Best-effort — never break a
-  // dispatch for telemetry; suspended during the telemetry's own emit leaf (cost_meter).
+  // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
+  // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
   return __realAgent(prompt, o)
 }

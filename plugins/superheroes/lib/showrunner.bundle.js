@@ -60,7 +60,8 @@ globalThis.agent = function (prompt, opts) {
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
   // #130 token telemetry: count this dispatch under the current phase, keyed by the resolved model
   // (the proxy backbone). This is the single dispatch choke-point. Best-effort — never break a
-  // dispatch for telemetry; suspended during the telemetry's own emit leaf (cost_meter).
+  // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
+  // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
   return __realAgent(prompt, o)
 }
@@ -315,16 +316,17 @@ function _g() { return (typeof globalThis !== 'undefined') ? globalThis : {} }
 
 function _state() {
   var g = _g()
-  if (!g.__SR_COST || typeof g.__SR_COST !== 'object') g.__SR_COST = { phases: {}, starts: {}, suspended: false }
+  if (!g.__SR_COST || typeof g.__SR_COST !== 'object') g.__SR_COST = { phases: {}, starts: {} }
   if (!g.__SR_COST.starts) g.__SR_COST.starts = {}
   return g.__SR_COST
 }
 
-// record(model): count one dispatch under the current phase, keyed by the resolved model. Skipped
-// while suspended, so the telemetry's OWN emit leaf never self-inflates the count it just captured.
+// record(model): count one dispatch under the current phase, keyed by the resolved model. The phase's
+// OWN persist leaf (which writes the folded phase_cost) is excluded by ORDERING, not a flag: take()
+// snapshots-and-resets the phase before that leaf dispatches, so the persist dispatch lands in a
+// freshly-reset bucket that is never emitted (documented as an inherent exclusion in CONVENTIONS §4.6).
 function record(model) {
   var s = _state()
-  if (s.suspended) return
   var phase = _g().__SR_PHASE || 'unknown'
   var p = s.phases[phase] || (s.phases[phase] = { dispatches: 0, byModel: {} })
   p.dispatches += 1
@@ -376,14 +378,10 @@ function isEmpty(body) {
   return !!body && !body.dispatches.total && !body.tokens.measured
 }
 
-// suspend/resume: bracket any telemetry-adjacent dispatch so it is excluded from the proxy count.
-function suspend() { _state().suspended = true }
-function resume() { _state().suspended = false }
-
 // reset(): clear all accumulated state (new-run guard / test helper).
-function reset() { _g().__SR_COST = { phases: {}, starts: {}, suspended: false } }
+function reset() { _g().__SR_COST = { phases: {}, starts: {} } }
 
-module.exports = { record: record, readSpent: readSpent, mark: mark, take: take, isEmpty: isEmpty, suspend: suspend, resume: resume, reset: reset }
+module.exports = { record: record, readSpent: readSpent, mark: mark, take: take, isEmpty: isEmpty, reset: reset }
 
 };
 
@@ -6836,9 +6834,12 @@ async function persistPhase(workItem, opts) {
   // record (no dispatches, unmeasured) or when the caller did not opt in (recordCost).
   const costBody = opts.recordCost ? phaseCostPayload(phase) : null
   const costArg = costBody ? ` --cost-payload ${shq(JSON.stringify(costBody))}` : ''
+  // #130: on a park (journalOnly), fold a `parked` terminal marker into this same save so the run is
+  // classifiable as parked (parkFromPhases journals nothing) — carrying its already-folded cost.
+  const parkArg = (journalOnly && opts.parkReason) ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
   // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
   // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
@@ -7494,6 +7495,9 @@ async function runPhases(workItem, fromStep, deps) {
       step: i, phase, sideEffect,
       journalOnly: !proceed,
       recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf
+      // #130: on a park, fold a `parked` terminal marker into the same save so token_trend/run_watch
+      // can classify the run (parkFromPhases journals nothing of its own).
+      parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
     })
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.

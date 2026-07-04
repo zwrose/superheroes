@@ -501,9 +501,18 @@ budget-derived (`budget.spent()`) output-token delta over the phase, present onl
 runtime surfaced it (`measured: true`) and **never fabricated**. It is written best-effort,
 **folded into the phase's existing durable write** — the per-phase `phase_progress_entry.py`
 save leaf, and `readout_post.py` for the terminal `ship` phase — so it rides no new courier
-leaf (§ the #118 one-leaf-per-phase budget). A ready hand-back journals `run_completed`
-(parks journal `parked`); `cost_report.py` projects the run total + top phases into the
-readout, and `token_trend.py` renders tokens-per-completed-work-item across runs.
+leaf (§ the #118 one-leaf-per-phase budget). A ready hand-back journals `run_completed`;
+a park journals `parked` — including a mid-phase park, which folds the `parked` marker into
+its journal-only save (`parkFromPhases` itself journals nothing), so `token_trend`/`run_watch`
+classify it as parked rather than `other`. `cost_report.py` projects the run total + top
+phases into the readout, and `token_trend.py` renders tokens-per-completed-work-item and
+tokens-per-park across runs.
+
+Two counts are **excluded by design** (both inherent to the no-new-leaf fold, not bugs): (a) a
+phase's own persist leaf — dispatched after the snapshot, so its tokens fall between the phase's
+delta endpoint and the next phase's baseline; and (b) the pre-loop startup leaves — recorded
+under a `startup` bucket that is never snapshotted. So the per-phase counts run slightly below a
+raw `/workflows` agent count; don't reconcile them one-to-one.
 
 **`resume-brief.md`** — the rehydration brief (workhorse `journal.render_brief`),
 refreshed at the compaction boundary (the PreCompact hook) and on every park. Required

@@ -1,6 +1,7 @@
 // #130: cost_meter accumulator — proxy dispatch counting under the current phase, budget-measured
-// output-token deltas across mark()->take(), take()'s snapshot-and-reset, suspend() excluding the
-// emit leaf, and the guarded budget read (a throwing spent() yields null, never throws).
+// output-token deltas across mark()->take(), take()'s snapshot-and-reset (which is how the phase's
+// own persist leaf is excluded — by ordering, no flag), and the guarded budget read (a throwing
+// spent() yields null, never throws).
 const assert = require('assert')
 const cm = require('../cost_meter.js')
 
@@ -36,12 +37,14 @@ const cm = require('../cost_meter.js')
   assert.strictEqual(body.tokens.output, 500)
   assert.strictEqual(body.tokens.source, 'budget')
 
-  // suspend() excludes a dispatch from the proxy count
+  // ordering exclusion: take() resets the phase, so a dispatch AFTER it (the persist leaf) lands in
+  // a fresh bucket the next take() would report — never mixed into the just-emitted phase's count
   cm.reset()
   globalThis.__SR_PHASE = 'plan'
-  cm.mark('plan')
-  cm.suspend(); cm.record('claude-opus-4-8'); cm.resume()
-  assert.strictEqual(cm.take('plan').dispatches.total, 0)
+  cm.mark('plan'); cm.record('claude-opus-4-8')
+  assert.strictEqual(cm.take('plan').dispatches.total, 1)
+  cm.record('claude-opus-4-8')                 // the persist leaf's own dispatch, post-take()
+  assert.strictEqual(cm.take('plan').dispatches.total, 1)   // isolated in the reset bucket, never emitted
 
   // guarded budget: a throwing spent() yields null (unmeasured), never throws
   cm.reset()

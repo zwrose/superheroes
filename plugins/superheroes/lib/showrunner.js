@@ -1287,9 +1287,12 @@ async function persistPhase(workItem, opts) {
   // record (no dispatches, unmeasured) or when the caller did not opt in (recordCost).
   const costBody = opts.recordCost ? phaseCostPayload(phase) : null
   const costArg = costBody ? ` --cost-payload ${shq(JSON.stringify(costBody))}` : ''
+  // #130: on a park (journalOnly), fold a `parked` terminal marker into this same save so the run is
+  // classifiable as parked (parkFromPhases journals nothing) — carrying its already-folded cost.
+  const parkArg = (journalOnly && opts.parkReason) ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
   // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
   // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
@@ -1945,6 +1948,9 @@ async function runPhases(workItem, fromStep, deps) {
       step: i, phase, sideEffect,
       journalOnly: !proceed,
       recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf
+      // #130: on a park, fold a `parked` terminal marker into the same save so token_trend/run_watch
+      // can classify the run (parkFromPhases journals nothing of its own).
+      parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
     })
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
