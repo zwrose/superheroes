@@ -278,8 +278,13 @@ automated review ran** — never claim a review that didn't happen:
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   ROOT=$(git rev-parse --show-toplevel)
+  WORK_ITEM="<work-item>"
+  DOC_PATH=$(python3 "$ROOT_DIR/lib/definition_doc.py" path \
+    --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
+  HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$DOC_PATH")
   python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
-    --doc spec --work-item "<work-item>" --review passed --root "$ROOT"
+    --doc spec --work-item "$WORK_ITEM" --review passed --root "$ROOT" \
+    --expected-hash "$HASH" --run-id "selfcert-$WORK_ITEM"
   ```
 
   This writes `gates.review: passed` (and derives `status: approved`) — the
