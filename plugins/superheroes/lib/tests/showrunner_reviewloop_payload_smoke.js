@@ -173,9 +173,15 @@ async function main() {
   const chunkReads = helperResults.filter((h) => h.args.includes('read-chunk'))
   assert.ok(chunkReads.length > 0, 'oversized resume summaries are fetched through verified read chunks')
   for (const chunkRead of chunkReads) {
-    assert.ok(chunkRead.stdout.length < 4096, `read chunk stdout stayed bounded (${chunkRead.stdout.length}B)`)
+    assert.ok(chunkRead.stdout.length < 6656, `read chunk stdout stayed bounded (${chunkRead.stdout.length}B)`)
     const parsed = JSON.parse(chunkRead.stdout)
-    assert.strictEqual(parsed.chunkHash, defaultIo.contentHash(parsed.b64), 'each read chunk self-verifies')
+    assert.strictEqual(parsed.chunkHash, defaultIo.contentHash(parsed.rb64), 'each read chunk self-verifies')
+    // #191 de-bait: no directly-decodable b64 payload may ride a chunk answer — a live courier
+    // model decodes recognizable base64-of-JSON and returns the content instead of the stdout
+    // (run wf_fd9b5edc-e80). The reversed form is opaque; a bare b64 field is a regression.
+    assert.ok(!('b64' in parsed), 'chunk answers must ship the reversed payload only (no b64 bait)')
+    const decodedBait = Buffer.from(String(parsed.rb64 || ''), 'base64').toString('utf8')
+    assert.ok(!decodedBait.includes('"schemaVersion"'), 'shipped payload must not decode as-is into content')
   }
   const plainLoad = helperResults.find((h) =>
     String(h.args[0] || '').includes('review_memory.py') && h.args.includes('load') && !h.args.includes('load-summary'))

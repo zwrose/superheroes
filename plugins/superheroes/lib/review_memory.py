@@ -629,7 +629,10 @@ def _strip_records(result):
     return {k: v for k, v in result.items() if k != "records"}
 
 
-_READ_CHUNK_CHARS = 1600
+# 4000 chars/chunk (#191): each chunk leaf costs ~34k fixed context tokens, so leaf count —
+# not bytes — is the cost driver. Chunk answers ride the copy-faithful payload tier and the
+# payload ships opaque (reversed), so ~5.6KB answers are within reliable relay range.
+_READ_CHUNK_CHARS = 4000
 
 
 def load_summary_result(path, dimensions, extras_path=None, sweep_stale=False):
@@ -705,6 +708,12 @@ def read_chunk(path, index, chunk_size=_READ_CHUNK_CHARS):
         return {"ok": False, "reason": "chunk-out-of-range"}
     chunk = text[start:start + chunk_size]
     b64 = base64.b64encode(chunk.encode("utf-8")).decode("ascii")
+    # The chunk ships REVERSED (#191): plain base64-of-JSON is decode-bait — a courier model
+    # recognizes it and "helpfully" returns the decoded content instead of the raw stdout,
+    # failing every hash check. A reversed string is semantically opaque, so the model has
+    # nothing to unwrap; the reader reverses it back before decoding. chunkHash covers the
+    # string exactly as shipped.
+    rb64 = b64[::-1]
     next_index = index + 1
     eof = start + chunk_size >= len(text)
     total = (len(text) + chunk_size - 1) // chunk_size if text else 1
@@ -714,8 +723,8 @@ def read_chunk(path, index, chunk_size=_READ_CHUNK_CHARS):
         "nextIndex": next_index,
         "totalChunks": total,
         "eof": eof,
-        "b64": b64,
-        "chunkHash": content_hash(b64),
+        "rb64": rb64,
+        "chunkHash": content_hash(rb64),
         "contentHash": content_hash(text),
     }
 

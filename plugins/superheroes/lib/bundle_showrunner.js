@@ -222,7 +222,7 @@ function __helperResult(s) {
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
 const __PAYLOAD_BOUND = 3000
-const __PAYLOAD_CHARS = 1200
+const __PAYLOAD_CHARS = 2400
 const __NL = String.fromCharCode(10)
 function __libPath(name) {
   return __require('lib_root').libPath(name)
@@ -330,7 +330,7 @@ globalThis.io = {
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); return __jsonFromText(t, dflt) },
   contentHash(text) { return __contentHash(text) },
-  async runHelper(cmd, args) {
+  async runHelper(cmd, args, opts) {
     var parts = __argv(cmd, args || [])
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in \`\`\` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
@@ -339,7 +339,9 @@ globalThis.io = {
     // __helperResult finds the LAST marker anywhere, slices stdout up to it, strips one wrapping
     // fence pair. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
     // payload is arbitrary text that may legitimately contain fences).
-    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || ''))
+    // opts.payload: the answer is a relay payload (e.g. a read-chunk) — ride the copy-faithful
+    // payload tier instead of the cheapest courier tier (#191).
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', (opts && opts.payload) ? { payload: true } : {}) || ''))
   },
 }
 // Full-run mode (read by showrunner() in Task 8): inject native authoring WITHOUT frontHalfBoundary.
