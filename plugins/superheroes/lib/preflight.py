@@ -204,9 +204,10 @@ def _ci_required(root, ci):
 
 
 def _derive_route(work_item, root):
-    """The launch route derived from the work-item's on-disk INPUT artifact (#25), mirroring the
-    spine's resolveIntake: a spec present => 'full'; else a tasks doc present => 'quick'; neither
-    => 'full' (the safe default — a run with no input artifact fails the gate check below anyway).
+    """The launch route derived from the work-item's on-disk INPUT artifact (#25). The rule is the
+    one documented in CONVENTIONS §3.4 — the single contract the spine's resolveIntake derives from
+    too: a spec present => 'full'; else a tasks doc present => 'quick'; neither => 'full' (the safe
+    default — a run with no input artifact fails the gate check below anyway).
     Resolved through the SAME mode-aware, spec-anchored resolver the tasks phase writes through, so
     it agrees with where the doc actually lives. Fail-closed: any resolver error (e.g. an
     undeterminable storage mode) => 'full'."""

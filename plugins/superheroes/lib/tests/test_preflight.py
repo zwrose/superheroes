@@ -30,8 +30,9 @@ def test_unapproved_spec_blocks():
 # --- #25: route-aware input-artifact gate (spec on full, tasks on quick) --------------------
 
 def test_full_route_default_echoes_route_and_gates_on_the_spec():
-    # No `route` key => full (byte-identical for every existing caller): the spec gate is checked
-    # and the verdict echoes the resolved route so the launcher reads a validated literal.
+    # No `route` key => full: the spec gate is checked, and the verdict gains an ADDITIVE `route`
+    # echo (the blocking/advisory shape is otherwise unchanged for every existing caller) so the
+    # launcher reads a validated literal.
     out = preflight.decide(_all_good(), "wi")
     assert out["route"] == "full"
     assert any(b["check"] == "spec-approved" and b["status"] == "pass" for b in out["blocking"])
@@ -75,6 +76,45 @@ def test_derive_route_failcloses_to_full_on_resolver_error(monkeypatch):
         raise RuntimeError("storage mode undeterminable")
     monkeypatch.setattr(definition_doc, "resolve_work_item_dir", boom)
     assert preflight._derive_route("wi", "/nope") == "full"
+
+
+def test_probe_reads_the_route_appropriate_gate(tmp_path, monkeypatch):
+    # #25: probe()'s glue — route -> which gate doc it shells read-gate for -> which probe key it
+    # populates — is what wires route-awareness into the REAL pre-flight (decide + _derive_route are
+    # pinned in isolation above; this pins their COMPOSITION). A quick route must shell the TASKS gate
+    # (never the absent spec) into tasks_gate; a full route the SPEC gate into spec_gate. Kills the two
+    # ternary-swap mutants: an inverted gate_doc (quick reads the absent spec -> always blocks, the
+    # exact bug quick discovery prevents) and swapped population (full drops its approved-spec gate).
+    import subprocess as _sp, gh_preflight, detect
+
+    class _R:
+        def __init__(self, rc, out):
+            self.returncode, self.stdout, self.stderr = rc, out, ""
+
+    seen = {}
+
+    def fake_run(argv, **kw):
+        if isinstance(argv, (list, tuple)) and "read-gate" in argv:
+            seen["doc"] = argv[argv.index("--doc") + 1]
+            return _R(0, "passed\n")
+        return _R(1, "")  # every other best-effort world-read fails closed, uninvolved here
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    monkeypatch.setattr(gh_preflight, "probe", lambda root: {})
+    monkeypatch.setattr(gh_preflight, "decide", lambda gp, required=None: (False, "x", "y"))
+    monkeypatch.setattr(detect, "detect_ci", lambda root: {"provider": None})
+
+    monkeypatch.setattr(preflight, "_derive_route", lambda wi, root: "quick")
+    p = preflight.probe("wi", str(tmp_path))
+    assert p["route"] == "quick"
+    assert seen["doc"] == "tasks"                                   # shelled the TASKS gate
+    assert p["tasks_gate"] == "passed" and p["spec_gate"] is None
+
+    seen.clear()
+    monkeypatch.setattr(preflight, "_derive_route", lambda wi, root: "full")
+    p = preflight.probe("wi", str(tmp_path))
+    assert seen["doc"] == "spec"                                    # shelled the SPEC gate
+    assert p["spec_gate"] == "passed" and p["tasks_gate"] is None
 
 def test_indeterminate_is_failclosed():
     p = _all_good(); p["gh"] = {"ok": False, "cause": "indeterminate", "remediation": "retry"}
