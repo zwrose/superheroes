@@ -236,13 +236,20 @@ def invoke(deps):
         if not pre_retry_cleanup_failed:
             teardown = _teardown(deps, stamp)
 
-        # 8-9. Write the single record (both attempts), then release the lease.
+        # 8-9. Write the single record (both attempts), then release the lease. The
+        # top-level spend/elapsed_sec are the INVOCATION total (module docstring line 32:
+        # "aggregated across attempts when retried") — summed across every attempt's
+        # `_attempt_record`, not just the final attempt's launch figures, so a retried
+        # invocation's FR-5 cost fields reflect the true combined cost/time rather than
+        # silently dropping the failed first attempt's spend/elapsed_sec.
         retried = len(attempts) > 1
+        total_spend = sum(a.get("spend") or 0.0 for a in attempts)
+        total_elapsed = sum(a.get("elapsed_sec") or 0.0 for a in attempts)
         record_path = _finalize(
             deps, verdict["verdict"], verdict["reason"],
-            launch.get("spend"), attempts, retried, teardown,
+            total_spend, attempts, retried, teardown,
             spend_partial=launch.get("spend_partial"),
-            elapsed_sec=launch.get("elapsed_sec"),
+            elapsed_sec=total_elapsed,
             pr_link=(outcome.get("readout_pr_link") if isinstance(outcome, dict) else "") or "",
             phases=(outcome.get("phases") if isinstance(outcome, dict) else []) or [],
         )

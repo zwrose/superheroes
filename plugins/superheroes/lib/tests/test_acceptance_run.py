@@ -169,6 +169,10 @@ def test_environmental_retry_folds_two_attempts_into_one_record_sharing_budget()
     rec = d["_state"]["records_written"][0]
     assert rec["retried"] is True
     assert len(rec["attempts"]) == 2
+    # module docstring (line 32): top-level FR-5 spend/elapsed_sec are the INVOCATION
+    # total across both attempts, not just the second (successful) attempt's figures.
+    assert rec["spend"] == 1.5
+    assert rec["elapsed_sec"] == 420.0
 
 
 def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
