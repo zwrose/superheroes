@@ -225,6 +225,29 @@ async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
   var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
   return __helperResult(String(await __sh(chain, { payload: true }) || ''))
 }
+// __jsonFromText: fence-tolerant JSON parse for readJson. On the verify read-back path (and every
+// other bundle read) the file content rides back through a haiku 'cat' courier that STOCHASTICALLY
+// wraps the JSON in ``` (or single-backtick) fences or prose — a bare JSON.parse then silently
+// defaults and the round-stamped pass evidence goes unseen (live wf_1ed21465-6f3: a clean verify round
+// halted). Mirrors __helperResult's fence tolerance + extractJson's brace-slice: direct parse, then
+// strip ONE wrapping fence pair (triple or single backtick), then a first-{…last-} brace slice. A
+// genuinely empty answer (missing file: cat ... || true -> '') falls straight to the silent default
+// (anti-fabrication: a missing verify file must NOT parse into a pass).
+function __jsonFromText(t, dflt) {
+  var s = String(t == null ? '' : t)
+  if (!s.trim()) return dflt
+  try { return JSON.parse(s) } catch (_) {}
+  var stripped = s.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').trim()
+  if (/^\x60/.test(stripped) && /\x60$/.test(stripped)) {
+    stripped = stripped.replace(/^\x60/, '').replace(/\x60$/, '').trim()
+  }
+  try { return JSON.parse(stripped) } catch (_) {}
+  var first = stripped.indexOf('{'), last = stripped.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(stripped.slice(first, last + 1)) } catch (_) {}
+  }
+  return dflt
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -265,7 +288,7 @@ globalThis.io = {
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
-  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
+  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); return __jsonFromText(t, dflt) },
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
     var parts = __argv(cmd, args || [])
@@ -2177,7 +2200,16 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
     `(result/code/tail); do not nest the JSON as a string.\n\n` +
     command
   const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  const out = await runCourier()
+  // A THROWN verify courier must be treated EXACTLY like an unusable answer — never collapsed to 'fail'
+  // before the file read-back runs. Live (harness-run 26, wf_1ed21465-6f3): the haiku courier ran
+  // verify_gate.py correctly (round-stamped file written, result PASS) but never called its
+  // StructuredOutput tool (emitted the tag as literal text), so agent() THREW; the call-site catch
+  // then collapsed a clean round to 'fail' with the pass evidence sitting on disk. Swallowing the throw
+  // to null here keeps the round-stamped file authoritative in BOTH directions: it is still REQUIRED to
+  // grant pass (anti-fabrication, unchanged) AND is now consulted before we ever conclude fail. The
+  // call-site catch remains only as a last-resort backstop.
+  const tryCourier = async () => { try { return await runCourier() } catch (_) { return null } }
+  const out = await tryCourier()
   const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
   if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
   const readBack = await ioApi.readJson(outPath, null)
@@ -2185,10 +2217,11 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   if (fromFile) return fromFile
   const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
   if (fromDirect) return fromDirect
-  const retryOut = await runCourier()
+  const retryOut = await tryCourier()
   const retryReadBack = await ioApi.readJson(outPath, null)
   const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
   if (fromRetryFile) return fromRetryFile
+  // Both couriers AND both read-backs yielded nothing usable -> the anti-fabrication fail-closed default.
   return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
 }
 

@@ -265,6 +265,29 @@ async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
   var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
   return __helperResult(String(await __sh(chain, { payload: true }) || ''))
 }
+// __jsonFromText: fence-tolerant JSON parse for readJson. On the verify read-back path (and every
+// other bundle read) the file content rides back through a haiku 'cat' courier that STOCHASTICALLY
+// wraps the JSON in \`\`\` (or single-backtick) fences or prose — a bare JSON.parse then silently
+// defaults and the round-stamped pass evidence goes unseen (live wf_1ed21465-6f3: a clean verify round
+// halted). Mirrors __helperResult's fence tolerance + extractJson's brace-slice: direct parse, then
+// strip ONE wrapping fence pair (triple or single backtick), then a first-{…last-} brace slice. A
+// genuinely empty answer (missing file: cat ... || true -> '') falls straight to the silent default
+// (anti-fabrication: a missing verify file must NOT parse into a pass).
+function __jsonFromText(t, dflt) {
+  var s = String(t == null ? '' : t)
+  if (!s.trim()) return dflt
+  try { return JSON.parse(s) } catch (_) {}
+  var stripped = s.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').trim()
+  if (/^\\x60/.test(stripped) && /\\x60$/.test(stripped)) {
+    stripped = stripped.replace(/^\\x60/, '').replace(/\\x60$/, '').trim()
+  }
+  try { return JSON.parse(stripped) } catch (_) {}
+  var first = stripped.indexOf('{'), last = stripped.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(stripped.slice(first, last + 1)) } catch (_) {}
+  }
+  return dflt
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -305,7 +328,7 @@ globalThis.io = {
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
-  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
+  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); return __jsonFromText(t, dflt) },
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
     var parts = __argv(cmd, args || [])
