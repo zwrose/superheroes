@@ -319,6 +319,23 @@ def test_review_discipline_probe_is_read_only(tmp_path, monkeypatch):
     assert note
 
 
+def test_review_discipline_probe_is_read_only_via_hero_evidence(tmp_path, monkeypatch):
+    # Same write-tripwire guard, but through the absent-registry branch
+    # (read_registry → None, then hero_evidence / evidence_verdict).
+    import mode_registry
+
+    def _write_tripwire(*a, **k):
+        raise AssertionError("write-capable resolver invoked from the read-only probe")
+
+    monkeypatch.setattr(mode_registry, "resolve", _write_tripwire)
+    monkeypatch.setattr(mode_registry, "write_registry", _write_tripwire)
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    monkeypatch.setattr(mode_registry, "hero_evidence",
+                        lambda cwd, root=None, hero_roots=None: {"review-crew": "in-repo"})
+    note = sc.review_discipline(str(tmp_path), "/plug")
+    assert note
+
+
 def test_review_discipline_probe_error_skips_with_breadcrumb(tmp_path, monkeypatch, capsys):
     # The probe is best-effort: an erroring registry read skips the note (absence is
     # the status quo) and breadcrumbs to stderr without leaking content.
