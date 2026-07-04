@@ -168,6 +168,15 @@ async function main() {
   assert.ok(loadCall.stdout.length < onDisk / 5,
     `resume load stdout must be bounded (${loadCall.stdout.length}B vs ${onDisk}B on disk)`)
   assert.ok(!loadCall.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the load stdout')
+  const loadReceipt = JSON.parse(loadCall.stdout)
+  assert.strictEqual(loadReceipt.receipt, 'load-summary', 'oversized resume summaries return a small receipt')
+  const chunkReads = helperResults.filter((h) => h.args.includes('read-chunk'))
+  assert.ok(chunkReads.length > 0, 'oversized resume summaries are fetched through verified read chunks')
+  for (const chunkRead of chunkReads) {
+    assert.ok(chunkRead.stdout.length < 4096, `read chunk stdout stayed bounded (${chunkRead.stdout.length}B)`)
+    const parsed = JSON.parse(chunkRead.stdout)
+    assert.strictEqual(parsed.chunkHash, defaultIo.contentHash(parsed.b64), 'each read chunk self-verifies')
+  }
   const plainLoad = helperResults.find((h) =>
     String(h.args[0] || '').includes('review_memory.py') && h.args.includes('load') && !h.args.includes('load-summary'))
   assert.ok(!plainLoad, 'the full-echo review_memory load verb must not be used by the loop')

@@ -9,6 +9,13 @@ const sr = require('../showrunner.js')
 
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
@@ -44,7 +51,7 @@ async function main() {
     // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
     // downgrades it to confidence:low -> cannot-certify).
     if (/^(architecture|code|security|test|premortem)-reviewer:/.test(label)) {
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     return { findings: [] }
   }
@@ -80,6 +87,12 @@ async function main() {
   assert.ok(
     reviewerPrompt.prompt.includes(RESOLVED_HEAD),
     `reviewer prompt names the resolved head (got: ${reviewerPrompt && reviewerPrompt.prompt.slice(0, 300)})`
+  )
+  const synthesisPrompt = seenPrompts.find((p) => p.label === 'synthesis:r1')
+  assert.ok(synthesisPrompt, 'synthesis leaf was dispatched')
+  assert.ok(
+    synthesisPrompt.prompt.includes(`Absolute verification worktree: ${RESOLVED_WT}`),
+    `synthesis prompt names the absolute worktree to verify files in (got: ${synthesisPrompt && synthesisPrompt.prompt.slice(0, 500)})`
   )
 
   // ─────────────────────────────────────────────────────────────────────────

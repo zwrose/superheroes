@@ -133,7 +133,7 @@ async function main() {
     const dir = freshDir()
     global.reviewerAgent = async () => ({ findings: [], confidence: 'high' })
     v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
-    assert.strictEqual(v.terminal, 'clean')
+    assert.strictEqual(v.terminal, 'cannot-certify', 'a high-confidence reviewer result without a receipt must fail closed')
   }
 
   {
@@ -380,6 +380,23 @@ async function main() {
     v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'] })
     assert.notStrictEqual(v.terminal, 'clean')
     assert.match(v.reason || '', /coverage-decisions/)
+  }
+
+  {
+    const dir = freshDir()
+    const oldIo = global.io
+    const baseIo = io()
+    global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
+      if (String((args || [])[0]).includes('coverage_decisions.py') && (args || []).includes('load')) {
+        return { ok: true, status: 0, stdout: '`{"ok":true,"decisions":[],"contentHash":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}`' }
+      }
+      return baseIo.runHelper(cmd, args)
+    } })
+    global.reviewerAgent = async (reviewer, context, rubric, runDir, round, opts) => cleanResult(runDir, round, opts)
+    v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'] })
+    global.io = oldIo
+    assert.strictEqual(v.terminal, 'clean',
+      'single-backtick-wrapped coverage-load JSON should parse via brace-slice fallback, not park')
   }
 
   {

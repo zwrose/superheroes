@@ -76,6 +76,9 @@ function __safeSmartDefault() {
   if (__safeSmartDefaultCache === null) __safeSmartDefaultCache = __require('model_tier').resolveModel('synthesis', null, null)
   return __safeSmartDefaultCache
 }
+function __payloadModel() {
+  return __require('model_tier').resolveModel('fixer', globalThis.__SR_OVERRIDES || null, 'code') || __safeSmartDefault()
+}
 const __realAgent = agent
 globalThis.agent = function (prompt, opts) {
   var o = Object.assign({}, opts || {})
@@ -87,10 +90,14 @@ globalThis.agent = function (prompt, opts) {
   // unconditionally, independent of __SR_LEAF_MODEL or any session default. Genuine-LLM (smart) leaves
   // get __SR_LEAF_MODEL when set (throwaway/test run override).
   var __lbl = (typeof o.label === 'string') ? o.label : ''
+  var __payload = o.payload === true
   var __isDumb = (o.courier === true || __lbl === 'exec' || __lbl === 'io' ||
                   __lbl.indexOf('exec:') === 0 || __lbl.indexOf('io:') === 0)
   if (o.courier !== undefined) delete o.courier   // courier marker is preamble-only, never forwarded
-  if (__isDumb) {
+  if (o.payload !== undefined) delete o.payload   // payload marker is preamble-only, never forwarded
+  if (__isDumb && __payload) {
+    o.model = __payloadModel()
+  } else if (__isDumb) {
     o.model = __cheapest()
   } else if (globalThis.__SR_LEAF_MODEL) {
     o.model = globalThis.__SR_LEAF_MODEL
@@ -120,7 +127,12 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
-async function __sh(cmd) { return globalThis.agent('Run exactly this command and return ONLY its stdout, unchanged:\\n\\n' + __sc(cmd), { label: 'io' }) }
+async function __sh(cmd, opts) {
+  return globalThis.agent(
+    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd),
+    Object.assign({ label: 'io', courier: true }, opts || {}),
+  )
+}
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
 // hashlib.sha256(text.encode('utf-8')).hexdigest() and io_seam's crypto twin. Parity is
@@ -202,8 +214,56 @@ function __helperResult(s) {
   while ((m = re.exec(s)) !== null) last = m
   var status = last ? Number(last[1]) : 1
   var stdout = last ? s.slice(0, last.index) : s
+  var markerTail = last ? s.slice(last.index + last[0].length) : ''
   stdout = stdout.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').replace(/\\n$/, '')
+  if (/^\\s*\\x60/.test(stdout) && (/\\x60\\s*$/.test(stdout) || /^\\s*\\x60\\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\\s*\\x60/, '').replace(/\\x60\\s*$/, '')
+  }
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+}
+const __PAYLOAD_BOUND = 3000
+const __PAYLOAD_CHARS = 1200
+const __NL = String.fromCharCode(10)
+function __libPath(name) {
+  return __require('lib_root').libPath(name)
+}
+function __argv(cmd, args) { return [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ') }
+function __textChunks(text, size) {
+  var chunks = []
+  for (var i = 0; i < text.length;) {
+    var end = Math.min(text.length, i + size)
+    var last = text.charCodeAt(end - 1)
+    if (end < text.length && last >= 0xd800 && last < 0xdc00) end -= 1
+    if (end <= i) end = Math.min(text.length, i + size)
+    chunks.push(text.slice(i, end)); i = end
+  }
+  if (!chunks.length) chunks.push('')
+  return chunks
+}
+async function __runHelperCommand(args, payload) {
+  var parts = __argv('python3', args)
+  return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', payload ? { payload: true } : {}) || ''))
+}
+async function __stageChunkFile(stagedPath, index, total, chunkText) {
+  var b64 = __b64(chunkText)
+  var args = [__libPath('review_memory.py'), 'stage-chunk', '--path', stagedPath,
+              '--index', String(index), '--total', String(total),
+              '--chunk-b64', b64, '--chunk-hash', __contentHash(b64)]
+  for (var attempt = 0; attempt < 2; attempt++) {
+    var out = await __runHelperCommand(args, true)
+    try { var parsed = JSON.parse(out.stdout || '') } catch (_) { parsed = null }
+    if (parsed && parsed.ok) return
+  }
+  throw new Error('payload-stage-failed')
+}
+async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
+  var chunks = __textChunks(text, __PAYLOAD_CHARS)
+  for (var i = 0; i < chunks.length; i++) await __stageChunkFile(stagedPath, i, chunks.length, chunks[i])
+  var finish = __argv('python3', [__libPath('review_memory.py'), 'finish-chunks', '--path', stagedPath,
+                                 '--total', String(chunks.length), '--payload-hash', __contentHash(text)])
+  var helper = __argv(cmd, args || [])
+  var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
+  return __helperResult(String(await __sh(chain, { payload: true }) || ''))
 }
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
@@ -216,7 +276,14 @@ globalThis.io = {
   // Python-side staged-hash checks keep the one-newline tolerance for old-bundle compat).
   async writeFile(p, s) {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
-    await __sh("python3 - <<'__SR_EOF__'\\nimport base64\\nwith open(" + JSON.stringify(p) + ", 'wb') as fh:\\n    fh.write(base64.b64decode('" + __b64(b) + "'))\\nprint('ok')\\n__SR_EOF__")
+    const encoded = __b64(b)
+    const script = "python3 - <<'__SR_EOF__'" + __NL +
+      "import base64" + __NL +
+      "with open(" + JSON.stringify(p) + ", 'wb') as fh:" + __NL +
+      "    fh.write(base64.b64decode('" + encoded + "'))" + __NL +
+      "print('ok')" + __NL +
+      "__SR_EOF__"
+    await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
   },
   // stageAndRunHelper: fold 1 (#141) — the single-leaf twin of writeFile(stagedPath)+runHelper. ONE
   // command chains: mkdir -p <parent> && <opaque base64 stage-write, stdout to /dev/null> && <helper>.
@@ -226,17 +293,22 @@ globalThis.io = {
   // Python-side --payload-hash check then fails closed exactly as before, one retry. D3 byte-identical.
   async stageAndRunHelper(stagedPath, text, cmd, args) {
     const b = (typeof text === 'string') ? text : JSON.stringify(text)
+    if (__b64(b).length > __PAYLOAD_BOUND) return __chunkedStageAndRun(stagedPath, b, cmd, args)
     var dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
     var mk = dir ? ('mkdir -p ' + __q(dir) + ' && ') : ''
-    var helper = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
-    var chain = mk + "python3 - <<'__SR_EOF__' >/dev/null && " + helper + ' 2>&1; echo __SR_EXIT:$?\\nimport base64\\nwith open(' + JSON.stringify(stagedPath) + ", 'wb') as fh:\\n    fh.write(base64.b64decode('" + __b64(b) + "'))\\n__SR_EOF__"
+    var helper = __argv(cmd, args || [])
+    var chain = mk + "python3 - <<'__SR_EOF__' >/dev/null && " + helper + ' 2>&1; echo __SR_EXIT:$?' + __NL +
+      'import base64' + __NL +
+      'with open(' + JSON.stringify(stagedPath) + ", 'wb') as fh:" + __NL +
+      "    fh.write(base64.b64decode('" + __b64(b) + "'))" + __NL +
+      '__SR_EOF__'
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
   async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
   contentHash(text) { return __contentHash(text) },
   async runHelper(cmd, args) {
-    var parts = [cmd].concat(args || []).map(function (a) { return __q(String(a)) }).join(' ')
+    var parts = __argv(cmd, args || [])
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in \`\`\` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
     // end-anchored match misses and a clean exit-0 helper is falsely read as FAILED (coverage-

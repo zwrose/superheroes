@@ -1,0 +1,10 @@
+{
+  "expected": "Security::auth::finding title word finding title word finding title word finding title word finding title word finding title word finding title word finding title word...",
+  "input": [
+    {
+      "dimension": "Security",
+      "taxonomy": "auth",
+      "title": "Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word Finding title word"
+    }
+  ]
+}

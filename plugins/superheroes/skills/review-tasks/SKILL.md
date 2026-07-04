@@ -242,10 +242,10 @@ test-first executable steps for a work-item), NOT code and NOT a diff.
 ## Your assignment
 Review the tasks doc at $SESSION_DIR/tasks.md for your dimension. Its parent
 `plan` is at $SESSION_DIR/plan.md and the `spec` behind it at $SESSION_DIR/spec.md
-(if present) — the tasks must faithfully COVER the plan (which satisfies the
-spec); cross-check against them. Read the base rubric (absolute path below) for
-severity calibration, verification rules, and the findings output format. Read
-the project profile and CLAUDE.md for calibration.
+(if present). Read those present session artifacts in bounded chunks (<=800 lines):
+use Read offset/limit when available, or an equivalent bounded shell range; never one whole-file read.
+The tasks must faithfully COVER the plan and, when present, spec. Read the base rubric (absolute
+path below) for severity calibration, verification rules, findings output format, and the project profile and CLAUDE.md for calibration.
 
 ## Context files
 - Tasks (the doc under review): $SESSION_DIR/tasks.md

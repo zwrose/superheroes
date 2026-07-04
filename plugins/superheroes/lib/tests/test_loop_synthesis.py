@@ -41,6 +41,25 @@ def test_clear_drop_with_reason_is_dropped():
     assert out["drops"][0]["was_blocking_tagged"] is False
 
 
+def test_clear_drop_can_match_reviewer_short_id():
+    f = {"id": "premortem-001", "file": "plugins/superheroes/lib/acceptance_deps.py",
+         "line": 12, "title": "Accepts stale dependency state", "severity": "Important"}
+    v = {"id": "premortem-001", "action": "drop", "reason": "does not hold in the build worktree"}
+    out = LS.consume([f], [v])
+    assert out["findings"] == []
+    assert out["drops"][0]["id"] == CB.finding_identity(f)
+    assert out["drops"][0]["was_blocking_tagged"] is True
+
+
+def test_unmatched_verdict_short_id_keeps_finding_fail_closed():
+    f = {"id": "premortem-001", "file": "plugins/superheroes/lib/acceptance_deps.py",
+         "line": 12, "title": "Accepts stale dependency state", "severity": "Important"}
+    v = {"id": "premortem-999", "action": "drop", "reason": "wrong finding"}
+    out = LS.consume([f], [v])
+    assert out["findings"] == [f]
+    assert out["drops"] == []
+
+
 def test_drop_without_reason_is_kept_uncertain():
     f = _f("a.py", "weak", "Minor")
     v = {"id": CB.finding_identity(f), "action": "drop", "reason": ""}  # no reason -> keep

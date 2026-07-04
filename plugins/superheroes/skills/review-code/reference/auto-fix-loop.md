@@ -19,6 +19,9 @@ You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
 
 ## Your assignment
 Review the diff at $SESSION_DIR/round-<round>/diff.txt for your dimension.
+Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
+available, or an equivalent bounded shell range. Never one whole-file read.
+Continue with later offsets until the diff is covered.
 Read the base rubric (absolute path below) for severity calibration,
 verification rules, and the findings output format. Read the project calibration
 and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and

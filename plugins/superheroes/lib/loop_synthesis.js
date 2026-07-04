@@ -21,7 +21,8 @@ function consume(merged, leafVerdicts) {
   const survivors = []; const drops = []
   for (const f of merged) {
     const id = findingIdentity(f)
-    const v = byId[id]
+    let v = byId[id]
+    if (!v && f && typeof f.id === 'string') v = byId[f.id]
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
