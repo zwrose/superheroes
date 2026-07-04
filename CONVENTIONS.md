@@ -960,9 +960,10 @@ Bash-only agent has neither ToolSearch nor the Skill tool, so it carries **no
 a tiny tool-schema prefix — cutting the fixed per-leaf context ~2.6× (≈33k → ≈13k tokens).
 This is orthogonal to the cheapest-model pin (§ the model wrapper). A **prompt-drop guard**
 covers the known plugin-subagent failure where a dispatch starts without the task prompt: for
-a command that echoes `__SR_EXIT`, an answer missing the marker triggers one retry on the
-courier agent, then a fall-back to the default dispatch — so a courier-agent dispatch bug
-degrades to today's cost instead of parking the run. Every **advancing durable write** must be
+a command that echoes `__SR_EXIT`, an answer that either omits the marker **or** echoes the
+command back with the literal unexpanded `__SR_EXIT:$?` (both did-not-run shapes) triggers one
+retry on the courier agent, then a fall-back to the default dispatch — so a courier-agent
+dispatch bug degrades to today's cost instead of parking the run. Every **advancing durable write** must be
 **idempotent** and **read-back confirmed** before the run advances past that step; a failed
 read-back parks fail-closed. **Best-effort** writes (round-state snapshots, deferred-finding
 backups, readout posting) must be explicitly named and must **not** gate advancement on their

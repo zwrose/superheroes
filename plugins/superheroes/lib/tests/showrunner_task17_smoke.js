@@ -433,7 +433,22 @@ async function partC() {
   assert.strictEqual(received.length, 1, 'FAIL (c4): a non-marker courier leaf must dispatch once (no marker guard)')
   assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c4): a non-marker courier leaf still carries agentType')
 
-  console.log('OK (c): courier leaves dispatch on superheroes:courier; guard falls back to default; smart leaves never carry it')
+  // (c5) Echo-back blind spot (#194 review): a leaf that echoes the command back WITHOUT running it
+  // returns text carrying the LITERAL unexpanded '__SR_EXIT:$?' — the marker STRING is present, so a
+  // bare presence check would wrongly pass. The guard must treat this as a failed dispatch too:
+  // retry once, then fall back to the default dispatch, exactly like a marker-less answer.
+  received.length = 0
+  answerFn = (n) => (n <= 2
+    ? "cd '/repo' && 'echo-probe' 2>&1; echo __SR_EXIT:$?"   // command echoed back, $? unexpanded
+    : '{"ok":true}\n__SR_EXIT:0')
+  const c5 = await sandbox.globalThis.io.runHelper('echo-probe', [])
+  assert.strictEqual(received.length, 3, 'FAIL (c5): an echoed-command answer must retry + fall back = 3 dispatches')
+  assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c5): first dispatch is on the courier agent')
+  assert.strictEqual(received[1].agentType, 'superheroes:courier', 'FAIL (c5): the retry stays on the courier agent')
+  assert.ok(!('agentType' in received[2]), 'FAIL (c5): the fallback drops agentType (default dispatch)')
+  assert.strictEqual(c5.ok, true, 'FAIL (c5): the fallback answer (real marker) parses as a clean exit')
+
+  console.log('OK (c): courier leaves dispatch on superheroes:courier; guard (missing + echoed marker) falls back to default; smart leaves never carry it')
 }
 
 ;(async () => {
