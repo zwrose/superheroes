@@ -1365,24 +1365,65 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
   return out
 }
 
-// #174 confirmation-bar economics helpers. A FULL confirmation panel is a round whose record
-// kind is 'confirmation'. The severities a confirmation surfaced are the NEW (non-carried)
-// blocking findings on that round's record.
+// #174 confirmation-bar economics helpers.
+// The NEW (non-carried) blocking severities a round surfaced.
 function surfacedBlockingSeverities(record) {
   const findings = (record && Array.isArray(record.findings)) ? record.findings : []
   return findings.filter((f) => f && BLOCKING.has(f.severity)).map((f) => f.severity)
 }
-// Is a FURTHER full confirmation panel still owed? Before any confirmation has run, the mandatory
-// first panel is owed. After one has run, another is owed only when that confirmation's follow-up
-// (severity + rework breadth, delegated to the shared review_round_policy twin) demands it —
-// bounded by the hard cap. A Critical still owed at the cap → park (certification withheld).
+// A confirmation counts as a qualifying FULL panel only when every dimension ran FRESH at
+// reviewer-deep with high confidence (the #167 invariant #174 preserves). A degraded attempt
+// (low-confidence / carried / non-deep dim — possible on a resumed prior-run record) neither
+// satisfies the panel obligation nor consumes the hard cap.
+function confirmationQualifies(record) {
+  const dims = (record && record.dimensions && typeof record.dimensions === 'object' && !Array.isArray(record.dimensions))
+    ? record.dimensions : null
+  if (!dims) return false
+  const names = Object.keys(dims)
+  if (!names.length) return false
+  return names.every((n) => {
+    const d = dims[n] || {}
+    return d.status === 'run' && d.confidence === 'high' && d.tier === 'reviewer-deep'
+  })
+}
+// Union of rework (changedSubjects) across a set of records. Any missing/non-array changed surface
+// is unknown → null → treated as cross-cutting by the twin (fail toward one more panel).
+function reworkAcross(records) {
+  const out = []
+  for (const r of records) {
+    const cs = r && r.changedSubjects
+    if (!Array.isArray(cs)) return null
+    out.push(...cs)
+  }
+  return out
+}
+// Is a FURTHER full confirmation panel still owed? The follow-up decision is computed over
+// EVERYTHING SINCE THE LAST QUALIFYING PANEL — the panel itself plus every later round — because
+// findings surfaced and rework applied by post-confirmation scoped rounds land on THOSE rounds'
+// records, not the panel's. Before any qualifying panel has run, the mandatory first panel is
+// owed. A Critical still owed at the cap → park (certification withheld).
+function panelWindow(records) {
+  const all = records || []
+  const qualifying = all.filter((r) => r && r.kind === 'confirmation' && confirmationQualifies(r))
+  if (!qualifying.length) return { qualifying, since: [] }
+  const lastRound = Number(qualifying[qualifying.length - 1].round) || 0
+  const since = all.filter((r) => r && (Number(r.round) || 0) >= lastRound)
+  return { qualifying, since }
+}
 function furtherConfirmationOwed(records) {
-  const confirmations = (records || []).filter((r) => r && r.kind === 'confirmation')
-  if (!confirmations.length) return { owed: true, park: false, panels: 0 }
-  const last = confirmations[confirmations.length - 1]
+  const { qualifying, since } = panelWindow(records)
+  if (!qualifying.length) return { owed: true, park: false, panels: 0 }
+  const surfaced = since.flatMap(surfacedBlockingSeverities)
   const followup = roundPolicy.confirmationFollowup(
-    surfacedBlockingSeverities(last), confirmations.length, roundPolicy.isCrossCutting(last.changedSubjects))
-  return { owed: followup.rearm, park: followup.park, panels: confirmations.length, reason: followup.reason }
+    surfaced, qualifying.length, roundPolicy.isCrossCutting(reworkAcross(since)))
+  return { owed: followup.rearm, park: followup.park, panels: qualifying.length, reason: followup.reason }
+}
+// The honest certification summary (#174 req 4): how many QUALIFYING full panels ran and whether
+// any blocking finding surfaced since the last one (resolved by scoped verify — not a pristine pass).
+function certificationSummary(records) {
+  const { qualifying, since } = panelWindow(records)
+  return { fullPanels: qualifying.length,
+    lastPanelSurfacedResolved: since.some((r) => surfacedBlockingSeverities(r).length > 0) }
 }
 
 function confirmationReady(records, round, justMarked) {
@@ -2255,15 +2296,10 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, terminal, reason, round }, safeExtras)
     // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
-    // established — how many FULL confirmation panels ran and whether the last one surfaced findings
-    // that were resolved by a scoped verify (never implying a pristine fresh pass occurred).
+    // established — how many QUALIFYING full panels ran and whether findings surfaced since the last
+    // one were resolved by scoped verify (never implying a pristine fresh pass occurred).
     if (terminal === 'clean' || terminal === 'clean-with-skips') {
-      const confirmationRecords = (records || []).filter((r) => r && r.kind === 'confirmation')
-      const lastConfirmation = confirmationRecords[confirmationRecords.length - 1]
-      verdictOut.certification = {
-        fullPanels: confirmationRecords.length,
-        lastPanelSurfacedResolved: !!(lastConfirmation && surfacedBlockingSeverities(lastConfirmation).length),
-      }
+      verdictOut.certification = certificationSummary(records)
     }
     return verdictOut
   } catch (exc) {

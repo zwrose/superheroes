@@ -120,6 +120,41 @@ def test_confirmation_surfaced_important_certifies_after_scope_verify():
     assert len(confirmations) == 1, "an Important surfaced by a confirmation is scope-verified, not re-confirmed"
 
 
+def test_postconfirmation_crosscutting_rework_rearms():
+    # #174 finding 1: rework responding to a confirmation can span MULTIPLE scoped rounds. A narrow
+    # fix at the panel + a broad fix at a later scoped round is cross-cutting rework since the panel
+    # → re-arm one more full confirmation (the follow-up unions changedSubjects since the panel).
+    observed = run_fixture("confirmation_postscoped_rework_rearms.json")
+    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
+    assert len(confirmations) == 2, confirmations
+
+
+def test_postconfirmation_narrow_rework_certifies():
+    # #174 finding 1 mirror: a broad fix BEFORE the confirmation must not count as the panel's
+    # rework; a narrow post-confirmation fix certifies with one panel.
+    observed = run_fixture("confirmation_postscoped_narrow_certifies.json")
+    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
+    assert observed["terminal"] == "clean"
+    assert len(confirmations) == 1, confirmations
+
+
+def test_postconfirmation_scoped_critical_rearms():
+    # #174 finding 2: a NEW Critical surfaced by a post-confirmation scoped round (not the panel
+    # itself) must re-arm a full confirmation, not certify off scoped verify.
+    observed = run_fixture("confirmation_postscoped_critical_rearms.json")
+    confirmations = {call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"}
+    assert len(confirmations) == 2, confirmations
+
+
+def test_degraded_confirmation_does_not_anchor_certification():
+    # #174 finding 3: a confirmation with a low-confidence dimension does not satisfy the
+    # every-dim-fresh-deep-high-confidence bar; a later clean round must not anchor certification on
+    # it — a proper panel must run (here at round >= 3, after the seeded degraded round-2 panel).
+    observed = run_fixture("confirmation_degraded_panel_not_counted.json")
+    confirmations = [call["round"] for call in observed["seen"] if call["roundKind"] == "confirmation"]
+    assert any(r >= 3 for r in confirmations), confirmations
+
+
 def test_resume_memory_restores_fix_context():
     observed = run_fixture("resume_memory.json")
     ctx = observed["fixContexts"][0]["context"]

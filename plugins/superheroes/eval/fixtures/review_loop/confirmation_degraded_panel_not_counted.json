@@ -1,0 +1,22 @@
+{
+  "name": "confirmation-degraded-panel-not-counted",
+  "_note": "#174 finding 3: a confirmation round with a low-confidence dimension does not satisfy the every-dim-fresh-deep-high-confidence bar (#167). Seeded as a resumed prior confirmation record; a later clean scoped round must NOT anchor certification on it — the loop owes a proper panel.",
+  "reviewerSet": ["security-reviewer", "test-reviewer"],
+  "seedRoundRecords": [
+    {"schemaVersion": 2, "round": 1, "kind": "baseline",
+     "dimensions": {"security-reviewer": {"status":"run","confidence":"high","tier":"reviewer-deep","findings":[],"hasFindings":false,"subjects":["Security"]},
+                    "test-reviewer": {"status":"run","confidence":"high","tier":"reviewer-deep","findings":[{"dimension":"Test","title":"MT","severity":"Important"}],"hasFindings":true,"subjects":["Test"]}},
+     "findings": [{"dimension":"Test","title":"MT","severity":"Important"}], "changedSubjects": ["Test"], "coverageDecisions": [], "confirmationPending": true},
+    {"schemaVersion": 2, "round": 2, "kind": "confirmation",
+     "dimensions": {"security-reviewer": {"status":"run","confidence":"low","tier":"reviewer-deep","findings":[],"hasFindings":false,"subjects":["Security"]},
+                    "test-reviewer": {"status":"run","confidence":"high","tier":"reviewer-deep","findings":[],"hasFindings":false,"subjects":["Test"]}},
+     "findings": [], "changedSubjects": ["Test"], "coverageDecisions": [], "confirmationPending": true}
+  ],
+  "reviewerEvents": [
+    {"round": 3, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 3, "reviewer": "test-reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 4, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000},
+    {"round": 4, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000}
+  ],
+  "maxRounds": 12
+}

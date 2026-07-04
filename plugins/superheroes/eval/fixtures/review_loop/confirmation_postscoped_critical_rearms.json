@@ -1,0 +1,20 @@
+{
+  "name": "confirmation-postscoped-critical-rearms",
+  "_note": "#174 finding 2: a NEW Critical surfaced by a post-confirmation scoped round (not the panel itself) must re-arm one more full confirmation, not certify off scoped verify. The follow-up must union surfaced severities across the panel and every later round.",
+  "reviewerSet": ["security-reviewer", "test-reviewer"],
+  "fixEvents": [
+    {"afterRound": 1, "changedSubjects": ["Test"]},
+    {"afterRound": 3, "changedSubjects": ["Test"]},
+    {"afterRound": 4, "changedSubjects": ["Test"]}
+  ],
+  "reviewerEvents": [
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension":"Test","title":"Missing test","severity":"Important"}], "usageTotal": 1000},
+    {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension":"Security","title":"Sec Important","severity":"Important"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000},
+    {"round": 4, "reviewer": "security-reviewer", "findings": [{"dimension":"Security","title":"NEW Critical post-confirmation","severity":"Critical"}], "usageTotal": 1000}
+  ],
+  "expectedTerminal": "clean",
+  "maxRounds": 12
+}
