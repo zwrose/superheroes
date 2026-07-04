@@ -84,9 +84,10 @@ function receiptFor(prompt) {
   assert.strictEqual(staleReceiptCalls, 1, 'a stale native reviewer receipt should be observed once')
   assert.ok(labels.filter((l) => l === 'architecture-reviewer:r1').length >= 2,
     'a stale native reviewer receipt must trigger one fresh retry')
-  assert.ok(reviewerPrompts.some((p) => p.includes('Read review diff artifacts in bounded chunks') &&
+  assert.ok(reviewerPrompts.some((p) => p.includes('Review the target worktree diff in bounded chunks') &&
+    p.includes('provided target worktree/head context') &&
     p.includes('<=800 lines') && p.includes('Never read the entire diff')),
-    'native showrunner review-code reviewer prompts must require bounded diff reads')
+    'native showrunner review-code reviewer prompts must require bounded target-worktree diff reads')
   const schemaText = JSON.stringify(reviewerSchema || {})
   for (const comb of ['allOf', 'oneOf', 'anyOf']) {
     assert.ok(!Object.prototype.hasOwnProperty.call(reviewerSchema || {}, comb),

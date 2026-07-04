@@ -227,7 +227,7 @@ function normalizeReviewerFindings(findings) {
 }
 
 const REVIEW_CODE_DIFF_READ_INSTRUCTION =
-  'Read review diff artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
+  'Review the target worktree diff in bounded chunks (<=800 lines per read): use the provided target worktree/head context and bounded git diff shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
 
 const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
   'Read definition-doc artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire artifact in one read; continue offsets until the document is covered.'

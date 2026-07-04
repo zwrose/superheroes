@@ -79,7 +79,12 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
-async function __sh(cmd) { return globalThis.agent('Run exactly this command and return ONLY its stdout, unchanged:\n\n' + __sc(cmd), { label: 'io' }) }
+async function __sh(cmd, opts) {
+  return globalThis.agent(
+    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd),
+    Object.assign({ label: 'io', courier: true }, opts || {}),
+  )
+}
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
 // hashlib.sha256(text.encode('utf-8')).hexdigest() and io_seam's crypto twin. Parity is
@@ -5912,7 +5917,7 @@ function normalizeReviewerFindings(findings) {
 }
 
 const REVIEW_CODE_DIFF_READ_INSTRUCTION =
-  'Read review diff artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
+  'Review the target worktree diff in bounded chunks (<=800 lines per read): use the provided target worktree/head context and bounded git diff shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
 
 const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
   'Read definition-doc artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire artifact in one read; continue offsets until the document is covered.'
