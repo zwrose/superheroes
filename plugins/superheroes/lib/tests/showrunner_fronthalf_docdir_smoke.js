@@ -16,6 +16,13 @@ const { io } = require('../io_seam.js')
 globalThis.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 globalThis.log = () => {}
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 // (a) fallback: nothing planted -> legacy in-repo relative paths (unchanged behavior).
 function partFallback() {
   delete globalThis.__SR_DOC_DIRS
@@ -99,7 +106,7 @@ async function partReviewReadInner(resolved, legacy) {
     // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
     // downgrades it to confidence:low -> cannot-certify).
     if (label.endsWith('-reviewer')) {
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     if (label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'revise-doc') return { fixes: [], deferred: [] }

@@ -53,6 +53,7 @@ PARITY_TWINS = [
     ("test_pilot_deciders", "aggregateResults", "test_pilot_results", "aggregate_browser_results"),
     ("test_pilot_deciders", "retryDecisionFromFacts", "test_pilot_retry", "decide"),
     ("review_round_policy", "planRound", "review_round_policy", "plan_round"),
+    ("review_memory", "clampTitle", "review_memory", "clamp_title"),
     ("review_memory", "classKey", "review_memory", "class_key"),
     ("review_memory", "recurrentClasses", "review_memory", "recurrent_classes"),
     ("review_memory", "promoteRecord", "review_memory", "promote_record"),

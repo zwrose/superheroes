@@ -133,7 +133,7 @@ async function main() {
     const dir = freshDir()
     global.reviewerAgent = async () => ({ findings: [], confidence: 'high' })
     v = await reviewPanel({ ...base(dir), reviewerSet: ['code-reviewer'], legKind: { panel: true, code: false } })
-    assert.strictEqual(v.terminal, 'clean')
+    assert.strictEqual(v.terminal, 'cannot-certify', 'a high-confidence reviewer result without a receipt must fail closed')
   }
 
   {

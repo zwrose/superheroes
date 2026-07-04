@@ -32,6 +32,13 @@ function freshRunDir(d) {
   return d
 }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 async function partA() {
   const calls = []
   const savedPrefs = globalThis.__SR_ENGINE_PREFS
@@ -233,7 +240,7 @@ async function partB() {
       nativeReviewerFired = true
       // a genuinely clean fall-open review needs a real verificationReceipt (else the
       // receipt-fabrication fix downgrades it to confidence:low -> cannot-certify).
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     return { findings: [] }
   }
