@@ -29,7 +29,9 @@ For each merged finding, emit:
     not in the changed material, or already handled). A drop REQUIRES a non-empty `reason`.
   - "keep" otherwise. If you are UNCERTAIN whether it holds, you MUST keep it — never drop on
     a hunch. (The deterministic consumer also keeps anything you leave ambiguous.)
-- reason: one sentence. Required for a drop; recommended for a severity change.
+- reason: one sentence. Required for a drop, and required when you downgrade a blocking finding
+  (Critical/Important) to a non-blocking tier (Minor/Nit) — that demotion drops it out of the
+  blocking set, so justify it the way you justify a drop. Recommended for any other severity change.
 - severity: the single rubric tier the finding's EVIDENCE justifies — raise or lower the merged
   tag as the evidence warrants (Critical / Important / Minor / Nit). Do not invent tiers.
 

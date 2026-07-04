@@ -51,6 +51,21 @@ def test_skill_records_and_surfaces_drops():
     assert "dropped as unsubstantiated" in text.lower()
 
 
+def test_skill_records_and_surfaces_downgrades_186():
+    text = _read(SKILL)
+    # compiled.json carries the downgrades, and the End-of-Loop Summary surfaces them for scrutiny
+    # (a blocking→non-blocking demotion is a silent-drop equivalent, #186).
+    assert '"downgrades"' in text, "compiled.json must carry the synthesis downgrades"
+    assert "downgraded from blocking to non-blocking" in text.lower()
+
+
+def test_reference_records_and_surfaces_downgrades_186():
+    text = _read(REF).lower()
+    # the emitted shape, the judge's reason requirement, and the surfacing all name downgrades.
+    assert "downgrades" in text, "synthesis-pass.md must name the downgrades output field"
+    assert "blocking→non-blocking downgrade" in text, "the judge must owe a reason for a downgrade"
+
+
 def test_reference_states_the_fail_closed_contract():
     text = _read(REF)
     for phrase in ("KEEP-ON-UNCERTAIN", "DROP-WITH-REASON", "was_blocking_tagged"):

@@ -4,7 +4,9 @@
 Renders ONE readout, the same structure for every leg, from a run's terminal record: the
 terminal + reason, the fixes made, the findings dropped (each with its reason), the non-blocking
 findings deferred (each with its reason), and — distinctly — any dropped finding a reviewer had
-tagged blocking (UFR-10, flagged for human scrutiny). When an escalated blocking finding traces
+tagged blocking (UFR-10, flagged for human scrutiny) plus any finding synthesis re-tiered from
+blocking to non-blocking (#186, same scrutiny — a silent downgrade is a silent-drop equivalent).
+When an escalated blocking finding traces
 to an upstream phase, the readout names it (FR-21) and the loop never re-enters it. A record whose
 `schemaVersion` the renderer does not understand is surfaced as "unknown record format" rather
 than rendered partially. stdlib only; never raises.
@@ -102,6 +104,22 @@ def render(record):
                   "_A reviewer marked these Critical/Important; synthesis dropped them. Confirm the "
                   "loop did not discard a real blocker._"]
         lines += [_row(d) for d in blocking] + [""]
+    # #186: a survivor the synthesis judge re-tiered from blocking to non-blocking is a silent-drop
+    # equivalent (it no longer counts as blocking). Surface it in its own scrutiny section — the
+    # severity outcome is unchanged; this is visibility for the owner, sibling to the blocking-drop
+    # section above.
+    downgrades = [d for d in (record.get("downgrades") or []) if isinstance(d, dict)]
+    if downgrades:
+        lines += ["### ⚠️ Findings synthesis DOWNGRADED from blocking to non-blocking — review these",
+                  "_A reviewer had tagged these Critical/Important; synthesis kept them at a "
+                  "non-blocking tier, so they no longer block. Confirm a real blocker was not "
+                  "quietly demoted._"]
+        for d in downgrades:
+            row = "- %s (%s → %s)" % (d.get("title", "?"), d.get("from", "?"), d.get("to", "?"))
+            if d.get("reason"):
+                row += " — %s" % d.get("reason")
+            lines.append(row)
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
