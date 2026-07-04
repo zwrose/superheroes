@@ -98,6 +98,18 @@ most 5 reported per agent). If you have nothing to flag, write an empty array
 > as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
 > cost. State this shape verbatim in the dispatch prompt so orchestrators stop re-guessing it per run.
 
+> **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
+> Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
+> runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
+> `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`, #204) injects a 600s `timeout` on any dispatch
+> that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
+> `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
+> per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
+> dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
+> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-Claude path;
+> a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
+> bounded cost, never a stuck loop.
+
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
 ---

@@ -339,3 +339,21 @@ def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
     assert '{"findings": [...]}' in text
     # and the tolerated bare-array note (kept in sync with parse_result's #196 tolerance)
     assert "bare" in text and "array" in text
+
+
+def test_engine_dispatch_timeout_expiry_contract_is_stated_in_dispatch_reference():
+    # #202: a wedged engine dispatch is not fail-open (a hang, not a bounded cost). The timeout
+    # itself is structural (#204's PreToolUse Bash floor), so this reference does NOT prescribe a
+    # prompted watchdog — what it owns is the EXPIRY contract: a killed/timed-out dispatch parses
+    # `unreadable` → the reviewer takes UFR-7, the fixer falls open to Claude. Structural pin so
+    # that contract (and the "structural, not prompted" framing) can't silently vanish.
+    ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(ref, encoding="utf-8") as fh:
+        text = fh.read()
+    # the structural-floor mechanism is named (so no one re-adds a prompted-watchdog claim), with
+    # #204 cited as its source
+    assert "bash_timeout.py" in text and "#204" in text
+    # covers BOTH dispatch types — the fixer is the same hang class as the reviewer
+    assert "reviewer" in text and "fixer" in text
+    # the expiry contract: an expired slot is `unreadable`, routed to UFR-7
+    assert "unreadable" in text and "UFR-7" in text
