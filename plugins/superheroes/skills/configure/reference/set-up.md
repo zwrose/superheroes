@@ -122,8 +122,9 @@ section to the project's `CLAUDE.md` (source of truth:
 human collaborators and non-superheroes tooling. Owner-gated; show the text before writing;
 idempotent (an existing `Review discipline` heading means report-and-skip). **Never offer this in
 out-of-repo mode** — that mode exists to keep the repo free of superheroes traces; there the
-SessionStart bootstrap note is the sole carrier. A decline is recorded like a declined hero and
-still completes set-up. Headless: never write; note the offer as un-made.
+SessionStart bootstrap note is the sole carrier. A decline still completes set-up; it is not
+persisted (this is not a hero), so the offer simply remains available on the view-and-tune menu
+rather than being re-pushed. Headless: never write; note the offer as un-made.
 
 ## 5 — Secrets stay out of shared calibration (NFR)
 

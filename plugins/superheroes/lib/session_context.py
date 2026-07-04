@@ -276,8 +276,8 @@ _Rec = collections.namedtuple("_Rec", "name text hint")
 def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
-    Priority order: resolved roots → project CLAUDE.md → env block → user
-    CLAUDE.md → review discipline (calibrated projects only) → MEMORY.md head.
+    Priority order: resolved roots → review discipline (calibrated projects only)
+    → project CLAUDE.md → env block → user CLAUDE.md → MEMORY.md head.
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
@@ -297,15 +297,15 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
         records = [
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
+            # Second record, immediately after resolved roots: both are small and
+            # constant-size, so placement guarantees the note for any sane budget.
+            # Every variable-size source (each with truncate/omit handling) follows.
+            _Rec("Review discipline", review_discipline(cwd, plugin_root),
+                 _discipline_doc(plugin_root)),
             _Rec("Project CLAUDE.md", _read_claude_chain(chain),
                  ", ".join(chain) or None),
             _Rec("Environment", env_block(cwd), None),
             _Rec("User CLAUDE.md", user_memory(), _user_claude_md_path()),
-            # Precedes the variable-size memory head: this note is small and
-            # constant-size; the memory head already has truncate-with-marker
-            # handling and must absorb budget pressure, never this note.
-            _Rec("Review discipline", review_discipline(cwd, plugin_root),
-                 _discipline_doc(plugin_root)),
             _Rec("Auto-memory (MEMORY.md head)", _read_memory_head(mem_path), mem_path),
         ]
     except Exception as exc:

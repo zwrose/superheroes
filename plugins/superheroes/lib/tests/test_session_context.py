@@ -254,9 +254,25 @@ def test_assemble_budget_truncates_and_accounts_omitted(tmp_path, monkeypatch, c
     assert len(out) <= 1000 + 250
 
 
+def test_assemble_review_discipline_survives_oversized_project_claude_md(tmp_path, monkeypatch):
+    # Review discipline is the second record (after constant-size resolved roots); every
+    # variable-size source comes after, so an oversized project CLAUDE.md cannot
+    # silently omit the note.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry",
+                        lambda cwd, root=None: {"storageMode": "in-repo"})
+    monkeypatch.setattr(sc.store_core, "run_git", lambda *a, **k: None)
+    monkeypatch.setattr(sc.store_core, "get_gitdir", lambda cwd: str(tmp_path / ".git"))
+    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
+    main = str(tmp_path)
+    _mk_repo(main, claude_md="X" * 20000)
+    out = sc.assemble(main, None, "/plug", "claude", char_budget=9000)
+    assert "### Review discipline" in out
+
+
 def test_assemble_review_discipline_survives_oversized_memory_head(tmp_path, monkeypatch):
-    # Review discipline precedes the variable-size memory head so a large head
-    # cannot silently omit the small constant-size discipline note.
+    # Review discipline is the second record (constant-size); a large memory head comes
+    # after all variable-size sources and cannot silently omit the note.
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry",
                         lambda cwd, root=None: {"storageMode": "in-repo"})
