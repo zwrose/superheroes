@@ -1,16 +1,22 @@
 ---
 name: discovery
-description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half — the *what*, in plain language, no technical implementation. Elicits requirements (incl. significant unhappy paths) with the owner, produces the `spec` definition-doc, and ends with the owner's approval. Not for technical approach (that is `plan`) or steps (that is `tasks`).
+description: Use at the START of any new piece of work in a superheroes project — when a fuzzy idea needs to become an owner-approved requirements spec. It OWNS the requirements front-half — the *what*, in plain language, no technical implementation. Elicits requirements (incl. significant unhappy paths) with the owner, produces the `spec` definition-doc, and ends with the owner's approval. It also recommends the discovery **route** — full (spec) or, for a chore, quick (a spec-less `tasks` doc) — with the owner's sign-off. Not for technical approach (that is `plan`) or steps (that is `tasks`).
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
 
 # Discovery
 
-Turn a fuzzy idea into an owner-approved **`spec`** definition-doc: the requirements
-for one piece of work, in plain language, with **no technical *how***. This is the
-front half of the superheroes loop (Discovery → Plan → Tasks → Build → Verify →
-Ship). You own the **what**; the `plan` skill owns the **how**.
+Turn a fuzzy idea into an owner-approved definition-doc: the requirements for one piece of
+work, in plain language, with **no technical *how***. This is the front half of the
+superheroes loop (Discovery → Plan → Tasks → Build → Verify → Ship). You own the **what**;
+the `plan` skill owns the **how**.
+
+Discovery is the **single front door**, and it **routes** (CONVENTIONS §3.4): it always
+produces the showrunner's input artifact, and the route decides which — **full** discovery
+writes the **`spec`** (this document's default flow), **quick** discovery writes a **`tasks`**
+doc directly for a genuine chore (the reference flow below). Choose the route **first** (next
+section); everything after `## Checklist` is the **full** route.
 
 The audience is a product-minded owner who may not be technical. Speak their
 language. Translate every non-functional concern into a plain-language outcome.
@@ -26,6 +32,38 @@ decides. A spec can be short; it cannot be skipped, and its gates cannot be
 self-approved — you may *record the owner's* explicit approval (step 8), but never
 approve on your own behalf.
 </HARD-GATE>
+
+## Choose the route (full or quick)
+
+After the initial context gathering + scope check (step 1), **assess the item and recommend a
+route**, then let the owner sign off — this is part of the normal discovery flow, not a
+separate gate:
+
+- **Default to `full`.** Recommend `full` for anything that is not a genuine chore — anything
+  with real requirements to elicit, unhappy paths worth mapping, owner-visible behavior to
+  pin, or design to shape. **The router can say no:** a plausible-looking "small" ask often
+  hides requirements, so when in doubt, route `full`.
+- **Recommend `quick` only for a genuine chore** — mechanical, well-understood work whose
+  *what* is not in question and where a spec would add no value (a targeted fix, a rename, a
+  small refactor, a config/docs change). Quick is **spec-less but never review-less**: the
+  showrunner still runs the full review-code panel, the verify gate, and the back-half
+  (CONVENTIONS §3.4). Quick does **not** mean "skip the thinking" — you still author real
+  tasks with clarifying questions (below); it means the *spec* would be ceremony.
+- **Discuss when the call isn't obvious.** If size/clarity is borderline, put the choice to the
+  owner in plain language (what each route means for them), with your recommendation. **The
+  owner signs off on the route.**
+- **Record the routing rationale — in both modes.** Whichever route is chosen, note the route
+  and a one-line reason in the discovery hand-off (e.g. "route: quick — chore: rename the
+  `foo` flag repo-wide, no behavior change"), so the record documents *why* this route.
+
+Then branch:
+
+- **`full`** → continue with `## Checklist` below (steps 1–8) — the unchanged full flow.
+- **`quick`** → follow
+  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-discovery/reference/quick-route.md`
+  (task authoring with clarifying questions → the single-dispatch alignment probe → the owner's
+  plain-language direction gate → gate write + launch). Do **not** run the full spec flow on the
+  quick route.
 
 ## Checklist
 
@@ -268,7 +306,9 @@ automated review ran** — never claim a review that didn't happen:
 
 | Excuse | Reality |
 | --- | --- |
-| "This is too simple to need a spec" | Simple work is where bad assumptions hide. Short spec, never skipped. |
+| "This is too simple to need a spec" | A genuine chore can be spec-less — route `quick` — but "simple" is never license to skip the thinking: you still author real tasks and run the alignment probe. Anything with real requirements is `full`. |
+| "It looks small — route quick to save time" | A plausible-small ask often hides requirements. Default `full`; recommend `quick` only for a genuine chore, and the **owner signs off** on the route. |
+| "Quick discovery means skip the review too" | Spec-less ≠ review-less. The showrunner still runs the full review-code panel, the verify gate, and the back-half (CONVENTIONS §3.4). |
 | "I'll just use brainstorming" | In a superheroes project, Discovery is this skill. Produce a `spec`. |
 | "Let me note the tech approach" | The *how* is the `plan`. Keep the spec to the *what*. |
 | "Happy path is enough" | The significant unhappy paths are the anti-slop core. Run the coverage checklist. |
