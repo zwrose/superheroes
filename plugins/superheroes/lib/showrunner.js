@@ -1466,6 +1466,86 @@ async function parkFromPhases(workItem, generation, root, phase, reason) {
   return { outcome: 'parked', phase, reason }
 }
 
+// #25 quick discovery — the showrunner's INTAKE contract. Discovery (the architect session) always
+// produces the run's input artifact; the ROUTE decides which one: full = spec (today), quick = the
+// tasks doc, built from `workhorse` on (plan/review-plan/tasks/review-tasks skipped). This is the
+// spine leg only — PR 2 owns the-architect's route recommendation, quick-mode task authoring, the
+// alignment probe, and the gate wiring that launches a quick run.
+//
+// resolveIntake: PURE decider over the startup facts (spec/tasks presence + gates) and the launch's
+// explicit route (globalThis.__SR_ROUTE, threaded from args.route). Returns the route plus, for the
+// quick route, either the tasks gate to check or a fail-closed REFUSE — a missing or malformed tasks
+// artifact never silently falls back to (or past) the full path. Byte-identical to today on the full
+// route: an absent explicit route with no tasks artifact resolves to 'full', so the spec-gate startup
+// path is unchanged.
+//   facts:    { spec_present, tasks_present, spec_gate, tasks_gate } (from readStartupState)
+//   explicit: the launch-declared route ('quick' | 'full' | null)
+//   returns:  { route:'full' }
+//           | { route:'quick', action:'gate', gate:<tasks_gate> }
+//           | { route:<declared|'quick'>, action:'refuse', reason:<why> }
+function resolveIntake(facts, explicit) {
+  facts = facts || {}
+  const specPresent = !!facts.spec_present
+  const tasksPresent = !!facts.tasks_present
+  // The route the on-disk artifacts SUPPORT: spec present ⇒ full (spec-anchored); else a tasks doc
+  // alone ⇒ quick; else neither ⇒ null (no input artifact resolved yet).
+  const derived = specPresent ? 'full' : (tasksPresent ? 'quick' : null)
+  const declared = (explicit === 'quick' || explicit === 'full') ? explicit : null
+  // A DECLARED route that conflicts with what the artifacts support is a fail-closed REFUSE — never
+  // silently overridden in EITHER direction. Declared 'quick' over a present spec would run the full
+  // route unattended (regenerating tasks.md over the architect's quick doc and building off a
+  // maybe-stale spec); declared 'full' over a spec-less tasks doc would skip the exact front half the
+  // launch asked for. Both are fail-open against the launch's stated intent — refuse and name what to
+  // reconcile, rather than pick a route the owner did not choose.
+  if (declared && derived && declared !== derived) {
+    const artifact = derived === 'full'
+      ? 'a spec is present on disk (the full route)'
+      : 'only a tasks doc — no spec — is present on disk (the quick route)'
+    return { route: declared, action: 'refuse',
+      reason: `launch declared the '${declared}' route but ${artifact} — refusing to launch ` +
+        `(fail-closed intake); reconcile the route with the on-disk artifact before relaunching` }
+  }
+  // No conflict below (the declared route agrees with the artifacts, or nothing was declared).
+  // Spec present ⇒ full route (spec-anchored, byte-identical to pre-#25).
+  if (specPresent) return { route: 'full' }
+  const declaredQuick = explicit === 'quick'
+  if (!tasksPresent) {
+    // No tasks artifact. A launch that DECLARED quick must refuse (fail-closed intake — never fall
+    // back to the full path, and never fall past tasks into an empty build). Otherwise this is the
+    // pre-#25 no-spec world: the full route parks at the spec startup gate (unreadable), unchanged.
+    if (declaredQuick) {
+      return { route: 'quick', action: 'refuse',
+        reason: 'quick-route launch declared, but no tasks artifact was found where the tasks phase writes it ' +
+          '— refusing to launch (fail-closed intake), never falling back to the full path' }
+    }
+    return { route: 'full' }
+  }
+  // Tasks artifact present, no spec ⇒ quick route. Validate it is well-formed BEFORE gating: a doc
+  // whose review gate can't be parsed (malformed frontmatter, missing gates line, or unreadable) is
+  // a fail-closed refuse — the run never builds off an artifact it can't verify the owner approved.
+  const g = facts.tasks_gate
+  if (g == null || g === 'malformed' || g === 'unreadable') {
+    return { route: 'quick', action: 'refuse',
+      reason: 'quick-route tasks artifact is malformed or missing its review gate (' + String(g) + ') ' +
+        '— refusing to launch (fail-closed intake)' }
+  }
+  return { route: 'quick', action: 'gate', gate: g }
+}
+
+// #25 quick discovery — record, DURABLY and honestly, the front-half phases the quick route skips so
+// they are never silently absent from the run's audit trail (journal) or its live readout (run_watch
+// renders the phases_skipped event). A structured, non-secret payload (fixed phase names + route),
+// written AS-IS via the generic journal_entry.py seam. Returns false on a failed durable write so the
+// caller fails closed — an unrecorded skip must not proceed (the run's durable-write discipline).
+async function recordSkippedPhases(workItem, skipped, entryPhase) {
+  const payload = { route: 'quick', skipped: skipped || [], entryPhase: entryPhase || 'workhorse' }
+  const out = await execJson(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} ` +
+    `--event-type phases_skipped --payload ${shq(JSON.stringify(payload))}`,
+    'record skipped phases')
+  return !!(out && out.ok)
+}
+
 async function showrunner({ workItem }) {
   // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
   // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
@@ -1475,10 +1555,24 @@ async function showrunner({ workItem }) {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
-  // UFR-1: refuse to run if the spec hasn't been approved.
+  // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
+  // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)
+  // and the launch-declared route; on the quick route it either hands back the tasks gate to check or
+  // fail-closes (missing/malformed tasks artifact ⇒ refuse, never a silent fall-back to/past full).
   const startupFacts = await readStartupState(workItem)
-  const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
-  const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
+  const _explicitRoute = (typeof globalThis !== 'undefined' && globalThis.__SR_ROUTE) || null
+  const intake = resolveIntake(startupFacts || {}, _explicitRoute)
+  const route = intake.route
+  // A fail-closed refuse parks regardless of which route it carries — a declared-vs-artifact conflict
+  // refuses under the DECLARED route (which may be 'full'), so this is not gated on route === 'quick'.
+  if (intake.action === 'refuse') {
+    await releaseLease(workItem, r.generation, r.root)
+    return { outcome: 'parked', phase: 'startup', reason: intake.reason }
+  }
+  // Full route ⇒ the spec gate (byte-identical to pre-#25); quick route ⇒ the owner-approved tasks
+  // gate. The startup decider (phase_step) proceeds only on a `passed` gate; anything else parks.
+  const startupGate = route === 'quick' ? intake.gate : ((startupFacts && startupFacts.spec_gate) || 'unreadable')
+  const startup = await phaseStep({ confidence: 'high', assumptions: [] }, startupGate)
   if (startup.action !== 'proceed') {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
@@ -1516,7 +1610,15 @@ async function showrunner({ workItem }) {
   if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
-  const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
+  // #25: a FRESH quick run starts at `workhorse` (plan/review-plan/tasks/review-tasks skipped — the
+  // tasks doc IS the input artifact). A resume rides the durable cursor unchanged (it already points
+  // past the skipped phases, so route need not survive resume for the cursor); the full route's fresh
+  // start stays 0 (byte-identical).
+  const _resuming = r.action === 'continue' && r.from_step != null
+  const _workhorseStep = PHASES.indexOf('workhorse')
+  const fromStep = _resuming
+    ? Number(r.from_step) + 1
+    : (route === 'quick' ? _workhorseStep : 0)
   // UFR-10 (#107): thread the lease generation recover_entry acquired into the workhorse build phase,
   // so the build can fence (renew-then-fence) at every branch-mutating boundary.
   const deps = { gateRead: gateReadFor(workItem), generation: r.generation, root: r.root }
@@ -1528,12 +1630,29 @@ async function showrunner({ workItem }) {
   //     injects this globalThis flag instead.
   //   - SUPERHEROES_BUNDLE_FULL_RUN true (preamble default + full-run ENTRY): no boundary park,
   //     proceeds into the back-half.
+  // #25: the quick route skips the whole front half (fromStep starts at `workhorse`), so the native
+  // authoring/boundary deps are irrelevant — and the boundary MUST NOT be wired, or it would fire at
+  // `workhorse` and park a quick run immediately. The full route wires them exactly as pre-#25.
   const fullRun = !!globalThis.SUPERHEROES_BUNDLE_FULL_RUN
   const frontHalfNative = procEnv('SUPERHEROES_FRONT_HALF') === 'native' || !!globalThis.SUPERHEROES_FRONT_HALF_NATIVE
-  if (frontHalfNative || fullRun) {
+  if (route !== 'quick' && (frontHalfNative || fullRun)) {
     deps.produce = producePhase                  // plan / tasks authoring (author-only)
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
     if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park
+  }
+  // #25: on a FRESH quick entry, durably record the skipped front-half phases before entering the
+  // loop — honest in the journal + readout, never silently absent. A failed durable write fails
+  // closed (park at startup) rather than proceed on an unrecorded skip (the run's durable-write
+  // discipline). A resume WITH a cursor does not re-record; a relaunch that re-enters the build from
+  // scratch (parked before its first checkpoint, so no cursor) re-asserts the skip — honest and
+  // harmless (no consumer counts these; run_readout reads the route from state, not the event tally).
+  if (route === 'quick' && !_resuming) {
+    const recorded = await recordSkippedPhases(workItem, PHASES.slice(0, _workhorseStep), 'workhorse')
+    if (!recorded) {
+      await releaseLease(workItem, r.generation, r.root)
+      return { outcome: 'parked', phase: 'startup',
+        reason: 'quick-route skipped-phase record could not be written durably — refusing to launch on an unrecorded skip' }
+    }
   }
   try {
     return await runPhases(workItem, fromStep, deps)
@@ -1570,10 +1689,27 @@ async function readStartupState(workItem) {
     'root = sys.argv[2]',
     'spec_gate = "unreadable"',
     'doc_dir = ""',
+    // #25 intake facts: which input artifact discovery produced decides the route (spec ⇒ full,
+    // tasks ⇒ quick). Read presence + gate for BOTH from the SAME mode-aware, spec-anchored resolver
+    // the tasks phase writes through, so the showrunner reads exactly the doc a quick run built off.
+    'spec_present = False',
+    'tasks_present = False',
+    'tasks_gate = None',
     'try:',
     '    d = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
     '    doc_dir = d',   // the storage-mode-aware docs dir — planted on __SR_DOC_DIRS (docDirFor)
-    '    spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
+    '    spec_present = os.path.isfile(os.path.join(d, "spec.md"))',
+    '    tasks_present = os.path.isfile(os.path.join(d, "tasks.md"))',
+    '    if spec_present:',
+    '        try:',
+    '            spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
+    '        except Exception:',   // present but unparseable — same "unreadable" the full path saw pre-#25
+    '            spec_gate = "unreadable"',
+    '    if tasks_present:',
+    '        try:',
+    '            tasks_gate = definition_doc.read_gate(os.path.join(d, "tasks.md"))',
+    '        except Exception:',   // present but its review gate can't be parsed — fail-closed marker
+    '            tasks_gate = "malformed"',
     'except Exception:',
     '    pass',
     'try:',
@@ -1593,7 +1729,7 @@ async function readStartupState(workItem) {
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs}))',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
   ].join('\n')
   try {
     return await courier.runCourierJson(
@@ -2540,6 +2676,8 @@ async function defaultPhaseLeaf(_phase, _workItem) {
 }
 
 module.exports.showrunner = showrunner
+module.exports.resolveIntake = resolveIntake
+module.exports.recordSkippedPhases = recordSkippedPhases
 module.exports.cmdRunner = cmdRunner
 module.exports.reconcile = reconcile
 module.exports.checkoutRoot = checkoutRoot

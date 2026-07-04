@@ -24,6 +24,10 @@ EVENT_TYPES = {
     # §4.6 vocabulary (no schemaVersion bump); the structured `payload` is non-secret and written
     # as-is, kept SEPARATE from phase_record (whose payloads are equality-deduped for idempotency).
     "phase_cost",
+    # #25 quick discovery: the front-half phases a quick-route run skips (plan/review-plan/tasks/
+    # review-tasks), recorded ONCE at intake so they are never silently absent from the audit trail.
+    # Structured non-secret `payload` ({route, skipped, entryPhase}), written as-is; run_watch renders it.
+    "phases_skipped",
 }
 
 
