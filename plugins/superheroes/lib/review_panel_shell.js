@@ -561,6 +561,17 @@ function _retryableReviewerIssue(out) {
   return !_validReviewerResult(out) || !!(out && (out.receiptMissing || out.receiptStale))
 }
 
+// #212: a retry that exists to cure a SPECIFIC defect must say which one, so reviewerAgent can add a
+// corrective instruction (a blind re-dispatch of the identical prompt just re-flips the same coin).
+// Covers every retryable cause, not only receipts: `malformed` catches a schema-failing/off-task
+// answer (live precedent: a reviewer glitched onto an unrelated MCP connector and returned nonsense).
+function _retryReason(out) {
+  if (out && out.receiptMissing) return 'receipt-missing'
+  if (out && out.receiptStale) return 'receipt-stale'
+  if (!_validReviewerResult(out)) return 'malformed'
+  return null
+}
+
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   const leaves = (reviewerSet || []).map((name) => `${name}:r${round}`)
   if (legKind && legKind.panel) leaves.push(`synthesis:r${round}`)
@@ -881,13 +892,15 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
   let escalated = false
   if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
     escalated = true
-    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
+    // #212: the escalation to reviewer-deep IS a re-dispatch — carry the corrective retryReason when
+    // the shallow answer had a curable defect (null when it was just an honest low, nothing to correct).
+    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer', retryReason: _retryReason(out) })
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
     if (_retryableReviewerIssue(out)) {
-      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
+      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), deepOpts)
     }
   } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
-    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), baseOpts)
   }
   if (!_validReviewerResult(out)) {
     roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: true, legacyArray: !!(out && out.legacyArray), escalated }
@@ -1070,8 +1083,14 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
         ? 'verify command timed out — cannot certify clean'
         : 'verify command failed — cannot certify clean'
     }
-    if (terminal === 'cannot-certify' && missing.length) {
-      reason = 'coverage incomplete — missing review angle(s): ' + missing.join(', ')
+    if (terminal === 'cannot-certify') {
+      // #212 honest reason: name the seat(s) that blocked certification + the DISTINCT defect class
+      // (receipt-missing / receipt-stale / malformed / genuinely-incomplete / coverage-gap). This
+      // subsumes the old missing-angle enrichment (a `missing` seat classifies as malformed /
+      // coverage-gap); keep that phrasing only as a fallback if no seat classified (shouldn't happen).
+      const named = panelTally.uncertifiedReason(roundFindings, roster)
+      if (named) reason = named
+      else if (missing.length) reason = 'coverage incomplete — missing review angle(s): ' + missing.join(', ')
     }
     const markedPending = (records || []).some((r) => r && r.confirmationPending)
     if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
@@ -1092,6 +1111,9 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     }
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, downgrades, terminal, reason, round }, safeExtras)
+    // #212 uncertified flag: a cannot-certify gate rides the verdict even when this round routes to the
+    // fix leg (terminal 'continue') — the readout/phase layer can see the coverage gap while fixes land.
+    if (gate === 'cannot-certify') verdictOut.uncertified = true
     // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
     // established — how many QUALIFYING full panels ran and whether findings surfaced since the last
     // one were resolved by scoped verify (never implying a pristine fresh pass occurred).
@@ -1154,6 +1176,7 @@ const VERDICT_SCHEMA = {
     terminal: { enum: ['continue', 'clean', 'clean-with-skips', 'cannot-certify', 'halted'] },
     reason: { type: 'string' },
     recordMissing: { type: 'boolean' },
+    uncertified: { type: 'boolean' },
   },
 }
 const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],

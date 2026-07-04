@@ -1042,7 +1042,9 @@ async function stabilizeReviewCode(deps, workItem, context, retryState, aggregat
   }
   if (!result || result.ok === false || result.gate === 'changes-requested' ||
       (result.phaseResult && result.phaseResult.confidence === 'low')) {
-    return { ok: false, reason: (result && (result.reason || (result.phaseResult && result.phaseResult.assumptions && result.phaseResult.assumptions[0]))) || 'review-code stabilization parked' }
+    // #212: prefer the named parkDetail (e.g. "cannot-certify: <seat> ... (receipt-missing — …)") so
+    // the stabilization park reason stays as honest as the workflow park, then assumptions[0], then generic.
+    return { ok: false, reason: (result && (result.reason || (result.phaseResult && (result.phaseResult.parkDetail || (result.phaseResult.assumptions && result.phaseResult.assumptions[0]))))) || 'review-code stabilization parked' }
   }
   if (result.terminal === 'clean-with-skips') {
     return { ok: false, reason: 'review-code stabilization clean-with-skips produced no covers stamp' }

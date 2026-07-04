@@ -145,6 +145,11 @@ async function main() {
   r = await sr.reviewCodePhase('wi-cc', { runDir: fresh(), resolveTarget: stubResolveTarget })
   assert.strictEqual(r.gate, 'changes-requested', 'cannot-certify -> park')
   assert.ok(incomplete >= 1, 'an incomplete reviewer drives cannot-certify')
+  // #212 addendum3: the terminal + honest reason survives the phase layer on parkDetail (phase_step
+  // threads it into the workflow park reason), naming the seat + defect class — not a bare flatten.
+  assert.match(r.phaseResult.parkDetail || '',
+    /^cannot-certify: architecture-reviewer did not return a usable result after retry \(malformed — uncertifiable\)/,
+    '#212: reviewCodePhase names the terminal + honest reason on parkDetail')
 
   calls = install({ roundFindings: [[]], provOk: false })
   r = await sr.reviewCodePhase('wi-ufr2', { runDir: fresh(), resolveTarget: stubResolveTarget })

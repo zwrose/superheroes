@@ -1,0 +1,2 @@
+{"input": [{"confidence": "high", "assumptions": ["first premise", "second premise"]}, "changes-requested"],
+ "expected": {"action": "park_assumption", "reason": "phase recorded a material assumption: first premise; second premise"}}

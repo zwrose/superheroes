@@ -54,11 +54,49 @@ function presentDeferred(compiled, deferredSet) {
   return n
 }
 function decideTerminal(gate, presentBlocking, presentDeferredCount, fixStatus, rnd, maxRounds, breakerHalt) {
-  if (gate === 'cannot-certify') return { terminal: 'cannot-certify', reason: 'a reviewer did not complete after its retry — coverage not certified' }
-  if (fixStatus === 'failed') return { terminal: 'halted', reason: 'the fix step did not complete (failed or timed out)' }
+  // FR-9 precedence (#212 fix-before-park): a cannot-certify round with NO fixable blocking finding
+  // parks immediately (coverage is the sole gap). A cannot-certify round that STILL holds unresolved
+  // blockers is NOT parked — its findings are real regardless of the uncertified seat, so it routes
+  // to the fix leg like a `blocking` round (falls through). Gate-based, so it covers every entrance
+  // to cannot-certify uniformly (receipt-missing/stale, a missing/malformed seat, a coverage-gap
+  // round holding blockers). Certification stays withheld: the next round's gate re-dooms the seat.
   const blockingFixed = Math.max(0, presentBlocking - presentDeferredCount)
+  if (gate === 'cannot-certify' && blockingFixed === 0) {
+    return { terminal: 'cannot-certify', reason: 'coverage not certified — a review seat did not certify after its retry' }
+  }
+  if (fixStatus === 'failed') return { terminal: 'halted', reason: 'the fix step did not complete (failed or timed out)' }
   const [action, , reason] = loopState.decide(blockingFixed, presentDeferredCount, rnd, maxRounds, !!breakerHalt)
   return { terminal: _ACTION_TO_TERMINAL[action], reason }
+}
+// The defect-class phrasing that names WHY a seat could not certify (#212). Each class is a DISTINCT
+// string so a park diagnoses the failure instead of anonymizing it.
+const _SEAT_PHRASE = {
+  'receipt-missing': (n) => `${n} returned no verification receipt after retry (receipt-missing — uncertifiable)`,
+  'receipt-stale': (n) => `${n} returned a stale verification receipt after retry (receipt-stale — uncertifiable)`,
+  malformed: (n) => `${n} did not return a usable result after retry (malformed — uncertifiable)`,
+  'genuinely-incomplete': (n) => `${n} reported low confidence after retry (genuinely-incomplete — uncertifiable)`,
+  'coverage-gap': (n) => `${n} did not complete after its retry (coverage-gap — uncertifiable)`,
+}
+function _seatDefectClass(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return 'coverage-gap'
+  if (result.externalReview) return null
+  if (result.confidence === 'high') return null
+  if (result.receiptMissing) return 'receipt-missing'
+  if (result.receiptStale) return 'receipt-stale'
+  if ((result.status !== 'run' && result.status !== 'skipped') || result.malformed) return 'malformed'
+  if (result.status === 'skipped') return 'coverage-gap'
+  return 'genuinely-incomplete'
+}
+function uncertifiedReason(results, expectedRoster) {
+  // The honest cannot-certify reason: name every seat that blocks certification AND why (#212).
+  // Returns a `;`-joined phrase, or null when every seat certified (caller keeps the terminal reason).
+  results = results || {}
+  const parts = []
+  for (const name of expectedRoster || []) {
+    const cls = _seatDefectClass(results[name])
+    if (cls) parts.push(_SEAT_PHRASE[cls](name))
+  }
+  return parts.length ? parts.join('; ') : null
 }
 function _currentBlockingFindings(results) {
   const out = []
@@ -138,4 +176,4 @@ function roundGateFromDimensionResults(results, expectedRoster, finalConfirmatio
   }
   return base
 }
-module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, compileDimensionResults, roundGateFromDimensionResults, presentBlockingFromDimensionResults, blockingFindingsFromDimensionResults, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }
+module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, uncertifiedReason, compileDimensionResults, roundGateFromDimensionResults, presentBlockingFromDimensionResults, blockingFindingsFromDimensionResults, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }

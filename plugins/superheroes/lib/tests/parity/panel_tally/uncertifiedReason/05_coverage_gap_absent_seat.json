@@ -1,0 +1,1 @@
+{"input": [{"code-reviewer": {"status": "run", "confidence": "high"}}, ["code-reviewer", "architecture-reviewer"]], "expected": "architecture-reviewer did not complete after its retry (coverage-gap — uncertifiable)"}

@@ -35,6 +35,7 @@ PARITY_TWINS = [
     ("panel_tally", "roundGate", "panel_tally", "round_gate"),
     ("panel_tally", "presentDeferred", "panel_tally", "present_deferred"),
     ("panel_tally", "decideTerminal", "panel_tally", "decide_terminal"),
+    ("panel_tally", "uncertifiedReason", "panel_tally", "uncertified_reason"),
     ("panel_tally", "compileDimensionResults", "panel_tally", "compile_dimension_results"),
     ("panel_tally", "roundGateFromDimensionResults", "panel_tally", "round_gate_from_dimension_results"),
     ("panel_tally", "presentBlockingFromDimensionResults", "panel_tally", "present_blocking_from_dimension_results"),
