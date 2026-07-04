@@ -763,6 +763,8 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
   email), and the auto-memory `MEMORY.md` head (keyed to the **main** repo, shared across
   worktrees) — parity with a native start.
 - a compact **review-discipline note** — ONLY when the project is superheroes-calibrated
+  (and, like this whole bootstrap, only on Claude Code — Codex wires no `SessionStart`
+  hook, so on that host the `configure`-written in-repo CLAUDE.md copy is the only carrier)
   (a storage-mode registry entry or hero calibration evidence; the probe is strictly
   read-only — never `mode_registry.resolve()`, which can backfill-write). It states the
   no-unreviewed-PRs convention and points at the canonical
