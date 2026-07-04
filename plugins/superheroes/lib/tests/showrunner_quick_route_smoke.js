@@ -46,19 +46,23 @@ assert.deepStrictEqual(sr.resolveIntake({ spec_present: false, tasks_present: fa
 // ---------------------------------------------------------------------------
 const WORLD = { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true }
 
-function makeAgent(startupFacts, trace) {
-  return async (prompt, opts) => {
-    const label = (opts && opts.label) || ''
+// opts.checkpoint: null (fresh) or a resume cursor object (reconciles to action:'continue').
+// opts.skipRecordFails: the skipped-phase journal write reports a failed durable write.
+function makeAgent(startupFacts, trace, opts) {
+  opts = opts || {}
+  return async (prompt, agopts) => {
+    const label = (agopts && agopts.label) || ''
     if (prompt.includes('recover_entry')) {
       return [{ index: 0, ok: true, stdout: JSON.stringify({
-        checkpoint: null, world: WORLD, generation: 7, root: CHECKOUT_ROOT }) }]
+        checkpoint: opts.checkpoint || null, world: WORLD, generation: 7, root: CHECKOUT_ROOT }) }]
     }
     if (label === 'read startup state') {
       return [{ ok: true, stdout: JSON.stringify(Object.assign({ ok: true }, startupFacts)) }]
     }
     if (label === 'record skipped phases') {
       trace.skipRecord = prompt
-      return JSON.stringify({ ok: true })
+      // opts.skipRecordFails simulates a failed durable journal write (recordSkippedPhases -> false).
+      return JSON.stringify(opts.skipRecordFails ? { ok: false } : { ok: true })
     }
     if (label === 'read gate') {
       // buildPhase's FIRST leaf reads the tasks gate; a non-'passed' answer parks it immediately,
@@ -153,5 +157,38 @@ const QUICK_FACTS = {
     assert.ok(!trace.buildEntered, 'an unapproved full-route run never builds')
   }
 
-  console.log('ok: #25 quick-route intake — route decider, skips journaled, starts at build, fail-closed refuse, full unchanged')
+  // -------------------------------------------------------------------------
+  // Part F — fail-closed durable-write: a quick run whose skipped-phase record
+  // fails to write REFUSES to launch, rather than build on a silently-absent
+  // skip. This is the honesty guarantee #25 adds — an unrecorded skip must park.
+  // -------------------------------------------------------------------------
+  {
+    delete globalThis.__SR_ROUTE
+    const trace = { releases: [] }
+    global.agent = makeAgent(QUICK_FACTS, trace, { skipRecordFails: true })
+    const out = await sr.showrunner({ workItem: 'wi' })
+    assert.ok(trace.skipRecord, 'the run attempted the skip record')
+    assert.strictEqual(out.outcome, 'parked')
+    assert.strictEqual(out.phase, 'startup')
+    assert.ok(/unrecorded skip/.test(out.reason), out.reason)
+    assert.ok(!trace.buildEntered, 'a failed skip record never proceeds into build')
+    assert.ok(trace.releases.length >= 1, 'the fail-closed park releases the held lease')
+  }
+
+  // -------------------------------------------------------------------------
+  // Part G — quick-route RESUME: a run resuming from a durable cursor rides the
+  // cursor (past the skipped front half) and does NOT re-record the skip — the
+  // `!_resuming` guard. A checkpoint with lastGoodStep reconciles to 'continue'
+  // (fromStep = cursor+1); lastGoodStep 3 resumes at `workhorse` (index 4).
+  // -------------------------------------------------------------------------
+  {
+    const trace = { releases: [] }
+    global.agent = makeAgent(QUICK_FACTS, trace, { checkpoint: { lastGoodStep: 3 } })
+    const out = await sr.showrunner({ workItem: 'wi' })
+    assert.ok(!trace.skipRecord, 'a resume does not re-record the skipped phases')
+    assert.ok(trace.buildEntered, 'the resume rides the cursor into the build phase')
+    assert.strictEqual(out.phase, 'workhorse', 'resume re-enters at the cursor, not the front half')
+  }
+
+  console.log('ok: #25 quick-route intake — route decider, skips journaled, starts at build, fail-closed refuse (missing/malformed/unrecorded), resume rides the cursor, full unchanged')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
