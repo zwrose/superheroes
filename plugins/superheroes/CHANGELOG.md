@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.6.0...superheroes-v0.7.0) (2026-07-04)
+
+
+### Features
+
+* **superheroes:** confirmation-bar economics for the shared review loop ([#174](https://github.com/zwrose/superheroes/issues/174) · PR 1) ([#181](https://github.com/zwrose/superheroes/issues/181)) ([6c3c76a](https://github.com/zwrose/superheroes/commit/6c3c76affaf40003b7c3759cf675629793eb2b58))
+* **superheroes:** fail-closed synthesis pass in standalone review-code + honest review-base rewrite ([#174](https://github.com/zwrose/superheroes/issues/174) · PR 3) ([#185](https://github.com/zwrose/superheroes/issues/185)) ([2b73745](https://github.com/zwrose/superheroes/commit/2b73745c8f3247470b8490ab6039377c7bd78566))
+* **superheroes:** script-owned round scheduler for review-code ([#174](https://github.com/zwrose/superheroes/issues/174) · PR 2) ([#182](https://github.com/zwrose/superheroes/issues/182)) ([c7657ff](https://github.com/zwrose/superheroes/commit/c7657ffeb2ea0742bf7a5e653d9858d8bb2de219))
+* **superheroes:** token telemetry — per-phase cost in the journal, readout, and a per-work-item trend ([#130](https://github.com/zwrose/superheroes/issues/130)) ([#179](https://github.com/zwrose/superheroes/issues/179)) ([dbb7393](https://github.com/zwrose/superheroes/commit/dbb7393d1b19bdc27f3ae8be49611ecbfbe8360d))
+
+
+### Bug Fixes
+
+* **superheroes:** courier inline-backtick tolerance + rooted synthesis verification + drop-identity fallback ([#178](https://github.com/zwrose/superheroes/issues/178)) ([034caa7](https://github.com/zwrose/superheroes/commit/034caa7575fdd44e9f0787ec13b102ccd52a2e6f))
+* **superheroes:** flag blocking→non-blocking synthesis downgrades like drops ([#186](https://github.com/zwrose/superheroes/issues/186)) ([#187](https://github.com/zwrose/superheroes/issues/187)) ([1e5b643](https://github.com/zwrose/superheroes/commit/1e5b64325ca90fb985a7ef0cf2b937a0af8e738f))
+* **superheroes:** harden review dispatch reliability ([#176](https://github.com/zwrose/superheroes/issues/176)) ([7957f5b](https://github.com/zwrose/superheroes/commit/7957f5b218154d79c6ab00ebf53baae5f70f68dd))
+
 ## [0.6.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.5.0...superheroes-v0.6.0) (2026-07-03)
 
 
