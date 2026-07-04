@@ -358,8 +358,87 @@ async function partB() {
   console.log('OK (b): bundle wrapper — exec/io + courier:true model pinning, payload courier fixer tier, smart leaves get __SR_LEAF_MODEL')
 }
 
+// ---------------------------------------------------------------------------
+// PART C (#194): the lean courier agent — every dumb-pipe (__sh) leaf dispatches on
+// agentType 'superheroes:courier'; the __SR_EXIT prompt-drop guard retries once then falls
+// back to the DEFAULT dispatch; a smart (non-courier) leaf never carries agentType.
+// ---------------------------------------------------------------------------
+async function partC() {
+  const bundlePath = path.join(__dirname, '..', 'showrunner.bundle.js')
+  const text = fs.readFileSync(bundlePath, 'utf8').replace(/export\s+const\s+meta/, 'const meta')
+
+  const received = []
+  let answerFn = null
+  const sandbox = {
+    console,
+    args: JSON.stringify({ workItem: 'c-probe', model: 'sonnet' }),
+    process: { env: {}, cwd: () => '/' },
+  }
+  sandbox.globalThis = sandbox
+  sandbox.global = sandbox
+  sandbox.agent = async function(prompt, opts) {
+    received.push(Object.assign({ prompt }, opts || {}))
+    // answerFn drives the guard: return a marker-less answer to simulate a prompt-drop, or a
+    // marker-carrying one for the healthy path. Default: a clean marker answer.
+    return answerFn ? answerFn(received.length, prompt, opts) : '__SR_EXIT:0'
+  }
+  sandbox.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
+  sandbox.log = () => {}
+  vm.createContext(sandbox)
+  vm.runInContext('globalThis.__SR_RUN = false;\n;(async () => {\n' + text + '\n})();', sandbox, { timeout: 5000 })
+  const cheapest = modelTier.DEFAULT_TIERS.mechanical
+
+  // (c1) A healthy courier leaf (io.runHelper -> __sh) carries agentType 'superheroes:courier',
+  // dispatches exactly once, keeps the cheapest-model pin, and the courier marker is still stripped.
+  received.length = 0
+  answerFn = () => '{"ok":true}\n__SR_EXIT:0'
+  const c1 = await sandbox.globalThis.io.runHelper('probe', [])
+  assert.strictEqual(c1.status, 0, 'FAIL (c1): healthy helper answer should read exit status 0')
+  assert.strictEqual(received.length, 1, 'FAIL (c1): a healthy marker-carrying leaf must dispatch exactly once')
+  assert.strictEqual(
+    received[0].agentType,
+    'superheroes:courier',
+    `FAIL (c1): a courier leaf must carry agentType 'superheroes:courier', got '${received[0].agentType}'`,
+  )
+  assert.strictEqual(received[0].model, cheapest, 'FAIL (c1): agentType must not disturb the cheapest-model pin')
+  assert.ok(!('courier' in received[0]), 'FAIL (c1): the courier marker is still stripped before the real agent() call')
+
+  // (c2) A smart (non-courier) leaf NEVER carries agentType — the lean courier agent is a dumb-pipe
+  // concern only, so smart reviewers/fixers keep the full tool surface.
+  received.length = 0
+  answerFn = () => 'noop'
+  try { await sandbox.globalThis.agent('review something', { label: 'reviewer:r1', model: 'opus' }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (c2): no call to underlying agent for smart leaf')
+  assert.ok(!('agentType' in received[0]), `FAIL (c2): a smart leaf must NOT carry agentType, got '${received[0].agentType}'`)
+
+  // (c3) Prompt-drop guard: two marker-less answers -> retry once on the courier agent, then fall back
+  // to the DEFAULT dispatch (agentType dropped) so a dispatch bug degrades to today's cost, never a
+  // park. The cheapest-model pin (courier:true) survives the fallback.
+  received.length = 0
+  answerFn = (n) => (n <= 2 ? 'EXEC-FAILED' : '{"ok":true}\n__SR_EXIT:0')
+  const c3 = await sandbox.globalThis.io.runHelper('drop-probe', [])
+  assert.strictEqual(received.length, 3, 'FAIL (c3): two marker-less answers must produce retry + fallback = 3 dispatches')
+  assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c3): first dispatch is on the courier agent')
+  assert.strictEqual(received[1].agentType, 'superheroes:courier', 'FAIL (c3): the retry stays on the courier agent')
+  assert.ok(!('agentType' in received[2]), 'FAIL (c3): the fallback drops agentType (default dispatch)')
+  assert.strictEqual(received[2].model, cheapest, 'FAIL (c3): the fallback keeps the cheapest-model pin (courier:true retained)')
+  assert.strictEqual(c3.ok, true, 'FAIL (c3): the fallback answer (marker-carrying) is parsed as a clean exit')
+
+  // (c4) A NON-marker courier leaf (mkdir) still carries agentType but is NOT subject to the guard
+  // (there is no marker to check), so it dispatches exactly once even on a marker-less answer — a
+  // regression guard against the fallback loop firing on every leaf.
+  received.length = 0
+  answerFn = () => 'ok'
+  await sandbox.globalThis.io.mkdirp('/tmp/c4-probe')
+  assert.strictEqual(received.length, 1, 'FAIL (c4): a non-marker courier leaf must dispatch once (no marker guard)')
+  assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c4): a non-marker courier leaf still carries agentType')
+
+  console.log('OK (c): courier leaves dispatch on superheroes:courier; guard falls back to default; smart leaves never carry it')
+}
+
 ;(async () => {
   await partA()
   await partB()
-  console.log('OK: Task 17 — startup __SR_OVERRIDES + unconditional cheapest dumb-pipe (bundle wrapper)')
+  await partC()
+  console.log('OK: Task 17 — startup __SR_OVERRIDES + unconditional cheapest dumb-pipe (bundle wrapper) + lean courier agent (#194)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack); process.exit(1) })

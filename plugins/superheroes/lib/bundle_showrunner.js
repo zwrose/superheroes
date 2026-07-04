@@ -128,10 +128,30 @@ function __sc(cmd) {
   return 'cd ' + __q(root) + ' && ' + cmd
 }
 async function __sh(cmd, opts) {
-  return globalThis.agent(
-    'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd),
-    Object.assign({ label: 'io', courier: true }, opts || {}),
-  )
+  // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
+  // A restricted-tool agent carries NO deferred_tools_delta / skill_listing attachments (measured:
+  // ~55.5KB, ~13.9k tokens per leaf) and a tiny tool-schema prefix, cutting the fixed per-leaf context
+  // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
+  // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
+  var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
+  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd)
+  // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
+  // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
+  // command that echoes __SR_EXIT can be checked this way; for it, a marker-less answer means the
+  // command did not run. Retry ONCE on the courier agent, then fall back to the DEFAULT dispatch
+  // (drop agentType, keep courier:true so the cheap-model pin holds) so a courier-agent dispatch bug
+  // degrades to today's cost instead of parking the run. Non-marker leaves (mkdir/cat/writeFile)
+  // already degrade fail-soft or via their caller's own hash check, so they need no marker guard.
+  var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
+  var ans = await globalThis.agent(prompt, o)
+  if (__expectMarker && String(ans == null ? '' : ans).indexOf('__SR_EXIT') < 0) {
+    ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
+    if (String(ans == null ? '' : ans).indexOf('__SR_EXIT') < 0) {
+      var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
+      ans = await globalThis.agent(prompt, fo)
+    }
+  }
+  return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\\/+/g, '/') }
 // __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's

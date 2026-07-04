@@ -951,7 +951,18 @@ unverified premise*, not a status note.
 **Courier stretch contract (#118).** Deterministic showrunner stretches use **at most one
 courier leaf by default**; genuine model work (authoring, review panels, fixers) remains
 separate leaves. The lease/reconcile **world snapshot** at startup is the named exception —
-it may batch multiple reads in one courier call. Every **advancing durable write** must be
+it may batch multiple reads in one courier call.
+
+**Lean courier agent (#194).** Every dumb-pipe courier leaf dispatches on the restricted
+`superheroes:courier` agent (`tools: Bash` only), not the default full-surface worker. A
+Bash-only agent has neither ToolSearch nor the Skill tool, so it carries **no
+`deferred_tools_delta` / `skill_listing` attachments** (~13.9k tokens/leaf, measured) and only
+a tiny tool-schema prefix — cutting the fixed per-leaf context ~2.6× (≈33k → ≈13k tokens).
+This is orthogonal to the cheapest-model pin (§ the model wrapper). A **prompt-drop guard**
+covers the known plugin-subagent failure where a dispatch starts without the task prompt: for
+a command that echoes `__SR_EXIT`, an answer missing the marker triggers one retry on the
+courier agent, then a fall-back to the default dispatch — so a courier-agent dispatch bug
+degrades to today's cost instead of parking the run. Every **advancing durable write** must be
 **idempotent** and **read-back confirmed** before the run advances past that step; a failed
 read-back parks fail-closed. **Best-effort** writes (round-state snapshots, deferred-finding
 backups, readout posting) must be explicitly named and must **not** gate advancement on their
