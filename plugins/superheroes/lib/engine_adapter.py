@@ -81,16 +81,18 @@ def build_argv(engine, role_kind, effort, opts):
     return []
 
 
-def _last_json_object(stdout):
-    """Return the LAST top-level JSON object in a (possibly line-delimited / streamed) blob,
-    or None. Tries whole-blob parse first, then a raw_decode scan, then a per-line fallback."""
+def _last_top_level_json(stdout, want_type):
+    """Return the LAST top-level JSON value of `want_type` (dict or list) in a (possibly
+    line-delimited / streamed) blob, or None. Tries a whole-blob parse first, then a
+    raw_decode scan that skips non-JSON stream noise a char at a time. Shared by
+    _last_json_object (dict) and _last_json_array (list) so the scan logic lives once."""
     s = (stdout or "").strip()
     if not s:
         return None
     try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
+        val = json.loads(s)
+        if isinstance(val, want_type):
+            return val
     except ValueError:
         pass
     dec = json.JSONDecoder()
@@ -102,13 +104,26 @@ def _last_json_object(stdout):
         if i >= n:
             break
         try:
-            obj, end = dec.raw_decode(s, i)
-            if isinstance(obj, dict):
-                last = obj
+            val, end = dec.raw_decode(s, i)
+            if isinstance(val, want_type):
+                last = val
             i = end
         except ValueError:
             i += 1  # skip a non-JSON char (stream noise) and keep scanning
     return last
+
+
+def _last_json_object(stdout):
+    """Return the LAST top-level JSON object in a (possibly line-delimited / streamed) blob,
+    or None."""
+    return _last_top_level_json(stdout, dict)
+
+
+def _last_json_array(stdout):
+    """Return the LAST top-level JSON array in a (possibly line-delimited / streamed) blob,
+    or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
+    instead of `{"findings": [...]}`, #196)."""
+    return _last_top_level_json(stdout, list)
 
 
 def _scrub(text):
@@ -153,20 +168,37 @@ def _scrub_notify(notify):
 
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
-    findings; build|fix → {ok,signal,evidence{testFailed,testPassed}}; author-plan →
+    findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
+    array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}};
+    author-plan →
     {ok,notify[]} (the doc itself is verified downstream by the deterministic usableDraft
     post-check — this parse only confirms the engine ran to completion and surfaces NOTIFY
     defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
     scrubbed HERE (Secret-hygiene). Never raises."""
     try:
         obj = _last_json_object(stdout)
-        if obj is None:
-            return {"ok": False, "reason": "unreadable"}
         if role_kind == "review":
-            findings = obj.get("findings")
+            findings = obj.get("findings") if isinstance(obj, dict) else None
+            if obj is None:
+                # Shape tolerance (#196): the engine emitted NO top-level object at all — the
+                # genuine bare-array reviewer shape (`[...]` instead of {"findings": [...]}).
+                # Adopt that array as the findings list, but only when every element is an object
+                # (an empty array is a clean, zero-finding review; a bare array with any
+                # non-object is noise → unreadable, the same fail direction as any other
+                # unparseable stdout — never a silent empty pass). We gate on `obj is None`, NOT
+                # merely on a missing `findings` key: a present-but-findings-less result object
+                # (a crash/error object) must stay unreadable and fall open to a Claude re-run
+                # (UFR-7) rather than have the stream hunted for some other array to reinterpret
+                # as findings — that would fail OPEN, silently certifying a slot that never
+                # reviewed. This keeps the object path byte-identical to before the tolerance.
+                arr = _last_json_array(stdout)
+                if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
+                    findings = arr
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
             return {"ok": True, "findings": _scrub_findings(findings)}
+        if obj is None:
+            return {"ok": False, "reason": "unreadable"}
         if role_kind == "author-plan":
             return {"ok": True, "notify": _scrub_notify(obj.get("notify"))}
         # build | fix

@@ -218,7 +218,7 @@ function confirmationReady(records, round, justMarked) {
 // Python-side and returns only a receipt; the shell reads base64 chunks and verifies each chunk plus
 // the reconstructed content hash before parsing (the #191 fallback transport).
 const _SUMMARY_RECEIPT_BOUND = 4000
-const _READ_CHUNK_CHARS = 1600
+const _READ_CHUNK_CHARS = 4000
 
 function _b64Bytes(b64) {
   const clean = String(b64 || '').replace(/[\r\n\t ]/g, '')
@@ -268,6 +268,15 @@ function _jsonFromStdout(out) {
   try { return JSON.parse((out && out.stdout) || '') } catch (_) { return null }
 }
 
+// The chunk payload rides REVERSED (`rb64`, #191): plain base64-of-JSON is decode-bait — a
+// live courier model recognizes it and answers with the DECODED content instead of the raw
+// stdout, failing every hash check (run wf_fd9b5edc-e80: all chunk attempts transformed this
+// way). Reversing makes the payload semantically opaque; reverse back before decoding.
+// b64 is ASCII, so a naive character reverse is byte-safe.
+function _unreverse(rb64) {
+  return String(rb64 || '').split('').reverse().join('')
+}
+
 async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) {
   if (!receipt || receipt.receipt !== expectedReceipt || !receipt.path || !receipt.contentHash) return { ok: false, reason: corruptReason }
   const chunkSize = receipt.chunkSize || _READ_CHUNK_CHARS
@@ -275,16 +284,18 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
   let text = ''
   for (let guard = 0; guard < 10000; guard += 1) {
     let parsed = null
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'read-chunk', '--path', receipt.path, '--index', String(index), '--chunk-size', String(chunkSize)])
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // payload marker: chunk answers are ~2KB relay payloads — they ride the copy-faithful
+      // payload tier, not the cheapest courier tier (#191 gap: the read leg missed the pin).
+      const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'read-chunk', '--path', receipt.path, '--index', String(index), '--chunk-size', String(chunkSize)], { payload: true })
       parsed = _jsonFromStdout(out)
       if (!parsed || !parsed.ok || parsed.index !== index) { parsed = null; continue }
       if (parsed.contentHash !== receipt.contentHash) { parsed = null; continue }
-      if (parsed.chunkHash !== ioApi.contentHash(parsed.b64 || '')) { parsed = null; continue }
+      if (parsed.chunkHash !== ioApi.contentHash(parsed.rb64 || '')) { parsed = null; continue }
       break
     }
     if (!parsed) return { ok: false, reason: corruptReason }
-    try { text += _decodeBase64Utf8(parsed.b64 || '') } catch (_) { return { ok: false, reason: corruptReason } }
+    try { text += _decodeBase64Utf8(_unreverse(parsed.rb64)) } catch (_) { return { ok: false, reason: corruptReason } }
     if (parsed.eof) break
     index = Number(parsed.nextIndex)
     if (!Number.isFinite(index)) return { ok: false, reason: corruptReason }
@@ -294,7 +305,7 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
 }
 
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)])
+  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
   let parsed = _jsonFromStdout(out)
   if (parsed && parsed.receipt === 'entry-bootstrap') {
     const read = await _readReceiptText(ioApi, parsed, 'entry-bootstrap', 'round-memory-helper-failed')
@@ -613,7 +624,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
     '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code',
     '--out-path', api.join(runDir, 'review-setup-gather.json'),
     '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)]
-  const out = await api.runHelper('python3', args)
+  const out = await api.runHelper('python3', args, { payload: true })
   let parsed = _jsonFromStdout(out)
   if (parsed && parsed.receipt === 'review-setup-gather') {
     const read = await _readReceiptText(api, parsed, 'review-setup-gather', 'review-setup-gather-unreadable')
@@ -939,7 +950,16 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
     `(result/code/tail); do not nest the JSON as a string.\n\n` +
     command
   const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  const out = await runCourier()
+  // A THROWN verify courier must be treated EXACTLY like an unusable answer — never collapsed to 'fail'
+  // before the file read-back runs. Live (harness-run 26, wf_1ed21465-6f3): the haiku courier ran
+  // verify_gate.py correctly (round-stamped file written, result PASS) but never called its
+  // StructuredOutput tool (emitted the tag as literal text), so agent() THREW; the call-site catch
+  // then collapsed a clean round to 'fail' with the pass evidence sitting on disk. Swallowing the throw
+  // to null here keeps the round-stamped file authoritative in BOTH directions: it is still REQUIRED to
+  // grant pass (anti-fabrication, unchanged) AND is now consulted before we ever conclude fail. The
+  // call-site catch remains only as a last-resort backstop.
+  const tryCourier = async () => { try { return await runCourier() } catch (_) { return null } }
+  const out = await tryCourier()
   const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
   if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
   const readBack = await ioApi.readJson(outPath, null)
@@ -947,10 +967,11 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   if (fromFile) return fromFile
   const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
   if (fromDirect) return fromDirect
-  const retryOut = await runCourier()
+  const retryOut = await tryCourier()
   const retryReadBack = await ioApi.readJson(outPath, null)
   const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
   if (fromRetryFile) return fromRetryFile
+  // Both couriers AND both read-backs yielded nothing usable -> the anti-fabrication fail-closed default.
   return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
 }
 

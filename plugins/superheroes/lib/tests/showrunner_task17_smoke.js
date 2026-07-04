@@ -355,6 +355,18 @@ async function partB() {
   assert.ok(received.every((c) => c.model === modelTier.DEFAULT_TIERS.fixer), 'FAIL (b10): every oversized payload courier call must use fixer tier')
   sandbox.__payloadHarness = null
 
+  // (b11) io.runHelper forwards the payload marker (#191): a receipt-fetch (read-chunk) answer
+  // is a ~2KB relay payload and must ride the copy-faithful fixer tier; b0 already pins the
+  // plain (opt-less) runHelper to cheapest.
+  received.length = 0
+  try { await sandbox.globalThis.io.runHelper('python3', ['read_chunk_probe.py'], { payload: true }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b11): no call to underlying agent for payload runHelper')
+  assert.strictEqual(
+    received[0].model,
+    modelTier.DEFAULT_TIERS.fixer,
+    `FAIL (b11): payload-marked runHelper must use fixer tier ('${modelTier.DEFAULT_TIERS.fixer}'), got '${received[0].model}'`,
+  )
+
   console.log('OK (b): bundle wrapper — exec/io + courier:true model pinning, payload courier fixer tier, smart leaves get __SR_LEAF_MODEL')
 }
 

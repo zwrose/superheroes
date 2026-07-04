@@ -147,9 +147,12 @@ def test_load_summary_receipt_round_trips_by_verified_chunks(tmp_path):
         cr = _cli("read-chunk", "--path", str(out_path), "--index", str(index), "--chunk-size", "300")
         chunk = json.loads(cr.stdout)
         assert chunk["ok"] is True
-        assert chunk["chunkHash"] == rm.content_hash(chunk["b64"])
+        assert chunk["chunkHash"] == rm.content_hash(chunk["rb64"])
         assert chunk["contentHash"] == receipt["contentHash"]
-        chunks.append(base64.b64decode(chunk["b64"]).decode("utf-8"))
+        # #191 de-bait: the payload ships REVERSED — no directly-decodable b64 field for a
+        # courier model to "helpfully" unwrap.
+        assert "b64" not in chunk
+        chunks.append(base64.b64decode(chunk["rb64"][::-1]).decode("utf-8"))
         if chunk["eof"]:
             break
         index += 1
@@ -866,9 +869,10 @@ def test_entry_bootstrap_receipt_round_trips_by_verified_chunks(tmp_path):
         cr = _cli("read-chunk", "--path", str(out_path), "--index", str(index), "--chunk-size", "300")
         chunk = json.loads(cr.stdout)
         assert chunk["ok"] is True
-        assert chunk["chunkHash"] == rm.content_hash(chunk["b64"])
+        assert chunk["chunkHash"] == rm.content_hash(chunk["rb64"])
         assert chunk["contentHash"] == receipt["contentHash"]
-        chunks.append(base64.b64decode(chunk["b64"]).decode("utf-8"))
+        assert "b64" not in chunk  # #191 de-bait: only the reversed payload ships
+        chunks.append(base64.b64decode(chunk["rb64"][::-1]).decode("utf-8"))
         if chunk["eof"]:
             break
         index += 1

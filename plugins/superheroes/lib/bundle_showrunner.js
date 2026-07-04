@@ -222,7 +222,7 @@ function __helperResult(s) {
   return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
 }
 const __PAYLOAD_BOUND = 3000
-const __PAYLOAD_CHARS = 1200
+const __PAYLOAD_CHARS = 2400
 const __NL = String.fromCharCode(10)
 function __libPath(name) {
   return __require('lib_root').libPath(name)
@@ -265,6 +265,29 @@ async function __chunkedStageAndRun(stagedPath, text, cmd, args) {
   var chain = finish + ' >/dev/null && ' + helper + ' 2>&1; echo __SR_EXIT:$?'
   return __helperResult(String(await __sh(chain, { payload: true }) || ''))
 }
+// __jsonFromText: fence-tolerant JSON parse for readJson. On the verify read-back path (and every
+// other bundle read) the file content rides back through a haiku 'cat' courier that STOCHASTICALLY
+// wraps the JSON in \`\`\` (or single-backtick) fences or prose — a bare JSON.parse then silently
+// defaults and the round-stamped pass evidence goes unseen (live wf_1ed21465-6f3: a clean verify round
+// halted). Mirrors __helperResult's fence tolerance + extractJson's brace-slice: direct parse, then
+// strip ONE wrapping fence pair (triple or single backtick), then a first-{…last-} brace slice. A
+// genuinely empty answer (missing file: cat ... || true -> '') falls straight to the silent default
+// (anti-fabrication: a missing verify file must NOT parse into a pass).
+function __jsonFromText(t, dflt) {
+  var s = String(t == null ? '' : t)
+  if (!s.trim()) return dflt
+  try { return JSON.parse(s) } catch (_) {}
+  var stripped = s.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').trim()
+  if (/^\\x60/.test(stripped) && /\\x60$/.test(stripped)) {
+    stripped = stripped.replace(/^\\x60/, '').replace(/\\x60$/, '').trim()
+  }
+  try { return JSON.parse(stripped) } catch (_) {}
+  var first = stripped.indexOf('{'), last = stripped.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(stripped.slice(first, last + 1)) } catch (_) {}
+  }
+  return dflt
+}
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('mkdir -p ' + __q(d)) },
@@ -305,9 +328,9 @@ globalThis.io = {
     return __helperResult(String(await __sh(chain) || ''))
   },
   async readText(p) { return __sh('cat ' + __q(p) + ' 2>/dev/null || true') },
-  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); try { return JSON.parse(t) } catch (_) { return dflt } },
+  async readJson(p, dflt) { const t = await __sh('cat ' + __q(p) + ' 2>/dev/null || true'); return __jsonFromText(t, dflt) },
   contentHash(text) { return __contentHash(text) },
-  async runHelper(cmd, args) {
+  async runHelper(cmd, args, opts) {
     var parts = __argv(cmd, args || [])
     // A misbehaving haiku courier STOCHASTICALLY wraps the whole answer in \`\`\` fences (live
     // 2026-07-02: 3 of 4 runHelper leaves fenced), pushing the fence AFTER the exit marker so an
@@ -316,7 +339,9 @@ globalThis.io = {
     // __helperResult finds the LAST marker anywhere, slices stdout up to it, strips one wrapping
     // fence pair. Mirrors extractJson's fence tolerance; runCourierText stays non-stripping (its
     // payload is arbitrary text that may legitimately contain fences).
-    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?') || ''))
+    // opts.payload: the answer is a relay payload (e.g. a read-chunk) — ride the copy-faithful
+    // payload tier instead of the cheapest courier tier (#191).
+    return __helperResult(String(await __sh(parts + ' 2>&1; echo __SR_EXIT:$?', (opts && opts.payload) ? { payload: true } : {}) || ''))
   },
 }
 // Full-run mode (read by showrunner() in Task 8): inject native authoring WITHOUT frontHalfBoundary.
