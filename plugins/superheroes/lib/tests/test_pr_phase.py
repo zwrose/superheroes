@@ -6,6 +6,7 @@ import sys
 
 import checkpoint
 import control_plane
+import pr_entry
 import pr_phase
 import test_pilot_status
 
@@ -207,6 +208,11 @@ def _make_bare_repo(tmp_path):
     subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-m", "init"], check=True)
     subprocess.run(["git", "-C", str(repo), "checkout", "-b", "feature/wi-base"], check=True)
     subprocess.run(["git", "-C", str(repo), "commit", "--allow-empty", "-m", "feat"], check=True)
+    # A local bare origin so pr_entry's pre-create `git push origin <branch>` (the ordering-hole
+    # fix) succeeds — the branch must exist on the remote before `gh pr create --head`.
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", str(origin)], check=True)
     return repo
 
 
@@ -243,3 +249,149 @@ def test_pr_entry_draft_passes_base_arg_when_set(tmp_path):
         args_text = capture.read_text(encoding="utf-8")
         assert "--base" in args_text, "--base must be forwarded to gh pr create"
         assert "live-showrunner-102" in args_text, "base branch name must appear in gh pr create args"
+
+
+# ---------------------------------------------------------------------------
+# Push the build branch BEFORE draft-PR creation (ordering hole from acceptance
+# run 27: review-code CERTIFIED clean, then draft-PR parked "gh pr create failed"
+# because the branch lived only locally). These stub subprocess.run so the push
+# rejection / timeout branches — impractical to force against a real remote — are
+# exercised deterministically.
+# ---------------------------------------------------------------------------
+
+def _stub_run(scenario, calls, real_run):
+    """A subprocess.run stub: fakes `gh pr *` and `git push origin <branch>` per `scenario`,
+    delegating every other git call (control-plane introspection, `git rev-parse <branch>`) to
+    the REAL git so the fixture repo answers them. Records each argv in `calls` for ordering."""
+    def run(cmd, *args, **kwargs):
+        c = list(cmd)
+        calls.append(c)
+        if c[:2] == ["gh", "pr"]:
+            sub = c[2] if len(c) > 2 else ""
+            if sub == "list":
+                if scenario.get("pr_created"):
+                    body = json.dumps([{"number": 77, "url": "https://ex.test/pr/77",
+                                        "isDraft": True, "state": "OPEN"}])
+                else:
+                    body = "[]"                                  # no PR yet -> recover -> 'create'
+                return subprocess.CompletedProcess(c, 0, body, "")
+            if sub == "create":
+                if scenario.get("create_fail"):
+                    return subprocess.CompletedProcess(c, 1, "", scenario.get("create_stderr", ""))
+                scenario["pr_created"] = True
+                return subprocess.CompletedProcess(c, 0, "https://ex.test/pr/77\n", "")
+        if c[:3] == ["git", "push", "origin"]:
+            mode = scenario.get("push", "ok")
+            if mode == "timeout":
+                raise subprocess.TimeoutExpired(c, kwargs.get("timeout", 120))
+            if mode == "reject":
+                return subprocess.CompletedProcess(c, 1, "", scenario.get("push_stderr", ""))
+            return subprocess.CompletedProcess(c, 0, "", "")
+        return real_run(cmd, *args, **kwargs)
+    return run
+
+
+def _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario):
+    """Wire a draft-ready work-item, stub subprocess.run per `scenario`, and call
+    pr_entry.main(['--step','draft', ...]) in-process. Returns (parsed_output, calls)."""
+    import ship_gate
+    repo = _make_bare_repo(tmp_path)
+    branch = "feature/wi-base"
+    monkeypatch.chdir(repo)
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
+    store = tmp_path / "store"
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(store))
+    root = os.getcwd()                                            # == pr_entry's os.getcwd()
+    paths = control_plane.paths(root, "wi-base", root=str(store))
+    checkpoint.write(paths["checkpoint"], checkpoint.new("wi-base", branch))
+    head = subprocess.check_output(["git", "rev-parse", branch], text=True).strip()
+    ship_gate.write_build(paths["provenance"], engine="subagent-driven-development", head=head)
+    ship_gate.set_review_covers(paths["provenance"], head)
+    os.makedirs(os.path.dirname(paths["review_result"]), exist_ok=True)
+    with open(paths["review_result"], "w", encoding="utf-8") as fh:
+        json.dump({"action": "exit_clean"}, fh)                   # ship_gate.decide -> proceed
+    calls = []
+    real_run = subprocess.run
+    monkeypatch.setattr(subprocess, "run", _stub_run(scenario, calls, real_run))
+    try:
+        pr_entry.main(["--step", "draft", "--work-item", "wi-base"])
+    except SystemExit:
+        pass
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    return out, calls
+
+
+def _index(calls, prefix):
+    for i, c in enumerate(calls):
+        if c[:len(prefix)] == prefix:
+            return i
+    return -1
+
+
+def test_draft_pushes_branch_before_pr_create(tmp_path, monkeypatch, capsys):
+    """(a) The draft step pushes the branch BEFORE `gh pr create`, then proceeds on success."""
+    out, calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, {"push": "ok"})
+    push_i = _index(calls, ["git", "push", "origin"])
+    create_i = _index(calls, ["gh", "pr", "create"])
+    assert push_i != -1, "the draft step must push the branch"
+    assert create_i != -1, "gh pr create must run after a successful push"
+    assert push_i < create_i, "the push must happen BEFORE gh pr create"
+    assert out == {"ok": True, "pr": {"number": 77, "url": "https://ex.test/pr/77",
+                                      "isDraft": True, "state": "OPEN"}, "read_back": True}
+
+
+def test_draft_push_rejection_parks_with_stderr_and_skips_create(tmp_path, monkeypatch, capsys):
+    """(b) A push rejection parks with the stderr tail in the reason; gh pr create is NOT invoked."""
+    marker = "! [rejected] feature/wi-base -> feature/wi-base (fetch first)"
+    out, calls = _run_draft_in_process(
+        tmp_path, monkeypatch, capsys, {"push": "reject", "push_stderr": marker})
+    assert out["ok"] is False
+    assert out["read_back"] is False
+    assert out["reason"].startswith("branch push failed before PR create:")
+    assert "rejected" in out["reason"], "the gh/git stderr tail must appear in the park reason"
+    assert _index(calls, ["gh", "pr", "create"]) == -1, "must NOT create a PR after a failed push"
+
+
+def test_draft_push_timeout_parks_with_own_reason(tmp_path, monkeypatch, capsys):
+    """(c) A push timeout parks with its own reason (no PR exists — 'adopt on resume' does not apply)."""
+    out, calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, {"push": "timeout"})
+    assert out["ok"] is False
+    assert out["read_back"] is False
+    assert out["reason"] == "branch push timed out before PR create"
+    assert "adopt on resume" not in out["reason"]
+    assert _index(calls, ["gh", "pr", "create"]) == -1, "must NOT create a PR after a push timeout"
+
+
+def test_draft_create_failure_park_carries_stderr_tail(tmp_path, monkeypatch, capsys):
+    """(d) A `gh pr create` failure park reason now carries a bounded tail of gh's stderr."""
+    marker = "pull request create failed: GraphQL: was submitted too quickly"
+    out, calls = _run_draft_in_process(
+        tmp_path, monkeypatch, capsys, {"push": "ok", "create_fail": True, "create_stderr": marker})
+    assert out["ok"] is False
+    assert out["reason"].startswith("gh pr create failed:")
+    assert "too quickly" in out["reason"], "gh stderr tail must be surfaced for diagnosis"
+    assert _index(calls, ["git", "push", "origin"]) != -1, "the push still ran before the failed create"
+
+
+# --- push_branch unit tests (pure; inject a fake `run`) --------------------
+
+def test_push_branch_success_returns_none():
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    assert pr_entry.push_branch("feature/x", run=run) is None
+
+
+def test_push_branch_rejection_returns_bounded_stderr_tail():
+    long_stderr = "A" * 1000 + "REJECTED_TAIL_MARKER"
+    def run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, "", long_stderr)
+    reason = pr_entry.push_branch("feature/x", run=run)
+    assert reason.startswith("branch push failed before PR create:")
+    assert "REJECTED_TAIL_MARKER" in reason, "the tail (not the head) of stderr must survive"
+    assert "A" * 400 not in reason, "stderr must be bounded (~300 chars), not the full 1000"
+
+
+def test_push_branch_timeout_returns_plain_reason():
+    def run(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 120))
+    assert pr_entry.push_branch("feature/x", run=run) == "branch push timed out before PR create"
