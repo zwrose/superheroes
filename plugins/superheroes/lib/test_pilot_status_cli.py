@@ -24,6 +24,13 @@ def _normalized(status):
 def _reflects(path, intended):
     try:
         current = test_pilot_status.read(path)
+    except FileNotFoundError:
+        # An ABSENT status file is the normal state of every FIRST write for a work item —
+        # "does not reflect yet, apply needed" (False), NOT "unreadable" (None). Collapsing the
+        # two parked every fresh run's test-pilot phase live (run 30, wf_cf3b882c-7b1: the
+        # not_applicable status write fail-closed on a file that had never existed). Corrupt
+        # JSON / permission errors below stay None — genuinely unreadable state never applies.
+        return False, {"read_back": False, "absent": True, "status_path": path}
     except (OSError, ValueError) as exc:
         return None, {"read_back": False, "error": str(exc)}
     read_back = current == _normalized(intended)
