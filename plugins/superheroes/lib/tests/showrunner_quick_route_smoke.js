@@ -15,10 +15,29 @@ const sr = require('../showrunner.js')
 // ---------------------------------------------------------------------------
 // Part A — resolveIntake: the pure intake decider (no dispatch).
 // ---------------------------------------------------------------------------
-// spec present -> full route (byte-identical path), even if an explicit route says otherwise.
+// spec present, UNDECLARED -> full route (byte-identical path).
 assert.deepStrictEqual(sr.resolveIntake({ spec_present: true, spec_gate: 'passed' }, null), { route: 'full' })
-assert.deepStrictEqual(sr.resolveIntake({ spec_present: true }, 'quick'), { route: 'full' })
-// tasks present + a real gate -> quick route, gate handed back for the startup check.
+// A DECLARED route that agrees with the artifact is honored.
+assert.deepStrictEqual(sr.resolveIntake({ spec_present: true, spec_gate: 'passed' }, 'full'), { route: 'full' })
+assert.deepStrictEqual(
+  sr.resolveIntake({ spec_present: false, tasks_present: true, tasks_gate: 'passed' }, 'quick'),
+  { route: 'quick', action: 'gate', gate: 'passed' })
+// A DECLARED route that CONFLICTS with the artifact -> fail-closed REFUSE, never a silent override.
+// (a) declared quick + a spec present: refuse under the declared route (was silently 'full').
+{
+  const out = sr.resolveIntake({ spec_present: true, spec_gate: 'passed' }, 'quick')
+  assert.strictEqual(out.route, 'quick')
+  assert.strictEqual(out.action, 'refuse')
+  assert.ok(/declared the 'quick' route/.test(out.reason) && /spec is present/.test(out.reason), out.reason)
+}
+// (b) declared full + a spec-less tasks doc: refuse under the declared route (was silently 'quick').
+{
+  const out = sr.resolveIntake({ spec_present: false, tasks_present: true, tasks_gate: 'passed' }, 'full')
+  assert.strictEqual(out.route, 'full')
+  assert.strictEqual(out.action, 'refuse')
+  assert.ok(/declared the 'full' route/.test(out.reason) && /only a tasks doc/.test(out.reason), out.reason)
+}
+// tasks present + a real gate, UNDECLARED -> quick route, gate handed back for the startup check.
 assert.deepStrictEqual(
   sr.resolveIntake({ spec_present: false, tasks_present: true, tasks_gate: 'passed' }, null),
   { route: 'quick', action: 'gate', gate: 'passed' })
@@ -40,6 +59,8 @@ for (const g of ['malformed', 'unreadable', null]) {
 }
 // no artifact + no declaration -> full (today's no-spec world; parks at the spec gate downstream).
 assert.deepStrictEqual(sr.resolveIntake({ spec_present: false, tasks_present: false }, null), { route: 'full' })
+// declared full + no artifact -> full (no conflict; parks at the spec gate downstream, fail-closed).
+assert.deepStrictEqual(sr.resolveIntake({ spec_present: false, tasks_present: false }, 'full'), { route: 'full' })
 
 // ---------------------------------------------------------------------------
 // Shared courier stub for the end-to-end showrunner() drives (Parts B–D).
@@ -190,5 +211,23 @@ const QUICK_FACTS = {
     assert.strictEqual(out.phase, 'workhorse', 'resume re-enters at the cursor, not the front half')
   }
 
-  console.log('ok: #25 quick-route intake — route decider, skips journaled, starts at build, fail-closed refuse (missing/malformed/unrecorded), resume rides the cursor, full unchanged')
+  // -------------------------------------------------------------------------
+  // Part H — declared-vs-artifact CONFLICT refuses end-to-end, under the DECLARED
+  // route (here 'full' over a spec-less tasks doc). Pins that the startup refuse
+  // handler fires for a refuse carrying route:'full', not only route:'quick'.
+  // -------------------------------------------------------------------------
+  {
+    globalThis.__SR_ROUTE = 'full'
+    const trace = { releases: [] }
+    global.agent = makeAgent(QUICK_FACTS, trace)   // tasks present, no spec -> derived quick
+    const out = await sr.showrunner({ workItem: 'wi' })
+    assert.strictEqual(out.outcome, 'parked')
+    assert.strictEqual(out.phase, 'startup')
+    assert.ok(/declared the 'full' route/.test(out.reason), out.reason)
+    assert.ok(!trace.skipRecord, 'a conflict refuse records no skipped phases')
+    assert.ok(!trace.buildEntered, 'a conflict refuse never builds')
+    delete globalThis.__SR_ROUTE
+  }
+
+  console.log('ok: #25 quick-route intake — route decider, skips journaled, starts at build, fail-closed refuse (missing/malformed/unrecorded/declared-conflict), resume rides the cursor, full unchanged')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

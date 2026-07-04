@@ -25,6 +25,36 @@ def _cost_summary(state):
         return None
 
 
+def _route_facts(state):
+    """#25: the run's route + the front-half phases a quick run skipped, for the machine-readable
+    outcome. Prefer explicit state keys; otherwise DERIVE from the run's own events.jsonl — the
+    `phases_skipped` event the spine journals once at a quick-route intake (mirrors `_cost_summary`,
+    which derives the cost block from the same journal). Best-effort: any failure, or no journal,
+    yields the safe full-route default (route 'full', no skips) — so a full run and an unreadable
+    journal both project honestly as full/[]."""
+    route = state.get("route")
+    skipped = state.get("skipped_phases")
+    if route or skipped:
+        return (route or "full"), (skipped if isinstance(skipped, list) else [])
+    ev_path = state.get("events_path")
+    if not ev_path:
+        return "full", []
+    try:
+        import journal
+        r, sk = "full", []
+        for ev in journal.read_events(ev_path):
+            # Last writer wins (a run that parks before its first checkpoint may journal the event
+            # more than once across relaunches; all carry the same route + skip list).
+            if isinstance(ev, dict) and ev.get("type") == "phases_skipped":
+                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                r = payload.get("route") or "quick"
+                s = payload.get("skipped")
+                sk = s if isinstance(s, list) else []
+        return r, sk
+    except Exception:
+        return "full", []
+
+
 def assemble(state):
     """Map run-end state -> the build_readout context dict (FR-10 elements)."""
     state = state or {}
@@ -49,9 +79,12 @@ def run_outcome(state):
 
     #25: also surfaces the route and, on the quick route, the front-half phases it skipped — so the
     outcome is honest that plan/review-plan/tasks/review-tasks were skipped-by-route, not merely
-    not-yet-reached. `route` defaults to full and `skippedPhases` to [] (byte-identical for a full run).
+    not-yet-reached. These come from `_route_facts`: explicit state keys, else derived from the run's
+    own journal (the `phases_skipped` event). `route` defaults to full and `skippedPhases` to [] —
+    byte-identical for a full run or an unreadable journal.
     """
     state = state or {}
+    route, skipped_phases = _route_facts(state)
     return {
         "status": state.get("status"),
         "phase": state.get("phase"),
@@ -59,7 +92,7 @@ def run_outcome(state):
         "prUrl": state.get("pr_url"),
         "checks": state.get("ci") or "none",
         "phasesTraversed": state.get("phases") or [],
-        "route": state.get("route") or "full",
-        "skippedPhases": state.get("skipped_phases") or [],
+        "route": route,
+        "skippedPhases": skipped_phases,
         "readoutPath": state.get("readout_path"),
     }

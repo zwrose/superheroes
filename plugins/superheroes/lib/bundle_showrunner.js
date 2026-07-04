@@ -377,10 +377,11 @@ if (globalThis.__SR_RUN !== false) {
   // Configurable base branch (#115): args.base is the branch name to build off of and PR into.
   // Absent -> unset (each site falls back to its default: _base() / 'main' / gh default).
   if (__a && __a.base) globalThis.__SR_BASE = __a.base
-  // #25 quick discovery: args.route is the discovery-declared route ('quick' | 'full'). The spine
-  // otherwise DERIVES the route from the on-disk artifact (spec ⇒ full, tasks ⇒ quick), so this is
-  // authoritative only for the fail-closed refuse when NO artifact is present. Absent ⇒ unset ⇒ the
-  // full route (byte-identical to pre-#25). PR 2 (the-architect leg) passes it on a quick launch.
+  // #25 quick discovery: args.route is the discovery-declared route ('quick' | 'full'). It is
+  // HONORED when it agrees with the on-disk artifact and REFUSED (fail-closed) when it conflicts —
+  // never silently overridden in either direction (resolveIntake). Absent ⇒ unset ⇒ the spine derives
+  // the route from the artifact alone (spec ⇒ full, tasks ⇒ quick; byte-identical to pre-#25). PR 2
+  // (the-architect leg) passes it on a quick launch.
   if (__a && __a.route) globalThis.__SR_ROUTE = __a.route
   return __require('showrunner.js').showrunner({ workItem: wi })
 }

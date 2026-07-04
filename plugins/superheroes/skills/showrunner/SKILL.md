@@ -105,8 +105,11 @@ recorded readout / run-end state) — not a fresh run.
 python3 - "$ROOT" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1] + "/plugins/superheroes/lib")
-import run_readout
+import run_readout, control_plane
 # <state> is the work-item's recorded run-end state (read from the control-plane run record)
+# #25: point run_outcome at the run's journal so a quick run's route + skipped front-half phases
+# project honestly (derived from the phases_skipped event), instead of defaulting to full/[].
+state.setdefault("events_path", control_plane.paths(sys.argv[1], "<work-item>")["events"])
 print(run_readout.run_outcome(state))
 PY
 ```

@@ -7420,13 +7420,31 @@ async function parkFromPhases(workItem, generation, root, phase, reason) {
 //   explicit: the launch-declared route ('quick' | 'full' | null)
 //   returns:  { route:'full' }
 //           | { route:'quick', action:'gate', gate:<tasks_gate> }
-//           | { route:'quick', action:'refuse', reason:<why> }
+//           | { route:<declared|'quick'>, action:'refuse', reason:<why> }
 function resolveIntake(facts, explicit) {
   facts = facts || {}
   const specPresent = !!facts.spec_present
   const tasksPresent = !!facts.tasks_present
-  // Spec present ⇒ full route (spec-anchored). Discovery produced a spec, so the spine never skips
-  // it; an erroneous explicit 'quick' is ignored here rather than silently discarding the spec.
+  // The route the on-disk artifacts SUPPORT: spec present ⇒ full (spec-anchored); else a tasks doc
+  // alone ⇒ quick; else neither ⇒ null (no input artifact resolved yet).
+  const derived = specPresent ? 'full' : (tasksPresent ? 'quick' : null)
+  const declared = (explicit === 'quick' || explicit === 'full') ? explicit : null
+  // A DECLARED route that conflicts with what the artifacts support is a fail-closed REFUSE — never
+  // silently overridden in EITHER direction. Declared 'quick' over a present spec would run the full
+  // route unattended (regenerating tasks.md over the architect's quick doc and building off a
+  // maybe-stale spec); declared 'full' over a spec-less tasks doc would skip the exact front half the
+  // launch asked for. Both are fail-open against the launch's stated intent — refuse and name what to
+  // reconcile, rather than pick a route the owner did not choose.
+  if (declared && derived && declared !== derived) {
+    const artifact = derived === 'full'
+      ? 'a spec is present on disk (the full route)'
+      : 'only a tasks doc — no spec — is present on disk (the quick route)'
+    return { route: declared, action: 'refuse',
+      reason: `launch declared the '${declared}' route but ${artifact} — refusing to launch ` +
+        `(fail-closed intake); reconcile the route with the on-disk artifact before relaunching` }
+  }
+  // No conflict below (the declared route agrees with the artifacts, or nothing was declared).
+  // Spec present ⇒ full route (spec-anchored, byte-identical to pre-#25).
   if (specPresent) return { route: 'full' }
   const declaredQuick = explicit === 'quick'
   if (!tasksPresent) {
@@ -7483,7 +7501,9 @@ async function showrunner({ workItem }) {
   const _explicitRoute = (typeof globalThis !== 'undefined' && globalThis.__SR_ROUTE) || null
   const intake = resolveIntake(startupFacts || {}, _explicitRoute)
   const route = intake.route
-  if (route === 'quick' && intake.action === 'refuse') {
+  // A fail-closed refuse parks regardless of which route it carries — a declared-vs-artifact conflict
+  // refuses under the DECLARED route (which may be 'full'), so this is not gated on route === 'quick'.
+  if (intake.action === 'refuse') {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'startup', reason: intake.reason }
   }
@@ -8645,10 +8665,11 @@ if (globalThis.__SR_RUN !== false) {
   // Configurable base branch (#115): args.base is the branch name to build off of and PR into.
   // Absent -> unset (each site falls back to its default: _base() / 'main' / gh default).
   if (__a && __a.base) globalThis.__SR_BASE = __a.base
-  // #25 quick discovery: args.route is the discovery-declared route ('quick' | 'full'). The spine
-  // otherwise DERIVES the route from the on-disk artifact (spec ⇒ full, tasks ⇒ quick), so this is
-  // authoritative only for the fail-closed refuse when NO artifact is present. Absent ⇒ unset ⇒ the
-  // full route (byte-identical to pre-#25). PR 2 (the-architect leg) passes it on a quick launch.
+  // #25 quick discovery: args.route is the discovery-declared route ('quick' | 'full'). It is
+  // HONORED when it agrees with the on-disk artifact and REFUSED (fail-closed) when it conflicts —
+  // never silently overridden in either direction (resolveIntake). Absent ⇒ unset ⇒ the spine derives
+  // the route from the artifact alone (spec ⇒ full, tasks ⇒ quick; byte-identical to pre-#25). PR 2
+  // (the-architect leg) passes it on a quick launch.
   if (__a && __a.route) globalThis.__SR_ROUTE = __a.route
   return __require('showrunner.js').showrunner({ workItem: wi })
 }

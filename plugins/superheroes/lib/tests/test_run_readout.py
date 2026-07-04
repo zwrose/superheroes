@@ -38,6 +38,31 @@ def test_run_outcome_surfaces_the_quick_route_and_its_skips():
     assert out["route"] == "quick"
     assert out["skippedPhases"] == ["plan", "review-plan", "tasks", "review-tasks"]
 
+def test_run_outcome_derives_route_and_skips_from_the_journal_end_to_end(tmp_path):
+    # #25: the END-TO-END coverage the honesty claim needs — a real phases_skipped journal event ->
+    # a state carrying only events_path (no explicit route/skip keys) -> the run_outcome projection.
+    # This is what the spine actually leaves behind, so the machine-readable #112 outcome reports the
+    # quick route + skipped phases WITHOUT any caller pre-populating them.
+    import journal
+    events = str(tmp_path / "events.jsonl")
+    journal.append(events, "run_started", root=str(tmp_path))
+    journal.append(events, "phases_skipped", root=str(tmp_path), payload={
+        "route": "quick", "skipped": ["plan", "review-plan", "tasks", "review-tasks"],
+        "entryPhase": "workhorse"})
+    out = run_readout.run_outcome({"status": "ready", "events_path": events})
+    assert out["route"] == "quick"
+    assert out["skippedPhases"] == ["plan", "review-plan", "tasks", "review-tasks"]
+
+def test_run_outcome_defaults_to_full_when_the_journal_has_no_skip_event(tmp_path):
+    # #25: a full run's journal carries no phases_skipped event -> the projection stays honest (full/[]).
+    import journal
+    events = str(tmp_path / "events.jsonl")
+    journal.append(events, "run_started", root=str(tmp_path))
+    journal.append(events, "phase_record", root=str(tmp_path), payload={"phase": "workhorse"})
+    out = run_readout.run_outcome({"status": "ready", "events_path": events})
+    assert out["route"] == "full"
+    assert out["skippedPhases"] == []
+
 
 def _seed_cost(tmp_path):
     import journal
