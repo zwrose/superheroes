@@ -1,13 +1,17 @@
 # plugins/superheroes/lib/tests/test_acceptance_run.py
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import acceptance_deps as real_deps
+import acceptance_result
 import acceptance_run as run
 
 
 def _deps(**over):
     """A fully-stubbed happy-path dep bundle; override any seam per test."""
     state = {"records_written": [], "refusal_records_written": [], "lease_released": False,
-             "lease_quarantined": None}
+             "lease_quarantined": None, "orphan_records_written": []}
+    # These phase names are arbitrary self-consistent verdict-logic inputs; the real
+    # pipeline phase list is read from showrunner.js via acceptance_phases.
     base = dict(
         reclaim_probe=lambda: ({"in_flight": False, "stamp": None, "has_record": False}, "dead"),
         preflight_ok=lambda wi: {"ok": True},
@@ -28,6 +32,8 @@ def _deps(**over):
         write_record=lambda rec: state["records_written"].append(rec) or "/rec.json",
         write_refusal_record=lambda rec: state["refusal_records_written"].append(rec)
         or "/refusal-rec.json",
+        write_orphan_record=lambda rec: state["orphan_records_written"].append(rec)
+        or "/orphan-rec.json",
         quarantine_lease=lambda stamp: state.__setitem__("lease_quarantined", stamp),
         release_lease=lambda: state.__setitem__("lease_released", True),
         clock_now=lambda: "2026-07-02T00:00:00Z",
@@ -155,10 +161,51 @@ def test_reclaimed_dead_run_reaps_its_own_leftover_artifacts_before_proceeding()
     )
     # The orphan record for the dead run reflects what was actually cleaned up, not a
     # hardcoded empty list.
-    orphan_records = [rec for rec in d["_state"]["records_written"]
-                      if rec.get("reason") == "orphan record for a reclaimed dead prior run"]
-    assert len(orphan_records) == 1
-    assert orphan_records[0]["cleaned_up"] == ["wi-accept-harness-deadrun"]
+    assert len(d["_state"]["orphan_records_written"]) == 1
+    assert d["_state"]["orphan_records_written"][0]["cleaned_up"] == [
+        "wi-accept-harness-deadrun"
+    ]
+
+
+def test_reclaimed_dead_run_writes_orphan_sidecar_and_final_record(tmp_path):
+    root = str(tmp_path)
+    orphan_paths = []
+    final_writer = real_deps.real_write_record(root)
+    orphan_writer = real_deps.real_write_orphan_record(root)
+
+    def write_orphan_record(record):
+        path = orphan_writer(record)
+        orphan_paths.append(path)
+        return path
+
+    def discover_artifacts(stamp):
+        if stamp is None:
+            return [{"kind": "branch", "name": "wi-accept-harness-deadrun"}]
+        return [{"kind": "branch", "name": "b-s1"}]
+
+    def reap(planned):
+        return {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
+    d = _deps(
+        reclaim_probe=lambda: ({"in_flight": True, "stamp": "accept-harness-deadrun",
+                                "has_record": False}, "dead"),
+        discover_artifacts=discover_artifacts,
+        reap=reap,
+        write_record=final_writer,
+        write_orphan_record=write_orphan_record,
+    )
+
+    r = run.invoke(d)
+
+    assert r["verdict"] == "pass"
+    assert len(orphan_paths) == 1
+    orphan_record = acceptance_result.read_record(os.path.dirname(orphan_paths[0]))
+    final_record = acceptance_result.read_record(real_deps._record_dir(root))
+    assert orphan_record["reason"] == "orphan record for a reclaimed dead prior run"
+    assert orphan_record["run_stamp"] == "accept-harness-deadrun"
+    assert final_record["verdict"] == "pass"
+    assert final_record["run_stamp"] == "s1"
+    assert orphan_paths[0] in r["report"]
 
 
 def test_parked_terminal_is_fail_but_teardown_still_runs():

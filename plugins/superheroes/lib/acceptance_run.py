@@ -67,7 +67,7 @@ def nesting_refusal(env):
 
 
 def _report(verdict, reason, record_path, teardown, spend_partial=False,
-            unwritten_record_note=None):
+            unwritten_record_note=None, orphan_record_path=None):
     """Render the single plain-language verdict report via the tested FR-6 renderer
     (`acceptance_result.render_report`) so the Markdown/partial-spend output owners see
     is the same one the module's own tests pin — not a second, drifted format."""
@@ -80,6 +80,8 @@ def _report(verdict, reason, record_path, teardown, spend_partial=False,
         "left_behind": (teardown or {}).get("left_behind") or [],
         "spend_partial": bool(spend_partial),
     }
+    if orphan_record_path:
+        result["orphan_record_path"] = orphan_record_path
     return acceptance_result.render_report(result)
 
 
@@ -144,6 +146,7 @@ def invoke(deps):
     teardown = None
     stamp = None
     attempts = []
+    orphan_record_path = None
 
     try:
         # 1. Reclaim / refuse a prior in-flight run.
@@ -175,11 +178,12 @@ def invoke(deps):
         if reclaim["action"] == "reclaim" and reclaim.get("write_orphan_record"):
             # The dead prior run left no record — write its orphan failed record before
             # proceeding, honestly reflecting what the discovery teardown above reaped.
-                deps["write_record"](_record_payload(
-                    deps, "fail", "orphan record for a reclaimed dead prior run",
-                    None, [{"stamp": recorded_state.get("stamp"), "verdict": "fail"}],
-                    False, dead_run_teardown, spend_partial=True,
-                    run_stamp=recorded_state.get("stamp")))
+            orphan_record_path = _write_record_only(
+                deps, "fail", "orphan record for a reclaimed dead prior run",
+                None, [{"stamp": recorded_state.get("stamp"), "verdict": "fail"}],
+                False, dead_run_teardown, spend_partial=True,
+                run_stamp=recorded_state.get("stamp"),
+                writer=deps.get("write_orphan_record"))
 
         # 2. Materialize the stamped throwaway fixture work-item.
         stamped = deps["materialize"]()
@@ -194,7 +198,8 @@ def invoke(deps):
                                     run_stamp=stamp)
             return {
                 "verdict": "fail",
-                "report": _report("fail", reason, record_path, teardown),
+                "report": _report("fail", reason, record_path, teardown,
+                                  orphan_record_path=orphan_record_path),
                 "record_path": record_path,
             }
 
@@ -277,7 +282,8 @@ def invoke(deps):
         return {
             "verdict": verdict["verdict"],
             "report": _report(verdict["verdict"], verdict["reason"], record_path, teardown,
-                              spend_partial=launch.get("spend_partial")),
+                              spend_partial=launch.get("spend_partial"),
+                              orphan_record_path=orphan_record_path),
             "record_path": record_path,
         }
 
@@ -308,7 +314,8 @@ def invoke(deps):
             record_path = None
         return {
             "verdict": "fail",
-            "report": _report("fail", reason, record_path, teardown),
+            "report": _report("fail", reason, record_path, teardown,
+                              orphan_record_path=locals().get("orphan_record_path")),
             "record_path": record_path,
         }
 

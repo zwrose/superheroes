@@ -65,7 +65,8 @@ repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1
    pass `--ceilings-config /path/to/ceilings.json` where the JSON object may contain
    `elapsed_sec` and/or `spend`, or pass `--ceiling-elapsed-sec <seconds>` /
    `--ceiling-spend <measured-output-tokens>` directly. Unset or partial values fall back to
-   the built-in defaults.
+   the built-in defaults: 1800 elapsed seconds and 5,000,000 measured output tokens. The
+   `spend` ceiling is measured output tokens, not dollars.
 
 4. **Render the single verdict report.** Print the orchestrator's one plain-language report — the
    pass/fail verdict, the reason, where the result record lives, and what was cleaned up or left

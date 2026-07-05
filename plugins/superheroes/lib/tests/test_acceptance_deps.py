@@ -24,6 +24,7 @@ import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_deps as deps
 import acceptance_result
+import acceptance_retry
 import hostinfo
 import control_plane
 import journal
@@ -315,7 +316,6 @@ def test_real_gh_reader_classifies_infra_check_runner_error(monkeypatch):
 def test_check_failure_kind_covers_all_runner_infra_shapes():
     for rollup in (
         [{"conclusion": "STARTUP_FAILURE"}],
-        [{"conclusion": "TIMED_OUT"}],
         [{"status": "ERROR"}],
         [{"state": "ERROR"}],
     ):
@@ -325,6 +325,20 @@ def test_check_failure_kind_covers_all_runner_infra_shapes():
 def test_check_failure_kind_keeps_behavioral_red_checks_unclassified():
     assert deps._check_failure_kind([{"conclusion": "FAILURE"}]) is None
     assert deps._check_failure_kind([{"conclusion": "CANCELLED"}]) is None
+    assert deps._check_failure_kind([{"conclusion": "TIMED_OUT"}]) is None
+
+
+def test_timed_out_check_does_not_trigger_environmental_retry():
+    kind = deps._check_failure_kind([{"conclusion": "TIMED_OUT"}])
+
+    retry = acceptance_retry.classify({
+        "kind": kind,
+        "unreadable": False,
+        "attempt": 1,
+    })
+
+    assert kind is None
+    assert retry["retry"] is False
 
 
 def test_real_gh_reader_keeps_behavioral_red_check_non_retryable(monkeypatch):
@@ -490,6 +504,41 @@ def test_real_spend_sampler_reads_measured_token_telemetry(tmp_path):
 
     assert readable is True
     assert spend == 123.0
+
+
+def test_real_spend_sampler_no_phase_cost_events_is_unreadable(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert spend is None
+    assert readable is False
+
+
+def test_real_spend_sampler_unmeasured_summary_is_unreadable(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
+    journal.append(events, "phase_cost", payload={
+        "phase": "workhorse",
+        "dispatches": {"total": 1, "byModel": {}},
+        "tokens": {"output": 123, "measured": True},
+    }, root=str(repo))
+    monkeypatch.setattr(deps.cost_report, "summarize",
+                        lambda events: {"measured": False, "outputTokens": 123})
+
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert spend is None
+    assert readable is False
+
+    monkeypatch.setattr(deps.cost_report, "summarize",
+                        lambda events: {"measured": True, "outputTokens": None})
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert spend is None
+    assert readable is False
 
 
 # --- real_discover_artifacts: real showrunner branch/PR naming ------------------------

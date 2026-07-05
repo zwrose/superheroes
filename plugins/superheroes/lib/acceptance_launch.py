@@ -278,15 +278,6 @@ def _default_child_factory(stamped, terminal_path=None):
     return _RealChild(proc, terminal_path)
 
 
-def _default_spend_sampler():
-    """Real spend sampler placeholder: spend unreadable until wired to the cost source.
-
-    Returns `(None, False)` so the watch governs on elapsed alone (fail-closed on the
-    readable ceiling) until a live spend source is injected.
-    """
-    return (None, False)
-
-
 def _default_engine_pref_reader(cwd=None, root=None):
     """Read the project's resolved engine preferences via the band's engine-pref lib."""
     try:

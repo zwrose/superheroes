@@ -54,6 +54,31 @@ def test_fixture_expected_phases_match_showrunner_source_of_truth():
     assert "review" not in phases
 
 
+def test_pipeline_phase_reader_ignores_commented_decoy_literal(tmp_path):
+    source = tmp_path / "showrunner.js"
+    source.write_text(
+        "// const PHASES = ['fake']\n"
+        "const PHASES = ['plan', 'review-plan', 'ship']\n",
+        encoding="utf-8",
+    )
+
+    assert acceptance_phases.read_pipeline_phases(str(source)) == [
+        "plan", "review-plan", "ship",
+    ]
+
+
+def test_pipeline_phase_reader_fails_closed_when_literal_declared_twice(tmp_path):
+    source = tmp_path / "showrunner.js"
+    source.write_text(
+        "const PHASES = ['plan']\n"
+        "const PHASES = ['ship']\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="multiple"):
+        acceptance_phases.read_pipeline_phases(str(source))
+
+
 def test_pipeline_phase_reader_fails_closed_when_literal_missing(tmp_path):
     source = tmp_path / "showrunner.js"
     source.write_text("const OTHER = ['plan']\n", encoding="utf-8")

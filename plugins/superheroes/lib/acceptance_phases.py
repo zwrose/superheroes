@@ -9,7 +9,7 @@ import os
 import re
 
 
-_PHASES_RE = re.compile(r"const\s+PHASES\s*=\s*(\[[^\]]+\])", re.MULTILINE | re.DOTALL)
+_PHASES_RE = re.compile(r"^const\s+PHASES\s*=\s*(\[[^\]]+\])", re.MULTILINE)
 
 
 def showrunner_js_path():
@@ -23,11 +23,13 @@ def read_pipeline_phases(path=None):
             text = fh.read()
     except OSError as exc:
         raise RuntimeError("showrunner phase source is unreadable: %s" % exc) from exc
-    match = _PHASES_RE.search(text)
-    if not match:
+    matches = list(_PHASES_RE.finditer(text))
+    if not matches:
         raise RuntimeError("showrunner PHASES literal was not found")
+    if len(matches) > 1:
+        raise RuntimeError("multiple showrunner PHASES literals were found")
     try:
-        phases = ast.literal_eval(match.group(1))
+        phases = ast.literal_eval(matches[0].group(1))
     except (SyntaxError, ValueError) as exc:
         raise RuntimeError("showrunner PHASES literal is not parseable") from exc
     if not isinstance(phases, list) or not phases or not all(

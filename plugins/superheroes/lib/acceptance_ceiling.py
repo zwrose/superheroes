@@ -1,10 +1,11 @@
 """Ceiling decider for the acceptance harness (FR-8 / FR-9 / UFR-2).
 
 Pure `decide(state)` over a plain dict: judges whether a live run has breached its
-elapsed-time or spend ceiling and must be hard-killed, or may continue. Fail-CLOSED on
-the readable ceiling — when spend is unreadable the run governs on elapsed alone and NEVER
-kills on spend (an unreadable spend sample can never justify a kill, and can never mask an
-elapsed breach).
+elapsed-time or spend ceiling and must be hard-killed, or may continue. The spend unit is
+measured output tokens, not dollars; the built-in default is 5,000,000 output tokens.
+Fail-CLOSED on the readable ceiling — when spend is unreadable the run governs on elapsed
+alone and NEVER kills on spend (an unreadable spend sample can never justify a kill, and
+can never mask an elapsed breach).
 
 The breach test is **invocation-scoped**: it compares the running invocation's fresh
 `elapsed_sec` / `spend_sampled` PLUS the `budget_consumed` a prior attempt already burned

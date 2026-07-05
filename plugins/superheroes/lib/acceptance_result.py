@@ -110,6 +110,12 @@ def render_report(result):
             "the control-plane store." % RECORD_NAME,
             "",
         ]
+    orphan_record_path = result.get("orphan_record_path") or result.get("orphanRecordPath")
+    if orphan_record_path:
+        lines += [
+            "Reclaimed prior-run orphan record: %s" % orphan_record_path,
+            "",
+        ]
 
     cleaned = result.get("cleaned_up") or []
     left = result.get("left_behind") or []

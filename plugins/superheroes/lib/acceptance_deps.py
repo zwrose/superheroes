@@ -504,7 +504,7 @@ def _check_failure_kind(rollup):
             continue
         conclusion = str(check.get("conclusion") or "").upper()
         status = str(check.get("status") or check.get("state") or "").upper()
-        if conclusion in ("STARTUP_FAILURE", "TIMED_OUT") or status == "ERROR":
+        if conclusion == "STARTUP_FAILURE" or status == "ERROR":
             return "check-runner-errored-before-running"
     return None
 
@@ -638,6 +638,14 @@ def real_write_refusal_record(root):
     return _write
 
 
+def real_write_orphan_record(root):
+    def _write(record):
+        stamp = record.get("run_stamp") if isinstance(record, dict) else None
+        dest = os.path.join(_harness_dir(root), "orphans", stamp or uuid.uuid4().hex)
+        return acceptance_result.write_record(record, dest)
+    return _write
+
+
 # --- assembly --------------------------------------------------------------------------
 
 
@@ -698,6 +706,7 @@ def build(fixture_dir, root, ceilings=None):
         "reap": real_reap(root, current_stamp),
         "write_record": real_write_record(root),
         "write_refusal_record": real_write_refusal_record(root),
+        "write_orphan_record": real_write_orphan_record(root),
         "quarantine_lease": real_quarantine_lease(root),
         "release_lease": lambda: real_release_lease(root),
         "clock_now": real_clock_now(),
