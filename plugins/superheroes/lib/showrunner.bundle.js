@@ -103,17 +103,9 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
-// __badCourierAnswer: TRUE when a courier answer to a marker-carrying command signals the command
-// DID NOT run. Two observed dispatch-failure shapes, both from the plugin-subagent prompt-drop bug:
-//   (a) the answer omits the __SR_EXIT marker entirely (echo/empty shape); or
-//   (b) the leaf echoes the command back as text instead of running it, so the answer contains the
-//       LITERAL unexpanded '__SR_EXIT:$?' (live 2026-07-03 run wf_1494a8fa-e28, agent aecd0b3ad) —
-//       the marker STRING is present, so a bare presence check would wrongly pass.
-// A genuinely-executed command can never print '$?' unexpanded (the shell expands it to a number),
-// so the literal '__SR_EXIT:$?' is an unambiguous did-not-run tell.
+// __badCourierAnswer: delegate to courier_exec (single source of truth — see badCourierAnswer there).
 function __badCourierAnswer(a) {
-  var s = String(a == null ? '' : a)
-  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+  return __require('courier_exec').badCourierAnswer(a)
 }
 async function __sh(cmd, opts) {
   // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
@@ -212,23 +204,10 @@ function __contentHash(text) {
   for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
   return out
 }
-// __helperResult: parse a leaf-bash helper answer (stdout + trailing __SR_EXIT:N marker) into the
-// runHelper result shape. Shared by runHelper and stageAndRunHelper (fold 1, #141) so both keep the
-// SAME fence tolerance + exit-marker slice. Find the LAST marker anywhere (a misbehaving haiku
-// courier stochastically fences the answer AFTER the marker), slice stdout up to it, strip one
-// wrapping fence pair.
+// __helperResult: delegate to courier_exec.helperResult (single source of truth for fence-tolerant
+// __SR_EXIT slice — shared by runHelper and stageAndRunHelper, fold 1 #141).
 function __helperResult(s) {
-  s = String(s || '')
-  var re = /__SR_EXIT:(\d+)/g, m, last = null
-  while ((m = re.exec(s)) !== null) last = m
-  var status = last ? Number(last[1]) : 1
-  var stdout = last ? s.slice(0, last.index) : s
-  var markerTail = last ? s.slice(last.index + last[0].length) : ''
-  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
-  if (/^\s*\x60/.test(stdout) && (/\x60\s*$/.test(stdout) || /^\s*\x60\s*$/.test(markerTail))) {
-    stdout = stdout.replace(/^\s*\x60/, '').replace(/\x60\s*$/, '')
-  }
-  return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+  return __require('courier_exec').helperResult(s)
 }
 const __PAYLOAD_BOUND = 3000
 const __PAYLOAD_CHARS = 2400
@@ -409,20 +388,30 @@ function _sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // libRootProbe: a shell prefix that fail-closes when an ABSOLUTE spine code root has gone missing
 // (e.g. a plugin-cache eviction between phases). It rides an ALREADY-composed command —
 // `${libRootProbe()}python3 <lib>/recover_entry.py …` — so it adds NO leaf. When the dir is absent it
-// echoes a PARSEABLE failure object carrying MISSING_MARKER and exits 0; when present it is a no-op
-// passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the compose stays
-// byte-identical.
+// echoes a PARSEABLE failure object carrying MISSING_MARKER, then __SR_EXIT:0, and exits 0; when
+// present it is a no-op passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the
+// compose stays byte-identical.
 //
 // The payload is a JSON `{"ok":false,"reason":"<marker>"}` (not a bare echo) so BOTH probe sites map
 // it to the same named park uniformly: the exec-based launch probe (reconcile) substring-matches the
-// marker in raw stdout, and the runCourierJson-based back-half probe (persistPhase) gets it back
-// verbatim as an `ok:false` failure (retryRealFailure:false) — a bare echo would be unparseable JSON,
-// making that courier retry then throw a GENERIC transport error instead of the named reason.
+// marker in raw stdout, and the runCourierMarkedJson-based back-half probe (persistPhase) gets it
+// back verbatim as an `ok:false` failure only AFTER execution is proven via __SR_EXIT (#218). The
+// failure branch must echo __SR_EXIT before exit — wrapMarkedCommand's trailing marker never runs
+// after `exit 0`, and without an in-branch marker a genuine missing libRoot looks like a lazy parrot.
+//
+// Residual fabricability (#218): the __SR_EXIT guard proves a marker-SHAPED answer, not that Bash
+// ran. This compose now embeds both the failure payload AND `echo __SR_EXIT:0` in the prompt, so a
+// courier that SIMULATES the failure branch (payload + marker, no execution) would still pass the
+// guard. Do NOT "harden" this with proof-of-execution (nonce/hash/timestamp) — the Workflow sandbox
+// has no crypto, wall-clock, or RNG primitives, so the JS side cannot verify a computed proof; that
+// is why #218 chose the marker protocol. The guard rejects the observed did-not-run shapes (bare
+// payload with no marker; echoed command with literal __SR_EXIT:$?), and runCourierMarked*'s 2×3
+// retry-then-default-dispatch chain bounds the residual simulation class.
 const MISSING_MARKER = '__SR_LIBROOT_MISSING__'
 function libRootProbe() {
   if (!isAbsoluteLibRoot()) return ''
   const payload = '{"ok":false,"reason":"' + MISSING_MARKER + '"}'
-  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; exit 0; }; "
+  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; echo __SR_EXIT:0; exit 0; }; "
 }
 
 // pyLibDir: a Python EXPRESSION that evaluates to the lib dir, for embedded
@@ -2476,6 +2465,122 @@ async function callOnce(label, command, promptOpts) {
   return currentAgent()(promptFor(command, promptOpts), { label, courier: true })
 }
 
+// badCourierAnswer: TRUE when a marker-carrying command's answer signals the shell DID NOT run.
+// Single source of truth for both courier_exec and the bundle preamble (__sh / #194). Detects:
+//   (a) a missing __SR_EXIT marker (bare payload / echo shape); and
+//   (b) the literal unexpanded '__SR_EXIT:$?' from an echoed command (live wf_1494a8fa-e28).
+// This proves marker-SHAPE, not execution. A courier simulating the full embedded failure branch
+// (payload + __SR_EXIT:0, as libRootProbe now embeds) would still pass — #218 bounds that residual
+// via runCourierMarked*'s 2 outer attempts × dispatchMarked's 3-dispatch retry/fallback chain.
+// Do NOT add proof-of-execution here: the Workflow sandbox has no crypto/wall-clock/RNG primitives.
+function badCourierAnswer(a) {
+  const s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
+
+// markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
+// helperResult wraps this for the bundle __runHelperCommand / stageAndRunHelper result shape.
+function markerSliceStdout(s) {
+  s = String(s || '')
+  const re = /__SR_EXIT:(\d+)/g
+  let m, last = null
+  while ((m = re.exec(s)) !== null) last = m
+  const status = last ? Number(last[1]) : 1
+  let stdout = last ? s.slice(0, last.index) : s
+  const markerTail = last ? s.slice(last.index + last[0].length) : ''
+  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
+  if (/^\s*`/.test(stdout) && (/`\s*$/.test(stdout) || /^\s*`\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\s*`/, '').replace(/`\s*$/, '')
+  }
+  return { status, stdout }
+}
+
+function helperResult(s) {
+  const sliced = markerSliceStdout(s)
+  return { ok: sliced.status === 0, status: sliced.status, stdout: sliced.stdout, stderr: '' }
+}
+
+function markedPromptFor(command) {
+  return 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
+    'Do not echo, fence, summarize, or describe the command:\n\n' + rootedCommand(command)
+}
+
+function wrapMarkedCommand(command) {
+  return String(command) + ' 2>&1; echo __SR_EXIT:$?'
+}
+
+// dispatchMarked: the #194/__sh courier protocol — lean superheroes:courier agent, marker guard with
+// retry + default-dispatch fallback. Shared by runCourierMarkedText/Json (#218: libRoot probe sites).
+// Each outer attempt calls dispatchMarked once; dispatchMarked itself retries up to 3 dispatches
+// (courier agent → courier agent → default agent) when badCourierAnswer fires — 2×3 total before
+// CourierTransportError. That chain bounds residual simulation (see badCourierAnswer / libRootProbe).
+async function dispatchMarked(label, markedCmd) {
+  const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
+  const prompt = markedPromptFor(markedCmd)
+  let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
+  if (badCourierAnswer(ans)) {
+    ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
+    if (badCourierAnswer(ans)) {
+      const fo = Object.assign({}, baseOpts)
+      delete fo.agentType
+      ans = stdoutOf(await currentAgent()(prompt, fo))
+    }
+  }
+  return ans
+}
+
+// runCourierMarkedText: dumb-pipe a shell command through the __SR_EXIT marker protocol and return
+// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218).
+async function runCourierMarkedText(label, command) {
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const sliced = markerSliceStdout(ans)
+    if (sliced.stdout.trim() !== '') return sliced.stdout
+    last = 'empty stdout'
+  }
+  throw new CourierTransportError(label, last)
+}
+
+// runCourierMarkedJson: runCourierJson semantics over the __SR_EXIT marker protocol — execution is
+// proven before a probe's embedded ok:false (e.g. __SR_LIBROOT_MISSING__) is accepted, so a lazy
+// courier that parrots the failure branch from the prompt cannot park the run (#218).
+async function runCourierMarkedJson(label, command, opts) {
+  const options = opts || {}
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const out = markerSliceStdout(ans).stdout
+    if (out.trim() === '') {
+      last = 'empty stdout'
+      continue
+    }
+    const parsed = extractJson(out)
+    if (parsed == null) {
+      last = 'unparseable JSON'
+      continue
+    }
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    const missing = missingRequired(parsed, options.require || [])
+    if (missing) {
+      last = `missing required field ${missing}`
+      continue
+    }
+    return parsed
+  }
+  throw new CourierTransportError(label, last)
+}
+
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
 // legitimate content may itself contain ``` fences — unfencing here would corrupt it. JSON
 // couriers get the fence-tolerant treatment in runCourierJson (extractJson) instead.
@@ -2531,8 +2636,13 @@ async function runCourierBatchJson(label, commands, opts) {
 
 module.exports = {
   CourierTransportError,
+  badCourierAnswer,
   extractJson,
+  helperResult,
+  markerSliceStdout,
   runCourierJson,
+  runCourierMarkedJson,
+  runCourierMarkedText,
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
@@ -7309,7 +7419,7 @@ async function persistPhase(workItem, opts) {
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
-    const res = await courier.runCourierJson(
+    const res = await courier.runCourierMarkedJson(
       'save phase progress',
       probedCmd,
       { require: required, retryRealFailure: false },
@@ -7325,8 +7435,11 @@ async function persistPhase(workItem, opts) {
     return confirmed
       ? { ok: true, recovered: false }
       : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
-  } catch (_e) {
-    return { ok: false, error: 'phase progress read-back mismatch' }
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) {
+      return { ok: false, error: 'phase progress save transport failed (courier): ' + e.reason }
+    }
+    return { ok: false, error: 'phase progress save transport failed (courier)' }
   }
 }
 
@@ -7396,10 +7509,14 @@ async function cmdRunner(cmd, { schema, label }) {
 async function reconcile(workItem) {
   const preRoot = checkoutRoot()
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
-  const results = await exec([
-    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`,
-  ], 'gather snapshot')
-  const _snapStdout = (results[0] && results[0].stdout) || ''
+  const snapCmd =
+    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`
+  let _snapStdout = ''
+  try {
+    _snapStdout = await courier.runCourierMarkedText('gather snapshot', snapCmd)
+  } catch (_e) {
+    return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
+  }
   // #170 fail-closed probe: an ABSOLUTE spine code root that vanished mid-run (e.g. plugin-cache
   // eviction) short-circuits the compose to MISSING_MARKER instead of a file-not-found python error —
   // park with a NAMED reason so the readout says exactly what's wrong. Relative (dev) libRoot never

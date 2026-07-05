@@ -10,6 +10,7 @@
 // Python-side; the large doc text never crosses the cheapest-model pipe.
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
+const { markedStdout, saveProgressOk } = require('./_marked_stdout.js')
 const fs = require('fs')
 const path = require('path')
 const sr = require('../showrunner.js')
@@ -45,12 +46,12 @@ function makeAgentStub() {
     // courier catch-all lives AFTER the named 'save phase progress' branch so it never swallows it.
     if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
       // reconcile(): empty snapshot -> recoverTwin gets undefined checkpoint/world -> world_derive
-      return [{ index: 0, ok: true, stdout: JSON.stringify({
+      return markedStdout({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
         generation: 1,
         root: globalThis.__SR_ROOT,
-      }) }]
+      })
     }
     if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
       // readGate() for spec, plan, or tasks: always return 'passed'
@@ -65,7 +66,7 @@ function makeAgentStub() {
     }
 
     if (label === 'save phase progress') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
+      return saveProgressOk()
     }
 
     // Any other dumb-pipe leaf (e.g. definition_doc set-gate batched in persistPhase): return ok.

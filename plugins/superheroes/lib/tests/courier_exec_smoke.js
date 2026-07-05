@@ -138,5 +138,40 @@ function agentFrom(outputs) {
   assert.deepStrictEqual(out.items, [{ a: 1 }, { b: 2 }], 'a pretty-printed single object parses whole, not per-line')
   assert.strictEqual(a.calls(), 1)
 
+  // #218: a lazy courier parrots the embedded libRoot failure branch from the prompt WITHOUT
+  // executing — runCourierJson accepts it as a real ok:false; runCourierMarkedJson rejects it
+  // (no __SR_EXIT marker) and fails closed instead of fabricating a 'spine code root missing' park.
+  const PARROT = JSON.stringify({ ok: false, reason: '__SR_LIBROOT_MISSING__' })
+  courier.setCourierAgent(async (_prompt, opts) => {
+    assert.strictEqual(opts.label, 'save phase progress')
+    return PARROT
+  })
+  out = await courier.runCourierJson('save phase progress', 'cmd', { retryRealFailure: false })
+  assert.strictEqual(out.reason, '__SR_LIBROOT_MISSING__', 'runCourierJson still accepts a parroted probe failure (unchanged)')
+
+  let markedCalls = 0
+  courier.setCourierAgent(async (_prompt, opts) => {
+    assert.strictEqual(opts.label, 'save phase progress')
+    markedCalls += 1
+    return PARROT
+  })
+  await assert.rejects(
+    () => courier.runCourierMarkedJson('save phase progress', 'cmd', { retryRealFailure: false }),
+    /courier transport failed after retry/,
+    'runCourierMarkedJson must NOT accept a marker-less parrot of the embedded failure branch',
+  )
+  assert.strictEqual(markedCalls, 6, 'runCourierMarkedJson exhausts 2 attempts × 3 dispatchMarked tries on a parroted answer')
+
+  markedCalls = 0
+  courier.setCourierAgent(async (_prompt, opts) => {
+    assert.strictEqual(opts.label, 'save phase progress')
+    markedCalls += 1
+    return PARROT + '\n__SR_EXIT:0'
+  })
+  out = await courier.runCourierMarkedJson('save phase progress', 'cmd', { retryRealFailure: false })
+  assert.strictEqual(out.reason, '__SR_LIBROOT_MISSING__',
+    'runCourierMarkedJson accepts a genuine probe failure AFTER execution is proven')
+  assert.strictEqual(markedCalls, 1, 'a marker-carrying genuine probe failure is not retried')
+
   console.log('ok: shared courier contract')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })
