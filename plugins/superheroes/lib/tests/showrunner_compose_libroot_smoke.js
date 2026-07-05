@@ -132,8 +132,8 @@ const MISSING_PAYLOAD = JSON.stringify({ ok: false, reason: libRootMod.MISSING_M
     const sr = require('../showrunner.js')
     globalThis.agent = async () => MISSING_PAYLOAD
     const parrot = await sr.persistPhase('wi-x', { step: 1, phase: 'x', journalPayload: { phase: 'x' } })
-    assert.strictEqual(parrot.error, 'phase progress read-back mismatch',
-      '(C3) a marker-less parrot of the embedded failure branch must NOT fabricate a libRoot park')
+    assert.strictEqual(parrot.error, 'phase progress save transport failed (courier): missing execution marker',
+      '(C3) a marker-less parrot exhausts transport and must NOT fabricate a libRoot park')
     assert.strictEqual(parrot.ok, false, '(C3) transport exhaustion still fails closed')
   }
   {

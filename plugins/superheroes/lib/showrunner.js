@@ -1367,8 +1367,11 @@ async function persistPhase(workItem, opts) {
     return confirmed
       ? { ok: true, recovered: false }
       : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
-  } catch (_e) {
-    return { ok: false, error: 'phase progress read-back mismatch' }
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) {
+      return { ok: false, error: 'phase progress save transport failed (courier): ' + e.reason }
+    }
+    return { ok: false, error: 'phase progress save transport failed (courier)' }
   }
 }
 
