@@ -314,3 +314,119 @@ def test_fix_push_nff_two_ahead_replays_both_commits(tmp_path):
     subprocess.run(["git", "fetch", "-q", "origin"], cwd=work, check=True)
     log = subprocess.run(["git", "log", "--format=%s", "origin/feat"], cwd=work, capture_output=True, text=True).stdout
     assert "freshen merge (unpushed)" in log and "remote advance" in log, log   # neither dropped
+
+
+def _origin_and_work(tmp_path):
+    """Bare origin + a work clone with feat pushed — the committed-fixer scenarios' shared setup."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=work, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=work, check=True)
+    (work / "f").write_text("base\n")
+    subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=work, check=True)
+    subprocess.run(["git", "branch", "-M", "feat"], cwd=work, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "feat"], cwd=work, check=True)
+    return origin, work
+
+
+def test_fix_push_fixer_committed_own_fix_pushes(tmp_path):
+    # Run-31 park: the fixer COMMITTED its fix itself (clean tree, local one ahead of the remote
+    # PR head). fix-push must recognize the local-ahead commit as the fixer's product and push it
+    # — not park with "nothing the fixer produced" while the fix sits unpushed.
+    _origin, work = _origin_and_work(tmp_path)
+    (work / "fix_file").write_text("the fix\n")
+    subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixer's own commit"], cwd=work, check=True)
+    store_root = str(tmp_path / "store")
+    _seed_branch_checkpoint(store_root, work, "wi", "feat")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"), "--step", "fix-push",
+                        "--work-item", "wi", "--worktree", str(work)],
+                       capture_output=True, text=True, cwd=str(work), env=monkey, timeout=60)
+    out = json.loads(r.stdout)
+    assert out["ok"] is True and out["pushed"] is True and out["read_back"] is True, r.stdout + r.stderr
+    log = subprocess.run(["git", "log", "--format=%s", "origin/feat"], cwd=work,
+                         capture_output=True, text=True).stdout
+    assert "fixer's own commit" in log, log
+
+
+def test_push_ci_fix_recheck_fixer_committed_own_fix_pushes(tmp_path):
+    # The same committed-fixer shape through the step the bundle actually calls.
+    _origin, work = _origin_and_work(tmp_path)
+    (work / "fix_file").write_text("the fix\n")
+    subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixer's own commit"], cwd=work, check=True)
+    store_root = str(tmp_path / "store")
+    _seed_branch_checkpoint(store_root, work, "wi", "feat")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"),
+                        "--step", "push-ci-fix-recheck", "--work-item", "wi", "--worktree", str(work)],
+                       capture_output=True, text=True, cwd=str(work), env=monkey, timeout=60)
+    out = json.loads(r.stdout)
+    assert out["pushed"] is True and out["read_back"] is True, r.stdout + r.stderr
+    log = subprocess.run(["git", "log", "--format=%s", "origin/feat"], cwd=work,
+                         capture_output=True, text=True).stdout
+    assert "fixer's own commit" in log, log
+
+
+def test_fix_push_clean_tree_in_sync_still_parks(tmp_path):
+    # A clean tree with local == remote is a TRUE no-op (the fixer really produced nothing):
+    # the committed-fixer tolerance must not turn it into a push or a false ok.
+    _origin, work = _origin_and_work(tmp_path)
+    store_root = str(tmp_path / "store")
+    _seed_branch_checkpoint(store_root, work, "wi", "feat")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"), "--step", "fix-push",
+                        "--work-item", "wi", "--worktree", str(work)],
+                       capture_output=True, text=True, cwd=str(work), env=monkey, timeout=60)
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["pushed"] is False
+    assert "no change" in out["reason"] or "nothing" in out["reason"]
+
+
+def test_fix_push_clean_tree_diverged_remote_still_parks(tmp_path):
+    # Clean tree but the histories DIVERGED (remote advanced past the shared base while local
+    # carries its own commit): not the committed-fixer shape — park fail-closed, no guess-push.
+    _origin, work = _origin_and_work(tmp_path)
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(_origin), str(other)], check=True)
+    subprocess.run(["git", "config", "user.email", "o@o"], cwd=other, check=True)
+    subprocess.run(["git", "config", "user.name", "o"], cwd=other, check=True)
+    subprocess.run(["git", "checkout", "-q", "-b", "feat", "origin/feat"], cwd=other, check=True)
+    (other / "remote_file").write_text("from remote\n")
+    subprocess.run(["git", "add", "-A"], cwd=other, check=True)
+    subprocess.run(["git", "commit", "-qm", "remote advance"], cwd=other, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "feat"], cwd=other, check=True)
+    (work / "local_file").write_text("local\n")
+    subprocess.run(["git", "add", "-A"], cwd=work, check=True)
+    subprocess.run(["git", "commit", "-qm", "local commit"], cwd=work, check=True)
+    store_root = str(tmp_path / "store")
+    _seed_branch_checkpoint(store_root, work, "wi", "feat")
+    monkey = {**os.environ, "SUPERHEROES_STORE_ROOT": store_root}
+    r = subprocess.run([sys.executable, os.path.join(LIB, "ship_phase.py"), "--step", "fix-push",
+                        "--work-item", "wi", "--worktree", str(work)],
+                       capture_output=True, text=True, cwd=str(work), env=monkey, timeout=60)
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["pushed"] is False, r.stdout
+    assert "no change" in out["reason"] or "nothing" in out["reason"]
+
+
+def test_post_push_read_back_checks_branch_ref_before_pr_api():
+    # Run-32 false park: gh's PR head can lag a just-accepted push by seconds, so a SUCCESSFUL
+    # push read back as failed. Every post-push confirm must go through _push_read_back, which
+    # consults the branch ref (ls-remote — atomic with the push) before the PR API.
+    sp = open(os.path.join(LIB, "ship_phase.py")).read()
+    body = sp.split("def _push_read_back", 1)[1].split("\ndef ", 1)[0]
+    assert "ls-remote" in body and "_remote_pr_head" in body
+    assert body.index("ls-remote") < body.index("_remote_pr_head")
+    # no post-push confirm bypasses the helper with a bare PR-API comparison
+    after_pushes = [chunk for chunk in sp.split('["push", "origin", branch]')[1:]]
+    for chunk in after_pushes:
+        head_cmp = chunk.find("_remote_pr_head(")
+        helper = chunk.find("_push_read_back(")
+        if head_cmp != -1 and (helper == -1 or head_cmp < helper):
+            # a raw PR-API read-back before the helper would reintroduce the lag race
+            raise AssertionError("post-push read-back not routed through _push_read_back")
