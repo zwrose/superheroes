@@ -239,6 +239,57 @@ def test_build_launch_prompt_override_names_bundle_path_and_libRoot():
     assert "do not merge" in prompt.lower()
 
 
+def test_build_launch_prompt_override_resolves_whole_spine_from_lib():
+    # #235 item 2 (the headline self-check): the override must resolve the ENTIRE spine from
+    # the override tree — pre-flight AND bundle AND libRoot — so pre-flight can't run from
+    # the installed cache while the bundle comes from main (a silent cross-version mix).
+    lib = "/repo/plugins/superheroes/lib"
+    prompt = al.build_launch_prompt(
+        "accept-harness-abc123", "/run/dir/terminal-record.json", spine_lib=lib, root="/repo")
+    assert lib + "/preflight.py" in prompt          # pre-flight from the override tree
+    assert lib + "/showrunner.bundle.js" in prompt   # bundle from the override tree
+    assert "libRoot: " + lib in prompt               # Workflow libRoot from the override tree
+    assert lib + "/run_readout.py" in prompt         # run-outcome projection from the override tree
+    # and it explicitly forbids resolving $LIB from the installed plugin cache.
+    assert "$LIB" in prompt
+    assert "cache" in prompt.lower()
+
+
+def test_default_child_factory_pins_model_sonnet_by_default(monkeypatch):
+    # #235 scope addition: the spawn must pin the driver model so it never inherits the
+    # invoking user's CLI default (model-governance). Default is sonnet.
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            self.pid = 321
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory({"work_item": "accept-harness-abc123"},
+                              terminal_path="/run/dir/terminal-record.json")
+    argv = captured["argv"]
+    assert "--model" in argv
+    assert argv[argv.index("--model") + 1] == "sonnet"
+    assert al.DEFAULT_CHILD_MODEL == "sonnet"
+
+
+def test_default_child_factory_honors_child_model_override(monkeypatch):
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            self.pid = 654
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory({"work_item": "accept-harness-abc123"},
+                              terminal_path="/run/dir/terminal-record.json",
+                              child_model="opus")
+    argv = captured["argv"]
+    assert argv[argv.index("--model") + 1] == "opus"
+
+
 def test_default_child_factory_threads_spine_lib_into_prompt(monkeypatch):
     captured = {}
 

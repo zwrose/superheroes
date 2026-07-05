@@ -67,6 +67,14 @@ _POLL_INTERVAL_SEC = 2.0
 _CONTEXT_MARKER = "SUPERHEROES_ACCEPTANCE_CONTEXT"
 _DENY_ONLY_MARKER = "SUPERHEROES_ACCEPTANCE_DENY_ONLY"
 
+# The model the child driver session is pinned to by default. The child does only wrapper
+# work (skill-following, the Workflow launch, the run_outcome projection write) — all the
+# in-run intelligence is pinned by the plugin's own tier config — so a fixed, cheap-but-capable
+# tier is correct here. Pinning it also closes a model-governance leak: an unpinned `claude -p`
+# child inherits the invoking user's CLI default (potentially Fable), which the repo's
+# no-session-model-inheritance governance forbids. Overridable per-run via `--child-model`.
+DEFAULT_CHILD_MODEL = "sonnet"
+
 
 def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
         budget_consumed=None, attempt=1):
@@ -244,21 +252,27 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
 
     Default (`spine_lib is None`) is byte-identical to the installed-plugin form: the child
     resolves the spine from its own plugin cache — i.e. the last *released* version. When
-    `spine_lib` is set (the #235 pre-release gate), the prompt instead pins the spine UNDER
-    TEST: the child reads the committed bundle at `<spine_lib>/showrunner.bundle.js` and
-    invokes the Workflow tool with `args: {workItem, root, libRoot: <spine_lib>}` — reusing
-    the launch surface's existing `libRoot` seam (the live-mission launches pinned it to the
-    versioned cache lib) rather than inventing a new mechanism — and derives the run-outcome
-    projection from that same tree's `run_readout.py`, so a merged-but-unreleased spine is
-    what actually runs.
+    `spine_lib` is set (the #235 pre-release gate), the prompt pins the ENTIRE spine to the
+    override tree under test: the child must treat `<spine_lib>` as the showrunner skill's
+    `$LIB` for EVERY step — pre-flight (`<spine_lib>/preflight.py`), the committed bundle
+    (`<spine_lib>/showrunner.bundle.js`), the Workflow `libRoot: <spine_lib>`, and the
+    run-outcome projection (`<spine_lib>/run_readout.py`) — and must NOT let `$LIB` resolve
+    from the installed plugin cache. That consistency is the whole point: if pre-flight ran
+    from the cached (released) tree while the bundle came from main, the run would be a
+    silent cross-version mix and the pre-release baseline it exists to produce would be
+    invalid.
     """
     if spine_lib:
         bundle = os.path.join(spine_lib, "showrunner.bundle.js")
+        preflight = os.path.join(spine_lib, "preflight.py")
         return (
             "Run the superheroes:showrunner skill end-to-end on the approved work-item "
-            "%(work_item)s, but launch the spine UNDER TEST rather than the installed "
-            "plugin: read the committed bundle at %(bundle)s and invoke the Workflow tool "
-            "on it with args: {workItem: %(work_item)s, root: %(root)s, libRoot: %(spine_lib)s}. "
+            "%(work_item)s, but resolve the ENTIRE spine from the override lib UNDER TEST at "
+            "%(spine_lib)s — treat %(spine_lib)s as the skill's $LIB for EVERY step and do NOT "
+            "let $LIB resolve from the installed plugin cache. Concretely: run the pre-flight "
+            "gate via %(preflight)s (never the cached preflight.py), read the committed bundle "
+            "at %(bundle)s, and invoke the Workflow tool on that bundle with "
+            "args: {workItem: %(work_item)s, root: %(root)s, libRoot: %(spine_lib)s}. "
             "After the run reaches a terminal state (ready or parked), compute its "
             "run-outcome projection via %(spine_lib)s/run_readout.py's "
             "run_outcome(state) function over the run's end state, and write that projection "
@@ -266,7 +280,7 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
             "Do not merge, release, or force-push anything — this run's changes are confined "
             "to the work-item's own branch and PR."
             % {"work_item": work_item, "terminal_path": terminal_path,
-               "bundle": bundle, "spine_lib": spine_lib, "root": root}
+               "bundle": bundle, "preflight": preflight, "spine_lib": spine_lib, "root": root}
         )
     return (
         "Run the superheroes:showrunner skill end-to-end on the approved work-item "
@@ -282,24 +296,29 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
     )
 
 
-def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=None):
-    """Spawn `claude -p <prompt>` as an isolated process-group leader (UFR-5/UFR-6).
+def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=None,
+                           child_model=None):
+    """Spawn `claude -p <prompt> --model <child_model>` as an isolated process-group leader
+    (UFR-5/UFR-6).
 
     `-p`/`--print` is the CLI's actual non-interactive form (there is no `--headless`
     flag); the prompt (`build_launch_prompt`) directs the session to drive
     `superheroes:showrunner` on the stamped work-item and persist its run-outcome
     projection to `terminal_path`. `spine_lib` (when set) pins the spine under test into
     the prompt (#235); `root` is threaded so the override's `args.root` names the real
-    repo root. Sets the execution-context + deny-only markers on the child env. Returns a
-    `_RealChild` handle for the watch loop.
+    repo root. `child_model` (default `DEFAULT_CHILD_MODEL`) pins the driver session's model
+    so it never inherits the invoking user's CLI default (model-governance). Sets the
+    execution-context + deny-only markers on the child env. Returns a `_RealChild` handle
+    for the watch loop.
     """
     env = dict(os.environ)
     env[_CONTEXT_MARKER] = "1"
     env[_DENY_ONLY_MARKER] = "1"
     work_item = stamped.get("work_item") if isinstance(stamped, dict) else stamped
     prompt = build_launch_prompt(work_item, terminal_path, spine_lib=spine_lib, root=root)
+    model = child_model or DEFAULT_CHILD_MODEL
     proc = subprocess.Popen(
-        ["claude", "-p", prompt],
+        ["claude", "-p", prompt, "--model", model],
         start_new_session=True,
         env=env,
     )

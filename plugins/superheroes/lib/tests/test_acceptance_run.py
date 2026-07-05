@@ -92,12 +92,13 @@ def test_spine_provenance_resolved_once_record_and_report_agree():
 
 
 def test_no_spine_provenance_seam_leaves_record_and_report_unchanged():
-    # Default (installed-plugin) path: no seam -> no spine_provenance key, no report section.
+    # A fake deps bundle with no seam at all -> no spine_provenance key, no report section
+    # (the real build() always wires the seam; this pins the seam-absent fallback).
     d = _deps()
     r = run.invoke(d)
     rec = d["_state"]["records_written"][0]
     assert "spine_provenance" not in rec
-    assert "Spine under test" not in r["report"]
+    assert "Provenance" not in r["report"]
 
 
 def test_confirmed_alive_prior_run_refuses_creating_nothing():

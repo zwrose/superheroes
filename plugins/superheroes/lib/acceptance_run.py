@@ -488,6 +488,11 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
                              "dir (must contain showrunner.bundle.js + showrunner.js) instead "
                              "of the installed plugin, so merged-but-unreleased spine changes "
                              "are validated before a release is cut. Unset = installed plugin.")
+    parser.add_argument("--child-model", default=None,
+                        help="Pin the child driver session's model (default: sonnet). The "
+                             "child does only wrapper work; pinning it stops the driver from "
+                             "inheriting the invoking user's CLI default (model-governance). "
+                             "Recorded in the result-record provenance.")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -515,6 +520,8 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
             build_kwargs["ceilings"] = ceilings
         if args.spine_lib is not None:
             build_kwargs["spine_lib"] = args.spine_lib
+        if args.child_model is not None:
+            build_kwargs["child_model"] = args.child_model
         deps = acceptance_deps.build(args.fixture, args.root, **build_kwargs)
     else:
         deps = deps_builder(args.fixture, args.root)

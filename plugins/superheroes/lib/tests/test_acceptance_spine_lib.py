@@ -91,27 +91,58 @@ def test_preflight_refuses_bad_override_before_touching_fixture(monkeypatch, tmp
 
 # --- provenance (record + report carry lib path + bundle hash) ------------------------
 
-def test_spine_provenance_seam_reports_lib_path_hash_and_version(tmp_path):
+def test_spine_provenance_seam_reports_lib_path_hash_version_and_child_model(tmp_path):
     body = b"// the spine under test\n"
     lib = _valid_spine_lib(tmp_path, bundle=body, version="0.11.0\n")
-    prov = deps.real_spine_provenance(str(lib))()
+    prov = deps.real_spine_provenance(str(lib), "sonnet")()
     assert prov["lib_path"] == str(lib)
     assert prov["bundle_sha256"] == hashlib.sha256(body).hexdigest()
     assert prov["version"] == "0.11.0"
+    assert prov["child_model"] == "sonnet"
 
 
 def test_spine_provenance_version_none_when_absent(tmp_path):
     lib = _valid_spine_lib(tmp_path)  # no version.txt
-    prov = deps.real_spine_provenance(str(lib))()
+    prov = deps.real_spine_provenance(str(lib), "sonnet")()
     assert prov["version"] is None
     assert prov["bundle_sha256"] is not None
 
 
-def test_spine_provenance_none_when_no_override():
-    assert deps.real_spine_provenance(None)() is None
+def test_spine_provenance_records_driver_even_with_no_override():
+    # Every verdict states what drove it: a default (no --spine-lib) run still records the
+    # child model, but carries NO spine lib/hash keys (their absence = no pinned spine).
+    prov = deps.real_spine_provenance(None, "opus")()
+    assert prov == {"child_model": "opus"}
+    assert "lib_path" not in prov and "bundle_sha256" not in prov
 
 
-def test_report_renders_spine_under_test_section(tmp_path):
+def test_build_threads_one_child_model_into_launcher_and_provenance(monkeypatch, tmp_path):
+    # build() resolves child_model ONCE and threads the SAME concrete value to the launcher
+    # (what is spawned) and the provenance seam (what is recorded) — they can never disagree.
+    captured = {}
+    monkeypatch.setattr(deps, "real_launcher",
+                        lambda root, ceilings=None, spine_lib=None, child_model=None:
+                        captured.__setitem__("launcher_model", child_model) or (lambda *a, **k: None))
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    d = deps.build(str(fixture), str(tmp_path / "root"), child_model="haiku")
+    assert captured["launcher_model"] == "haiku"
+    assert d["spine_provenance"]()["child_model"] == "haiku"
+
+
+def test_build_default_child_model_is_sonnet(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(deps, "real_launcher",
+                        lambda root, ceilings=None, spine_lib=None, child_model=None:
+                        captured.__setitem__("launcher_model", child_model) or (lambda *a, **k: None))
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    d = deps.build(str(fixture), str(tmp_path / "root"))   # no child_model
+    assert captured["launcher_model"] == "sonnet"
+    assert d["spine_provenance"]()["child_model"] == "sonnet"
+
+
+def test_report_renders_provenance_section_with_spine_and_driver(tmp_path):
     report = result.render_report({
         "verdict": "pass",
         "reason": "clean run",
@@ -119,20 +150,34 @@ def test_report_renders_spine_under_test_section(tmp_path):
         "cleaned_up": [],
         "left_behind": [],
         "spine_provenance": {"lib_path": "/repo/plugins/superheroes/lib",
-                             "bundle_sha256": "deadbeef", "version": "0.11.0"},
+                             "bundle_sha256": "deadbeef", "version": "0.11.0",
+                             "child_model": "sonnet"},
     })
-    assert "Spine under test" in report
+    assert "Provenance" in report
     assert "/repo/plugins/superheroes/lib" in report
     assert "deadbeef" in report
     assert "0.11.0" in report
+    assert "sonnet" in report          # the driver is named
 
 
-def test_report_omits_spine_section_by_default():
+def test_report_provenance_shows_driver_on_default_run():
+    # A default run (child_model only, no spine keys) still renders the driver, and says the
+    # spine was the unpinned installed plugin.
+    report = result.render_report({
+        "verdict": "pass", "reason": "clean run", "record_path": "/rec.json",
+        "cleaned_up": [], "left_behind": [],
+        "spine_provenance": {"child_model": "sonnet"},
+    })
+    assert "sonnet" in report
+    assert "not pinned" in report
+
+
+def test_report_omits_provenance_section_when_absent():
     report = result.render_report({
         "verdict": "pass", "reason": "clean run", "record_path": "/rec.json",
         "cleaned_up": [], "left_behind": [],
     })
-    assert "Spine under test" not in report
+    assert "Provenance" not in report
 
 
 # --- phase source follows the override ------------------------------------------------

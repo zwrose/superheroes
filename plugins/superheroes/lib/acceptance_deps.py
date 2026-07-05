@@ -257,18 +257,22 @@ def _spine_lib_refusal(spine_lib):
     return None
 
 
-def real_spine_provenance(spine_lib):
-    """`deps["spine_provenance"]`: identify WHICH spine was under test (#235 honesty piece).
+def real_spine_provenance(spine_lib, child_model):
+    """`deps["spine_provenance"]`: identify WHAT this verdict validated and WHAT drove it
+    (#235 honesty piece). Every verdict must state both the spine under test AND the driver.
 
-    Returns `{lib_path, bundle_sha256, version}` for the resolved override lib — the
-    content hash makes a pass attributable to the exact spine it validated (a pre-release
-    pass and a post-release pass are otherwise indistinguishable in the record). Returns
-    None when no override is set (the default installed-plugin path carries no pinned
-    spine), so the record/report omit the provenance block entirely on default runs.
+    Always returns a dict carrying `child_model` (the pinned driver-session model), since
+    the driver is always pinned now. On a `--spine-lib` run it ALSO carries
+    `{lib_path, bundle_sha256, version}` for the override lib — the content hash makes a pass
+    attributable to the exact spine it validated (a pre-release pass and a post-release pass
+    are otherwise indistinguishable). On a default (installed-plugin) run those spine keys
+    are absent — their absence is itself the honest signal that no spine was pinned — while
+    `child_model` is still recorded, so the driver is never unstated.
     """
     def _prov():
+        prov = {"child_model": child_model}
         if not spine_lib:
-            return None
+            return prov
         digest = None
         try:
             with open(_spine_bundle(spine_lib), "rb") as fh:
@@ -281,7 +285,10 @@ def real_spine_provenance(spine_lib):
                 version = fh.read().strip()
         except OSError:
             version = None
-        return {"lib_path": spine_lib, "bundle_sha256": digest, "version": version}
+        prov["lib_path"] = spine_lib
+        prov["bundle_sha256"] = digest
+        prov["version"] = version
+        return prov
     return _prov
 
 
@@ -687,19 +694,20 @@ def real_spend_sampler(root, work_item):
     return _sample
 
 
-def real_launcher(root, ceilings=None, spine_lib=None):
+def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
     """`deps["launcher"]`: `acceptance_launch.run` with its production real defaults
-    (spawns `claude -p <prompt>` — the non-interactive CLI form — as a process-group
-    leader, driving superheroes:showrunner on the stamped work-item). When `spine_lib`
-    is set (#235), the child launches the spine under test from that lib, not the
-    installed plugin."""
+    (spawns `claude -p <prompt> --model <child_model>` — the non-interactive CLI form — as a
+    process-group leader, driving superheroes:showrunner on the stamped work-item). When
+    `spine_lib` is set (#235), the child launches the spine under test from that lib, not the
+    installed plugin. `child_model` pins the driver session's model (model-governance)."""
     def _launch(stamped, budget_consumed=None, attempt=1):
         terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
                                      "terminal-record.json")
 
         def _child_factory():
             return acceptance_launch._default_child_factory(
-                stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root)
+                stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root,
+                child_model=child_model)
 
         return acceptance_launch.run(
             stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,
@@ -735,7 +743,7 @@ def real_write_orphan_record(root):
 # --- assembly --------------------------------------------------------------------------
 
 
-def build(fixture_dir, root, ceilings=None, spine_lib=None):
+def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None):
     """Assemble the full real `deps` dict `acceptance_run.invoke` expects.
 
     Every seam here is a real primitive (control-plane store, git/gh subprocess reads,
@@ -743,12 +751,17 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None):
     `invoke(deps)` with the dict this returns.
 
     `spine_lib` (the #235 pre-release gate, default None = today's installed-plugin
-    behavior, byte-identical) pins the spine UNDER TEST: it threads into the launcher's
-    child prompt (the child launches `<spine_lib>/showrunner.bundle.js` with
-    `libRoot: <spine_lib>`), the preflight's bad-override refusal + phase source, the
-    journal-derived phase filter, the expected-phase source, and a `spine_provenance`
-    seam that stamps the record/report with the bundle's SHA-256 so a pass is
-    attributable to the exact spine it validated.
+    behavior, byte-identical prompt) pins the spine UNDER TEST: it threads into the
+    launcher's child prompt (the child resolves the WHOLE spine — pre-flight, bundle,
+    `libRoot`, run-outcome — from `<spine_lib>`), the preflight's bad-override refusal +
+    phase source, the journal-derived phase filter, the expected-phase source, and a
+    `spine_provenance` seam that stamps the record/report with the bundle's SHA-256 so a
+    pass is attributable to the exact spine it validated.
+
+    `child_model` (default `acceptance_launch.DEFAULT_CHILD_MODEL`) pins the driver
+    session's model so it never inherits the invoking user's CLI default; it is resolved to
+    a concrete value ONCE here and threaded to both the launcher (what is spawned) and the
+    provenance seam (what is recorded), so the recorded driver always matches the spawned one.
 
     premortem-001: `reclaim_probe` and the FIRST `materialize()` share one atomically-
     reserved stamp (`state["reserved_stamp"]`, minted once here and consumed exactly
@@ -760,6 +773,10 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None):
     invocation needs arbitrating at that point — only the initial proceed/refuse decision
     is a genuine multi-invocation race.
     """
+    # Resolve the driver model ONCE so the spawned child and the recorded provenance can
+    # never disagree about what drove the run.
+    resolved_child_model = child_model or acceptance_launch.DEFAULT_CHILD_MODEL
+
     state = {
         "stamped": None,
         "reserved_stamp": acceptance_fixture.make_stamp(uuid.uuid4().hex),
@@ -792,7 +809,8 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None):
         "reclaim_probe": reclaim_probe,
         "materialize": materialize,
         "preflight_ok": real_preflight_ok(fixture_dir, root, spine_lib=spine_lib),
-        "launcher": real_launcher(root, ceilings=ceilings, spine_lib=spine_lib),
+        "launcher": real_launcher(root, ceilings=ceilings, spine_lib=spine_lib,
+                                  child_model=resolved_child_model),
         "run_outcome": real_run_outcome(
             root, lambda: (state["stamped"] or {}).get("work_item"), spine_lib=spine_lib),
         "gh_reader": gh_reader,
@@ -805,5 +823,5 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None):
         "quarantine_lease": real_quarantine_lease(root),
         "release_lease": lambda: real_release_lease(root),
         "clock_now": real_clock_now(),
-        "spine_provenance": real_spine_provenance(spine_lib),
+        "spine_provenance": real_spine_provenance(spine_lib, resolved_child_model),
     }
