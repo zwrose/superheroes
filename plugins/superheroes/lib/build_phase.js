@@ -15,15 +15,34 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
+// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
+// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
+// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
 const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 
-const LIB = 'plugins/superheroes/lib'
+// #170: compose the spine CODE root (plugin-cache lib dir, or the repo-relative default) at
+// CALL time — never a module-load const, since the bundle ENTRY plants __SR_LIB after factories.
+const { libPath, libRoot } = require('./lib_root.js')
 const MAX_ROUNDS = 3                 // per-task + final-review fix bound (plan: same bound as a task)
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
+
+// #150: task-scoped leaf labels for the /workflows progress view (spaces, not kebab-case).
+function implementTaskLabel(task, taskCount) {
+  return `implement task ${task.id} of ${taskCount}`
+}
+
+function fixTaskLabel(task) {
+  return `fix task ${task.id}`
+}
+
+function reviewTaskLabel(task, round) {
+  return `review task ${task.id}:r${round}`
+}
 function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
 function ok() { return { confidence: 'high', assumptions: [] } }
 
@@ -40,9 +59,9 @@ function baseArg() {
 // build_phase reference is itself lazy, and deferring keeps build_phase's require surface unchanged
 // for the smokes). One exec, no duplication, no front-half change.
 let _execFn = null
-function exec(commands) {
+function exec(commands, label) {
   if (!_execFn) _execFn = require('./showrunner.js').exec
-  return _execFn(commands)
+  return _execFn(commands, label)
 }
 
 // Run ONE command via the exec dumb-pipe and parse its JSON stdout. The cheap haiku courier
@@ -54,9 +73,11 @@ function exec(commands) {
 // park/false/fallback it produces today). A clean {"ok":true} on the first call returns immediately
 // (one exec, no behavior change); a parseable {"ok":false} (a REAL durable-write failure) is returned
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
-async function execJson(cmd) {
+// `label` is the cosmetic display purpose (defaults to 'exec'); dumb-pipe routing rides the courier's
+// `courier: true` marker, so a descriptive label never loosens the cheapest-model pinning.
+async function execJson(cmd, label) {
   try {
-    return await courier.runCourierJson('exec', cmd)
+    return await courier.runCourierJson(label || 'exec', cmd)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -65,9 +86,9 @@ async function execJson(cmd) {
 
 // Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
 // Retry once on an empty stdout; returns the trimmed string, or null after the retry.
-async function execText(cmd) {
+async function execText(cmd, label) {
   try {
-    return (await courier.runCourierText('exec', cmd)).trim()
+    return (await courier.runCourierText(label || 'exec', cmd)).trim()
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -113,7 +134,7 @@ async function gatherState(workItem, branch, validIds, wt) {
   try {
     parsed = await courier.runCourierJson(
       'gather build state',
-      `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+      `python3 ${libPath('build_state_cli.py')} gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
       {},
     )
   } catch (_) {
@@ -148,13 +169,15 @@ async function buildPhase(workItem, generation) {
   // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
   // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
   const gate = await execText(
-    `python3 ${LIB}/definition_doc.py read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+    'read gate',
   )
   if (gate == null) return park('could not read the tasks gate — failing closed')
   if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
-    `python3 ${LIB}/build_entry.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    `python3 ${libPath('build_entry.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    'prepare build',
   )
   if (setup == null) return park('build setup failed: no branch')
   if (!setup.branch) return park('build setup failed: ' + (setup.error || 'no branch'))
@@ -165,7 +188,7 @@ async function buildPhase(workItem, generation) {
   // UFR-8: zero executable tasks -> finish without building.
   // With exec+JSON.parse the BUG-2 string-recovery is structurally moot, but KEEP the
   // typeof===string JSON.parse recovery + Array.isArray guard as defense-in-depth (BUG-3).
-  const _taskResult = await execJson(`python3 ${LIB}/task_list_cli.py --work-item ${shq(workItem)}`)
+  const _taskResult = await execJson(`python3 ${libPath('task_list_cli.py')} --work-item ${shq(workItem)}`, 'read tasks')
   if (_taskResult == null) return park('task-list command did not run — failing closed')
   let tasks = _taskResult.tasks
   if (typeof tasks === 'string') {
@@ -256,7 +279,7 @@ async function buildPhase(workItem, generation) {
       }
       if (!isBuilt) {
         // Build the task (fence, dispatch worker, commit, journal, then review).
-        const r = await buildOneTask(workItem, generation, task, branch, validIds, wt)
+        const r = await buildOneTask(workItem, generation, task, branch, validIds, wt, tasks.length)
         if (r.parked) return park(r.reason)
         // On confirmed success (buildOneTask only returns !parked when journal+review both passed):
         builtTaskIds.add(task.id)
@@ -319,7 +342,7 @@ async function resetUncommitted(wt, branch) {
 async function writeProvenance(workItem) {
   // execJson retries the courier ONCE on a dropped/garbled stdout; null -> the SAME fail-closed
   // fallback as today ({ok:false} -> caller parks). A parseable {ok:false} is returned as-is (no retry).
-  const r = await execJson(`python3 ${LIB}/prov_entry.py --step build --work-item ${shq(workItem)}`)
+  const r = await execJson(`python3 ${libPath('prov_entry.py')} --step build --work-item ${shq(workItem)}`, 'write provenance')
   if (r == null) return { ok: false, error: 'provenance leaf did not run' }
   return r
 }
@@ -329,7 +352,7 @@ async function recordFinalReviewClean(workItem) {
   try {
     return await courier.runCourierJson(
       'stamp build coverage',
-      `python3 ${LIB}/build_state_cli.py record-final-review --work-item ${shq(workItem)} --clean true`,
+      `python3 ${libPath('build_state_cli.py')} record-final-review --work-item ${shq(workItem)} --clean true`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -339,12 +362,17 @@ async function recordFinalReviewClean(workItem) {
 
 // fenceOrPark: lease-fence acquire. CRITICAL fail-closed: an exec/parse failure must read as a LOST
 // fence (false), NEVER as ok — a fence failure read as ok would let an unfenced write through (UFR-10).
+function _checkoutRoot() {
+  const r = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT)
+    ? String(globalThis.__SR_ROOT) : null
+  return (r && r.trim()) ? r : null
+}
 async function fenceOrPark(workItem, generation) {
-  // execJson retries the courier ONCE on a dropped/garbled stdout; null -> false (fence reads LOST),
-  // preserving the CRITICAL fail-closed semantic (an exec/parse failure must NEVER read as ok — an
-  // unfenced write would slip through, UFR-10). A parseable {ok:false} returns false the same.
+  const root = _checkoutRoot()
+  if (!root) return false
   const f = await execJson(
-    `python3 ${LIB}/fence_cli.py --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
+    `python3 ${libPath('fence_cli.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))} --root ${shq(root)}`,
+    'fence lease',
   )
   return !!(f && f.ok)
 }
@@ -353,7 +381,7 @@ async function recordTaskBuilt(workItem, taskId) {
   try {
     return await courier.runCourierJson(
       'record task built',
-      `python3 ${LIB}/build_state_cli.py record-built --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      `python3 ${libPath('build_state_cli.py')} record-built --work-item ${shq(workItem)} --task ${shq(taskId)}`,
       { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -365,7 +393,7 @@ async function recordTaskReviewed(workItem, taskId) {
   try {
     return await courier.runCourierJson(
       'record task reviewed',
-      `python3 ${LIB}/build_state_cli.py record-reviewed --work-item ${shq(workItem)} --task ${shq(taskId)}`,
+      `python3 ${libPath('build_state_cli.py')} record-reviewed --work-item ${shq(workItem)} --task ${shq(taskId)}`,
       { require: ['ok', 'read_back', 'task'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -381,7 +409,7 @@ let _writeAuthNotified = false
 async function _implWriteAuthorized(engine, wt) {
   if (_writeAuthOk !== null) return _writeAuthOk
   const v = await execJson(
-    `python3 ${LIB}/engine_authz.py test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`)
+    `python3 ${libPath('engine_authz.py')} test-dispatch --engine ${shq(engine)} --cwd ${shq(wt)}`, 'check write auth')
   _writeAuthOk = !!(v && v.ok === true)
   if (!_writeAuthOk && !_writeAuthNotified) {
     _writeAuthNotified = true
@@ -416,7 +444,7 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
-async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
+async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   let attempt = 1
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
@@ -427,14 +455,18 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       prompt:
         `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
         + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+        + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
         + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Return JSON `
+        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+        + `other trailer (e.g. Co-Authored-By). Return JSON `
         + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
-        { label: 'implement-task', schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
@@ -442,7 +474,8 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt) {
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
       // can't run / returns unparseable output must NOT read as a clean trailer state — park (UFR-7).
       const chk = await execJson(
-        `python3 ${LIB}/build_state_cli.py gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+        `python3 ${libPath('build_state_cli.py')} gather --work-item ${shq(workItem)} --branch ${shq(branch)} --valid-ids ${shq(validIds)} --worktree ${shq(wt)}${baseArg()}`,
+        'check trailers',
       )
       if (chk == null) return { parked: true, reason: 'could not verify commit trailers — failing closed (UFR-7)' }
       // A structured base-resolution error (C-I3) must park with its specific reason, not slip past
@@ -478,6 +511,66 @@ async function reviewOneTask(workItem, generation, task, branch, wt) {
   return reviewLoop(workItem, generation, task, branch, wt)
 }
 
+// #160: the per-task reviewer's bespoke two-verdict schema — the shape the task_review twin consumes.
+// `findings` is REQUIRED (not just a declared property): for codex this schema is enforced via
+// --output-schema, and the engine adapter's review parse (parse_result role='review') treats a missing
+// findings list as 'unreadable' — so a schema-conformant clean external review that omitted findings
+// would needlessly fall open to Claude, defeating the reviewer-engine preference on clean tasks. Both
+// engines are therefore required to emit the findings array the parse layer depends on (matching the
+// whole-branch review's external schema). Harmless for the native path — the native reviewer already
+// emits findings, and reviewLoop reads `review.findings || []` either way.
+const REVIEW_TASK_SCHEMA = {
+  type: 'object',
+  required: ['verdicts', 'findings'],
+  properties: {
+    verdicts: {
+      type: 'object',
+      required: ['spec_compliance', 'code_quality'],
+      properties: {
+        spec_compliance: { enum: ['pass', 'fail'] },
+        code_quality: { enum: ['pass', 'fail'] },
+      },
+    },
+    findings: { type: 'array' },
+  },
+}
+
+// #160: dispatch ONE per-task review, honoring enginePreferences.reviewer AND the model-tier policy —
+// mirroring the whole-branch final review beside it (runFinalReview's reviewerAgent). Before this, the
+// per-task reviewer called agent() with NO model + NO engine resolution, so a project configured
+// `reviewer: codex` never routed the per-task review to codex (it silently rode the bundle's Opus
+// safety floor, bypassing enginePreferences.reviewer entirely — found live). The per-task review runs
+// at the LIGHTER `reviewer` tier / regular `review` effort — the whole-branch review is the deep one
+// (reviewer-deep / review-deep). Returns the bespoke {verdicts, findings} shape the task_review twin
+// consumes.
+async function taskReviewAgent(workItem, task, branch, wt, round) {
+  const reviewerModel = modelTierTwin.resolveModel('reviewer', _overrides(), null)
+  const prompt =
+    `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
+    + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
+    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+  const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
+  if (rEngine !== 'claude') {
+    // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
+    const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+    const res = await engineDispatch.dispatchExternal({
+      workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
+      schema: REVIEW_TASK_SCHEMA, taskId: task.id,
+    })
+    // The engine adapter's review parse yields {findings} only (parse_result role_kind='review'
+    // discards verdicts), so synthesize the two required verdicts from the findings. The task_review
+    // twin uses the verdicts ONLY as a completeness guard — their pass/fail value is unused; the real
+    // decision rides the findings' blocking severities — so this is behavior-identical to a native
+    // two-verdict review that returned the same findings. An unreadable external review (null / no
+    // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
+    if (res && Array.isArray(res.findings)) {
+      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
+    }
+  }
+  return agent(prompt, { label: reviewTaskLabel(task, round), model: reviewerModel, schema: REVIEW_TASK_SCHEMA })
+}
+
 // The bespoke two-verdict review + bounded fix loop (FR-4..7, UFR-4/5). Never uses reviewPanel.
 async function reviewLoop(workItem, generation, task, branch, wt) {
   // model_tier resolved in-process via the existing twin (no leaf): mirror showrunner's authorModel.
@@ -494,26 +587,9 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
   for (;;) {
     iter += 1
     if (iter > MAX_ITER) return { parked: true, reason: 'review loop exceeded its iteration guard — park' }
-    const review = await agent(
-      `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
-      + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-      + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`,
-      { label: `task-reviewer:r${round}`,
-        schema: {
-          type: 'object',
-          required: ['verdicts'],
-          properties: {
-            verdicts: {
-              type: 'object',
-              required: ['spec_compliance', 'code_quality'],
-              properties: {
-                spec_compliance: { enum: ['pass', 'fail'] },
-                code_quality: { enum: ['pass', 'fail'] },
-              },
-            },
-            findings: { type: 'array' },
-          },
-        } })
+    // #160: engine- + model-tier-aware per-task review (see taskReviewAgent) — honors
+    // enginePreferences.reviewer + the reviewer model tier, mirroring the whole-branch review.
+    const review = await taskReviewAgent(workItem, task, branch, wt, round)
     // #115 runaway fix: defensively recover a stringified `verdicts` (a leaf can still derail and emit
     // it as JSON-in-a-string despite the pinned schema — same nested-structure-stringification family
     // as the exec/fence mangles, and mirrors build_phase's existing task-list string recovery). The
@@ -536,7 +612,8 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
         // append the carried-forward Minors (result unused — best-effort accumulator write). Route
         // through execJson so a dropped/garbled courier stdout is retried once (the write is idempotent).
         await execJson(
-          `python3 ${LIB}/minor_rollup_cli.py --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
+          `python3 ${libPath('minor_rollup_cli.py')} --work-item ${shq(workItem)} --append ${shq(JSON.stringify(d.minors))}`,
+          'append minors',
         )
       }
       // record-before-advance: record-reviewed must succeed before the task counts reviewed.
@@ -555,11 +632,11 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: task.id, wt, branch,
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}": ${_fixFindings}`,
+      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
-        + `"Task-Id: ${task.id}": ${_fixFindings}`,
-        { label: 'fix-task', model: fixerModel }),
+        + `"Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
+        { label: fixTaskLabel(task), model: fixerModel }),
     })
     history.push({ round, findings: review.findings || [] })
     round += 1
@@ -586,7 +663,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   try {
     folded = await courier.runCourierJson(
       'read verify + minors',
-      `python3 -c ${shq(script)} ${shq(LIB)} ${shq(workItem)}`,
+      `python3 -c ${shq(script)} ${shq(libRoot())} ${shq(workItem)}`,
       { require: ['ok', 'verify_command', 'minors'] },
     )
   } catch (_) {
@@ -665,7 +742,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
   return { terminal: verdict && verdict.terminal }
 }
 
-module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok }
+// Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
+module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

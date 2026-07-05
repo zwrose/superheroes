@@ -8,6 +8,7 @@
 // #118: reviewDocPhase RETURNS its persist spec (set-gate side-effect + journal payload); the ONE
 //   'save phase progress' write happens in runPhases' per-phase tail — the failure scenarios drive
 //   runPhases and assert the park there (UFR-5: never advance on an un-recorded gate).
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
@@ -31,6 +32,13 @@ const BIG_MINOR_FINDINGS = Array.from({ length: 24 }, (_, i) => ({
 // (journal_entry.py DurableWriteError prints {"ok":false} and exits 0). persistPhase must fail-CLOSE on it.
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 // setGateFails / journalWriteFails: shape the save phase progress courier response.
 function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, setGateStale, journalWriteFails }) {
   let panelRuns = 0
@@ -48,7 +56,7 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
       return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
     }
     if (label === 'save round state') return jsonOut({ ok: true })
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: gate }) }]
       // gate-for-terminal must NOT be dispatched as an exec (it is the in-process JS twin).
       if (prompt.includes('gate-for-terminal')) throw new Error('gate-for-terminal dispatched as exec — must use JS twin')
@@ -60,7 +68,7 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     // fix downgrades it to confidence:low -> cannot-certify).
     if (label.endsWith('-reviewer')) {
       panelRuns += 1
-      return { findings: reviewerFindings, confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: reviewerFindings, confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     if (label.startsWith('synthesis')) return { verdicts: [] }         // keep all merged findings
     if (label === 'revise-doc') return reviserFails ? null : { fixes: [], deferred: [] }

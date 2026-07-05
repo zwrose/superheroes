@@ -14,8 +14,14 @@ def decide(phase_result, gate):
     pr = phase_result or {}
     # 1. self-assessed park signals first (before the gate) — the safety ordering.
     if pr.get("assumptions"):
-        return {"action": "park_assumption",
-                "reason": "phase recorded a material assumption"}
+        # #212: name WHICH assumption(s) — the payload carries the list; a bare "recorded a material
+        # assumption" hid the real cause. The infra parkReason override still wins at the consumer, so
+        # this richer reason surfaces where no override was set (e.g. review-code sub-parks).
+        detail = "; ".join(str(a) for a in pr.get("assumptions") or [])
+        reason = "phase recorded a material assumption"
+        if detail:
+            reason += ": " + detail
+        return {"action": "park_assumption", "reason": reason}
     if pr.get("confidence") == "low":
         return {"action": "park_low_confidence",
                 "reason": "phase recorded confidence below the parking threshold"}
@@ -24,8 +30,14 @@ def decide(phase_result, gate):
         return {"action": "proceed",
                 "reason": "no review gate" if gate is None else "gate passed"}
     if gate == "changes-requested":
-        return {"action": "park_changes_requested",
-                "reason": "review requested changes"}
+        # #212: a review park must survive the phase layer — thread the named terminal reason the
+        # review phase put on parkDetail (e.g. "cannot-certify: <seat> returned no verification
+        # receipt after retry") so the workflow park reads it instead of the bare flatten.
+        detail = pr.get("parkDetail")
+        reason = "review requested changes"
+        if detail:
+            reason += " — " + str(detail)
+        return {"action": "park_changes_requested", "reason": reason}
     if gate == "pending":
         return {"action": "park_pending",
                 "reason": "gate not passed (pending / not yet approved)"}

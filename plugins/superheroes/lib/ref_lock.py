@@ -1,14 +1,18 @@
 # plugins/superheroes/lib/ref_lock.py
-"""The work-item lock (CONVENTIONS §4.4 / §4.5).
+"""The work-item lock (CONVENTIONS §4.4).
 
 Ref-lease (§4.4): a leased git ref `refs/superheroes/locks/<work-item>` in the
-per-checkout control-plane store. The lease JSON is stored as a git BLOB; the ref
+per-clone control-plane store. The lease JSON is stored as a git BLOB; the ref
 points at that blob; reclaim is an atomic compare-and-swap via
 `git update-ref <ref> <newblob> <oldblob>` (the oldvalue precondition). `generation`
 is the fence token mirrored into checkpoint.lockGeneration.
 
-Startup per-checkout lock (§4.5) lives in lock_startup.py-style helpers added in
-Task 4 (same module).
+This per-work-item lease is the sole mutex for "one live run per work item per clone":
+because the store is keyed off the git common dir, the same lease ref is visible
+identically from every worktree of a clone. (The old §4.5 per-checkout `startup.lock`
+was removed in #170 — it never serialized anything: its recorded holder pid was the
+ephemeral recover_entry leaf, dead seconds after acquire, so every subsequent launch
+stole it, and release_startup had zero callers.)
 """
 import calendar
 import json
@@ -178,56 +182,25 @@ def fence_ok(store, work_item, generation):
     return bool(lease) and lease.get("generation") == generation
 
 
-# --- §4.5 startup per-checkout lock (append to plugins/superheroes/lib/ref_lock.py) ---
-
-def _startup_path(store):
-    return os.path.join(store, "startup.lock")
-
-
-def _startup_holder(store):
-    try:
-        with open(_startup_path(store), encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return {}
-
-
-def _startup_obj():
-    return {"pid": os.getpid(), "host": _host(), "bootId": hostinfo.boot_id()}
+def list_leases(store):
+    """(work_item, lease_dict_or_None) for every lock ref in the store. Never raises:
+    an unreadable store / no refs -> []. The work item is the ref suffix after the
+    §4.4 prefix."""
+    r = _git(store, "for-each-ref", "--format=%(refname)", LOCK_REF_PREFIX)
+    if r.returncode != 0 or not r.stdout.strip():
+        return []
+    out = []
+    for line in r.stdout.splitlines():
+        ref = line.strip()
+        if not ref.startswith(LOCK_REF_PREFIX):
+            continue
+        out.append((ref[len(LOCK_REF_PREFIX):], read_lease(store, ref[len(LOCK_REF_PREFIX):])[1]))
+    return out
 
 
-def acquire_startup(store):
-    """One active loop per checkout (§4.5). O_EXCL create; if held, steal iff the
-    holder is stale (pid dead-on-this-boot), else fail closed. Returns
-    (ok, holder_if_failed)."""
-    path = _startup_path(store)
-    try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        holder = _startup_holder(store)
-        # Re-entrant for THIS very process (same pid + host + boot): a compaction-resume
-        # re-runs step 0 in the SAME OS process, which still holds its own startup.lock —
-        # treat that as already-held, not a rival loop, or every resume would fail closed.
-        if (holder.get("pid") == os.getpid() and holder.get("host") == _host()
-                and holder.get("bootId") == hostinfo.boot_id()):
-            return (True, {})                    # we already hold it (re-entry)
-        if not _pid_dead(holder):                # reuse §4.4's dead-on-this-boot check
-            return (False, holder)               # a DIFFERENT live holder -> fail closed
-        try:
-            os.unlink(path)                      # stale -> clear it
-        except FileNotFoundError:
-            pass
-        try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            return (False, _startup_holder(store))   # lost a concurrent steal
-    with os.fdopen(fd, "w") as fh:
-        json.dump(_startup_obj(), fh)
-    return (True, {})
-
-
-def release_startup(store):
-    try:
-        os.unlink(_startup_path(store))
-    except FileNotFoundError:
-        pass
+def active_work_items(store, ttl=DEFAULT_TTL, now=None):
+    """Work items in `store` holding a LIVE (non-stale) lease — the honest "what is running
+    in this clone" signal that replaced the vacuous current.json pointer (#170). Sorted for
+    determinism. Never raises."""
+    return sorted(wi for (wi, lease) in list_leases(store)
+                  if isinstance(lease, dict) and not is_stale(lease, ttl, now))

@@ -146,18 +146,28 @@ def resolve_write_path(work_item, doc_type, *, root, cwd=None, store_root=None):
 # --- frontmatter (§3.1) ----------------------------------------------------
 
 def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
-                created=None, updated=None, status="draft", review="pending"):
+                created=None, updated=None, status="draft", review="pending",
+                allow_orphan=False):
     """Build the §3.1 frontmatter dict, enforcing the parent-linkage invariant.
 
     `spec` must have a null parent; `plan` must parent a `spec`; `tasks` must
     parent a `plan` (§3.1). We fail closed on a mismatch rather than emit a doc
     that violates the contract. `parent` may be passed as the work-item slug of
     the parent (a string) or as a full `{workItem, docType}` dict.
+
+    `allow_orphan` (tasks only) permits a NULL parent: quick discovery (#25) authors a tasks
+    doc directly, with no plan (and no spec) ancestor — the tasks doc IS the showrunner's root
+    input artifact on the quick route, so a null parent is correct, exactly as a spec's is. It
+    is opt-in, so the full path keeps its strict tasks→plan linkage; a non-tasks doc, or a
+    tasks doc that is given a parent, still runs the strict validation below.
     """
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
-    expected_parent = _PARENT_DOCTYPE[doc_type]
-    parent_obj = _normalize_parent(parent, expected_parent, doc_type)
+    if allow_orphan and doc_type == "tasks" and parent is None:
+        parent_obj = None
+    else:
+        expected_parent = _PARENT_DOCTYPE[doc_type]
+        parent_obj = _normalize_parent(parent, expected_parent, doc_type)
     today = datetime.date.today().isoformat()
     return {
         "superheroes": "doc",
@@ -387,6 +397,9 @@ def _build_parser():
     f.add_argument("--issue", type=int, default=None)
     f.add_argument("--parent-item", default=None,
                    help="parent work-item slug (required for plan/tasks)")
+    f.add_argument("--orphan", action="store_true",
+                   help="tasks only: emit a NULL parent for a quick-discovery tasks doc "
+                        "authored with no plan (#25); ignored if --parent-item is given")
     f.add_argument("--created", default=None)
     f.add_argument("--updated", default=None)
 
@@ -454,7 +467,8 @@ def main(argv):
     if args.cmd == "frontmatter":
         fm = frontmatter(
             args.doc, args.work_item, size=args.size, parent=args.parent_item,
-            issue=args.issue, created=args.created, updated=args.updated)
+            issue=args.issue, created=args.created, updated=args.updated,
+            allow_orphan=getattr(args, "orphan", False))
         sys.stdout.write(render_frontmatter(fm))
         return 0
     try:

@@ -63,13 +63,26 @@ action that owns it, leaving the rest of the calibration untouched:
   never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
+- **Write the review-discipline section into the project's `CLAUDE.md`** — offered ONLY when
+  the storage mode is **in-repo** (out-of-repo mode exists to keep the repo free of superheroes
+  traces; there the SessionStart bootstrap note is the sole carrier). Owner-gated like every
+  write: show the section text (source of truth:
+  `$ROOT_DIR/rubric/review-discipline.md`), and on explicit confirm
+  append it under a `## Review discipline` heading. Idempotent — if a `Review discipline`
+  heading already exists in the project's `CLAUDE.md`, report that and change nothing.
 - **Switch the storage mode** → the confirmed switch below.
-- **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
-  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing
-  `enginePreferences` through `core_md`. Set a role back to `claude` (or clear it) to fall fully open.
-- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/author)
-  → show the effective map first, then write only the `## Model tiers` block in the resolved
-  review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+- **Change the per-role engine** (reviewer engine / implementation engine / plan-author engine) → the
+  engine step in `reference/set-up.md` §4.5 (availability → preference → show-authorization →
+  test-dispatch), writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`,
+  `planAuthor`). Set a role back to `claude` (or clear it) to fall fully open. `planAuthor` routes ONLY
+  the showrunner's plan-author leaf; tasks authoring always runs native.
+- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/
+  author/author-plan) → show the effective map first, then write only the `## Model tiers` block in the
+  resolved review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+  `author-plan` is a split role: unset, it resolves exactly as `author`; set (e.g. `author-plan: fable`,
+  only on explicit owner ask) it moves plan authoring alone. Fable-via-Cursor plan authoring = both
+  `author-plan: fable` and `planAuthor: cursor` (the cursor adapter maps the tier to its own fable
+  model id).
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

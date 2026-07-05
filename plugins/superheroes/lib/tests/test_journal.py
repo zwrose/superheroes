@@ -56,6 +56,21 @@ def test_ci_attempts_over_counts_a_torn_tail_failsafe(tmp_path, monkeypatch):
     assert rounds == 2   # 1 parsed + 1 conservative for the torn tail (NEVER under-counts)
 
 
+def test_phase_cost_is_a_valid_additive_event_type(tmp_path, monkeypatch):
+    # #130: token telemetry extends the §4.6 vocabulary additively (no schemaVersion bump). A
+    # phase_cost event carries structured non-secret accounting written as-is (like ci_fix_attempt).
+    monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
+    e = str(tmp_path / "events.jsonl")
+    payload = {"phase": "workhorse",
+               "dispatches": {"total": 12, "byModel": {"claude-opus-4-8": 3, "claude-haiku-4-5-20251001": 9}},
+               "tokens": {"output": 84000, "input": None, "measured": True, "source": "budget"}}
+    journal.append(e, "phase_cost", payload=payload, root=str(tmp_path))
+    evs = journal.read_events(e)
+    assert evs[0]["type"] == "phase_cost"
+    assert evs[0]["payload"]["dispatches"]["total"] == 12
+    assert evs[0]["payload"]["tokens"]["output"] == 84000
+
+
 def test_render_brief_has_required_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(journal.readout, "scrub", lambda t, root=None: (t, True))
     e = str(tmp_path / "events.jsonl")
@@ -188,3 +203,31 @@ def test_journal_entry_cli_defaults_to_phase_record(tmp_path, monkeypatch):
     assert out.returncode == 0 and _json.loads(out.stdout) == {"ok": True}
     evs = journal.read_events(control_plane.paths(str(tmp_path), "wi-y")["events"])
     assert evs[-1]["type"] == "phase_record"
+
+
+def test_phases_skipped_event_is_recorded_with_payload(tmp_path, monkeypatch):
+    # #25: the quick route's skipped-phase record rides the journal_entry.py seam with a structured,
+    # non-secret payload written AS-IS — so the skip is durable and honest, never silently absent.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    import journal
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    payload = {"route": "quick", "skipped": ["plan", "review-plan", "tasks", "review-tasks"],
+               "entryPhase": "workhorse"}
+    out = _sp.run(
+        [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+         "--work-item", "wi-q", "--event-type", "phases_skipped", "--payload", _json.dumps(payload)],
+        capture_output=True, text=True)
+    assert out.returncode == 0 and _json.loads(out.stdout) == {"ok": True}
+    evs = journal.read_events(control_plane.paths(str(tmp_path), "wi-q")["events"])
+    assert evs[-1]["type"] == "phases_skipped"
+    assert evs[-1]["payload"] == payload
+
+
+def test_phases_skipped_is_a_known_event_type():
+    # An unknown type would fail closed (DurableWriteError); phases_skipped must be registered.
+    assert "phases_skipped" in journal.EVENT_TYPES

@@ -186,3 +186,64 @@ def test_write_read_and_cli_use_control_plane_sidecar(tmp_path, monkeypatch):
         check=True,
     )
     assert json.loads(asserted.stdout)["ok"] is True
+
+
+def _cli_write(tmp_path, work_item, payload_path):
+    return subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "plugins/superheroes/lib/test_pilot_status_cli.py"),
+            "write",
+            "--work-item",
+            work_item,
+            "--status-json",
+            str(payload_path),
+        ],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def test_cli_first_write_applies_when_status_file_absent(tmp_path, monkeypatch):
+    """Run-30 escape (wf_cf3b882c-7b1): the FIRST status write for a work item sees no
+    status file — that is 'apply needed', NOT 'unreadable'. The pre-fix reader collapsed
+    FileNotFoundError into fail-closed None, so a fresh work item's test-pilot phase could
+    never write its status (every prior CLI test pre-wrote the file, hiding this)."""
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    data = _applicable()
+    source = tmp_path / "status-source.json"
+    source.write_text(json.dumps(data))
+
+    out = json.loads(_cli_write(tmp_path, "issue-fresh", source).stdout)
+    assert out["ok"] is True, out
+    assert out["already"] is False
+    assert out["read_back"] is True
+    assert status.read(status.status_path(str(tmp_path), "issue-fresh"))["head"] == HEAD
+
+    # Second identical write: reality already reflects it -> idempotent no-op.
+    again = json.loads(_cli_write(tmp_path, "issue-fresh", source).stdout)
+    assert again["ok"] is True
+    assert again["already"] is True
+
+
+def test_cli_write_corrupt_status_still_fails_closed(tmp_path, monkeypatch):
+    """The absent-file carve-out must NOT weaken genuine unreadability: a corrupt current
+    status file still refuses to apply (fail closed, never overwrite unreadable state)."""
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True)
+    path = status.status_path(str(tmp_path), "issue-corrupt")
+    import os
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    source = tmp_path / "status-source.json"
+    source.write_text(json.dumps(_applicable()))
+
+    out = json.loads(_cli_write(tmp_path, "issue-corrupt", source).stdout)
+    assert out["ok"] is False
+    assert "unreadable" in out["reason"]
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == "{not json"   # never overwritten

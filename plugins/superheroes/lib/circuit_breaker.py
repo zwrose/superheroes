@@ -11,7 +11,7 @@ import os
 import re
 import sys
 
-from review_memory import class_key
+from review_memory import clamp_title, canonical_class_key, class_key_aliases
 
 BLOCKING = {"Critical", "Important"}
 
@@ -26,17 +26,27 @@ def normalize_title(title):
     return t.strip()
 
 
+def finding_label(finding):
+    return finding.get("title") or finding.get("summary") or ""
+
+
 def finding_identity(finding):
-    return f"{finding.get('file') or ''}::{normalize_title(finding.get('title') or '')}"
+    return f"{finding.get('file') or ''}::{normalize_title(clamp_title(finding_label(finding)))}"
 
 
 def recurrence_key(finding):
+    if finding.get("dimension") or finding.get("taxonomy"):
+        return canonical_class_key(finding)
     if finding.get("classKey"):
         return finding["classKey"]
-    key = class_key(finding)
-    if finding.get("dimension") or finding.get("taxonomy"):
-        return key
     return finding_identity(finding)
+
+
+def recurrence_aliases(finding):
+    aliases = {recurrence_key(finding)}
+    if finding.get("dimension") or finding.get("taxonomy"):
+        aliases |= class_key_aliases(finding)
+    return aliases
 
 
 def _blocking(round_findings):
@@ -54,7 +64,18 @@ def _blocking_count_excluding_generalize(round_rec):
     blocking = _blocking(round_rec)
     if not generalize:
         return len(blocking)
-    return len([f for f in blocking if recurrence_key(f) not in generalize])
+    return len([f for f in blocking if not (recurrence_aliases(f) & generalize)])
+
+
+def _round_reviewed(round_rec):
+    dims = round_rec.get("dimensions")
+    if not isinstance(dims, dict) or not dims:
+        return True
+    return any(isinstance(d, dict) and d.get("status") == "run" for d in dims.values())
+
+
+def _reviewed_rounds(rounds):
+    return [r for r in rounds if _round_reviewed(r)]
 
 
 def check_circuit_breaker(rounds, max_rounds):
@@ -77,10 +98,12 @@ def check_circuit_breaker(rounds, max_rounds):
     # Criterion 2: no net progress across two consecutive round-transitions.
     # Exclude generalize-pending classKeys from each round's count so grace at round 3
     # is not preempted by a flat single-class recurrence (Criterion 1's job).
-    if n >= 3:
-        c_n = _blocking_count_excluding_generalize(rounds[n - 1])
-        c_n1 = _blocking_count_excluding_generalize(rounds[n - 2])
-        c_n2 = _blocking_count_excluding_generalize(rounds[n - 3])
+    reviewed = _reviewed_rounds(rounds)
+    rn = len(reviewed)
+    if rn >= 3:
+        c_n = _blocking_count_excluding_generalize(reviewed[rn - 1])
+        c_n1 = _blocking_count_excluding_generalize(reviewed[rn - 2])
+        c_n2 = _blocking_count_excluding_generalize(reviewed[rn - 3])
         if c_n > 0 and c_n >= c_n1 and c_n1 >= c_n2:
             return {
                 "halt": True,
@@ -89,14 +112,16 @@ def check_circuit_breaker(rounds, max_rounds):
             }
 
     # Criterion 1: recurring finding across the two most recent rounds.
-    if n >= 2:
-        latest_rec = rounds[n - 1]
+    if rn >= 2:
+        latest_rec = reviewed[rn - 1]
         latest_generalize = {g.get("classKey") for g in latest_rec.get("generalizeRequired", []) if isinstance(g, dict)}
         challenged = {d.get("classKey") for d in latest_rec.get("coverageDecisions", []) if isinstance(d, dict) and d.get("challengedBy")}
         latest_blocking = _blocking(latest_rec)
-        prev_ids = {recurrence_key(f) for f in _blocking(rounds[n - 2])}
-        recurring = [f for f in latest_blocking if recurrence_key(f) in prev_ids]
-        challenged_recurring = [f for f in recurring if recurrence_key(f) in challenged]
+        prev_ids = set()
+        for f in _blocking(reviewed[rn - 2]):
+            prev_ids |= recurrence_aliases(f)
+        recurring = [f for f in latest_blocking if recurrence_aliases(f) & prev_ids]
+        challenged_recurring = [f for f in recurring if recurrence_aliases(f) & challenged]
         if challenged_recurring:
             ids = "; ".join(recurrence_key(f) for f in challenged_recurring)
             return {"halt": True, "reason": "challenged-principle-recurring", "detail": f"{len(challenged_recurring)} challenged coverage decision class recurred after being recorded: {ids}"}

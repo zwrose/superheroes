@@ -26,14 +26,24 @@ TASK_ID_TRAILER = "Task-Id"
 _CODEX_MODEL = "gpt-5.5"
 _CURSOR_MODEL = "composer-2.5-fast"
 
+# Native tier short-name -> cursor model id, for roles that carry a model override (today only
+# author-plan, the plan-author leaf: `author-plan: fable` + `planAuthor: cursor` = Fable via
+# Cursor). Ids verified live 2026-07-03 against cursor-agent 2026.07.01 `models`. An unmapped or
+# absent override keeps the pinned composer default — never the developer's ambient default.
+_CURSOR_MODEL_BY_TIER = {
+    "fable": "claude-fable-5-thinking-xhigh",
+    "opus": "claude-opus-4-8-thinking-high",
+}
+
 
 def build_argv(engine, role_kind, effort, opts):
     """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
-    read-only sandbox; WRITE (build|fix) → workspace-write. Always explicit model+effort.
-    opts keys: cwd, schema_path. The PROMPT is NOT encoded here — codex reads it from stdin
-    (trailing `-`) and cursor-agent reads it from stdin when given no positional prompt; the JS
-    runner (Task 10) feeds the staged prompt file to the process stdin. Deterministic; fully
-    unit-testable."""
+    read-only sandbox; WRITE (build|fix|author-plan) → workspace-write. Always explicit
+    model+effort. opts keys: cwd, schema_path, model (native tier short name — cursor maps it via
+    _CURSOR_MODEL_BY_TIER; codex ignores it, staying on its pinned model). The PROMPT is NOT
+    encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
+    when given no positional prompt; the JS runner (Task 10) feeds the staged prompt file to the
+    process stdin. Deterministic; fully unit-testable."""
     opts = opts or {}
     cwd = opts.get("cwd")
     schema_path = opts.get("schema_path")
@@ -58,7 +68,8 @@ def build_argv(engine, role_kind, effort, opts):
         # headless run (without it it goes interactive and --output-format is a no-op); --trust
         # clears the workspace-trust gate that otherwise HANGS a headless run (needed for the
         # read/--mode-plan role — the write role's -f also trusts, but --trust covers both).
-        argv = ["cursor-agent", "--model", _CURSOR_MODEL, "-p", "--trust"]
+        model = _CURSOR_MODEL_BY_TIER.get(opts.get("model"), _CURSOR_MODEL)
+        argv = ["cursor-agent", "--model", model, "-p", "--trust"]
         if is_read:
             argv += ["--mode", "plan"]     # read-only planning mode
         else:
@@ -70,16 +81,18 @@ def build_argv(engine, role_kind, effort, opts):
     return []
 
 
-def _last_json_object(stdout):
-    """Return the LAST top-level JSON object in a (possibly line-delimited / streamed) blob,
-    or None. Tries whole-blob parse first, then a raw_decode scan, then a per-line fallback."""
+def _last_top_level_json(stdout, want_type):
+    """Return the LAST top-level JSON value of `want_type` (dict or list) in a (possibly
+    line-delimited / streamed) blob, or None. Tries a whole-blob parse first, then a
+    raw_decode scan that skips non-JSON stream noise a char at a time. Shared by
+    _last_json_object (dict) and _last_json_array (list) so the scan logic lives once."""
     s = (stdout or "").strip()
     if not s:
         return None
     try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
+        val = json.loads(s)
+        if isinstance(val, want_type):
+            return val
     except ValueError:
         pass
     dec = json.JSONDecoder()
@@ -91,13 +104,26 @@ def _last_json_object(stdout):
         if i >= n:
             break
         try:
-            obj, end = dec.raw_decode(s, i)
-            if isinstance(obj, dict):
-                last = obj
+            val, end = dec.raw_decode(s, i)
+            if isinstance(val, want_type):
+                last = val
             i = end
         except ValueError:
             i += 1  # skip a non-JSON char (stream noise) and keep scanning
     return last
+
+
+def _last_json_object(stdout):
+    """Return the LAST top-level JSON object in a (possibly line-delimited / streamed) blob,
+    or None."""
+    return _last_top_level_json(stdout, dict)
+
+
+def _last_json_array(stdout):
+    """Return the LAST top-level JSON array in a (possibly line-delimited / streamed) blob,
+    or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
+    instead of `{"findings": [...]}`, #196)."""
+    return _last_top_level_json(stdout, list)
 
 
 def _scrub(text):
@@ -129,20 +155,52 @@ def _scrub_findings(findings):
     return out
 
 
+def _scrub_notify(notify):
+    """NOTIFY entries are author free-text end to end (identity AND message) — scrub both."""
+    out = []
+    for n in notify if isinstance(notify, list) else []:
+        if not isinstance(n, dict):
+            continue
+        out.append({"identity": _scrub(n.get("identity")) if isinstance(n.get("identity"), str) else None,
+                    "message": _scrub(n.get("message")) if isinstance(n.get("message"), str) else None})
+    return out
+
+
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
-    findings; build|fix → {ok,signal,evidence{testFailed,testPassed}}. Unparseable/empty →
-    {ok:false, reason:'unreadable'}. External free-text is scrubbed HERE (Secret-hygiene).
-    Never raises."""
+    findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
+    array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}};
+    author-plan →
+    {ok,notify[]} (the doc itself is verified downstream by the deterministic usableDraft
+    post-check — this parse only confirms the engine ran to completion and surfaces NOTIFY
+    defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
+    scrubbed HERE (Secret-hygiene). Never raises."""
     try:
         obj = _last_json_object(stdout)
-        if obj is None:
-            return {"ok": False, "reason": "unreadable"}
         if role_kind == "review":
-            findings = obj.get("findings")
+            findings = obj.get("findings") if isinstance(obj, dict) else None
+            if obj is None:
+                # Shape tolerance (#196): the engine emitted NO top-level object at all — the
+                # genuine bare-array reviewer shape (`[...]` instead of {"findings": [...]}).
+                # Adopt that array as the findings list, but only when every element is an object
+                # (an empty array is a clean, zero-finding review; a bare array with any
+                # non-object is noise → unreadable, the same fail direction as any other
+                # unparseable stdout — never a silent empty pass). We gate on `obj is None`, NOT
+                # merely on a missing `findings` key: a present-but-findings-less result object
+                # (a crash/error object) must stay unreadable and fall open to a Claude re-run
+                # (UFR-7) rather than have the stream hunted for some other array to reinterpret
+                # as findings — that would fail OPEN, silently certifying a slot that never
+                # reviewed. This keeps the object path byte-identical to before the tolerance.
+                arr = _last_json_array(stdout)
+                if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
+                    findings = arr
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
             return {"ok": True, "findings": _scrub_findings(findings)}
+        if obj is None:
+            return {"ok": False, "reason": "unreadable"}
+        if role_kind == "author-plan":
+            return {"ok": True, "notify": _scrub_notify(obj.get("notify"))}
         # build | fix
         ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
         evidence = {"testFailed": bool(ev.get("testFailed")),
@@ -185,7 +243,7 @@ def commit_result(worktree, task_id, pre_sha):
 
 
 def _cmd_build_argv(args):
-    opts = {"cwd": args.cwd, "schema_path": args.schema_path}
+    opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model}
     sys.stdout.write(json.dumps(build_argv(args.engine, args.role, args.effort, opts)) + "\n")
     return 0
 
@@ -195,13 +253,15 @@ def main(argv):
     sub = ap.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("build-argv")
     b.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    b.add_argument("--role", required=True, choices=("review", "build", "fix"))
+    b.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))
     b.add_argument("--effort", required=True)
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
+    b.add_argument("--model", default=None,
+                   help="native tier short name (fable/opus); cursor maps it to its model id")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    pr.add_argument("--role", required=True, choices=("review", "build", "fix"))
+    pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))
     pr.add_argument("--stdout-path", default=None,
                      help="file holding the external engine's raw stdout; stdin if omitted")
     cm = sub.add_parser("commit")

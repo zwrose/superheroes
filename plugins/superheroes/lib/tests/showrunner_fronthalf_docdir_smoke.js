@@ -7,6 +7,7 @@
 // wrote plan.md into the project store while the spine read (and hashed, and appended the
 // NOTIFY ledger under) the hard-wired in-repo path.
 'use strict'
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
@@ -14,6 +15,13 @@ const { io } = require('../io_seam.js')
 
 globalThis.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 globalThis.log = () => {}
+
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
 
 // (a) fallback: nothing planted -> legacy in-repo relative paths (unchanged behavior).
 function partFallback() {
@@ -41,7 +49,7 @@ async function partAppendNotify() {
   let emitCalls = 0
   globalThis.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('emit-signals')) {
         emitCalls += 1
         return [{ index: 0, ok: true, stdout: emitCalls === 1 ? NOT_USABLE : USABLE }]
@@ -91,14 +99,14 @@ async function partReviewReadInner(resolved, legacy) {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
     }
     if (label === 'save round state') return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: JSON.stringify({ review: 'pending' }) }]
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
     // downgrades it to confidence:low -> cannot-certify).
     if (label.endsWith('-reviewer')) {
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     if (label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'revise-doc') return { fixes: [], deferred: [] }
@@ -135,8 +143,13 @@ async function partStartupPlants() {
         ok: true, spec_gate: 'passed', model_overrides: {},
         doc_dir: '/abs/proj-store/docs/wi-s' }) }]
     }
-    if (label === 'exec') {
-      if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: '{}' }]
+    if (opts && opts.courier) {
+      if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+        checkpoint: null,
+        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+        generation: 1,
+        root: globalThis.__SR_ROOT,
+      }) }]
       if (prompt.includes('definition_doc.py read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
@@ -157,8 +170,13 @@ async function partStartupPlants() {
     if (label === 'read startup state') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
-    if (label === 'exec') {
-      if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: '{}' }]
+    if (opts && opts.courier) {
+      if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+        checkpoint: null,
+        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+        generation: 1,
+        root: globalThis.__SR_ROOT,
+      }) }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     return null
@@ -180,7 +198,7 @@ async function partMissingDocDirRetries() {
       calls += 1
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {} }) }]
     }
-    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{}' }]
+    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{}' }]
     return null
   }
   const facts = await sr.readStartupState('wi-m')

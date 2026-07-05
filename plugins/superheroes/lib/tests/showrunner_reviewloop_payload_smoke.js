@@ -142,15 +142,23 @@ async function main() {
   for (const arg of fjCall) assert.ok(String(arg).length <= ARG_BOUND, 'fenced write arg too large')
   assert.ok(!fs.existsSync(recPath + '.payload'), 'staged payload file consumed on success')
 
-  // (d) the RESUME read is bounded too: a large on-disk history loads as summaries via
-  // load-summary — the evidence bodies never ride the courier stdout back (the read twin
-  // of the persist-skeleton write side; pre-D3 full-bodied files load the same way).
+  // (d) #211: the RESUME read is the review_setup_gather leaf, and it rides DECISIONS, not records.
+  // A large verbose on-disk history (a couple blocking + many chatty non-blocking findings) collapses
+  // to a small resume DECISION + round-1 plan — NO findings, not even a blocking skeleton, ride back
+  // (the #193 stub that still crossed up is retired). ZERO read-chunk calls; the answer is direct.
   const rdir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-resume-'))
+  const RESUME_BLOCKING = Array.from({ length: 2 }, (_, i) => ({
+    file: 'a.py', line: i + 1, title: `blocker ${i}`, severity: 'Critical',
+    taxonomy: 'bug', dimension: 'Code', evidence: BIG_EVIDENCE }))
+  const RESUME_MINOR = Array.from({ length: 40 }, (_, i) => ({
+    file: 'b.py', line: i + 1, title: `nit number ${i} with a chatty verbose body`, severity: 'Minor',
+    taxonomy: 'style', dimension: 'Code', evidence: BIG_EVIDENCE }))
+  const RESUME_FINDINGS = RESUME_BLOCKING.concat(RESUME_MINOR)
   const bigRecs = [1, 2].map((rnd) => ({
     schemaVersion: 2, round: rnd, kind: 'baseline', confirmationPending: false,
     changedSubjects: ['Code'], coverageDecisions: [], tokenUsage: {},
-    findings: BIG_FINDINGS, carriedFindings: [],
-    dimensions: { code: { dimension: 'code', status: 'run', confidence: 'high', round: rnd, findings: BIG_FINDINGS, subjects: ['Code'] } },
+    findings: RESUME_FINDINGS, carriedFindings: [],
+    dimensions: { code: { dimension: 'code', status: 'run', confidence: 'high', round: rnd, tier: 'reviewer-deep', findings: RESUME_FINDINGS, hasFindings: true, subjects: ['Code'] } },
   }))
   fs.writeFileSync(`${rdir}/round-records.json`, JSON.stringify(bigRecs))
   const onDisk = fs.statSync(`${rdir}/round-records.json`).size
@@ -163,16 +171,61 @@ async function main() {
     maxRounds: 7, legKind: { panel: true, code: false },
   })
   assert.ok(rv && typeof rv.terminal === 'string', 'resume run reaches a terminal')
-  const loadCall = helperResults.find((h) => h.args.includes('load-summary'))
-  assert.ok(loadCall, 'the resume seed goes through load-summary')
-  assert.ok(loadCall.stdout.length < onDisk / 5,
-    `resume load stdout must be bounded (${loadCall.stdout.length}B vs ${onDisk}B on disk)`)
-  assert.ok(!loadCall.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the load stdout')
-  const plainLoad = helperResults.find((h) =>
-    String(h.args[0] || '').includes('review_memory.py') && h.args.includes('load') && !h.args.includes('load-summary'))
-  assert.ok(!plainLoad, 'the full-echo review_memory load verb must not be used by the loop')
+  // the resume seed goes through the setup gather, with ZERO chunk reads and NO records up
+  const gatherCalls = helperResults.filter((h) => h.args.includes('gather') && String(h.args[0] || '').includes('review_setup_gather.py'))
+  assert.ok(gatherCalls.length >= 1, 'the resume seed goes through review_setup_gather')
+  assert.ok(!helperResults.some((h) => h.args.includes('load-summary')),
+    '#211: the resume no longer pays the full load-summary skeleton')
+  const chunkReads = helperResults.filter((h) => h.args.includes('read-chunk'))
+  assert.strictEqual(chunkReads.length, 0, `a bounded gather needs ZERO chunk reads (got ${chunkReads.length})`)
+  const seed = gatherCalls[0]
+  assert.ok(seed.stdout.length < 4000 && seed.stdout.length < onDisk / 10,
+    `resume gather stdout must be a small direct answer (${seed.stdout.length}B vs ${onDisk}B on disk)`)
+  const seedAnswer = JSON.parse(seed.stdout)
+  assert.ok(!('receipt' in seedAnswer), 'the bounded gather answers DIRECT, not as a receipt')
+  assert.ok(seedAnswer.resume && seedAnswer.resume.round === 3, 'the gather ships the resume DECISION (round 3)')
+  assert.ok(!('records' in seedAnswer) && !('records' in (seedAnswer.resume || {})),
+    '#211: the resume answer ships NO records — decisions ride up, content stays on disk')
+  assert.ok(!seed.stdout.includes(BIG_EVIDENCE), 'evidence bodies never ride the resume answer')
+  assert.ok(!seed.stdout.includes('blocker 0') && !seed.stdout.includes('nit number'),
+    '#211: NO finding — blocking or not — rides the resume answer')
 
-  console.log('ok: review-loop persistence ships paths + small scalars only (no mega-JSON through the courier)')
+  // (e) #211 SCALING proof: 50 verbose findings × 3 rounds through the loop — no courier ANSWER
+  // scales with run size. Every review_loop_plan / review_setup_gather / review_memory / review_
+  // telemetry answer stays < 4 KB, and the decider-leaf count is O(rounds), not O(findings).
+  const sdir = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-scale-'))
+  const SCALE_FINDINGS = Array.from({ length: 50 }, (_, i) => ({
+    file: `m${i}.py`, line: i + 1, title: `scale finding ${i} ${'verbose body '.repeat(6)}`,
+    severity: i % 5 === 0 ? 'Critical' : 'Minor', taxonomy: 'bug', dimension: 'Code', evidence: BIG_EVIDENCE }))
+  let sround = 0
+  globalThis.reviewerAgent = async (_r, _c, _rub, runDir, r) => {
+    sround = r
+    return r <= 2
+      ? { findings: SCALE_FINDINGS, confidence: 'high', verificationReceipt: receipt(runDir, r), usage: { total: 1 } }
+      : { findings: [], confidence: 'high', verificationReceipt: receipt(runDir, r), usage: { total: 1 } }
+  }
+  helperResults.length = 0
+  const sv = await reviewPanel({
+    reviewerSet: ['code'], context: {}, rubric: 'r', runKey: sdir, runDir: sdir,
+    fixStep: async () => ({ fixed: SCALE_FINDINGS.filter((f) => f.severity === 'Critical').map((f) => `${f.file}::${f.title}`), changedSubjects: ['Code'], coverageDecisions: [] }),
+    maxRounds: 7, legKind: { panel: true, code: false },
+  })
+  assert.ok(sv && typeof sv.terminal === 'string', 'scaling run reaches a terminal')
+  const ANSWER_BOUND = 4096
+  for (const h of helperResults) {
+    const script = String(h.args[0] || '')
+    if (!/review_loop_plan|review_setup_gather|review_memory|review_telemetry/.test(script)) continue
+    assert.ok((h.stdout || '').length <= ANSWER_BOUND,
+      `a decider/persist courier ANSWER is ${(h.stdout || '').length}B (findings are ~${JSON.stringify(SCALE_FINDINGS).length}B) — must stay ≤ ${ANSWER_BOUND}B: ${script}`)
+    assert.ok(!(h.stdout || '').includes(BIG_EVIDENCE), `evidence bodies must never ride a courier answer: ${script}`)
+  }
+  // decider-leaf count is O(rounds): plan-round + tally-round fire ≤ 2 per round, never per-finding.
+  const planLeaves = helperResults.filter((h) => h.args.includes('plan-round')).length
+  const tallyLeaves = helperResults.filter((h) => h.args.includes('tally-round')).length
+  assert.ok(tallyLeaves <= sround + 1, `tally-round leaves (${tallyLeaves}) must be O(rounds=${sround}), not O(findings)`)
+  assert.ok(planLeaves <= sround + 1, `plan-round leaves (${planLeaves}) must be O(rounds=${sround})`)
+
+  console.log('ok: review-loop persistence ships paths + small scalars only; no answer scales with run size (#211)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

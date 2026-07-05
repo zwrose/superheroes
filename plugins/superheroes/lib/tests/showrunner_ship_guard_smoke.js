@@ -1,4 +1,5 @@
 // plugins/superheroes/lib/tests/showrunner_ship_guard_smoke.js
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
@@ -22,7 +23,7 @@ function base(label, p) {
 }
 ;(async () => {
   let { sr } = run((label, p) => {
-    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: true })
+    if (label === 'fence lease') return JSON.stringify({ ok: true })
     if (label === 'check ship-readiness') {
       return jsonOut({ ok: false, reconcile: { ok: false, reason: 'remote head unreadable' }, freshness: {}, checks: {} })
     }
@@ -33,7 +34,7 @@ function base(label, p) {
 
   let calls
   ;({ sr, calls } = run((label, p) => {
-    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: false, reason: 'lease lost' })
+    if (label === 'fence lease') return JSON.stringify({ ok: false, reason: 'lease lost' })
     if (label === 'check ship-readiness') return jsonOut({ ok: true, reconcile: { ok: true }, freshness: { decision: 'up_to_date' }, checks: [] })
     return base(label, p)
   }))
@@ -42,7 +43,7 @@ function base(label, p) {
   assert.ok(!calls.some((c) => c.startsWith('check ship-readiness')), 'entry fence parks BEFORE check ship-readiness runs')
 
   ;({ sr } = run((label, p) => {
-    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: true })
+    if (label === 'fence lease') return JSON.stringify({ ok: true })
     if (label === 'check ship-readiness') {
       return jsonOut({
         ok: false,
@@ -60,7 +61,7 @@ function base(label, p) {
   let merged = false
   ;({ sr } = run((label, p) => {
     if (/gh pr merge|--merge\b|pr merge/.test(p)) merged = true
-    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: true })
+    if (label === 'fence lease') return JSON.stringify({ ok: true })
     if (label === 'check ship-readiness') {
       return jsonOut({
         ok: true,

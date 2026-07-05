@@ -1,0 +1,1 @@
+{"input": ["cannot-certify", 2, 0, "completed", 7, 7, false], "expected": {"reason": "round cap (7) reached with blocking fixes still landing — REPORT the open findings; do NOT declare success.", "terminal": "halted"}}

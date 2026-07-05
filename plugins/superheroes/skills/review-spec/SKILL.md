@@ -84,17 +84,19 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
-**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
-  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
-PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
-LOCATION=$(printf '%s' "$RES" | jq -r .location)
-EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+  || CAL='{"location":"none","exists":false}'
+CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
+LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
+PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
+LOCATION=$(printf '%s' "$CAL" | jq -r .location)
+EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
-  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+  || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 ```
 
@@ -194,7 +196,7 @@ cat > "$SESSION_DIR/meta.json" <<EOF
 EOF
 ```
 
-The classification is informational — **all five specialists still run**.
+The classification is informational — **it never narrows the dispatch** (the round schedule is script-owned; see §2/§5).
 
 ### 2. Dispatch Summary
 
@@ -221,15 +223,16 @@ MT="$ROOT_DIR/lib/model_tier_resolve.py"
 OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {role:model} or {}
 REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
 DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
+PLAN=$(python3 "$ROOT_DIR/lib/spec_loop_plan.py" plan --session-dir "$SESSION_DIR" --round 1)
 ```
 
-When dispatching the specialists, pass `model: $DEEP_MODEL` to `security-reviewer` and
-`architecture-reviewer`, and `model: $REVIEWER_MODEL` to the other three. An empty value means
-"inherit the session model" — omit the `model` arg in that case.
+Per-round dispatch is **script-owned** (`spec_loop_plan.py` — the #125 convergence levers): dispatch each scheduled specialist at its `dims_to_run` tier — `reviewer-deep` → pass `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL`. Round 1 always plans the full `reviewer-deep` panel (`$PLAN` above). An empty model value means "inherit the session model" — omit the `model` arg in that case.
+
+**Refresh dispatch paths before specialists.** Re-run the calibration jq block above after bootstrap.
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
+Launch the round's scheduled specialists (round 1: all five, per `$PLAN`) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<CORE_PATH>` and `<LAYER_PATH>` with the resolved absolute `$CORE` and `$LAYER` when building each subagent prompt (same path when legacy single-file; subagents do not inherit shell vars):
 
 ```
 You are reviewing the-architect's `spec` definition-doc — the plain-language
@@ -237,14 +240,15 @@ REQUIREMENTS (the *what*) for a work-item. NOT code, NOT a technical design.
 
 ## Your assignment
 Review the spec at $SESSION_DIR/spec.md for your dimension, reframed to
-requirements quality (below). Read the base rubric (absolute path below) for
-severity calibration, verification rules, and the findings output format. Read
-the project profile and CLAUDE.md for calibration.
+requirements quality (below). Read the spec in bounded chunks (<=800 lines):
+use Read offset/limit when available, or an equivalent bounded shell range;
+never one whole-file read. Read the base rubric (absolute path below) for severity
+calibration, verification rules, and findings output format. Read the project profile and CLAUDE.md for calibration.
 
 ## Context files
 - Spec (the doc under review): $SESSION_DIR/spec.md
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
-- Project profile (threat model, scope, focus hints): <PROFILE_PATH>
+- Core + layer calibration: <CORE_PATH> (threat model, patterns); <LAYER_PATH> (scope, focus)
 - CLAUDE.md (project conventions): CLAUDE.md
 - <if focus notes> Focus: <focus notes>
 
@@ -325,11 +329,11 @@ Per-agent substitutions:
 | test-reviewer                | test                          | Test          |
 | premortem-reviewer           | premortem                     | Failure-Mode  |
 
-After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator does not read agent transcripts — only the JSON files.
+After dispatch, wait for all dispatched agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator does not read agent transcripts — only the JSON files.
 
 ### 4. Compile Findings (main context)
 
-Read the five `$SESSION_DIR/findings-*.json` files. Apply, in order:
+Read the `$SESSION_DIR/findings-*.json` files of the dimensions that ran this round (a skipped dimension carried a clean result and contributes none). Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Dedupe by spec section + topic.** When two findings target the same requirement and same topic (e.g. both flagging "no acceptance criterion"), merge them: concatenate bodies with a separator, keep the higher severity, list both dimensions (e.g. `"Test + Code"`).
@@ -362,11 +366,11 @@ This skill **revises the spec in place** until it is ready for the owner's revie
 
 Keep every revision in the spec's voice: **plain language, owner-facing, no technical *how***. A fix that adds implementation detail is wrong even if it resolves the finding.
 
-Initialize `round = 1` and an empty `skip-set` (finding identities the user chose not to act on; identity = `spec-section::normalized-title`). If context was compacted mid-loop, re-read `$SESSION_DIR/meta.json` and the latest `$SESSION_DIR/compiled.json`, and re-derive the `skip-set` from your chat record.
+Initialize `round = 1` and an empty `skip-set` (finding identities the user chose not to act on; identity = `spec-section::normalized-title`). If context was compacted mid-loop, re-read `$SESSION_DIR/meta.json` and the latest `$SESSION_DIR/compiled.json`, re-derive the `skip-set` from your chat record, and re-emit the current round's schedule with `spec_loop_plan.py plan`.
 
 Each round:
 
-1. **Review.** (Round 1: the five specialists dispatched in §3 have already written `$SESSION_DIR/findings-*.json`.) For round > 1, re-dispatch the five specialists per §3 against the freshly-copied `$SESSION_DIR/spec.md`.
+1. **Review.** (Round 1: the specialists dispatched in §3 have already written `$SESSION_DIR/findings-*.json`.) For round > 1, dispatch **exactly the `dims_to_run` the step-8 gate emitted** — no more, no fewer, each at its listed tier's model (§2) — per §3 against the freshly-copied `$SESSION_DIR/spec.md`. The schedule is script-owned: do not add, drop, or re-tier a dimension (a skipped dimension carries its prior high-confidence clean result; after compaction re-emit the round's schedule with `spec_loop_plan.py plan --session-dir "$SESSION_DIR" --round <N>`). Then, every round (round 1 included), record the executed evidence: run `python3 "$ROOT_DIR/lib/spec_loop_plan.py" record --session-dir "$SESSION_DIR" --round <N>`; if its `escalate` list is non-empty (a missing/malformed findings file, or a low-confidence `reviewer`-tier result), re-dispatch **just those dimensions once** at `reviewer-deep` and run `record` again — it never asks twice.
 2. **Compile** per §4 into `$SESSION_DIR/compiled.json` with verdict.
 3. **Effective findings** = `compiled.findings` whose identity is NOT in the `skip-set`.
 4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited requirement in `$SESSION_DIR/spec.md`, emit for each finding a **recommendation** (`Fix` = revise the spec; `Defer` = legitimately defer-to-plan; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. rephrasing a requirement into EARS or adding an acceptance criterion; `judgment` = a real requirements question only the owner can answer — e.g. "what SHOULD happen on a double-submit?").
@@ -403,26 +407,26 @@ Each round:
    ```
 
    Read its `path` and embed the rubric (if `degraded` is true, apply the embedded fail-closed
-   posture: apply the hard floor and GATE anything owner-weighable). **Keep step-8's `loop_state.py`
-   invocation unchanged** (`--compiled "$SESSION_DIR/compiled.json" --skipped-blocking
+   posture: apply the hard floor and GATE anything owner-weighable). **Keep step-8's continuation
+   inputs unchanged** (`--compiled "$SESSION_DIR/compiled.json" --skipped-blocking
    <SKIPPED_BLOCKING>`, the present-∩-skip-set integer per the `arch-r2-001` cumulative-PRESENT
    contract). The trio's `SKIPPED_BLOCKING` stays a prose-computed present-∩-skip-set integer and is
    deliberately **not** externalized to a cumulative `resolutions.json` — doing so drops the
    present-set intersection (the resolutions entries carry no finding identity) and reintroduces the
    loop-skipping bug.
    **Record decisions (learning loop):** append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (**Apply as suggested** → `fix`; **Apply with my guidance** → `guidance`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Also append a `fix` record for each finding auto-revised in step 6. This append is non-blocking and never gates the loop.
-8. **Refresh + continuation gate.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. Whether to re-review is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `SKIPPED_BLOCKING` = the count of Critical/Important findings in this round's `compiled.findings` whose identity is in the `skip-set` — the *present* skipped blockers (equivalently: blocking findings minus blocking **effective** findings from step 3). Count this **cumulatively every round**, not just the ones you added this round — the specialists re-flag a skipped finding each round, so a once-skipped blocker stays present and must keep being counted as skipped, else it reads as "present and addressed" forever and the loop can never reach `exit_skipped`. The gate **derives the number of blockers addressed from this round's `compiled.json`** (blockers present minus the present-and-skipped), so the addressed count is **not yours to self-report**. Run it and obey its `action`:
+8. **Refresh + continuation gate.** Re-copy the revised spec: `cp "$SPEC_PATH" "$SESSION_DIR/spec.md"`. Whether to re-review — and **which dimensions run next round, at which tier** — is **decided by a script, not by you** — a model rationalizes early exits ("the revision obviously resolved it", "it'll be clean next round"). Compute `SKIPPED_BLOCKING` = the count of Critical/Important findings in this round's `compiled.findings` whose identity is in the `skip-set` — the *present* skipped blockers (equivalently: blocking findings minus blocking **effective** findings from step 3). Count this **cumulatively every round**, not just the ones you added this round — the specialists re-flag a skipped finding each round, so a once-skipped blocker stays present and must keep being counted as skipped, else it reads as "present and addressed" forever and the loop can never reach `exit_skipped`. The gate wraps `loop_state.py`'s continuation decision and the shared round policy (`review_round_policy.py`, the spine scheduler's parity-locked twin): it **derives the blockers addressed from this round's `compiled.json`** (not yours to self-report) and the changed surface from **diffing its own per-round spec snapshots** (never your summary of the revisions), and fails toward run-all on any corrupt or unknown input. Run it and obey its output verbatim:
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
-     --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
+   python3 "$ROOT_DIR/lib/spec_loop_plan.py" decide --session-dir "$SESSION_DIR" --round <N> \
+     --max-rounds 7 --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
 
-   - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved."
+   - **`review`** → `round += 1` and repeat from step 1, dispatching its `dims_to_run` **exactly**. **MANDATORY** — either a blocking revision needs re-verification, or a reduced round must be followed by the full `reviewer-deep` confirmation round (`roundKind: confirmation`) before any exit. Do **not** exit because the revision "looks resolved."
    - **`exit_clean`** → **EXIT** the loop (then report, §6 — review-spec records no `passed`).
    - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain SPEC READY.
-   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare SPEC READY.
+   - **`halt`** → the 7-round cap was hit with blocking findings still being revised (or before the mandatory confirmation round could run): report them; do **not** declare SPEC READY.
 
 ### 6. Report (advisory — never grants the gate)
 
@@ -477,7 +481,7 @@ After the loop exits, print a terminal summary in chat:
 
 Nothing else is written to the repo — the revised `$SPEC_PATH` is the deliverable (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map). **The only gate write review-spec can make is the stale-approval reset to `pending` above — it never writes `passed`.**
 
-For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
+For recurrence handling, coverage decisions, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract; its dimension-skipping, tier-cascade, and final-confirmation levers are **enforced by `spec_loop_plan.py`** (§2, §5) — obey the emitted schedule, do not re-derive it from the contract prose. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 
 ## Spec-Content Requirements (Opinionated)
 

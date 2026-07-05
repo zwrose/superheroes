@@ -30,7 +30,9 @@ function receiptFor(prompt) {
 ;(async () => {
   const labels = []
   let reviewerCalls = 0
+  let staleReceiptCalls = 0
   let reviewerSchema = null
+  const reviewerPrompts = []
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     labels.push(label)
@@ -46,10 +48,20 @@ function receiptFor(prompt) {
     if (/^(architecture|code|security|test|premortem)-reviewer:r/.test(label)) {
       reviewerSchema = opts && opts.schema
       reviewerCalls += 1
+      reviewerPrompts.push(prompt)
+      const receipt = receiptFor(prompt)
+      if (label === 'architecture-reviewer:r1' && staleReceiptCalls === 0) {
+        staleReceiptCalls += 1
+        return {
+          findings: [],
+          confidence: 'high',
+          verificationReceipt: Object.assign({}, receipt, { artifact: 'stale-round-artifact' }),
+        }
+      }
       return {
         findings: reviewerCalls === 1 ? [{ id: 'X', file: 'a.js', title: 'bug', severity: 'Important' }] : [],
         confidence: 'high',
-        verificationReceipt: receiptFor(prompt),
+        verificationReceipt: receipt,
       }
     }
     if (label.startsWith('fix-code')) return { fixed: ['X'], deferred: [], changedSubjects: ['Code'], coverageDecisions: [] }
@@ -69,9 +81,19 @@ function receiptFor(prompt) {
   assert.ok(labels.some((l) => /^(architecture|code|security|test|premortem)-reviewer:r1$/.test(l)))
   assert.ok(labels.includes('stamp review coverage'))
   assert.ok(labels.filter((l) => l === 'run verify').length >= 1)
+  assert.strictEqual(staleReceiptCalls, 1, 'a stale native reviewer receipt should be observed once')
+  assert.ok(labels.filter((l) => l === 'architecture-reviewer:r1').length >= 2,
+    'a stale native reviewer receipt must trigger one fresh retry')
+  assert.ok(reviewerPrompts.some((p) => p.includes('Review the target worktree diff in bounded chunks') &&
+    p.includes('provided target worktree/head context') &&
+    p.includes('<=800 lines') && p.includes('Never read the entire diff')),
+    'native showrunner review-code reviewer prompts must require bounded target-worktree diff reads')
   const schemaText = JSON.stringify(reviewerSchema || {})
-  assert.ok(schemaText.includes('"if"') && schemaText.includes('"then"') &&
-    schemaText.includes('"required":["verificationReceipt"]'),
-    'high-confidence reviewer StructuredOutput must require verificationReceipt at the leaf')
+  for (const comb of ['allOf', 'oneOf', 'anyOf']) {
+    assert.ok(!Object.prototype.hasOwnProperty.call(reviewerSchema || {}, comb),
+      `reviewer StructuredOutput schema must not use top-level ${comb} (Anthropic input_schema rejects it)`)
+  }
+  assert.ok(schemaText.includes('verificationReceipt'),
+    'reviewer StructuredOutput keeps verificationReceipt as an optional property; decider downgrades missing receipts')
   console.log('ok: review-code leaf budget folds')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

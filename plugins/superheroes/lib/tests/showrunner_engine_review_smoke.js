@@ -14,6 +14,7 @@
 //   panel's keep/drop judge is not a reviewer-persona dispatch, and the adapter's
 //   parse_result(role_kind='review') only understands {findings:[...]}, not a synthesis {verdicts:[...]}
 //   (b4 below asserts dispatchExternal is never called with a synthesis-shaped payload).
+require('./_smoke_checkout_root.js')
 'use strict'
 const assert = require('assert')
 
@@ -31,6 +32,13 @@ function freshRunDir(d) {
   return d
 }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 async function partA() {
   const calls = []
   const savedPrefs = globalThis.__SR_ENGINE_PREFS
@@ -43,14 +51,19 @@ async function partA() {
     // courier — a separate engine_pref_load.py leaf must never fire.
     if (label === 'read startup state') {
       return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '',
-        engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: { review: 'medium' } } })
+        engine_prefs: { reviewer: 'codex', implementation: 'cursor', planAuthor: 'cursor', effort: { review: 'medium' } } })
     }
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('engine_pref_load.py')) {
         throw new Error('engine_pref_load.py dispatched as its own leaf — must ride read startup state (#118)')
       }
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: '{}' }]
+        return [{ index: 0, ok: true, stdout: JSON.stringify({
+          checkpoint: null,
+          world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+          generation: 1,
+          root: globalThis.__SR_ROOT,
+        }) }]
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
@@ -73,8 +86,8 @@ async function partA() {
 
   assert.deepStrictEqual(
     globalThis.__SR_ENGINE_PREFS,
-    { reviewer: 'codex', implementation: 'cursor', effort: { review: 'medium' } },
-    'FAIL (a2): __SR_ENGINE_PREFS does not deep-equal the parsed reviewer/implementation/effort map',
+    { reviewer: 'codex', implementation: 'cursor', planAuthor: 'cursor', effort: { review: 'medium' } },
+    'FAIL (a2): __SR_ENGINE_PREFS does not deep-equal the parsed reviewer/implementation/planAuthor/effort map',
   )
 
   // fail-safe: bad/unreadable JSON -> both 'claude' + empty effort, never crashes.
@@ -84,9 +97,14 @@ async function partA() {
     const label = (opts && opts.label) || ''
     // an older/mangled canned response WITHOUT engine_prefs must degrade to both-'claude'
     if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: '{}' }]
+        return [{ index: 0, ok: true, stdout: JSON.stringify({
+          checkpoint: null,
+          world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+          generation: 1,
+          root: globalThis.__SR_ROOT,
+        }) }]
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
@@ -100,7 +118,7 @@ async function partA() {
   } catch (_) {}
   assert.deepStrictEqual(
     globalThis.__SR_ENGINE_PREFS,
-    { reviewer: 'claude', implementation: 'claude', effort: {} },
+    { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} },
     'FAIL (a3): __SR_ENGINE_PREFS must fail-safe to both-claude + empty effort on a bad parse',
   )
 
@@ -117,12 +135,14 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
     promptLog.push(prompt)
     const label = opts && opts.label
     // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
-    if (label === 'exec' && prompt.includes('git -C')) return 'head-1\n'
+    if (opts && opts.courier && prompt.includes('git -C')) return 'head-1\n'
     if (label === 'resume') return '1'
-    if (label === 'exec' && prompt.includes('review_code_config.py')) {
+    if (opts && opts.courier && prompt.includes('review_code_config.py')) {
       return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} })
     }
     if (label && (label.startsWith('verify') || label === 'run verify')) {
+      const m = String(prompt).match(/--out '([^']+)'/)
+      if (m) fs.writeFileSync(m[1], JSON.stringify({ result: 'pass', code: 0, tail: '' }))
       return { command: 'python3 -m pytest targeted-tests -q', returncode: 0, timedOut: false }
     }
     if (label && label.startsWith('synthesis')) {
@@ -220,7 +240,7 @@ async function partB() {
       nativeReviewerFired = true
       // a genuinely clean fall-open review needs a real verificationReceipt (else the
       // receipt-fabrication fix downgrades it to confidence:low -> cannot-certify).
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     return { findings: [] }
   }

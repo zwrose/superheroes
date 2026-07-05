@@ -1,1 +1,1 @@
-{"input": [[{"file": "d.rs", "title": "Bad cast", "severity": "Critical"}], [{"id": "d.rs::bad cast", "action": "drop", "reason": "", "severity": "Critical"}]], "expected": {"findings": [{"file": "d.rs", "title": "Bad cast", "severity": "Critical"}], "drops": []}}
+{"input": [[{"file": "d.rs", "title": "Bad cast", "severity": "Critical"}], [{"id": "d.rs::bad cast", "action": "drop", "reason": "", "severity": "Critical"}]], "expected": {"findings": [{"file": "d.rs", "title": "Bad cast", "severity": "Critical"}], "drops": [], "downgrades": []}}

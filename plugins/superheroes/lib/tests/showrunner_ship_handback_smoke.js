@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
@@ -6,7 +7,7 @@ function run(capture, opts) {
   global.agent = async (p, o) => {
     const label = (o && o.label) || ''
     if (label === 'resolve review target') return jsonOut({ ok: true, worktree: '/wt', expectedHead: '/wt-head' })
-    if (label === 'exec' && p.includes('fence_cli')) return JSON.stringify({ ok: true })
+    if (o && o.courier && p.includes('fence_cli')) return JSON.stringify({ ok: true })
     if (label === 'check ship-readiness') {
       return jsonOut({
         ok: true,

@@ -15,15 +15,53 @@ def test_checkout_key_is_stable_16hex(tmp_path):
     assert k1 == k2 and len(k1) == 16 and all(c in "0123456789abcdef" for c in k1)
 
 
-def test_checkout_key_distinct_per_worktree(tmp_path):
+def _commit_and_worktree(tmp_path):
     main = tmp_path / "main"; main.mkdir(); _git_init(str(main))
     (main / "f").write_text("x"); subprocess.run(["git", "-C", str(main), "add", "f"], check=True)
     subprocess.run(["git", "-C", str(main), "-c", "user.email=a@b.c", "-c", "user.name=a",
                     "commit", "-qm", "x"], check=True)
     wt = tmp_path / "wt"
     subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", str(wt)], check=True)
-    # §4.2: the control-plane key MUST differ between a clone's linked worktrees
-    assert cp.checkout_key(str(main)) != cp.checkout_key(str(wt))
+    return main, wt
+
+
+def test_checkout_key_shared_across_worktrees(tmp_path):
+    # §4.2 (inverted under common-dir keying, #170): the control-plane key MUST be IDENTICAL
+    # across a clone's main checkout and every linked worktree, so coordination (the one-live-
+    # run-per-work-item lease) is shared — a per-worktree key would let the same work item run
+    # twice from two worktrees (split-brain).
+    main, wt = _commit_and_worktree(tmp_path)
+    assert cp.checkout_key(str(main)) == cp.checkout_key(str(wt))
+
+
+def test_checkout_key_zero_migration_equals_old_absolute_git_dir_derivation(tmp_path):
+    # Zero-migration invariant (#170): for the MAIN checkout the new common-dir key equals the
+    # OLD `--absolute-git-dir` derivation (sha of realpath of the main .git dir), so every
+    # existing lease/journal/checkpoint keeps its exact store key — no migration, state moves by
+    # identity. Compute BOTH derivations here and assert equality.
+    _git_init(str(tmp_path))
+    old = cp._run_git(str(tmp_path), "rev-parse", "--absolute-git-dir")
+    old_key = cp._short_hash(os.path.realpath(old))
+    assert cp.checkout_key(str(tmp_path)) == old_key
+
+
+def test_checkout_key_non_git_dir_falls_back_to_realpath_hash(tmp_path):
+    # A non-git directory has no common/absolute git dir; the derivation degrades to hashing
+    # realpath(cwd) (unchanged fallback behavior).
+    d = tmp_path / "plain"; d.mkdir()
+    assert cp.checkout_key(str(d)) == cp._short_hash(os.path.realpath(str(d)))
+
+
+def test_paths_converge_across_worktrees(tmp_path):
+    # #170 item 5 (tool-side convergence): run_watch/preflight/etc. invoked with --root <any
+    # worktree> must resolve the SAME store as a run launched from the main checkout. Because
+    # paths() keys off the common-dir checkout_key, paths(worktree) == paths(main) for a work
+    # item — no separate tool-side path fix is needed.
+    main, wt = _commit_and_worktree(tmp_path)
+    root = str(tmp_path / "store")
+    assert cp.paths(str(main), "wi-42", root=root) == cp.paths(str(wt), "wi-42", root=root)
+    # and the full checkout dir (where the lease refs + worktrees.json live) is identical too
+    assert cp.checkout_dir(str(main), root) == cp.checkout_dir(str(wt), root)
 
 
 def test_paths_shape(tmp_path):

@@ -53,17 +53,19 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
-**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
-  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
-PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
-LOCATION=$(printf '%s' "$RES" | jq -r .location)
-EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+  || CAL='{"location":"none","exists":false}'
+CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
+LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
+PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
+LOCATION=$(printf '%s' "$CAL" | jq -r .location)
+EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
-  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+  || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
 NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
@@ -223,25 +225,23 @@ When dispatching the four specialists, pass `model: $DEEP_MODEL` to `security-re
 `architecture-reviewer`, and `model: $REVIEWER_MODEL` to `code-reviewer` and `test-reviewer`.
 An empty value means "inherit the session model" — omit the `model` arg in that case.
 
+**Refresh dispatch paths before specialists.** Re-run the calibration jq block above after bootstrap.
+
 ### 3. Dispatch Specialists in Parallel
 
-Launch all four specialists in a **single message with four parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same sweep-mode prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<PROFILE_PATH>` with the resolved absolute `$PROFILE` when building each subagent prompt (subagents do not inherit shell vars):
+Launch all four specialists in a **single message with four parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). On Codex, dispatch is `spawn_agent` loading `agents/<name>.md`'s methodology; collect with `wait_agent` — see the tool map. Each gets the same sweep-mode prompt template, parameterized by reviewer name, dimension label, and findings filename. The agent's review methodology is its own system prompt — the prompt below is context-only (paths and rules); do **not** tell it to read an agent file. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) so the subagent can read it. Substitute `<CORE_PATH>` and `<LAYER_PATH>` with `$CORE` and `$LAYER` (same path when legacy single-file):
 
 ```
 You are sweeping the codebase for accumulated debt, NOT reviewing a diff.
 
 ## Your assignment
-Sweep the entire codebase under the project's source dirs (and other paths as
-relevant) for accumulated issues in your dimension. Read the base rubric
-(absolute path below) for severity calibration, verification rules, and the
-findings output format. Read the project profile and CLAUDE.md for calibration
-(threat model, scope, focus hints, canonical patterns, conventions). The
+Sweep the entire codebase under the project's source dirs for accumulated issues in your dimension. Read the base rubric (absolute path below) for severity calibration, verification rules, and the findings output format. Read core + layer calibration and CLAUDE.md for threat model, scope, focus hints, and conventions. The
 diff-scope rule does NOT apply — you are auditing existing code.
 
 ## Context files
-- File list: $SESSION_DIR/sweep-prep/files.txt
+- File list: $SESSION_DIR/sweep-prep/files.txt (read in bounded chunks, <=800 lines; use Read offset/limit when available, or an equivalent bounded shell range; never one whole-file read)
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
-- Project profile (threat model, scope, focus hints, canonical patterns): <PROFILE_PATH>
+- Core + layer calibration: <CORE_PATH> (threat model, patterns); <LAYER_PATH> (scope, focus, conventions)
 - CLAUDE.md (project conventions): CLAUDE.md
 - Findings output path: $SESSION_DIR/findings-<agent>.json
 - <if focus notes> Focus: <focus notes>

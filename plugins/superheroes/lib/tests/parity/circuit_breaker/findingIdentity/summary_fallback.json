@@ -1,0 +1,1 @@
+{"input": [{"file": "src/foo.js", "summary": "Missing null check"}], "expected": "src/foo.js::missing null check"}

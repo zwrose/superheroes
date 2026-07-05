@@ -1,0 +1,917 @@
+[
+  {
+    "schemaVersion": 2,
+    "round": 1,
+    "kind": "baseline",
+    "confirmationPending": true,
+    "changedSubjects": [
+      "Architecture",
+      "Code",
+      "Test"
+    ],
+    "coverageDecisions": [],
+    "tokenUsage": {
+      "synthesis:r1": {
+        "findings_evaluated": 5,
+        "kept": 5,
+        "dropped": 0
+      }
+    },
+    "findings": [
+      {
+        "file": "plugins/superheroes/lib/acceptance_launch.py",
+        "line": 221,
+        "title": "Production launcher spawns `claude --headless` (invalid flag, no prompt) so the live acceptance run cannot drive the showrunner",
+        "severity": "Important",
+        "taxonomy": "broken-invocation",
+        "dimension": "Code"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_launch.py",
+        "line": 221,
+        "dimension": "architecture-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 320,
+        "dimension": "architecture-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/run_readout.py",
+        "line": 29,
+        "dimension": "architecture-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_launch.py",
+        "line": 222,
+        "dimension": "premortem-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 321,
+        "dimension": "premortem-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 93,
+        "title": "No test exercises the _lease_liveness tri-state safety classifier (UFR-4 fail-closed liveness)",
+        "severity": "Important",
+        "taxonomy": "claim/test mismatch",
+        "dimension": "Test"
+      },
+      {
+        "file": "plugins/superheroes/lib/tests/test_acceptance_result.py",
+        "line": 43,
+        "title": "read_record's schema-version-mismatch and corrupt-JSON fail-closed branches are untested",
+        "severity": "Minor",
+        "taxonomy": "claim/test mismatch",
+        "dimension": "Test"
+      }
+    ],
+    "carriedFindings": [],
+    "dimensions": {
+      "security-reviewer": {
+        "dimension": "security-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 1,
+        "subjects": [
+          "Security"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 1,
+        "subjects": [
+          "Code"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_launch.py",
+            "line": 221,
+            "title": "Production launcher spawns `claude --headless` (invalid flag, no prompt) so the live acceptance run cannot drive the showrunner",
+            "severity": "Important",
+            "taxonomy": "broken-invocation",
+            "dimension": "Code"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 1
+      },
+      "architecture-reviewer": {
+        "dimension": "architecture-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 1,
+        "subjects": [
+          "Architecture",
+          "architecture-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_launch.py",
+            "line": 221,
+            "dimension": "architecture-reviewer"
+          },
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 320,
+            "dimension": "architecture-reviewer"
+          },
+          {
+            "file": "plugins/superheroes/lib/run_readout.py",
+            "line": 29,
+            "dimension": "architecture-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "premortem-reviewer": {
+        "dimension": "premortem-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 1,
+        "subjects": [
+          "premortem-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_launch.py",
+            "line": 222,
+            "dimension": "premortem-reviewer"
+          },
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 321,
+            "dimension": "premortem-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 1,
+        "subjects": [
+          "Test"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 93,
+            "title": "No test exercises the _lease_liveness tri-state safety classifier (UFR-4 fail-closed liveness)",
+            "severity": "Important",
+            "taxonomy": "claim/test mismatch",
+            "dimension": "Test"
+          },
+          {
+            "file": "plugins/superheroes/lib/tests/test_acceptance_result.py",
+            "line": 43,
+            "title": "read_record's schema-version-mismatch and corrupt-JSON fail-closed branches are untested",
+            "severity": "Minor",
+            "taxonomy": "claim/test mismatch",
+            "dimension": "Test"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 1
+      }
+    },
+    "runId": "/tmp/showrunner-standalone-showrunner-acceptance-harness-df979d-review-code",
+    "fix": {
+      "fixes": [
+        {
+          "id": "code-001",
+          "status": "fixed",
+          "commit": "52c333a",
+          "note": "_default_child_factory now spawns `claude -p <prompt>` (never the invalid --headless flag), with the prompt driving superheroes:showrunner on the stamped work-item and instructing it to persist run_readout.run_outcome to the terminal path."
+        },
+        {
+          "id": "architecture-real_run_outcome",
+          "status": "fixed",
+          "commit": "52c333a",
+          "note": "real_run_outcome now reads the real run_readout.run_outcome field names (status/checks/reason/prUrl/phasesTraversed) instead of invented ones (terminal/checksGreen/failureKind)."
+        },
+        {
+          "id": "architecture-no-persisted-terminal-record",
+          "status": "fixed",
+          "commit": "52c333a",
+          "note": "Closed via the launch prompt: the child session is explicitly instructed to compute run_readout.run_outcome(state) and write it as JSON to the terminal_location path after the showrunner reaches a terminal state \u2014 the only place such a write can originate given the showrunner itself never persists one."
+        },
+        {
+          "id": "test-001",
+          "status": "fixed",
+          "commit": "52c333a",
+          "note": "Added test_acceptance_deps.py covering all _lease_liveness branches, including the foreign-host-never-dead and PermissionError-never-fail-open mutants."
+        },
+        {
+          "id": "test-002",
+          "status": "fixed",
+          "commit": "52c333a",
+          "note": "Added read_record schema-version-mismatch, missing-schema-version-key, and corrupt-JSON tests to test_acceptance_result.py."
+        }
+      ],
+      "deferred": [],
+      "changedSubjectDetails": [
+        "Code",
+        "Architecture",
+        "Test"
+      ]
+    }
+  },
+  {
+    "schemaVersion": 2,
+    "round": 2,
+    "kind": "intermediate",
+    "confirmationPending": true,
+    "changedSubjects": [
+      "Code",
+      "Test"
+    ],
+    "coverageDecisions": [],
+    "tokenUsage": {
+      "synthesis:r2": {
+        "findings_evaluated": 3
+      }
+    },
+    "findings": [
+      {
+        "file": "plugins/superheroes/skills/acceptance/SKILL.md",
+        "line": 36,
+        "title": "Acceptance front-door step 1 crashes: os.environ[\"LIB\"] read while LIB is never exported",
+        "severity": "Important",
+        "taxonomy": "broken-invocation",
+        "dimension": "Code"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 337,
+        "title": "FR-9 environmental retry is unreachable in the live wiring \u2014 no real failure_kind ever matches the environmental set",
+        "severity": "Important",
+        "taxonomy": "dead-path / spec-vs-wiring gap",
+        "dimension": "Code"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_launch.py",
+        "line": 142,
+        "severity": "minor",
+        "dimension": "architecture-reviewer"
+      }
+    ],
+    "carriedFindings": [],
+    "dimensions": {
+      "security-reviewer": {
+        "dimension": "security-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 2,
+        "subjects": [
+          "Security"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 2,
+        "subjects": [
+          "Test"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 2,
+        "subjects": [
+          "Code"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/skills/acceptance/SKILL.md",
+            "line": 36,
+            "title": "Acceptance front-door step 1 crashes: os.environ[\"LIB\"] read while LIB is never exported",
+            "severity": "Important",
+            "taxonomy": "broken-invocation",
+            "dimension": "Code"
+          },
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 337,
+            "title": "FR-9 environmental retry is unreachable in the live wiring \u2014 no real failure_kind ever matches the environmental set",
+            "severity": "Important",
+            "taxonomy": "dead-path / spec-vs-wiring gap",
+            "dimension": "Code"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 2
+      },
+      "premortem-reviewer": {
+        "dimension": "premortem-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 2,
+        "subjects": [],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "architecture-reviewer": {
+        "dimension": "architecture-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 2,
+        "subjects": [
+          "Architecture",
+          "architecture-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_launch.py",
+            "line": 142,
+            "severity": "minor",
+            "dimension": "architecture-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      }
+    },
+    "runId": "/tmp/showrunner-standalone-showrunner-acceptance-harness-df979d-review-code",
+    "fix": {
+      "fixes": [
+        {
+          "id": "code-002-skill-lib-export",
+          "file": "plugins/superheroes/skills/acceptance/SKILL.md",
+          "summary": "Export LIB where resolved so step 1's os.environ[\"LIB\"] heredoc no longer KeyErrors and falsely refuses on every real invocation."
+        },
+        {
+          "id": "arch-spend-partial-effort-key",
+          "file": "plugins/superheroes/lib/acceptance_launch.py",
+          "summary": "_compute_spend_partial now excludes the non-role 'effort' sub-map from the any-non-claude test, fixing a false spend_partial=True on real all-claude runs; added regression tests using the real engine_pref.load_engine_prefs shape."
+        }
+      ],
+      "deferred": [
+        {
+          "id": "code-002-fr9-retry-unreachable",
+          "reason": "Low-confidence, tradeoff:true finding \u2014 the reviewer explicitly flagged multiple reasonable resolutions (map showrunner free-form parked-reason strings onto acceptance_retry's environmental-kind set, vs. documenting FR-9 retry as not yet wired end-to-end live). No spec authority exists in this fixer pass to choose a reason-to-kind mapping without guessing at scope the reviewer declined to prescribe; left for owner/spec decision."
+        }
+      ],
+      "changedSubjectDetails": [
+        "Code",
+        "Test"
+      ]
+    }
+  },
+  {
+    "schemaVersion": 2,
+    "round": 3,
+    "kind": "intermediate",
+    "confirmationPending": true,
+    "changedSubjects": [
+      "Architecture",
+      "Code",
+      "Failure-Mode",
+      "Test"
+    ],
+    "coverageDecisions": [],
+    "tokenUsage": {
+      "synthesis:r3": {
+        "findings_evaluated": 3,
+        "kept": 3,
+        "dropped": 0
+      }
+    },
+    "findings": [
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 40,
+        "dimension": "architecture-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 271,
+        "title": "Live PR discovery searches for a title the showrunner never assigns \u2014 a genuine success is misreported as fail",
+        "severity": "Important",
+        "taxonomy": "contract-mismatch / false-negative verdict",
+        "dimension": "Failure-Mode"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 183,
+        "severity": "medium",
+        "dimension": "code-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_run.py",
+        "line": 145,
+        "severity": "medium",
+        "dimension": "code-reviewer"
+      }
+    ],
+    "carriedFindings": [],
+    "dimensions": {
+      "security-reviewer": {
+        "dimension": "security-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 3,
+        "subjects": [
+          "Security"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 3,
+        "subjects": [
+          "Test"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "architecture-reviewer": {
+        "dimension": "architecture-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 3,
+        "subjects": [
+          "Architecture",
+          "architecture-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 40,
+            "dimension": "architecture-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "premortem-reviewer": {
+        "dimension": "premortem-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 3,
+        "subjects": [
+          "Failure-Mode"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 271,
+            "title": "Live PR discovery searches for a title the showrunner never assigns \u2014 a genuine success is misreported as fail",
+            "severity": "Important",
+            "taxonomy": "contract-mismatch / false-negative verdict",
+            "dimension": "Failure-Mode"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 1
+      },
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 3,
+        "subjects": [
+          "Code",
+          "code-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 183,
+            "severity": "medium",
+            "dimension": "code-reviewer"
+          },
+          {
+            "file": "plugins/superheroes/lib/acceptance_run.py",
+            "line": 145,
+            "severity": "medium",
+            "dimension": "code-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      }
+    },
+    "runId": "/tmp/showrunner-standalone-showrunner-acceptance-harness-df979d-review-code",
+    "fix": {
+      "fixes": [
+        {
+          "id": "premortem-001",
+          "status": "fixed",
+          "detail": "real_gh_reader now matches the PR by real build-branch prefix (superheroes/<work_item>-<hash>, falling back to legacy wi-<work_item>) instead of the harness's synthetic pr_title, which the live showrunner's gh pr create --fill-first never sets as the PR title."
+        },
+        {
+          "id": "code-reviewer-artifact-discovery-glob",
+          "status": "fixed",
+          "detail": "real_discover_artifacts now globs both the legacy wi-<stamp>* pattern and the real showrunner superheroes/*<stamp>* pattern, and discovers PRs by headRefName instead of a free-text title search; the discovered PR artifact's name is now its head branch so acceptance_cleanup.plan's parse_stamp routing still finds the stamp. real_reap's PR branch now looks the PR back up by --head instead of --search."
+        },
+        {
+          "id": "code-reviewer-reclaim-dead-cleanup-gap",
+          "status": "fixed",
+          "detail": "invoke() now calls a new _discovery_teardown(deps) (record-less discovery mode, run_stamp=None) on a confirmed-dead reclaim, before this invocation's own materialize/launch, and folds its cleaned_up/left_behind into the orphan record instead of hardcoding empty lists."
+        },
+        {
+          "id": "code-001-headless-flag",
+          "status": "already-fixed-in-worktree",
+          "detail": "Prior commits in this worktree (52c333a, 9ed7e02) already replaced claude --headless with claude -p <prompt> driving superheroes:showrunner, fixed the real_run_outcome field-name mismatch, exported LIB in the SKILL.md front door, and fixed the spend_partial effort-key bug."
+        }
+      ],
+      "deferred": [
+        {
+          "id": "architecture-phase-vocabulary-mismatch",
+          "reason": "PIPELINE_PHASES (harness) vs showrunner.js's real PHASES vocabulary and terminal-state shape are structurally decoupled -- runPhases never accumulates a traversed-phases list into its {outcome,phase,reason} terminal return. Fixing this requires a core showrunner.js loop change (accumulating phase history across runPhases and threading it through every terminal return site: front-half-boundary park, reconcile park, startup park, phase-progress-failure park, and shipPhase's ready/parked returns) w"
+        },
+        {
+          "id": "code-002-fr9-retry-dead-path",
+          "reason": "Original reviewer flagged this Low-confidence with an explicit tradeoff note: whether the failure-kind-to-environmental mapping was a deliberate live-run/DoD deferral is a judgment call, not a clear-cut bug. No real production signal in the launcher/child-factory path cleanly maps to the ENVIRONMENTAL kinds (check-runner-errored-before-running, host-unreachable) without inventing new showrunner-side semantics, so a speculative fix risked being wrong rather than useful."
+        }
+      ],
+      "changedSubjectDetails": [
+        "Code",
+        "Architecture",
+        "Test",
+        "Failure-Mode"
+      ]
+    }
+  },
+  {
+    "schemaVersion": 2,
+    "round": 4,
+    "kind": "intermediate",
+    "confirmationPending": false,
+    "changedSubjects": null,
+    "coverageDecisions": [],
+    "tokenUsage": {},
+    "findings": [
+      {
+        "file": "plugins/superheroes/lib/acceptance_launch.py",
+        "line": 281,
+        "title": "FR-8 spend ceiling is structurally inert in a live run \u2014 only the elapsed ceiling bounds cost",
+        "severity": "Minor",
+        "taxonomy": "detectability",
+        "dimension": "Failure-Mode"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 388,
+        "dimension": "architecture-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_verdict.py",
+        "line": 54,
+        "dimension": "code-reviewer"
+      }
+    ],
+    "carriedFindings": [],
+    "dimensions": {
+      "security-reviewer": {
+        "dimension": "security-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 4,
+        "subjects": [
+          "Security"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 4,
+        "subjects": [
+          "Test"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "premortem-reviewer": {
+        "dimension": "premortem-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 4,
+        "subjects": [
+          "Failure-Mode"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_launch.py",
+            "line": 281,
+            "title": "FR-8 spend ceiling is structurally inert in a live run \u2014 only the elapsed ceiling bounds cost",
+            "severity": "Minor",
+            "taxonomy": "detectability",
+            "dimension": "Failure-Mode"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "architecture-reviewer": {
+        "dimension": "architecture-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 4,
+        "subjects": [
+          "Architecture",
+          "architecture-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 388,
+            "dimension": "architecture-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 4,
+        "subjects": [
+          "Code",
+          "code-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_verdict.py",
+            "line": 54,
+            "dimension": "code-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      }
+    },
+    "runId": "/tmp/showrunner-standalone-showrunner-acceptance-harness-df979d-review-code"
+  },
+  {
+    "schemaVersion": 2,
+    "round": 5,
+    "kind": "confirmation",
+    "confirmationPending": true,
+    "changedSubjects": null,
+    "coverageDecisions": [],
+    "tokenUsage": {},
+    "findings": [],
+    "carriedFindings": [],
+    "dimensions": {
+      "security-reviewer": {
+        "dimension": "security-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 5,
+        "subjects": [
+          "Security"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 5,
+        "subjects": [
+          "Test"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "architecture-reviewer": {
+        "dimension": "architecture-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 5,
+        "subjects": [
+          "Architecture"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "premortem-reviewer": {
+        "dimension": "premortem-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 5,
+        "subjects": [],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 5,
+        "subjects": [
+          "Code"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      }
+    },
+    "runId": "/tmp/showrunner-standalone-showrunner-acceptance-harness-df979d-review-code"
+  },
+  {
+    "schemaVersion": 2,
+    "round": 6,
+    "kind": "confirmation",
+    "confirmationPending": true,
+    "changedSubjects": null,
+    "coverageDecisions": [],
+    "tokenUsage": {},
+    "findings": [
+      {
+        "file": "plugins/superheroes/skills/acceptance/SKILL.md",
+        "line": 39,
+        "dimension": "code-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_deps.py",
+        "line": 40,
+        "dimension": "code-reviewer"
+      },
+      {
+        "file": "plugins/superheroes/lib/acceptance_run.py",
+        "line": 158,
+        "dimension": "architecture-reviewer"
+      }
+    ],
+    "carriedFindings": [],
+    "dimensions": {
+      "security-reviewer": {
+        "dimension": "security-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 6,
+        "subjects": [
+          "Security"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "code-reviewer": {
+        "dimension": "code-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 6,
+        "subjects": [
+          "Code",
+          "code-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/skills/acceptance/SKILL.md",
+            "line": 39,
+            "dimension": "code-reviewer"
+          },
+          {
+            "file": "plugins/superheroes/lib/acceptance_deps.py",
+            "line": 40,
+            "dimension": "code-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "architecture-reviewer": {
+        "dimension": "architecture-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 6,
+        "subjects": [
+          "Architecture",
+          "architecture-reviewer"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [
+          {
+            "file": "plugins/superheroes/lib/acceptance_run.py",
+            "line": 158,
+            "dimension": "architecture-reviewer"
+          }
+        ],
+        "hasFindings": true,
+        "blockingCount": 0
+      },
+      "premortem-reviewer": {
+        "dimension": "premortem-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 6,
+        "subjects": [],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      },
+      "test-reviewer": {
+        "dimension": "test-reviewer",
+        "status": "run",
+        "confidence": "high",
+        "round": 6,
+        "subjects": [
+          "Test"
+        ],
+        "escalated": false,
+        "tier": "reviewer-deep",
+        "findings": [],
+        "hasFindings": false,
+        "blockingCount": 0
+      }
+    },
+    "runId": "/tmp/showrunner-standalone-showrunner-acceptance-harness-df979d-review-code"
+  }
+]

@@ -1,6 +1,11 @@
 // plugins/superheroes/lib/review_round_policy.js
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
+// #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
+// rework-breadth (distinct policy subjects the fix touched) at or above which a confirmation's
+// rework counts as "cross-cutting" and re-arms one more full confirmation.
+const MAX_CONFIRMATIONS = 2
+const CROSS_CUTTING_SUBJECTS = 3
 const SUBJECT_FALLBACK = {
   test: 'Test',
   security: 'Security',
@@ -124,4 +129,41 @@ function planRound(state) {
   return { roundKind: 'intermediate', dimensions: out, escalationPolicy: 'cheap-first' }
 }
 
-module.exports = { planRound }
+function isCrossCutting(changedSubjects, threshold = CROSS_CUTTING_SUBJECTS) {
+  // #174: the rework of a confirmation's fix is "cross-cutting" when it touched at least
+  // `threshold` distinct policy subjects (default ≥3 of the 5). Reuses the shared changed-subjects
+  // normalizer, so a malformed / unknown surface returns null → treated as cross-cutting (fail
+  // toward one more confirmation, never toward a premature certify).
+  const subjects = _changedSubjects(changedSubjects)
+  if (subjects === null || subjects === undefined) return true
+  return new Set(subjects).size >= threshold
+}
+
+function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting,
+  maxConfirmations = MAX_CONFIRMATIONS) {
+  // #174 confirmation-bar economics — the follow-up decision after a FULL confirmation panel
+  // surfaced blocking findings (which the fix loop still resolves + verifies, requirement 1).
+  // Only a Critical surfaced, OR cross-cutting rework, triggers one more full confirmation; hard
+  // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
+  // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
+  const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
+  const hasCritical = sevs.includes('Critical')
+  const trigger = hasCritical || !!crossCutting
+  const atCap = confirmationsRun >= maxConfirmations
+  if (!trigger) {
+    return { rearm: false, park: false, atCap,
+      reason: 'non-Critical findings, rework not cross-cutting — resolve by scoped verify; no further confirmation panel' }
+  }
+  if (atCap) {
+    if (hasCritical) {
+      return { rearm: false, park: true, atCap: true,
+        reason: 'Critical surfaced at the confirmation-panel cap — park; certification withheld' }
+    }
+    return { rearm: false, park: false, atCap: true,
+      reason: 'confirmation-panel cap reached — resolve remaining by scoped verify; no further panel' }
+  }
+  return { rearm: true, park: false, atCap: false,
+    reason: (hasCritical ? 'Critical surfaced by confirmation' : 'cross-cutting rework') + ' — one more full confirmation panel required' }
+}
+
+module.exports = { planRound, isCrossCutting, confirmationFollowup, MAX_CONFIRMATIONS, CROSS_CUTTING_SUBJECTS }

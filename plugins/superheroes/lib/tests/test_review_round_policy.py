@@ -36,6 +36,75 @@ def test_fractional_round_string_is_malformed():
     assert out["escalationPolicy"] == "deep-only"
 
 
+def test_is_cross_cutting_three_of_five_subjects_is_cross_cutting():
+    # #174: "cross-cutting rework" = the fix touched ≥3 of the 5 policy subjects. Pin the rule.
+    assert RP.is_cross_cutting(["Code", "Architecture", "Security"]) is True
+
+
+def test_is_cross_cutting_two_subjects_is_not_cross_cutting():
+    assert RP.is_cross_cutting(["Code", "Architecture"]) is False
+
+
+def test_is_cross_cutting_dedupes_before_counting():
+    # Three list entries but only two distinct subjects — not cross-cutting.
+    assert RP.is_cross_cutting(["Code", "Code", "Architecture"]) is False
+
+
+def test_is_cross_cutting_empty_is_not_cross_cutting():
+    assert RP.is_cross_cutting([]) is False
+
+
+def test_is_cross_cutting_unknown_surface_fails_toward_cross_cutting():
+    # Unknown rework breadth (malformed / not a list) → conservative: treat as cross-cutting so
+    # the loop errs toward one more confirmation, never toward a premature certify.
+    assert RP.is_cross_cutting(None) is True
+
+
+def test_confirmation_followup_non_critical_under_cap_no_rearm():
+    # Req 2: a confirmation that surfaces only Importants (not cross-cutting) does NOT trigger
+    # another full confirmation — the Importants are fixed + scope-verified by a scoped round.
+    out = RP.confirmation_followup(["Important"], 1, False)
+    assert out["rearm"] is False
+    assert out["park"] is False
+
+
+def test_confirmation_followup_critical_under_cap_rearms():
+    # Req 2: a Critical from a confirmation triggers one additional full confirmation.
+    out = RP.confirmation_followup(["Important", "Critical"], 1, False)
+    assert out["rearm"] is True
+    assert out["park"] is False
+
+
+def test_confirmation_followup_cross_cutting_under_cap_rearms():
+    # Req 2: cross-cutting rework (no Critical) also triggers one additional full confirmation.
+    out = RP.confirmation_followup(["Important"], 1, True)
+    assert out["rearm"] is True
+    assert out["park"] is False
+
+
+def test_confirmation_followup_critical_at_cap_parks():
+    # Req 3: a Critical still owed at the hard cap (2 panels) parks — certification withheld.
+    out = RP.confirmation_followup(["Critical"], 2, False)
+    assert out["rearm"] is False
+    assert out["park"] is True
+    assert out["atCap"] is True
+
+
+def test_confirmation_followup_non_critical_at_cap_certifies():
+    # Req 3: at the cap, remaining non-Critical findings are resolved by scoped verify — no park,
+    # no further panel.
+    out = RP.confirmation_followup(["Important"], 2, True)
+    assert out["rearm"] is False
+    assert out["park"] is False
+    assert out["atCap"] is True
+
+
+def test_confirmation_followup_nothing_surfaced_no_rearm():
+    out = RP.confirmation_followup([], 1, False)
+    assert out["rearm"] is False
+    assert out["park"] is False
+
+
 def test_object_changed_subjects_from_live_doc_fix_still_schedule_skips():
     out = RP.plan_round({
         "round": 2,

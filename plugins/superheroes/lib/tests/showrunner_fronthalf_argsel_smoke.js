@@ -8,6 +8,7 @@
 //       globals (text/structure assertion, not a full eval of the entry).
 // usableDraft uses the small boundary signal {usable, recorded, expected} — verdict computed
 // Python-side; the large doc text never crosses the cheapest-model pipe.
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
@@ -39,30 +40,36 @@ function makeAgentStub() {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
 
-    if (label === 'exec') {
-      // exec() dispatches as a batch; each result is {index, ok, stdout}.
-      if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        // reconcile(): empty snapshot -> recoverTwin gets undefined checkpoint/world -> world_derive
-        return [{ index: 0, ok: true, stdout: '{}' }]
-      }
-      if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
-        // readGate() for spec, plan, or tasks: always return 'passed'
-        return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
-      }
-      if (typeof prompt === 'string' && prompt.includes('front_half_usable.py')) {
-        // usableDraft(): return a usable draft so producePhase short-circuits (no author agent)
-        return [{ index: 0, ok: true, stdout: USABLE_SIGNALS }]
-      }
-      if (typeof prompt === 'string' && prompt.includes('front_half.py append-notify')) {
-        return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
-      }
-      // Any other exec batch: return ok (e.g. definition_doc set-gate batched in persistPhase)
+    // Dumb-pipe (courier) leaves are routed by the command in their prompt, regardless of the
+    // descriptive label ('gather snapshot'/'read gate'/'check draft'/'append notify'). The generic
+    // courier catch-all lives AFTER the named 'save phase progress' branch so it never swallows it.
+    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
+      // reconcile(): empty snapshot -> recoverTwin gets undefined checkpoint/world -> world_derive
+      return [{ index: 0, ok: true, stdout: JSON.stringify({
+        checkpoint: null,
+        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+        generation: 1,
+        root: globalThis.__SR_ROOT,
+      }) }]
+    }
+    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
+      // readGate() for spec, plan, or tasks: always return 'passed'
+      return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
+    }
+    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('front_half_usable.py')) {
+      // usableDraft(): return a usable draft so producePhase short-circuits (no author agent)
+      return [{ index: 0, ok: true, stdout: USABLE_SIGNALS }]
+    }
+    if (opts && opts.courier && typeof prompt === 'string' && prompt.includes('front_half.py append-notify')) {
       return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
     }
 
     if (label === 'save phase progress') {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
     }
+
+    // Any other dumb-pipe leaf (e.g. definition_doc set-gate batched in persistPhase): return ok.
+    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
 
     if (label === 'lib') {
       if (typeof prompt === 'string' && prompt.includes('journal_entry')) return { ok: true }

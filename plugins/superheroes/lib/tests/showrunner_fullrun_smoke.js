@@ -3,6 +3,7 @@
 // runPhases calls phase_step.decide() directly — no 'lib' label agent for phase_step_cli.
 // #118: the per-phase tail is ONE 'save phase progress' courier (phase_progress_entry.py save) —
 // journal_entry/checkpoint_entry never ride separate leaves.
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}

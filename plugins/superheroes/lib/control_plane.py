@@ -1,11 +1,15 @@
 # plugins/superheroes/lib/control_plane.py
-"""Per-checkout control-plane store (CONVENTIONS §4.2): a machine-local git repo,
-keyed by <absolute-git-dir-key> (§6.2) — DISTINCT per worktree/clone — holding one
-work-item's runtime (checkpoint, resume-brief, events). Dependency-free.
+"""Per-clone control-plane store (CONVENTIONS §4.2): a machine-local git repo, keyed by
+<common-dir-key> (§6.2) — SHARED identically across a clone's main checkout and every
+linked worktree — holding each work-item's runtime (checkpoint, resume-brief, events).
+Dependency-free.
 
-Keying note (§4.2): we derive from raw `--absolute-git-dir`, NOT `--git-common-dir`
-(which is shared across a clone's linked worktrees, correct for config but WRONG
-for the control plane — it would funnel two parallel loops onto one store).
+Keying note (§4.2): we derive from the git COMMON dir (`--git-common-dir`), NOT the
+per-worktree `--absolute-git-dir`. Coordination MUST be shared across a clone's worktrees:
+the one-live-run-per-work-item lease refs live in this store, and a per-worktree store
+would let the same work item launch twice from two worktrees (split-brain on one
+branch/PR). State isolation is per-work-item WITHIN the store (issues/<work-item>/…), not
+per-worktree — mirrors mode_registry.config_key's common-dir keying (§6.2).
 """
 import hashlib
 import json
@@ -92,10 +96,32 @@ def _short_hash(s):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
+def _common_git_dir(cwd):
+    """realpath of the git COMMON dir — identical from the main checkout and every linked
+    worktree of a clone, so all of them resolve to ONE control-plane store.
+
+    `--path-format=absolute` (git >= 2.31) is REQUIRED: a bare `--git-common-dir` returns a
+    RELATIVE ".git" from the main checkout, which os.path.realpath would then resolve against
+    the PYTHON process cwd (not the repo) and mis-key the store. Fallback chain preserved:
+    common-dir → absolute-git-dir → realpath(cwd). On git < 2.31 (no --path-format) we re-run
+    the bare `--git-common-dir` and join a relative result onto `cwd` before realpath, so
+    worktrees still converge; only a total git failure drops to --absolute-git-dir / cwd.
+
+    Zero-migration invariant: for the main checkout the common dir IS the absolute git dir, so
+    this returns the exact same realpath the old `--absolute-git-dir` derivation did — every
+    existing lease/journal/checkpoint keeps its key (pinned by a test)."""
+    out = _run_git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if out is None:
+        rel = _run_git(cwd, "rev-parse", "--git-common-dir")
+        if rel is not None:
+            out = rel if os.path.isabs(rel) else os.path.join(cwd, rel)
+        else:
+            out = _run_git(cwd, "rev-parse", "--absolute-git-dir")
+    return os.path.realpath(out if out is not None else cwd)
+
+
 def checkout_key(cwd):
-    out = _run_git(cwd, "rev-parse", "--absolute-git-dir")
-    base = os.path.realpath(out) if out else os.path.realpath(cwd)
-    return _short_hash(base)
+    return _short_hash(_common_git_dir(cwd))
 
 
 def checkout_dir(cwd, root=None):
@@ -156,20 +182,4 @@ def ensure_store(cwd, root=None):
                 {"schemaVersion": SCHEMA_VERSION, "sourcePath": os.path.realpath(cwd)}))
         return d
     except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _current_path(cwd, root=None):
-    return os.path.join(checkout_dir(cwd, root), "current.json")
-
-
-def set_current(cwd, work_item, root=None):
-    atomic_write(_current_path(cwd, root), json.dumps({"workItem": work_item}))
-
-
-def get_current(cwd, root=None):
-    try:
-        with open(_current_path(cwd, root), encoding="utf-8") as fh:
-            return json.load(fh).get("workItem")
-    except (OSError, ValueError):
         return None

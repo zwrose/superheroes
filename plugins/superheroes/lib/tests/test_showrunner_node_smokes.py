@@ -26,6 +26,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
+    # #174: confirmation-bar economics — certify-after-scoped, severity-gated re-arm, hard cap.
+    "plugins/superheroes/lib/tests/showrunner_confirmation_economics_smoke.js",
     # mega-JSON regression: loop persistence ships paths + small scalars, never the record body.
     "plugins/superheroes/lib/tests/showrunner_reviewloop_payload_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
@@ -34,15 +36,20 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_verify_readback_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_readout_fencing_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    # #25 quick discovery (PR 1 — showrunner leg): route decider + fresh-quick skip journaling +
+    # loop entry at build + fail-closed refuse of a missing/malformed tasks artifact + full unchanged.
+    "plugins/superheroes/lib/tests/showrunner_quick_route_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_front_half_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_label_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_workhorse_wire_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_workhorse_park_release_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_phase_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_exec_persist_smoke.js",
     # BUG B: persistPhase resolves the SAVE result from a two-JSON-line side-effect && save chain.
@@ -51,9 +58,20 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_review_crash_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_review_round_state_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_review_breaker_halt_smoke.js",
+    # #157: code-fixer changedSubjects derivation (file paths + object fixes -> policy subjects).
+    "plugins/superheroes/lib/tests/showrunner_policy_changed_subjects_smoke.js",
+    # #157 follow-up: circuit breaker ignores transport-failed (all-missing) rounds.
+    "plugins/superheroes/lib/tests/showrunner_circuit_breaker_reviewed_rounds_smoke.js",
     # #141 fold 2: reviewPanel honors the preloaded review_setup_gather.py result (mkdir + deferred
-    # seed + load-summary + coverage folded into ONE leaf); no preloaded -> unfolded fallback.
+    # seed + entry-bootstrap + coverage folded into ONE leaf); no preloaded -> unfolded fallback.
     "plugins/superheroes/lib/tests/showrunner_review_setup_gather_smoke.js",
+    # #211 Phase 4c — the ADVERSARIAL proof: mangling any >4KB courier answer never breaks the loop
+    # (nothing that big crosses), and a mangled SMALL decider answer fails closed, never silently wrong.
+    "plugins/superheroes/lib/tests/showrunner_reviewloop_adversarial_smoke.js",
+    # #211 PR 3 — the JS reassembler's regression net: force the receipt+chunk EMERGENCY FALLBACK and
+    # pin _readReceiptText's raw-text reassembly (happy multi-chunk) + both fail-closed guards (per-chunk
+    # chunkHash, final reassembly-hash backstop) -> a mangled chunk parks round-memory-unreadable.
+    "plugins/superheroes/lib/tests/showrunner_reviewloop_fallback_smoke.js",
     # #115 Task 13a: args-based front-half selector (globalThis flags + bundle ENTRY text assertion).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).
@@ -93,6 +111,9 @@ SHOWRUNNER_SMOKES = [
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # plan-author engine route: author-plan external dispatch (commit-free write, --model
+    # threading, notify, UFR-6) + producePhase planAuthor wiring (plan-only, fall-open).
+    "plugins/superheroes/lib/tests/showrunner_engine_author_smoke.js",
     # #38 Task 11: build_phase.js worker/fixer/final-review engine-branch routing (UFR-2/4, FR-15,
     # FIX I5 final-fixer report contract). Name starts build_phase_ so the discovery guard auto-matches.
     "plugins/superheroes/lib/tests/build_phase_engine_smoke.js",
@@ -121,6 +142,14 @@ SHOWRUNNER_SMOKES = [
     # parked payload-stage-failed; the record is now composed Python-side from on-disk state so no
     # oversized blob crosses the courier, and it survives a byte-dropping courier fake.
     "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
+    # #170: the libRoot compose guard — no raw `plugins/superheroes/lib` compose survives the bundle,
+    # an absolute __SR_LIB resolves composes under it, and a missing absolute code root fails closed
+    # to a named park.
+    "plugins/superheroes/lib/tests/showrunner_compose_libroot_smoke.js",
+    # #130 token telemetry: the cost_meter accumulator (proxy dispatch counts + budget-measured
+    # output-token deltas) and the spine's best-effort phase_cost / run_completed emit path.
+    "plugins/superheroes/lib/tests/showrunner_cost_meter_smoke.js",
+    "plugins/superheroes/lib/tests/showrunner_cost_emit_smoke.js",
 ]
 
 

@@ -9,6 +9,13 @@ const sr = require('../showrunner.js')
 
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
@@ -34,17 +41,17 @@ async function main() {
     seenPrompts.push({ prompt, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
     // resolveHead + config now ride the exec courier (#118); return the expected head so it matches.
-    if (label === 'exec' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
-    if (label === 'exec' && prompt.includes('git rev-parse')) return 'cwd-head-000\n'
+    if (label === 'resolve head' && prompt.includes('git -C') && prompt.includes(RESOLVED_WT)) return RESOLVED_HEAD + '\n'
+    if (label === 'resolve head' && prompt.includes('git rev-parse')) return 'cwd-head-000\n'
     if (label === 'resume') return '1'
-    if (label === 'exec' && prompt.includes('review_code_config.py')) return JSON.stringify({ verifyCommand: 'none', tiers: {} })
+    if (label === 'read review config') return JSON.stringify({ verifyCommand: 'none', tiers: {} })
     if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
     if (label.startsWith('synthesis:')) return { verdicts: [] }
     if (label === 'stamp review coverage') return jsonOut({ ok: true })
     // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
     // downgrades it to confidence:low -> cannot-certify).
     if (/^(architecture|code|security|test|premortem)-reviewer:/.test(label)) {
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     return { findings: [] }
   }
@@ -62,7 +69,7 @@ async function main() {
   // The config command must have run in the resolved worktree (cd '/tmp/resolved-build-wt' &&).
   // (The resolver SEAM here returns no folded config, so the phase falls back to its own exec leaf;
   // the real resolveBuildTarget carries config inside the one 'resolve review target' gather.)
-  const configPrompt = seenPrompts.find((p) => p.label === 'exec' && p.prompt.includes('review_code_config.py'))
+  const configPrompt = seenPrompts.find((p) => p.label === 'read review config' && p.prompt.includes('review_code_config.py'))
   assert.ok(configPrompt, 'config command was dispatched')
   assert.ok(
     configPrompt.prompt.includes(`cd '${RESOLVED_WT}'`) ||
@@ -80,6 +87,12 @@ async function main() {
   assert.ok(
     reviewerPrompt.prompt.includes(RESOLVED_HEAD),
     `reviewer prompt names the resolved head (got: ${reviewerPrompt && reviewerPrompt.prompt.slice(0, 300)})`
+  )
+  const synthesisPrompt = seenPrompts.find((p) => p.label === 'synthesis:r1')
+  assert.ok(synthesisPrompt, 'synthesis leaf was dispatched')
+  assert.ok(
+    synthesisPrompt.prompt.includes(`Absolute verification worktree: ${RESOLVED_WT}`),
+    `synthesis prompt names the absolute worktree to verify files in (got: ${synthesisPrompt && synthesisPrompt.prompt.slice(0, 500)})`
   )
 
   // ─────────────────────────────────────────────────────────────────────────

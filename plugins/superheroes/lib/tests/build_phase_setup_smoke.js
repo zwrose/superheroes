@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_setup_smoke.js
 // #115 increment A: read-gate / build_entry.py / task_list_cli.py are ported to exec(raw)+parse.
 // They route through the single 'exec' label; the stub inspects the exec PROMPT (which lists the
@@ -12,6 +13,7 @@ function makeAgent(routes) {
     // Exact-label first (unique labels) so a short needle never shadows a longer script name.
     for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    if (opts && opts.courier) { for (const [needle, resp] of routes) if (needle === 'exec') return typeof resp === 'function' ? resp(prompt) : resp }
     return ''
   }
 }

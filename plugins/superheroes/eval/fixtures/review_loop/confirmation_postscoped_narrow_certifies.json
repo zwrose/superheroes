@@ -1,0 +1,18 @@
+{
+  "name": "confirmation-postscoped-narrow-certifies",
+  "_note": "#174 finding 1 mirror: a broad fix BEFORE the confirmation must not count as the confirmation's rework. Pre-confirmation fix touches 3 subjects, post-confirmation fix is narrow -> rework since the panel is narrow -> must NOT re-arm (certifies with one panel).",
+  "reviewerSet": ["security-reviewer", "test-reviewer"],
+  "fixEvents": [
+    {"afterRound": 1, "changedSubjects": ["Code", "Security", "Test"]},
+    {"afterRound": 3, "changedSubjects": ["Test"]}
+  ],
+  "reviewerEvents": [
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension":"Test","title":"Missing test","severity":"Important"}], "usageTotal": 1000},
+    {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension":"Security","title":"Secret A","severity":"Important"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000}
+  ],
+  "expectedTerminal": "clean",
+  "maxRounds": 12
+}

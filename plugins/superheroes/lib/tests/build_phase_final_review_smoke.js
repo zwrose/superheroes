@@ -1,3 +1,4 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_final_review_smoke.js
 // #115: runFinalReview drives the in-memory panel (single-reviewer code leg). The reviewer RETURNS a
 // findings[] array (no findings-generalist.json); merge/tally run in-process via the parity-locked
@@ -23,12 +24,22 @@ function makeAgent({ reviewerFindings, verifyResult }) {
     if (result === 'pass')    return { command: 'pytest -q', returncode: 0,    timedOut: false }
     return                           { command: 'pytest -q', returncode: 1,    timedOut: false }  // fail
   }
+  function writeVerifyOut(prompt, result) {
+    const m = String(prompt || '').match(/--out '([^']+)'/)
+    if (!m) return
+    const payload = result === 'pass' ? { result: 'pass', code: 0, tail: '' }
+      : result === 'skipped' ? { result: 'skipped', code: null, tail: '' }
+      : result === 'timeout' ? { result: 'timeout', code: null, tail: '' }
+      : { result: 'fail', code: 1, tail: '' }
+    fs.writeFileSync(m[1], JSON.stringify(payload))
+  }
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
     if (label.startsWith('branch-reviewer:')) return { findings: reviewerFindings }
     if (label === 'run verify') {
       if (verifyResult === 'garbled-no-command') return { returncode: 1, timedOut: false }
+      writeVerifyOut(prompt, verifyResult)
       return runDataFor(verifyResult)
     }
     if (label === 'read verify + minors') {

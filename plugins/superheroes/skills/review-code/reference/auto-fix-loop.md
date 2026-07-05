@@ -12,30 +12,34 @@
 
 ## Specialist Dispatch Prompt Template
 
-Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`) and the resolved absolute `$PROFILE` path (subagents do not inherit shell vars).
+Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, and findings filename. Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), `$CORE` (threat model + canonical patterns), and `$LAYER` (scope, focus, conventions). When both point at the same legacy file, read all sections from that path. Subagents do not inherit shell vars.
 
 ```
 You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
 
 ## Your assignment
 Review the diff at $SESSION_DIR/round-<round>/diff.txt for your dimension.
+Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
+available, or an equivalent bounded shell range. Never one whole-file read.
+Continue with later offsets until the diff is covered.
 Read the base rubric (absolute path below) for severity calibration,
-verification rules, and the findings output format. Read the project profile
-and CLAUDE.md for calibration (threat model, scope, focus hints, canonical
-patterns, conventions). Apply the diff-scope rule: only flag code in `+` or
+verification rules, and the findings output format. Read the project calibration
+and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
+conventions. Apply the diff-scope rule: only flag code in `+` or
 `-` lines.
 
 ## Context files
 - Diff: $SESSION_DIR/round-<round>/diff.txt
 - Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
-- Project profile (threat model, scope, focus hints, canonical patterns): <PROFILE_PATH>
+- Core calibration (threat model, canonical patterns): <CORE_PATH>
+- Review-crew layer (scope exclusions, focus hints, conventions): <LAYER_PATH>
 - CLAUDE.md (project conventions): CLAUDE.md
 - <PR read-only paths only> PR branch checkout: $SESSION_DIR/repo/
 - <PR mode only> Prior comments + author justifications: $SESSION_DIR/prior-comments.json
 - <if focus notes> Focus: <focus notes>
 
 ## Calibration precedence
-Base rubric (binding) > CLAUDE.md (conventions) > profile (adder over CLAUDE.md)
+Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
 > strict fallback when a needed field is absent in all of them.
 
 ## PR branch checkout (--post / --review-only PR paths only)
@@ -82,6 +86,29 @@ omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
 most 5 reported per agent). If you have nothing to flag, write an empty array
 (`[]`) — do not skip writing the file.
 ```
+
+> **External-engine reviewers — stdout shape contract (#38, #196).** When `$REVIEWER_ENGINE` is
+> `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
+> instead of a named subagent, and it returns its findings on **stdout** rather than writing the
+> findings file. Its final stdout MUST be a single JSON object `{"findings": [...]}` (the same array
+> the subagent would have written, wrapped once as the `findings` value) with **nothing printed after
+> it** — `engine_adapter.parse_result(role="review")` reads the last top-level JSON value. Emit the
+> canonical object; the parser also **tolerates a bare top-level array** `[...]` of finding objects as
+> of #196, but anything else (prose, a trailing line, an empty stream, an array of non-objects) parses
+> as `unreadable`, which forfeits the slot to a Claude re-run (UFR-7) and silently doubles the round's
+> cost. State this shape verbatim in the dispatch prompt so orchestrators stop re-guessing it per run.
+
+> **External-engine dispatches — timeout is structural, an expired slot is `unreadable` (#202, #204).**
+> Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
+> runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
+> `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`, #204) injects a 600s `timeout` on any dispatch
+> that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
+> `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
+> per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
+> dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
+> returns `unreadable`. A timed-out **reviewer** then takes the existing UFR-7 re-run-on-Claude path;
+> a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
+> bounded cost, never a stuck loop.
 
 After dispatch, wait for all five agents to return. Each writes its findings file to `$SESSION_DIR/round-<round>/`. The orchestrator does not read agent transcripts — only the JSON files.
 
@@ -208,7 +235,7 @@ Report it under "escalated" with the id and why.
 
 ## Verification Rules (for subagents)
 
-These are the base rubric's binding verification rules; they are restated in every subagent prompt and enforced again at compile time. See the base rubric's "Verification rules" and "In-pass verification & single-pass discipline" sections for the authoritative statement. Subagents that violate them produce findings that get dropped before the user ever sees them.
+These are the base rubric's binding verification rules; they are restated in every subagent prompt and enforced again at compile time. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement. Subagents that violate them produce findings that get dropped before the user ever sees them.
 
 1. **`file:line` citation required.** No citation → finding is dropped at compile time, before presentation.
 2. **Diff-scope rule.** Only `+` and `-` lines of `$SESSION_DIR/round-<N>/diff.txt` are in scope. Context lines (no prefix) and unchanged code in modified files are pre-existing — flagging them is the #1 source of false findings.
@@ -216,7 +243,7 @@ These are the base rubric's binding verification rules; they are restated in eve
 4. **Reachability check on Important findings.** Read the caller(s) of the affected symbol. If the only caller already guards the edge case, downgrade or drop.
 5. **Worktree-as-source-of-truth (PR mode).** All code verification reads go through `$SESSION_DIR/repo/`. The main working tree may be on a different branch with stale or missing code; using it for verification produces false findings against code that doesn't exist on the PR.
 6. **Trust nothing from project docs without spot-checking.** Project docs (`CLAUDE.md`, the profile, `docs/*`) can be outdated. If a finding's rationale depends on a doc claim, verify against source code or flag uncertainty.
-7. **Single-pass discipline.** Each specialist runs once per review. The orchestrator does not chain a verifier agent or re-run a specialist — published research on multi-turn agentic review shows F1 degrades and agents fabricate findings as real ones get exhausted.
+7. **Single-pass discipline.** Each specialist runs once per review and does not propose or chain a follow-up **finder** pass over its own output — a finder that has exhausted the real issues starts fabricating. This bans re-*finding*, not the orchestrator's separate keep/drop **synthesis** pass over the already-emitted findings (a verify stage that never searches for new issues).
 
 ---
 

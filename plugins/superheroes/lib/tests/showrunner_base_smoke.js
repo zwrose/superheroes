@@ -9,6 +9,7 @@
 //   (C) gatherState in build_phase.js reads __SR_BASE and passes --base to build_state_cli.py.
 //       Absent __SR_BASE -> no --base arg.
 //   (D) bundle ENTRY maps args.base -> __SR_BASE (text assertion on the generated bundle).
+require('./_smoke_checkout_root.js')
 
 const assert = require('assert')
 const fs = require('fs')
@@ -41,7 +42,7 @@ function shipReadinessStub(capturedCmds) {
     }
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
     if (label === 'lib') return { ok: true }
-    if (label === 'exec') return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+    if (opts && opts.courier) return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
     return null
   }
 }

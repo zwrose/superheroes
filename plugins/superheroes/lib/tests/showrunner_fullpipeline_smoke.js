@@ -2,6 +2,7 @@
 // #115 Task 12: phaseStep is the JS twin (in-process). #118: the per-phase tail (journal +
 // cursor + side effect) is ONE 'save phase progress' courier; the ship-entry PR read is the
 // exec courier (checkpoint_entry --read-pr). ship-phase IO is folded into courier leaves.
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const PR = { number: 1, url: 'https://github.com/o/r/pull/1', isDraft: true }
 
@@ -29,7 +30,7 @@ global.agent = async (p, opts) => {
     }
     return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
   }
-  if (label === 'exec') {
+  if (opts && opts.courier) {
     if (p.includes('emit-checks')) {
       return [{ index: 0, ok: true, stdout: JSON.stringify([{ name: 'ci', bucket: 'pass', state: 'success' }]) }]
     }

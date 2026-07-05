@@ -1,8 +1,10 @@
+require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_courier_retry_smoke.js
 // #115 courier-drop retry: the cheap haiku exec "courier" occasionally returns an EMPTY/garbled stdout
 // for a command that ran fine. execJson/runCourierJson retry ONCE on empty/unparseable stdout before
 // failing closed. A genuine {"ok":false} (a real durable-write failure) must STILL fail closed with NO retry.
 const assert = require('assert')
+const { routeMatches } = require('./_task_leaf_route.js')
 global.log = () => {}
 
 function makeAgent(routes) {
@@ -18,8 +20,9 @@ function makeAgent(routes) {
         }
       }
     }
-    for (const [needle, resp] of routes) if (label === needle) return typeof resp === 'function' ? resp(prompt) : resp
+    for (const [needle, resp] of routes) if (routeMatches(label, needle)) return typeof resp === 'function' ? resp(prompt) : resp
     for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
+    if (opts && opts.courier) { for (const [needle, resp] of routes) if (needle === 'exec') return typeof resp === 'function' ? resp(prompt) : resp }
     return ''
   }
 }
@@ -48,7 +51,7 @@ const TASK = { id: '1', title: 'A' }
     ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
     ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
   ])
-  let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  let r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, false, 'a dropped record-built stdout must be recovered by the courier retry (not park)')
   assert.strictEqual(recordBuiltCalls, 2, 'record task built is retried exactly once on an empty stdout (2 calls total)')
 
@@ -69,7 +72,7 @@ const TASK = { id: '1', title: 'A' }
     ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
     ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, false, 'a malformed record-built stdout must be recovered by the shared courier retry')
   assert.strictEqual(malformedCalls, 2, 'malformed JSON is retried exactly once')
 
@@ -84,7 +87,7 @@ const TASK = { id: '1', title: 'A' }
     ['record task built', () => { recordBuiltCalls2 += 1; return [{ ok: true, stdout: '' }] }],
     ['implement-task', { ok: true, signal: 'ok', evidence: {} }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, true, 'an empty record-built stdout on BOTH attempts must still park (fail-closed after retry)')
   assert.ok(/record write failed|record-before-advance/i.test(r.reason || ''), 'the record-before-advance park reason is preserved')
   assert.strictEqual(recordBuiltCalls2, 2, 'record task built is retried exactly once before failing closed (2 calls total)')
@@ -103,7 +106,7 @@ const TASK = { id: '1', title: 'A' }
     }],
     ['implement-task', { ok: true, signal: 'ok', evidence: {} }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, true, 'a genuine record-built failure must park (fail closed)')
   assert.strictEqual(recordBuiltCalls3, 1, 'a genuine failure is NOT retried')
 
@@ -120,7 +123,7 @@ const TASK = { id: '1', title: 'A' }
     ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
     ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
   ])
-  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt')
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, false, 'a clean record-built write completes the task')
   assert.strictEqual(recordBuiltCalls4, 1, 'a clean read-back on the first call returns immediately — exactly one call, no retry')
 

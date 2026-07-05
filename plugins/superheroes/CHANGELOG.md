@@ -1,5 +1,105 @@
 # Changelog
 
+## [0.9.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.8.0...superheroes-v0.9.0) (2026-07-05)
+
+
+### Features
+
+* **superheroes:** quick-discovery the-architect leg — routing, in-session task authoring, alignment probe, gate/launch wiring ([#25](https://github.com/zwrose/superheroes/issues/25) · PR 2) ([#210](https://github.com/zwrose/superheroes/issues/210)) ([ceafd72](https://github.com/zwrose/superheroes/commit/ceafd72a57df7dd9390ac42faa56abddfe57dc64))
+* **superheroes:** quick-route showrunner intake — spec-less-but-never-review-less ([#25](https://github.com/zwrose/superheroes/issues/25) · PR 1) ([#200](https://github.com/zwrose/superheroes/issues/200)) ([761e79b](https://github.com/zwrose/superheroes/commit/761e79b1a19437263b5ba36917be8652b510b1be))
+* **superheroes:** review-discipline convention — repo rule + portable to calibrated projects ([#190](https://github.com/zwrose/superheroes/issues/190)) ([7d5898a](https://github.com/zwrose/superheroes/commit/7d5898af4e920575f50dcb50358677991a664447))
+* **superheroes:** review-loop deciders — decisions up, pointers down ([#211](https://github.com/zwrose/superheroes/issues/211) · PR 1 of 3) ([#214](https://github.com/zwrose/superheroes/issues/214)) ([c7dfd8d](https://github.com/zwrose/superheroes/commit/c7dfd8d508d9bd5b20548551261cf44420ff2f13))
+* **superheroes:** review-loop shell cutover — decisions up, pointers down ([#211](https://github.com/zwrose/superheroes/issues/211) · PR 2 of 3) ([#216](https://github.com/zwrose/superheroes/issues/216)) ([d517cc3](https://github.com/zwrose/superheroes/commit/d517cc37e12ad1aa1a594f6c29e37cb23f439299))
+
+
+### Bug Fixes
+
+* **superheroes:** first test-pilot status write must treat an absent file as apply-needed ([#209](https://github.com/zwrose/superheroes/issues/209)) ([d15dda0](https://github.com/zwrose/superheroes/commit/d15dda09e7f81ff77dab86c29f31a9ed16becd53))
+* **superheroes:** raw-text read-chunk fallback + delete the cutover-orphaned machinery ([#211](https://github.com/zwrose/superheroes/issues/211) · PR 3 of 3) ([#217](https://github.com/zwrose/superheroes/issues/217)) ([2ff4b28](https://github.com/zwrose/superheroes/commit/2ff4b280c3dde5d1d909a8edf8d59397e4b27556))
+* **superheroes:** review-loop cures receipt-less answers — corrective retry, fix-before-park, honest reasons ([#212](https://github.com/zwrose/superheroes/issues/212)) ([#215](https://github.com/zwrose/superheroes/issues/215)) ([b588ff0](https://github.com/zwrose/superheroes/commit/b588ff09392bafc84727e7be7d4dcd23e22ef285))
+* **superheroes:** self-cert gate snippets use the fenced set-gate form ([#213](https://github.com/zwrose/superheroes/issues/213)) ([7894b6b](https://github.com/zwrose/superheroes/commit/7894b6b64c569d02d4a55913394bc3c81a377662))
+
+## [0.8.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.7.0...superheroes-v0.8.0) (2026-07-04)
+
+
+### Features
+
+* **superheroes:** entry-bootstrap resume decider — ship decisions, not record content ([#193](https://github.com/zwrose/superheroes/issues/193)) ([#199](https://github.com/zwrose/superheroes/issues/199)) ([1d9438c](https://github.com/zwrose/superheroes/commit/1d9438cec480d20660ab196a1d8536401ecd10fa))
+* **superheroes:** lean courier agent — cut the ~34k fixed context every one-command leaf pays ([#194](https://github.com/zwrose/superheroes/issues/194)) ([#198](https://github.com/zwrose/superheroes/issues/198)) ([0770830](https://github.com/zwrose/superheroes/commit/0770830539b461f5fea0d6cd8b091ce4fe45047b))
+
+
+### Bug Fixes
+
+* **superheroes:** de-bait chunk relay payloads + payload-tier read pins ([#192](https://github.com/zwrose/superheroes/issues/192)) ([31e2fa4](https://github.com/zwrose/superheroes/commit/31e2fa459a9f7dc2ef13a755398736cfa28e9617))
+* **superheroes:** fall back to default dispatch when the courier agent type is unknown ([#206](https://github.com/zwrose/superheroes/issues/206)) ([44ee2e5](https://github.com/zwrose/superheroes/commit/44ee2e562acf137887eb23adca1d8f0f1a652435))
+* **superheroes:** push the build branch before draft-PR creation ([#203](https://github.com/zwrose/superheroes/issues/203)) ([a7ebb84](https://github.com/zwrose/superheroes/commit/a7ebb84c26b3bb5e4b961b82f3f7dcf5fd6040c4))
+* **superheroes:** state the engine-dispatch timeout expiry contract (structural via [#204](https://github.com/zwrose/superheroes/issues/204)) ([#202](https://github.com/zwrose/superheroes/issues/202)) ([#207](https://github.com/zwrose/superheroes/issues/207)) ([fe5fc2b](https://github.com/zwrose/superheroes/commit/fe5fc2b2e479130300e1f2f8763d233508fb5d72))
+* **superheroes:** structural Bash timeout floor via PreToolUse updatedInput hook ([#204](https://github.com/zwrose/superheroes/issues/204)) ([d220280](https://github.com/zwrose/superheroes/commit/d22028011501cb8e7dc04c88ab4f4a589f489f79))
+* **superheroes:** tolerate bare-array reviewer output + state the stdout shape contract ([#196](https://github.com/zwrose/superheroes/issues/196)) ([#201](https://github.com/zwrose/superheroes/issues/201)) ([db08e3e](https://github.com/zwrose/superheroes/commit/db08e3e3dec43abc4a235771b5f077fdfc793e8f))
+* **superheroes:** verify read-back must survive a thrown courier ([#195](https://github.com/zwrose/superheroes/issues/195)) ([8802019](https://github.com/zwrose/superheroes/commit/8802019efb1ae779c7932be6a784b776edbe41b5))
+
+## [0.7.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.6.0...superheroes-v0.7.0) (2026-07-04)
+
+
+### Features
+
+* **superheroes:** confirmation-bar economics for the shared review loop ([#174](https://github.com/zwrose/superheroes/issues/174) · PR 1) ([#181](https://github.com/zwrose/superheroes/issues/181)) ([6c3c76a](https://github.com/zwrose/superheroes/commit/6c3c76affaf40003b7c3759cf675629793eb2b58))
+* **superheroes:** fail-closed synthesis pass in standalone review-code + honest review-base rewrite ([#174](https://github.com/zwrose/superheroes/issues/174) · PR 3) ([#185](https://github.com/zwrose/superheroes/issues/185)) ([2b73745](https://github.com/zwrose/superheroes/commit/2b73745c8f3247470b8490ab6039377c7bd78566))
+* **superheroes:** script-owned round scheduler for review-code ([#174](https://github.com/zwrose/superheroes/issues/174) · PR 2) ([#182](https://github.com/zwrose/superheroes/issues/182)) ([c7657ff](https://github.com/zwrose/superheroes/commit/c7657ffeb2ea0742bf7a5e653d9858d8bb2de219))
+* **superheroes:** token telemetry — per-phase cost in the journal, readout, and a per-work-item trend ([#130](https://github.com/zwrose/superheroes/issues/130)) ([#179](https://github.com/zwrose/superheroes/issues/179)) ([dbb7393](https://github.com/zwrose/superheroes/commit/dbb7393d1b19bdc27f3ae8be49611ecbfbe8360d))
+
+
+### Bug Fixes
+
+* **superheroes:** courier inline-backtick tolerance + rooted synthesis verification + drop-identity fallback ([#178](https://github.com/zwrose/superheroes/issues/178)) ([034caa7](https://github.com/zwrose/superheroes/commit/034caa7575fdd44e9f0787ec13b102ccd52a2e6f))
+* **superheroes:** flag blocking→non-blocking synthesis downgrades like drops ([#186](https://github.com/zwrose/superheroes/issues/186)) ([#187](https://github.com/zwrose/superheroes/issues/187)) ([1e5b643](https://github.com/zwrose/superheroes/commit/1e5b64325ca90fb985a7ef0cf2b937a0af8e738f))
+* **superheroes:** harden review dispatch reliability ([#176](https://github.com/zwrose/superheroes/issues/176)) ([7957f5b](https://github.com/zwrose/superheroes/commit/7957f5b218154d79c6ab00ebf53baae5f70f68dd))
+
+## [0.6.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.5.0...superheroes-v0.6.0) (2026-07-03)
+
+
+### Features
+
+* **superheroes:** common-dir coordination store + guard cleanup (PR 2 of [#170](https://github.com/zwrose/superheroes/issues/170)) ([#172](https://github.com/zwrose/superheroes/issues/172)) ([6bf7d2b](https://github.com/zwrose/superheroes/commit/6bf7d2bf353691591cc4182c9d338da5b24587f0))
+* **superheroes:** Fable plan-authoring options — author-plan tier + planAuthor engine ([#168](https://github.com/zwrose/superheroes/issues/168)) ([b2e96f8](https://github.com/zwrose/superheroes/commit/b2e96f89118f688aeb7eba77cb9e358ec155e989))
+* **superheroes:** libRoot — portable, version-pinned spine (PR 1 of [#170](https://github.com/zwrose/superheroes/issues/170)) ([#171](https://github.com/zwrose/superheroes/issues/171)) ([746b741](https://github.com/zwrose/superheroes/commit/746b7414ece878fae32bc6396d5c963454e7829c))
+* **superheroes:** script-owned review-spec round scheduler ([#164](https://github.com/zwrose/superheroes/issues/164)) ([#167](https://github.com/zwrose/superheroes/issues/167)) ([26c4e15](https://github.com/zwrose/superheroes/commit/26c4e1578348e3cd1c64e7a0b5eb5f8d245cb715))
+
+
+### Bug Fixes
+
+* **superheroes:** fail closed on synthesized review findings ([#169](https://github.com/zwrose/superheroes/issues/169)) ([d54f9e1](https://github.com/zwrose/superheroes/commit/d54f9e192d9587ef3100dd4dcc1d7c8e0e070e6c))
+* **superheroes:** per-task reviewer honors reviewer engine + model tier ([#160](https://github.com/zwrose/superheroes/issues/160)) ([#163](https://github.com/zwrose/superheroes/issues/163)) ([97dafcd](https://github.com/zwrose/superheroes/commit/97dafcdfee4cbbfbdc5113f8a0802b4ca46ecbbf))
+* **superheroes:** preserve review loop changed subjects ([#161](https://github.com/zwrose/superheroes/issues/161)) ([26c2f99](https://github.com/zwrose/superheroes/commit/26c2f991797b9ae2d9f47c06102dfbf1bb5cfc1c))
+
+## [0.5.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.4.0...superheroes-v0.5.0) (2026-07-03)
+
+
+### Features
+
+* **superheroes:** add run_watch live watch CLI ([#155](https://github.com/zwrose/superheroes/issues/155)) ([015d770](https://github.com/zwrose/superheroes/commit/015d770ef137ca87466e0b2a7c6df3576e36657d))
+* **superheroes:** add task-scoped labels to build-phase leaves ([#150](https://github.com/zwrose/superheroes/issues/150)) ([#153](https://github.com/zwrose/superheroes/issues/153)) ([8f9effc](https://github.com/zwrose/superheroes/commit/8f9effc52de87c25e601fdcb5621f0c843e8a6bb))
+* **superheroes:** close the [#118](https://github.com/zwrose/superheroes/issues/118) courier-collapse acceptance gaps and land the D3 review-round durability rework ([#138](https://github.com/zwrose/superheroes/issues/138)) ([05a1965](https://github.com/zwrose/superheroes/commit/05a1965b70f0a36173375dd239fec0566c198979))
+* **superheroes:** record store provenance and add orphan report/sweep ([#134](https://github.com/zwrose/superheroes/issues/134)) ([b153911](https://github.com/zwrose/superheroes/commit/b153911ed2774c965a24dea63328a8b62c0ba0db))
+
+
+### Bug Fixes
+
+* **superheroes:** build-half resolver bypass + transport hardening ([#146](https://github.com/zwrose/superheroes/issues/146)) ([a705f5a](https://github.com/zwrose/superheroes/commit/a705f5aa78729654a489dcea264b482aba325eb8))
+* **superheroes:** collapse the review-loop bookkeeping stretches to the [#118](https://github.com/zwrose/superheroes/issues/118) 0-or-1-leaf bar ([#141](https://github.com/zwrose/superheroes/issues/141)) ([e5b0091](https://github.com/zwrose/superheroes/commit/e5b009168ef4844edf527833fafdb62335d70c65))
+* **superheroes:** compose terminal-record Python-side to survive the courier ([#144](https://github.com/zwrose/superheroes/issues/144)) ([4e496c8](https://github.com/zwrose/superheroes/commit/4e496c84161f395b7539c130b325c9a2055b6edc))
+* **superheroes:** derive policy subjects from code-fixer file-path shape ([#157](https://github.com/zwrose/superheroes/issues/157)) ([#158](https://github.com/zwrose/superheroes/issues/158)) ([538e883](https://github.com/zwrose/superheroes/commit/538e883219ccc22f3c91a670ed97fb919042f882))
+* **superheroes:** descriptive exec-courier labels ([#151](https://github.com/zwrose/superheroes/issues/151)) ([#154](https://github.com/zwrose/superheroes/issues/154)) ([fc256fb](https://github.com/zwrose/superheroes/commit/fc256fb05e9f3ab8d483c8f7b78eb042a6fe737e))
+* **superheroes:** drop top-level allOf from FINDINGS_SCHEMA ([#156](https://github.com/zwrose/superheroes/issues/156)) ([2eef51b](https://github.com/zwrose/superheroes/commit/2eef51b7fe3dcea9196dedd7df6103ca24e9c12f))
+* **superheroes:** fence-blind runHelper + two-JSON-line persist park (run-8 dogfood) ([#140](https://github.com/zwrose/superheroes/issues/140)) ([a2eb441](https://github.com/zwrose/superheroes/commit/a2eb4413ab574de7e870c7fa98e98b9af959dcf8))
+* **superheroes:** finish [#123](https://github.com/zwrose/superheroes/issues/123) unified layout migration for review-code ([#148](https://github.com/zwrose/superheroes/issues/148)) ([476d167](https://github.com/zwrose/superheroes/commit/476d1675d248265f4d7703dcce9ec92e87a6b58a))
+* **superheroes:** five showrunner-spine defects from the 2026-07-02 live dogfood run ([#136](https://github.com/zwrose/superheroes/issues/136)) ([d248a29](https://github.com/zwrose/superheroes/commit/d248a295d6cb2eaa0cee08a4f83b58a7fc217e1a))
+* **superheroes:** harden run_watch fail-soft + status accuracy ([#159](https://github.com/zwrose/superheroes/issues/159)) ([68a5297](https://github.com/zwrose/superheroes/commit/68a529744d24fc062792f23818c902680c670093))
+* **superheroes:** harden showrunner leaf model governance ([#142](https://github.com/zwrose/superheroes/issues/142)) ([c6bb970](https://github.com/zwrose/superheroes/commit/c6bb970e278bf3ebf524abe1161d61f73f81f46d))
+* **superheroes:** restore review-loop convergence levers ([#145](https://github.com/zwrose/superheroes/issues/145)) ([c1127b0](https://github.com/zwrose/superheroes/commit/c1127b08792aacc13c0ccfe0db435b8baffc455c))
+* **superheroes:** stop fabricating verification receipts + remove dead build_progress_cli.py ([#139](https://github.com/zwrose/superheroes/issues/139)) ([9f29253](https://github.com/zwrose/superheroes/commit/9f29253ad0aff3ca543217d90f42d065e27a5c52))
+* **superheroes:** Task-Id body parse + workhorse park lease release ([#147](https://github.com/zwrose/superheroes/issues/147)) ([0034454](https://github.com/zwrose/superheroes/commit/0034454ec3daae370312877d7de27cf75a3ce483))
+
 ## [0.4.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.3.0...superheroes-v0.4.0) (2026-07-02)
 
 

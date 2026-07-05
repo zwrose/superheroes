@@ -332,40 +332,48 @@ def split_profile(profile_text, hero):
 
 
 def _legacy_path(cwd, hero):
-    """The hero's pre-existing single-file profile path, MODE-AWARE. A global-mode legacy
-    profile lives under the hero's own global store, not in the repo, so resolve it through
-    each hero's own resolver first (the hero owns where its profile lives); fall back to the
-    in-repo `_HERO_INREPO` subpath (anchored at the repo root) when no global profile exists.
-    Returns None for an unknown hero."""
-    sub = mode_registry._HERO_INREPO.get(hero)
+    """The hero's pre-existing single-file LEGACY profile path only (#123 — never the unified
+    layer). In-repo legacy wins over global legacy (matches review_store in-repo-first order)."""
+    sub = mode_registry._HERO_LEGACY_INREPO.get(hero)
     if sub is None:
         return None
+    anchored = os.path.join(_repo_root(cwd), sub)
+    if os.path.isfile(anchored):
+        return anchored
     try:
         if hero == "review-crew":
             import review_store
-            res = review_store.resolve(cwd, "profile", review_store.store_root())
-            if res.get("exists") and res.get("path"):
-                return res["path"]
+            g = store_core.resolve_global(cwd, review_store.store_root(), heal=False)
+            if g is not None:
+                legacy = os.path.join(g["dir"], review_store.FILENAMES["profile"])
+                if os.path.isfile(legacy):
+                    return legacy
         elif hero == "test-pilot":
             import store as test_pilot_store
             res = test_pilot_store.resolve(cwd, test_pilot_store.store_root())
             if res.get("exists") and res.get("profile"):
                 return res["profile"]
     except Exception:
-        pass  # fail-open: fall back to the in-repo anchored path
-    return os.path.join(_repo_root(cwd), sub)
+        pass  # fail-open: return the in-repo anchored path for isfile checks
+    return anchored
 
 
-def _layer_path(cwd, hero, root=None):
-    """The hero layer path, co-located with core.md (same mode-aware dir)."""
+def layer_path(cwd, hero, root=None):
+    """Mode-aware path to a hero layer file, co-located with core.md."""
     return os.path.join(os.path.dirname(core_path(cwd, root)), hero + ".md")
 
 
-def _render_layer(layer_text, hero, status, stamp):
+def _layer_path(cwd, hero, root=None):
+    """Back-compat alias used within this module."""
+    return layer_path(cwd, hero, root)
+
+
+def _render_layer(layer_text, hero, status, stamp, rubric_version=None):
     """Wrap the split hero sections in the §2.2 provenance line for a layer file. Always ends in a
     single trailing newline (#121 Part I — never write a "No newline at end of file" layer)."""
-    rendered = ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s nudge-ack={} -->\n\n%s"
-                % (hero, SCHEMA_VERSION, status, stamp, stamp, layer_text))
+    rubric_part = (" rubric-version=%d" % rubric_version) if rubric_version is not None else ""
+    rendered = ("<!-- %s: schemaVersion=%d status=%s created=%s updated=%s%s nudge-ack={} -->\n\n%s"
+                % (hero, SCHEMA_VERSION, status, stamp, stamp, rubric_part, layer_text))
     return rendered if rendered.endswith("\n") else rendered + "\n"
 
 
@@ -601,7 +609,7 @@ def resolve_shared(cwd, *, root=None):
     return read(cwd, root)
 
 
-def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
+def write_layer(cwd, hero, layer_text, status, *, root=None, now=None, rubric_version=None):
     """Lock-guarded atomic write of a hero LAYER file (FR-3 create path), co-located with
     core.md and wrapped in the §2.2 layer provenance line. Returns a structured result:
       - written  → {action: "written", "path": layer_p}
@@ -614,7 +622,8 @@ def write_layer(cwd, hero, layer_text, status, *, root=None, now=None):
             return {"action": "deferred"}
         layer_p = _layer_path(cwd, hero, root)
         try:
-            store_core.atomic_write(layer_p, _render_layer(layer_text, hero, status, stamp))
+            store_core.atomic_write(
+                layer_p, _render_layer(layer_text, hero, status, stamp, rubric_version))
         except OSError:
             return {"action": "deferred"}
         return {"action": "written", "path": layer_p}
@@ -745,6 +754,7 @@ def main(argv):
     lp.add_argument("--root", default=None)
     lp.add_argument("--hero", choices=_HEROES, required=True)
     lp.add_argument("--status", choices=("provisional", "confirmed"), default="provisional")
+    lp.add_argument("--rubric-version", type=int, default=None)
     cp = sub.add_parser("confirm")  # FR-18 owner-confirm: core + every present hero layer
     cp.add_argument("--cwd", default=".")
     cp.add_argument("--root", default=None)
@@ -773,7 +783,8 @@ def main(argv):
             out = {"action": "deferred", "record": None, "proposals": []}
     elif args.cmd == "write-layer":
         try:
-            out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status, root=args.root)
+            out = write_layer(args.cwd, args.hero, sys.stdin.read(), args.status,
+                              root=args.root, rubric_version=args.rubric_version)
         except Exception:
             out = {"action": "deferred"}
     else:  # confirm

@@ -18,7 +18,7 @@ There are three top-level paths, chosen at invocation:
 - **`--review-only`** → one review pass, then a read-only interactive terminal presentation. No commits.
 - **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
 
-The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project profile (`.claude/review-profile.md`), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator does not chain a "verifier agent" or run a specialist twice within a round, because multi-turn agentic review within a single pass degrades F1 and fabricates findings as real ones get exhausted (base rubric, "In-pass verification & single-pass discipline"). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
+The five specialist agents are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project calibration (`core.md` for threat model + canonical patterns, `review-crew.md` layer for scope/focus/conventions), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator never re-runs a specialist or chains a second **finder** pass within a round, because a finder that has exhausted the real issues starts fabricating (base rubric, "In-pass Chain-of-Verification & single-pass discipline"). It does run a fail-closed **synthesis** judgment pass over the *already-emitted* findings at compile time — a keep/drop verify stage that never searches for new issues, distinct from re-running a finder (see `## Compile + Dedupe`). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
 
 ## Invocation
 
@@ -88,17 +88,19 @@ ESC_WRAPPER="$ROOT_DIR/lib/escalation_resolve.py"   # absolute; embed the expand
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
 ```
 
-**Resolve the profile and decisions paths once (resolver-driven).** The profile/decisions may live in-repo (`./.claude/`) or in the global per-repo store; `review_store.py resolve` returns the resolved path (or `location: none` when nothing exists yet). Capture `$PROFILE`, `$LOCATION`, `$EXISTS`, and `$DECISIONS` here, before the staleness self-check and profile bootstrap below use them:
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind profile) \
-  || { echo "review_store resolve failed — continuing with strict fallback"; RES='{"location":"none","exists":false,"path":null}'; }
-PROFILE=$(printf '%s' "$RES" | jq -r '.path // empty')
-LOCATION=$(printf '%s' "$RES" | jq -r .location)
-EXISTS=$(printf '%s' "$RES" | jq -r .exists)
+CAL=$(python3 "$ROOT_DIR/lib/calibration_resolve.py" resolve) \
+  || CAL='{"location":"none","exists":false}'
+CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
+LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
+PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"
+LOCATION=$(printf '%s' "$CAL" | jq -r .location)
+EXISTS=$(printf '%s' "$CAL" | jq -r .exists)
 DRES=$(python3 "$ROOT_DIR/lib/review_store.py" resolve --kind decisions) \
-  || { echo "review_store resolve --kind decisions failed"; DRES='{"path":null}'; }
+  || DRES='{"path":null}'
 DECISIONS=$(printf '%s' "$DRES" | jq -r '.path // empty')
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
 NUDGE_MSG=$(python3 "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
@@ -113,9 +115,7 @@ PLUGIN_VERSION=$(python3 -c "import json;print(json.load(open('$ROOT_DIR/.claude
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
-**Resolve the model tiers once (band-wide knob).** The five specialists run at the
-`reviewer` tier (`reviewer-deep` for security/architecture), and the triage + fixer
-subagents at `mechanical`. Resolve each via the shared knob to get the band defaults:
+**Resolve model tiers.** Specialists at `reviewer` (`reviewer-deep` for security/architecture); triage + fixer at `mechanical`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -124,11 +124,10 @@ OV=$(python3 "$ROOT_DIR/lib/model_tier_overrides.py" --profile "$PROFILE")  # {r
 REVIEWER_MODEL=$(python3 "$MT" --role reviewer --overrides "$OV" | jq -r '.model // empty')
 DEEP_MODEL=$(python3 "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.model // empty')
 MECH_MODEL=$(python3 "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
+SYNTH_MODEL=$(python3 "$MT" --role synthesis --overrides "$OV" | jq -r '.model // empty')  # fail-closed synthesis judge
 ```
 
-**Resolve the per-role engine (orthogonal to the model tier).** The reviewer engine runs the five
-specialists (read-only); the implementation engine runs the auto-fix (FR-15). Default `claude` — a
-project that set nothing behaves exactly as today.
+**Resolve per-role engine (FR-15).** Default `claude` when unset.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -137,10 +136,11 @@ REVIEWER_ENGINE=$(echo "$EP" | jq -r '.reviewer // "claude"')
 IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 ```
 
-When dispatching specialists, pass `model: $DEEP_MODEL` for
-`security-reviewer` and `architecture-reviewer`, `model: $REVIEWER_MODEL` for the
-other three, and `model: $MECH_MODEL` for the triage and fixer subagents. An empty
-value means "inherit the session model" — omit the `model` arg in that case.
+When dispatching specialists, map each `dims_to_run` entry's **tier** to a model —
+`reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the per-round
+schedule is script-owned; see the round scheduler). Triage and fixer subagents use
+`model: $MECH_MODEL`. An empty value means "inherit the session model" — omit the `model`
+arg in that case.
 
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
@@ -153,7 +153,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on the `--post` path once the detached worktree exists — run the check after the worktree is created in PR `--post` setup — and empty otherwise.) Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see End-of-Loop Summary / Read-Only Paths). Do NOT act on `drift` here — it is informational only.
+(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on `--post` once the worktree exists; empty otherwise.) Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superheroes:configure` and continue. Retain `message`, `signal_hash`, `nudge_acked` for the end-of-run staleness nudge. Do NOT act on `drift` here.
 
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -171,19 +171,24 @@ if [ "$LOCATION" = "none" ]; then
   fi
   PROFILE=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
-  # Then run review-init's create procedure inline, writing the profile to $PROFILE.
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. Headless runs get a provisional profile from detected defaults.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+**Read the verify story from core calibration** via `review_code_config.py` (uses `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`). Sets `VERIFY_CMD` for the verify gate and fixer:
 
-**Read the verify story from the resolved profile** (the `## Verify` section of `$PROFILE`). This sets `VERIFY_CMD` for the orchestrator's verify gate and the fixer (see `## The verify command` below):
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+VERIFY_JSON=$(python3 "$ROOT_DIR/lib/review_code_config.py" 2>/dev/null) || VERIFY_JSON='{}'
+VERIFY_CMD=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyCommand // empty')
+VERIFY_MODE=$(printf '%s' "$VERIFY_JSON" | jq -r '.verifyMode // empty')
+[ "$VERIFY_CMD" = "none" ] && VERIFY_CMD=""
+```
 
-- `command: <cmd>` present → `VERIFY_CMD="<cmd>"`.
-- `mode: unverified` → no verify command; the verify gate is skipped and commits proceed ungated.
-- `mode: review-only` → the project opted out of auto-fix; the default path degrades to a single review pass + the `--review-only` presentation.
+When `VERIFY_MODE` is `unverified`, skip the verify gate. When `VERIFY_MODE` is `review-only`, degrade to one pass + presentation.
+
+**Refresh dispatch paths before specialists.** Re-run the `calibration_resolve.py` jq block above once after bootstrap.
 
 **PR mode:**
 
@@ -285,7 +290,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Head SHA:** short hash
 - **Diff size:** `<DIFF_LINES>` lines
 - **Verify:** `VERIFY_CMD` (the command string), or `unverified` (no gate), or `review-only` (auto-fix disabled — this run degrades to a single pass + presentation)
-- **Specialists to dispatch (all five, in parallel):**
+- **Specialists to dispatch (round 1: all five at `reviewer-deep`, in parallel; later rounds: the scheduler's `dims_to_run`):**
   - `architecture-reviewer` → `findings-architecture.json`
   - `code-reviewer` → `findings-code.json`
   - `security-reviewer` → `findings-security.json`
@@ -296,11 +301,11 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Path:** default → auto-fix loop (compile + dedupe → triage → fix → re-review, committing locally); `--review-only` → one pass + interactive presentation; `--post` → one pass + post to GitHub
 - **What happens after dispatch (default loop):** compile + dedupe → triage → user interventions on judgment calls → fixer subagent commits → verify gate (`VERIFY_CMD`, unless `unverified`) → circuit-breaker → re-review or exit. The auto-fix runs on `$IMPL_ENGINE` (FR-15): when it is `codex`/`cursor`, the fix is written by the external engine via `engine_adapter.py` (workspace-write) and committed by the adapter, then the same verify gate runs; when it is `claude`, the fixer subagent runs as today. This standalone path has no run-time `engine_authz.py test-dispatch` preflight (that lives only in the native build leg's `_implWriteAuthorized`); instead it relies on the host classifier's `autoMode.allow` deny to fall open behaviorally — an ungranted external-engine dispatch is denied by the host, the write never happens, and the fix falls open to Claude.
 
-Do **not** tier or skip specialists based on which files changed. Coverage uniformity matters more than saving an agent dispatch — a "no security-relevant files changed" guess is exactly when an IDOR slips through. All five always run. The agents themselves return an empty findings array when there's nothing in their dimension, which is cheap.
+Per-round dispatch is **script-owned** — this **reverses** the former "coverage uniformity" rule (all five specialists at fixed tiers every round). `code_loop_plan.py` emits each round's `dims_to_run`: round 1 is the full `reviewer-deep` panel; later rounds dispatch exactly the emitted schedule, skipping a dimension only on a prior high-confidence-clean result whose subject the fix did not touch — safe because a full `reviewer-deep` confirmation panel is mandatory before any exit (the "no security-relevant files changed" worry, e.g. an IDOR slipping through, is answered by that bound, not by re-running five reviewers every delta round). Obey the emitted schedule; never tier or skip by eye. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-scheduler.md`.
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch all five specialists in a **single message with five parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt. When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each of the five specialists through `engine_adapter.py` (read-only sandbox) instead of the named subagent — the persona and `$RUBRIC` are unchanged, and each still returns its dimension's findings JSON; an unreadable or missing specialist slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). When `$REVIEWER_ENGINE` is `claude`, dispatch the named subagents exactly as below.
+Launch the round's scheduled specialists (round 1: all five) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt. When `$REVIEWER_ENGINE` is `codex` or `cursor`, dispatch each of the five specialists through `engine_adapter.py` (read-only sandbox) instead of the named subagent — the persona and `$RUBRIC` are unchanged, and each still returns its dimension's findings JSON; an unreadable or missing specialist slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). When `$REVIEWER_ENGINE` is `claude`, dispatch the named subagents exactly as below.
 
 **Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
 
@@ -324,8 +329,9 @@ Read the five `$SESSION_DIR/round-<round>/findings-*.json` files. Apply, in orde
 4. **Dedupe by `(file, line)`.** When two findings target the same `(file, line)`, merge them: concatenate bodies with a separator, keep the higher severity, and list both dimensions (e.g. `"Security + Code"`). The merged finding **keeps the higher-severity input's `title`** (ties → the earlier one in dimension order Architecture, Code, Security, Test, Failure-Mode), so the finding identity (`file::normalized-title`) is deterministic round-to-round — the circuit breaker's recurrence check depends on a stable title. The merged finding is **`tradeoff: true` if either input is** (a judgment call in one facet makes the whole finding a judgment call). This also prevents the visual clutter of two GitHub comments on the same line.
 5. **Author-justification filter (PR mode).** Cross-reference `prior-comments.json`. If a prior comment thread on the same `(file, line)` (or with the same finding topic on an outdated anchor) shows a substantive author justification, drop the new finding unless its body identifies a technical error in the justification.
 6. **Nit cap.** After dedupe, if more than 5 Nits remain, keep the first 5 and replace the rest with a single summary entry like `"+ 12 more Nits — see $SESSION_DIR/round-<round>/findings-*.json for details"` (the base rubric's severity caps).
+7. **Fail-closed synthesis pass.** Run a judgment pass over the merged findings **before** the verdict: a synthesis judge (`model: $SYNTH_MODEL`, the synthesis tier — never the session model) decides keep/drop + severity per finding, and `lib/loop_synthesis.py` applies its verdicts with the same guarantees the spine's panel uses (KEEP-ON-UNCERTAIN — a model's silence never drops a finding; DROP-WITH-REASON; a dropped Critical/Important flagged `was_blocking_tagged`, and a survivor re-tiered from blocking to non-blocking recorded in `downgrades` — so neither an all-drop nor a silent demotion can make a false clean). Synthesis failure or no result → raw compile with **no findings dropped**. Replace `findings` with the survivors and record `drops` and `downgrades`. Do **not** judge keep/drop yourself or reimplement the rules. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/synthesis-pass.md`.
 
-Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-filter findings). For `/superheroes:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
+Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-synthesis findings). For `/superheroes:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
 
 - 0 Critical, 0 Important → **READY FOR PR**
 - 0 Critical, 1+ Important → **FIX BEFORE PR**
@@ -338,7 +344,9 @@ Write the result to `$SESSION_DIR/round-<round>/compiled.json` (preserve each fi
 {
   "summary": "<1-2 sentence overall summary>",
   "verdict": "READY FOR PR" | "FIX BEFORE PR" | "MAJOR FIXES NEEDED",
-  "findings": [<deduplicated, verified findings array>]
+  "findings": [<deduplicated, verified, post-synthesis survivors>],
+  "drops": [<synthesis drops: {id, file, title, reason, was_blocking_tagged}>],
+  "downgrades": [<blocking→non-blocking re-tiers: {id, file, title, from, to, reason?}>]
 }
 ```
 
@@ -361,10 +369,10 @@ Runs when neither `--post` nor `--review-only` is set, and the profile's verify 
 Each round:
 
 1. `mkdir -p $SESSION_DIR/round-<round>`. Regenerate the diff locally: `git diff <baseRef>...HEAD > $SESSION_DIR/round-<round>/diff.txt`. Size it with `wc -l` only — never `cat` it.
-2. **Review.** Dispatch the five specialists in parallel by reviewer name (resolve dispatch via the host tool map, same prompt template as `## Dispatch Specialists in Parallel`), writing `round-<round>/findings-<agent>.json`. Point them at `round-<round>/diff.txt`.
+2. **Review — the round's schedule is script-owned.** Run `python3 "$ROOT_DIR/lib/code_loop_plan.py" plan --session-dir "$SESSION_DIR" --round <round>` and dispatch **exactly** its `dims_to_run` (each at its tier's model, same prompt template as `## Dispatch Specialists in Parallel`), writing `round-<round>/findings-<agent>.json` and pointing them at `round-<round>/diff.txt`. For each `skipped` dimension, copy its last-run `findings-<agent>.json` into `round-<round>/` so compile sees a full five-dimension panel. Then run `python3 "$ROOT_DIR/lib/code_loop_plan.py" record --session-dir "$SESSION_DIR" --round <round>`; if its `escalate` list is non-empty, re-dispatch just those dimensions once at `reviewer-deep` and run `record` again. Round 1 is the full `reviewer-deep` panel. Full contract (plan/record/decide, tier→model, head-diff derivation): `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-scheduler.md`.
 3. **Compile + dedupe** into `round-<round>/compiled.json` with verdict (same pipeline as `## Compile + Dedupe`).
 4. **Effective findings** = `compiled.findings` whose identity is NOT in the skip-set.
-5. If `effective` is empty → **EXIT SUCCESS** (jump to End-of-Loop Summary with `ACTION=exit_clean`, `ROUND=<round>`, `REASON="no effective findings"`).
+5. If `effective` is empty → this round is clean. Write `round-<round>/fix-batch.json` as `[]`, skip triage/fix/verify/breaker, set `BREAKER_HALT=no`, and go straight to the **continuation gate** (step 14) — do **not** declare success here by eye. The gate returns `exit_clean` **only** off a qualifying full `reviewer-deep` round; off a reduced round it schedules the mandatory full-deep confirmation round first (the confirmation invariant is script-owned, #174).
 6. **Triage.** Dispatch the triage subagent (template below) over `effective`, writing `round-<round>/triage.json`.
 7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each **Critical/Important** effective finding, route its disposition with the shared rubric (modes PROCEED/NOTIFY/GATE). **GATE** (the consolidated `AskUserQuestion` below) only the blockers whose skip-or-fix is genuinely the owner's call — a product/scope/risk trade-off. For the rest, **verify and proceed**, recording the disposition so `loop_state` still sees it:
    - **Fix, one right answer per the project's conventions** → fold into the fix batch (step 8) using the POV's suggested approach (a step-8 auto-fix).
@@ -383,29 +391,30 @@ Each round:
      **Record decisions (learning loop):** after writing `resolutions.json`, append one `decisions.py` record per resolution to the resolved decisions store (`$DECISIONS`) (`action`: `skip` → `skip`, `fix-with-guidance` → `guidance`, `fix` → `fix`), per `## Learning Loop & Staleness Nudge` → "Recording decisions". Also append a `fix` record for each `auto-fix-set` finding fixed silently this round. This append is non-blocking and never gates the loop.
 8. **Fix batch.** `auto-fix-set` = effective findings where `recommendation` is `Fix` AND (`classification` is `mechanical` **OR** severity is `Minor`/`Nit`) — mechanical fixes at any severity, plus non-blocking judgment-fixes applied as the POV suggests (a non-blocking judgment call isn't worth an interrupt). `fix-batch` = `auto-fix-set ∪ approved`. Write `round-<round>/fix-batch.json` (full finding objects; attach `userGuidance` to any with guidance). (Blocking — Critical/Important — judgment-fixes are not auto-added; they arrive via `approved` from step 7.)
 9. **Blocking-to-fix** = count of `fix-batch` findings with severity Critical or Important.
-10. If `fix-batch` is empty (everything this round was skipped) → **EXIT** with a "remaining findings deliberately skipped" note (list them) (`ACTION=exit_skipped`, `ROUND=<round>`, `REASON="all findings skipped"`). (This all-skipped shortcut pre-empts the step-14 gate, which would return the same `exit_skipped` for these facts. The gate still reaches `exit_skipped` normally at step 14 when a round fixes only Minor/Nit findings but skips a blocker.)
+10. If `fix-batch` is empty (every effective finding this round was skipped), skip the fixer/verify/breaker, set `BREAKER_HALT=no`, and go to the **continuation gate** (step 14) with the empty `fix-batch` and this round's `resolutions.json`. The gate returns `exit_skipped` **only** off a qualifying full `reviewer-deep` round (list the deliberately-skipped blocker(s), do **not** report a plain success); off a reduced round it schedules the mandatory full-deep confirmation round first — a skipped blocker is not certified until a full panel confirms the rest is clean (#174).
 11. **Fix.** Dispatch the fixer subagent (template below) with `fix-batch.json`.
     - Status `CHECK_FAILED` → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="fixer CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface the failing `VERIFY_CMD` output. (When the profile is `mode: unverified`, the fixer runs no checks and cannot return `CHECK_FAILED`.)
     - Status `ESCALATED` → for each escalated finding, present it as a `present-set` intervention now (same prompt shape as step 7), then re-dispatch the fixer with the user's decisions folded in. The follow-up dispatch uses this same `CHECK_FAILED`/`ESCALATED` contract; a finding the user has already decided on is no longer eligible to escalate, so it cannot ping-pong. Do NOT add an escalated finding to the skip-set unless the user skips it. After escalation handling resolves the final `fix-batch`, recompute **blocking-to-fix** (step 9) before evaluating step 14.
 12. **Verify.** If a `VERIFY_CMD` is set, the orchestrator independently runs it from the user's own working tree (never the PR head), non-interactively, with a timeout. Fail (non-zero exit) → **HALT** (`ACTION=halt`, `ROUND=<round>`, `REASON="verify CHECK_FAILED"`) and proceed to the End-of-Loop Summary (which writes `--result-file` if set), then surface output. (Do not re-review on a broken tree.) If the profile's verify story is `mode: unverified`, **SKIP this gate** — there is no command to run; the round's commit stands ungated.
 13. **Circuit breaker.** Run `python3 "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/circuit_breaker.py" "$SESSION_DIR" 7`. Parse its JSON; **capture `halt`** as `BREAKER_HALT` (`yes`/`no`). Do NOT read or `cat` the diff into the orchestrator context. (Don't act on it yet — step 14 feeds it to the continuation gate so the next action is decided in one place.)
-14. **Continuation gate — the next action is decided by a script, not by you.** Whether to run another round is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run the deterministic gate and **obey its `action`** (it derives the blocking counts from the round artifacts, so they are not yours to self-report either):
+14. **Continuation gate + next schedule — decided by a script, not by you.** Whether to run another round — and **which dimensions run next, at which tier** — is **not yours to judge by eye**: a model rationalizes early exits ("this fix is trivial", "the next round will be clean", "I'll offer it as optional", "save the tokens"). This is the symmetric partner to the circuit breaker — it guards against stopping *too early* the way the breaker guards against looping *too long*. Run `code_loop_plan.py decide` (it wraps `loop_state.py`'s continuation decision, derives the blocking counts from the round artifacts and the changed surface from the git diff so neither is yours to self-report, and emits the next round's `dims_to_run`) and **obey its `action`**:
 
     ```bash
     ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-    python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
+    git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<N>/head-diff.txt"   # post-fix surface: what ACTUALLY changed (#157/#158), never the fixer's self-report
+    python3 "$ROOT_DIR/lib/code_loop_plan.py" decide --session-dir "$SESSION_DIR" --round <N> --max-rounds 7 \
       --breaker-halt "$BREAKER_HALT" \
       --fix-batch "$SESSION_DIR/round-<N>/fix-batch.json" \
       --resolutions "$SESSION_DIR/round-<N>/resolutions.json"
     ```
 
-    (A `resolutions.json` is written whenever the round recorded any skip — autonomous, NOTIFY, or gated; omit `--resolutions` only when no skip occurred at all this round.) Parse its JSON `{action, reason}` and **do exactly what `action` says — you may not substitute your own judgment for it**:
-    - **`review`** → `round += 1` and **repeat from step 1**. This is **MANDATORY**: you applied a blocking fix and the loop must re-review to verify it. Do **not** exit, declare success, or present the next round as optional. (The classic skip is to stop here believing it's clean — that belief is exactly what this gate overrides; the last time it was trusted, the "obviously clean" re-review found two real bugs in the fix.)
-    - **`exit_clean`** → set `ACTION=exit_clean`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT SUCCESS** (no blocking fix applied this round and none skipped; any Minor/Nit are now fixed).
+    (A `resolutions.json` is written whenever the round recorded any skip — autonomous, NOTIFY, or gated; omit `--resolutions` only when no skip occurred at all this round.) Parse its JSON `{action, dims_to_run, reason, ...}` and **do exactly what `action` says — you may not substitute your own judgment for it**:
+    - **`review`** → `round += 1` and **repeat from step 1**, dispatching its `dims_to_run` **exactly** (the next round's plan is already persisted; it may be a reduced scoped round or a full `reviewer-deep` confirmation round — `roundKind`). This is **MANDATORY**: you applied a blocking fix (or a reduced round owes a full-deep confirmation) and the loop must re-review to verify it. Do **not** exit, declare success, or present the next round as optional. (The classic skip is to stop here believing it's clean — that belief is exactly what this gate overrides; the last time it was trusted, the "obviously clean" re-review found two real bugs in the fix.)
+    - **`exit_clean`** → set `ACTION=exit_clean`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT SUCCESS** (no blocking fix applied this round and none skipped; any Minor/Nit are now fixed). Surface the gate's `certification` block honestly (how many full `reviewer-deep` confirmation panels ran, and whether the last panel's findings were resolved with scoped verification) — never imply a pristine fresh pass that did not occur (#174).
     - **`exit_skipped`** → set `ACTION=exit_skipped`, `ROUND=<round>`, `REASON=<gate reason>` and **EXIT — CLEAN EXCEPT FOR SKIPPED**: list the deliberately-skipped blocking finding(s); do **not** report a plain SUCCESS verdict.
     - **`halt`** → set `ACTION=halt`, `ROUND=<round>`, `REASON=<gate reason>` and **HALT**: surface the gate's `reason` (plus the breaker's `reason`/`detail` if it halted) + the still-open findings + the commit range (`git log <baseRef>..HEAD --oneline`).
 
-    On `ESCALATED` re-handling (step 11), recompute the fix-batch first, then run this gate on the final `round-<N>/fix-batch.json`. **Red flags that mean you are about to skip the loop** — if you catch yourself thinking any of these, run the gate and obey it instead: "it's a trivial/one-line fix" · "round N+1 will obviously be clean" · "I have full context, I can tell it's done" · "a re-review is diminishing returns / not worth the tokens" · "I'll *offer* another round as optional." None of these is yours to act on; `loop_state.py` decides.
+    On `ESCALATED` re-handling (step 11), recompute the fix-batch first, then run this gate on the final `round-<N>/fix-batch.json`. **Red flags that mean you are about to skip the loop** — if you catch yourself thinking any of these, run the gate and obey it instead: "it's a trivial/one-line fix" · "round N+1 will obviously be clean" · "I have full context, I can tell it's done" · "a re-review is diminishing returns / not worth the tokens" · "I'll *offer* another round as optional." None of these is yours to act on; `code_loop_plan.py` decides.
 
 ### Triage and Fixer subagent prompts
 
@@ -424,9 +433,9 @@ python3 "$ROOT_DIR/lib/review_result.py" write \
   --reason "$REASON"
 ```
 
-(`$ACTION`, `$ROUND`, and `$REASON` are set on **every** terminal exit path: step-5 → `exit_clean`; step-10 → `exit_skipped`; step-11/12 HALT → `halt`; step-14 → the gate's returned action. Each exit path sets these variables before jumping to the End-of-Loop Summary, so the write always has defined values. `$RESULT_FILE` is the path supplied via `--result-file`. When `--result-file` is absent, skip this step entirely — no file written, no behavior change.)
+(`$ACTION`, `$ROUND`, and `$REASON` are set on **every** terminal exit path: step-5 (clean) and step-10 (all-skipped) now route **through** the step-14 gate, so their action comes from the gate (`exit_clean`/`exit_skipped`, or a mandatory confirmation round that keeps looping); step-11/12 HALT → `halt`; step-14 → the gate's returned action. Each terminal path sets these variables before jumping to the End-of-Loop Summary, so the write always has defined values. `$RESULT_FILE` is the path supplied via `--result-file`. When `--result-file` is absent, skip this step entirely — no file written, no behavior change.)
 
-Print: final verdict, rounds run, commits created (one per round), findings fixed by severity, any blocking findings deliberately skipped, **the Minor/Nit findings auto-handled without asking** (a short list — `auto-fixed` vs `auto-skipped` — so the non-blocking work the loop did silently is visible, not hidden), and any new findings the fixer noticed/introduced along the way (informational). If the verify story was `unverified`, state that fixes were committed **without a verify gate**. Because fixes are local-only, offer to push the branch (or, if this was a PR you don't own, point to `--post`). Do not push without explicit confirmation.
+Print: final verdict, rounds run, commits created (one per round), findings fixed by severity, any blocking findings deliberately skipped, **the findings the synthesis pass dropped as unsubstantiated** (each with its reason) and — distinctly, flagged for your scrutiny — **any dropped finding a reviewer had tagged Critical/Important** (`was_blocking_tagged`; a dropped blocker is always surfaced, never silently gone) **and any finding synthesis downgraded from blocking to non-blocking** (`downgrades`; show `from → to`, flagged for the same scrutiny — a silent downgrade is a silent-drop equivalent), **the Minor/Nit findings auto-handled without asking** (a short list — `auto-fixed` vs `auto-skipped` — so the non-blocking work the loop did silently is visible, not hidden), and any new findings the fixer noticed/introduced along the way (informational). If the verify story was `unverified`, state that fixes were committed **without a verify gate**. Because fixes are local-only, offer to push the branch (or, if this was a PR you don't own, point to `--post`). Do not push without explicit confirmation.
 
 **Then, after the summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the review output and none blocks.
 

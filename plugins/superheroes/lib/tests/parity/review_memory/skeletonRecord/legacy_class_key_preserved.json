@@ -1,0 +1,48 @@
+{
+  "expected": {
+    "carriedFindings": [],
+    "changedSubjects": [],
+    "confirmationPending": false,
+    "coverageDecisions": [],
+    "dimensions": {},
+    "findings": [
+      {
+        "classKey": "Test::coverage::the architecture section and task 1's test comment both claim phases is imported byte-for-byte from showrunner.js, but task 1's actual implementation defines phases as a hand-maintained python literal list, checked only after the fact.",
+        "dimension": "Test",
+        "file": "docs/x/tasks.md",
+        "line": 67,
+        "severity": "Important",
+        "taxonomy": "coverage",
+        "title": "The Architecture section and Task 1's test comment both claim PHASES is imported byte-for-byte from showrunner.js, but Task 1's actual implementation..."
+      }
+    ],
+    "kind": "baseline",
+    "round": 1,
+    "schemaVersion": 2,
+    "tokenUsage": {}
+  },
+  "input": [
+    {
+      "carriedFindings": [],
+      "changedSubjects": [],
+      "confirmationPending": false,
+      "coverageDecisions": [],
+      "dimensions": {},
+      "findings": [
+        {
+          "classKey": "Test::coverage::the architecture section and task 1's test comment both claim phases is imported byte-for-byte from showrunner.js, but task 1's actual implementation defines phases as a hand-maintained python literal list, checked only after the fact.",
+          "dimension": "Test",
+          "file": "docs/x/tasks.md",
+          "line": 67,
+          "severity": "Important",
+          "taxonomy": "coverage",
+          "title": "The Architecture section and Task 1's test comment both claim PHASES is imported byte-for-byte from showrunner.js, but Task 1's actual implementation defines PHASES as a hand-maintained Python literal list, checked only after the fact."
+        }
+      ],
+      "kind": "baseline",
+      "round": 1,
+      "schemaVersion": 2,
+      "tokenUsage": {}
+    }
+  ]
+}

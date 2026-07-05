@@ -3,7 +3,10 @@
 // Release-on-park: a terminal park RELEASES the work-item lease (CAS on our generation) so a
 // relaunch never waits out DEFAULT_TTL; a run that never acquired (generation null, e.g. a
 // lease-held park) must NOT issue a release.
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
+
+const CHECKOUT_ROOT = globalThis.__SR_ROOT
 
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
@@ -12,9 +15,11 @@ const WORLD = { store_ok: true, current_content_hash: null, pr: null, seeded_emp
 function agentFor(generation, releaseCalls) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
-    if (label === 'exec') {
+    if (opts && opts.courier) {
       if (prompt.includes('recover_entry')) {
-        return [{ index: 0, ok: true, stdout: JSON.stringify({ checkpoint: null, world: WORLD, generation }) }]
+        return [{ index: 0, ok: true, stdout: JSON.stringify({
+          checkpoint: null, world: WORLD, generation, root: CHECKOUT_ROOT,
+        }) }]
       }
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"pending"}' }]
     }
@@ -25,6 +30,7 @@ function agentFor(generation, releaseCalls) {
     if (label === 'release lease') {
       assert.ok(prompt.includes('fence_cli.py') && prompt.includes('--release'),
         'the release runs the scripted release command')
+      assert.ok(prompt.includes('--root'), 'release must carry --root for store keying')
       assert.ok(/do not run any other command/i.test(prompt),
         'the release prompt forbids extra commands (no improvising)')
       releaseCalls.push(prompt)
