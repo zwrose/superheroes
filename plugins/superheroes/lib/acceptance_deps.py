@@ -20,6 +20,7 @@ bytes live and how do we read/write them for real."
 so the documented command performs a genuine live run rather than a silent no-op or a
 stub that declines (the DoD floor `test_acceptance_run_cli.py` pins).
 """
+import hashlib
 import json
 import os
 import socket
@@ -211,6 +212,79 @@ def real_quarantine_lease(root):
     return _quarantine
 
 
+# --- spine-lib override (#235 pre-release gate) ---------------------------------------
+
+
+def _spine_showrunner_js(spine_lib):
+    """The `showrunner.js` phase source inside a spine-lib override (None -> the sibling
+    default `acceptance_phases` resolves when no override is set)."""
+    return os.path.join(spine_lib, "showrunner.js") if spine_lib else None
+
+
+def _spine_bundle(spine_lib):
+    return os.path.join(spine_lib, "showrunner.bundle.js")
+
+
+def _read_spine_phases(spine_lib):
+    """Read the pipeline PHASES from the spine under test. With no override, call the
+    phase reader exactly as the default path always has (no `path` kwarg) so the source
+    stays the harness's own sibling `showrunner.js`; with an override, point it at the
+    override tree's `showrunner.js` so drift/phase-truth follows the spine actually run."""
+    js = _spine_showrunner_js(spine_lib)
+    if js:
+        return acceptance_phases.read_pipeline_phases(path=js)
+    return acceptance_phases.read_pipeline_phases()
+
+
+def _spine_lib_refusal(spine_lib):
+    """UFR-7 pre-launch guard for a `--spine-lib` override: return a reason string (naming
+    the offending path) when the override is unusable, or None when it is well-formed.
+
+    Fails closed on a missing directory, a missing `showrunner.bundle.js` (the committed
+    bundle the child launches), or a missing `showrunner.js` (the phase source under test).
+    NEVER falls back to the installed plugin — a bad override refuses the whole run.
+    """
+    if not spine_lib:
+        return None
+    if not os.path.isdir(spine_lib):
+        return "spine-lib override directory does not exist: %s" % spine_lib
+    bundle = _spine_bundle(spine_lib)
+    if not os.path.isfile(bundle):
+        return "spine-lib override is missing showrunner.bundle.js: %s" % bundle
+    js = _spine_showrunner_js(spine_lib)
+    if not os.path.isfile(js):
+        return "spine-lib override is missing showrunner.js: %s" % js
+    return None
+
+
+def real_spine_provenance(spine_lib):
+    """`deps["spine_provenance"]`: identify WHICH spine was under test (#235 honesty piece).
+
+    Returns `{lib_path, bundle_sha256, version}` for the resolved override lib — the
+    content hash makes a pass attributable to the exact spine it validated (a pre-release
+    pass and a post-release pass are otherwise indistinguishable in the record). Returns
+    None when no override is set (the default installed-plugin path carries no pinned
+    spine), so the record/report omit the provenance block entirely on default runs.
+    """
+    def _prov():
+        if not spine_lib:
+            return None
+        digest = None
+        try:
+            with open(_spine_bundle(spine_lib), "rb") as fh:
+                digest = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            digest = None
+        version = None
+        try:
+            with open(os.path.join(spine_lib, "version.txt"), encoding="utf-8") as fh:
+                version = fh.read().strip()
+        except OSError:
+            version = None
+        return {"lib_path": spine_lib, "bundle_sha256": digest, "version": version}
+    return _prov
+
+
 # --- materialize / preflight -----------------------------------------------------------
 
 
@@ -245,14 +319,22 @@ def real_materialize(fixture_dir, root, reserved_stamp=None, lease_acquired=Fals
     return stamped
 
 
-def real_preflight_ok(fixture_dir, root):
+def real_preflight_ok(fixture_dir, root, spine_lib=None):
     """`deps["preflight_ok"]`: the drift check (UFR-7) — a missing/drifted fixture refuses
     before anything launches. `work_item` is accepted for interface parity with the
-    injected-test seam but the check runs entirely against the committed fixture dir."""
+    injected-test seam but the check runs entirely against the committed fixture dir.
+
+    When `spine_lib` is set (#235), a bad override refuses FIRST (before the fixture drift
+    check reads phases) naming the offending path, and the phase source is read from the
+    override tree's `showrunner.js` rather than the sibling default — so drift is judged
+    against the spine actually under test."""
     def _check(work_item):
+        spine_refusal = _spine_lib_refusal(spine_lib)
+        if spine_refusal is not None:
+            return {"ok": False, "reason": spine_refusal}
         target_exists = os.path.isfile(os.path.join(fixture_dir, "target.txt"))
         try:
-            phases = acceptance_phases.read_pipeline_phases()
+            phases = _read_spine_phases(spine_lib)
         except RuntimeError as exc:
             return {"ok": False, "reason": "pipeline phase source drift: %s" % exc}
         drift = acceptance_fixture.drift_check(fixture_dir, phases, target_exists)
@@ -522,11 +604,11 @@ def _phase_from_event(event):
     return None
 
 
-def _phases_from_journal(root, work_item):
+def _phases_from_journal(root, work_item, spine_lib=None):
     if not work_item:
         return []
     try:
-        allowed = set(acceptance_phases.read_pipeline_phases())
+        allowed = set(_read_spine_phases(spine_lib))
         events = journal.read_events(control_plane.paths(root, work_item)["events"])
     except Exception:
         return []
@@ -538,7 +620,7 @@ def _phases_from_journal(root, work_item):
     return phases
 
 
-def real_run_outcome(root, work_item=None):
+def real_run_outcome(root, work_item=None, spine_lib=None):
     """`deps["run_outcome"]`: read the showrunner's terminal record + project the readout
     facts `acceptance_verdict.decide` needs. Missing/unreadable -> a `parked`-shaped
     outcome so the verdict fails naming the unreadable facts rather than crashing.
@@ -567,7 +649,8 @@ def real_run_outcome(root, work_item=None):
         pr_url = record.get("prUrl") or ""
         checks = record.get("checks")
         current_work_item = work_item() if callable(work_item) else work_item
-        durable_phases = _phases_from_journal(root, current_work_item) if current_work_item else None
+        durable_phases = (_phases_from_journal(root, current_work_item, spine_lib=spine_lib)
+                          if current_work_item else None)
         return {
             "terminal": record.get("status") or "parked",
             "phases": durable_phases if durable_phases is not None else (record.get("phasesTraversed") or []),
@@ -579,8 +662,8 @@ def real_run_outcome(root, work_item=None):
     return _read
 
 
-def real_expected_phases():
-    return lambda: acceptance_phases.read_pipeline_phases()
+def real_expected_phases(spine_lib=None):
+    return lambda: _read_spine_phases(spine_lib)
 
 
 def real_clock_now():
@@ -604,16 +687,19 @@ def real_spend_sampler(root, work_item):
     return _sample
 
 
-def real_launcher(root, ceilings=None):
+def real_launcher(root, ceilings=None, spine_lib=None):
     """`deps["launcher"]`: `acceptance_launch.run` with its production real defaults
     (spawns `claude -p <prompt>` — the non-interactive CLI form — as a process-group
-    leader, driving superheroes:showrunner on the stamped work-item)."""
+    leader, driving superheroes:showrunner on the stamped work-item). When `spine_lib`
+    is set (#235), the child launches the spine under test from that lib, not the
+    installed plugin."""
     def _launch(stamped, budget_consumed=None, attempt=1):
         terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
                                      "terminal-record.json")
 
         def _child_factory():
-            return acceptance_launch._default_child_factory(stamped, terminal_path=terminal_path)
+            return acceptance_launch._default_child_factory(
+                stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root)
 
         return acceptance_launch.run(
             stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,
@@ -649,12 +735,20 @@ def real_write_orphan_record(root):
 # --- assembly --------------------------------------------------------------------------
 
 
-def build(fixture_dir, root, ceilings=None):
+def build(fixture_dir, root, ceilings=None, spine_lib=None):
     """Assemble the full real `deps` dict `acceptance_run.invoke` expects.
 
     Every seam here is a real primitive (control-plane store, git/gh subprocess reads,
     the live launcher) — not a fake. `acceptance_run._cli` is what actually calls
     `invoke(deps)` with the dict this returns.
+
+    `spine_lib` (the #235 pre-release gate, default None = today's installed-plugin
+    behavior, byte-identical) pins the spine UNDER TEST: it threads into the launcher's
+    child prompt (the child launches `<spine_lib>/showrunner.bundle.js` with
+    `libRoot: <spine_lib>`), the preflight's bad-override refusal + phase source, the
+    journal-derived phase filter, the expected-phase source, and a `spine_provenance`
+    seam that stamps the record/report with the bundle's SHA-256 so a pass is
+    attributable to the exact spine it validated.
 
     premortem-001: `reclaim_probe` and the FIRST `materialize()` share one atomically-
     reserved stamp (`state["reserved_stamp"]`, minted once here and consumed exactly
@@ -697,11 +791,12 @@ def build(fixture_dir, root, ceilings=None):
     return {
         "reclaim_probe": reclaim_probe,
         "materialize": materialize,
-        "preflight_ok": real_preflight_ok(fixture_dir, root),
-        "launcher": real_launcher(root, ceilings=ceilings),
-        "run_outcome": real_run_outcome(root, lambda: (state["stamped"] or {}).get("work_item")),
+        "preflight_ok": real_preflight_ok(fixture_dir, root, spine_lib=spine_lib),
+        "launcher": real_launcher(root, ceilings=ceilings, spine_lib=spine_lib),
+        "run_outcome": real_run_outcome(
+            root, lambda: (state["stamped"] or {}).get("work_item"), spine_lib=spine_lib),
         "gh_reader": gh_reader,
-        "expected_phases": real_expected_phases(),
+        "expected_phases": real_expected_phases(spine_lib=spine_lib),
         "discover_artifacts": discover_artifacts,
         "reap": real_reap(root, current_stamp),
         "write_record": real_write_record(root),
@@ -710,4 +805,5 @@ def build(fixture_dir, root, ceilings=None):
         "quarantine_lease": real_quarantine_lease(root),
         "release_lease": lambda: real_release_lease(root),
         "clock_now": real_clock_now(),
+        "spine_provenance": real_spine_provenance(spine_lib),
     }

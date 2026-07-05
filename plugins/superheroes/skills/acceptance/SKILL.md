@@ -68,6 +68,22 @@ repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1
    the built-in defaults: 1800 elapsed seconds and 5,000,000 measured output tokens. The
    `spend` ceiling is measured output tokens, not dollars.
 
+   **Pre-release gate (`--spine-lib`).** By default the child launches the spine from the
+   installed plugin cache — the last *released* version — so merged-but-unreleased spine
+   changes are invisible (post-release smoke). To gate merged `main` **before** cutting a
+   release, pass `--spine-lib <lib-dir>` pointing at the checkout's own
+   `plugins/superheroes/lib` (must contain `showrunner.bundle.js` + `showrunner.js`): the
+   child then launches that bundle with `libRoot: <lib-dir>`, phase-truth follows the same
+   tree, and the record/report record the bundle's SHA-256 so the pass is attributable to the
+   exact spine. A missing dir / bundle / `showrunner.js` refuses pre-launch, naming the path
+   (never a silent fall-back to the installed plugin). The shape for a `0.11.0`-style gate:
+
+   ```bash
+   git -C ~/superheroes checkout main && git pull
+   python3 "$LIB/acceptance_run.py" --fixture "$LIB/../eval/fixtures/acceptance" --root "$ROOT" \
+     --spine-lib "$ROOT/plugins/superheroes/lib"    # green -> then merge the release PR
+   ```
+
 4. **Render the single verdict report.** Print the orchestrator's one plain-language report — the
    pass/fail verdict, the reason, where the result record lives, and what was cleaned up or left
    behind — and stop. **Never instruct merging**; the run mutates no real state and the verdict is

@@ -66,8 +66,21 @@ def nesting_refusal(env):
     return {"refuse": False, "reason": "top-level invocation; safe to proceed"}
 
 
+def _spine_provenance(deps):
+    """Resolve the #235 spine-under-test provenance seam (lib path + bundle SHA-256 +
+    version), or None when no `--spine-lib` override was given / the seam is absent.
+    Never raises — provenance is an honesty annotation, never a run blocker."""
+    fn = deps.get("spine_provenance") if isinstance(deps, dict) else None
+    if not callable(fn):
+        return None
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
 def _report(verdict, reason, record_path, teardown, spend_partial=False,
-            unwritten_record_note=None, orphan_record_path=None):
+            unwritten_record_note=None, orphan_record_path=None, spine_provenance=None):
     """Render the single plain-language verdict report via the tested FR-6 renderer
     (`acceptance_result.render_report`) so the Markdown/partial-spend output owners see
     is the same one the module's own tests pin — not a second, drifted format."""
@@ -82,6 +95,8 @@ def _report(verdict, reason, record_path, teardown, spend_partial=False,
     }
     if orphan_record_path:
         result["orphan_record_path"] = orphan_record_path
+    if spine_provenance:
+        result["spine_provenance"] = spine_provenance
     return acceptance_result.render_report(result)
 
 
@@ -147,6 +162,9 @@ def invoke(deps):
     stamp = None
     attempts = []
     orphan_record_path = None
+    # Resolve once up front so it is available on every exit path, including the except
+    # branch below (the record itself picks it up independently via `_record_payload`).
+    prov = _spine_provenance(deps)
 
     try:
         # 1. Reclaim / refuse a prior in-flight run.
@@ -168,7 +186,8 @@ def invoke(deps):
                 "verdict": "fail",
                 "report": _report(
                     "fail", reason, record_path, None, spend_partial=True,
-                    unwritten_record_note="NOT WRITTEN (prior run lease still held)"),
+                    unwritten_record_note="NOT WRITTEN (prior run lease still held)",
+                    spine_provenance=prov),
                 "record_path": record_path,
             }
         # UFR-8: sweep any leftover accepted-stamp artifacts before this invocation launches.
@@ -199,7 +218,8 @@ def invoke(deps):
             return {
                 "verdict": "fail",
                 "report": _report("fail", reason, record_path, teardown,
-                                  orphan_record_path=orphan_record_path),
+                                  orphan_record_path=orphan_record_path,
+                                  spine_provenance=prov),
                 "record_path": record_path,
             }
 
@@ -283,7 +303,8 @@ def invoke(deps):
             "verdict": verdict["verdict"],
             "report": _report(verdict["verdict"], verdict["reason"], record_path, teardown,
                               spend_partial=launch.get("spend_partial"),
-                              orphan_record_path=orphan_record_path),
+                              orphan_record_path=orphan_record_path,
+                              spine_provenance=prov),
             "record_path": record_path,
         }
 
@@ -315,7 +336,8 @@ def invoke(deps):
         return {
             "verdict": "fail",
             "report": _report("fail", reason, record_path, teardown,
-                              orphan_record_path=locals().get("orphan_record_path")),
+                              orphan_record_path=locals().get("orphan_record_path"),
+                              spine_provenance=prov),
             "record_path": record_path,
         }
 
@@ -386,6 +408,13 @@ def _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
     }
     if run_stamp:
         record["run_stamp"] = run_stamp
+    # #235: stamp the record with which spine was under test (optional field — present
+    # only on a `--spine-lib` pre-release-gate run; omitted on the default installed-plugin
+    # path). Kept OPTIONAL rather than a REQUIRED_KEY so the default path's record shape is
+    # unchanged and every other write path (refusal/orphan) need not synthesize a value.
+    provenance = _spine_provenance(deps)
+    if provenance:
+        record["spine_provenance"] = provenance
     return record
 
 
@@ -449,6 +478,11 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
                         help="Override the elapsed-time ceiling in seconds.")
     parser.add_argument("--ceiling-spend", type=float, default=None,
                         help="Override the measured output-token spend ceiling.")
+    parser.add_argument("--spine-lib", default=None,
+                        help="Pre-release gate (#235): pin the spine UNDER TEST to this lib "
+                             "dir (must contain showrunner.bundle.js + showrunner.js) instead "
+                             "of the installed plugin, so merged-but-unreleased spine changes "
+                             "are validated before a release is cut. Unset = installed plugin.")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -469,8 +503,14 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
 
     if deps_builder is None:
         import acceptance_deps
-        deps = (acceptance_deps.build(args.fixture, args.root, ceilings=ceilings)
-                if ceilings is not None else acceptance_deps.build(args.fixture, args.root))
+        # Only pass optional kwargs when set, so a spy builder with the legacy
+        # (fixture, root) signature keeps working when neither override is given.
+        build_kwargs = {}
+        if ceilings is not None:
+            build_kwargs["ceilings"] = ceilings
+        if args.spine_lib is not None:
+            build_kwargs["spine_lib"] = args.spine_lib
+        deps = acceptance_deps.build(args.fixture, args.root, **build_kwargs)
     else:
         deps = deps_builder(args.fixture, args.root)
 

@@ -233,7 +233,7 @@ class _RealChild:
         return self._terminal_path
 
 
-def build_launch_prompt(work_item, terminal_path):
+def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
     """The non-interactive prompt handed to `claude -p` for a live acceptance run.
 
     Directs the headless session to drive `superheroes:showrunner` to completion on the
@@ -241,7 +241,33 @@ def build_launch_prompt(work_item, terminal_path):
     projection (`run_readout.run_outcome`) to `terminal_path` as JSON — the one write
     that makes a run-level terminal record exist at the path `real_run_outcome` reads.
     Pure string-building so the exact wording is unit-tested without a live spawn.
+
+    Default (`spine_lib is None`) is byte-identical to the installed-plugin form: the child
+    resolves the spine from its own plugin cache — i.e. the last *released* version. When
+    `spine_lib` is set (the #235 pre-release gate), the prompt instead pins the spine UNDER
+    TEST: the child reads the committed bundle at `<spine_lib>/showrunner.bundle.js` and
+    invokes the Workflow tool with `args: {workItem, root, libRoot: <spine_lib>}` — reusing
+    the launch surface's existing `libRoot` seam (the live-mission launches pinned it to the
+    versioned cache lib) rather than inventing a new mechanism — and derives the run-outcome
+    projection from that same tree's `run_readout.py`, so a merged-but-unreleased spine is
+    what actually runs.
     """
+    if spine_lib:
+        bundle = os.path.join(spine_lib, "showrunner.bundle.js")
+        return (
+            "Run the superheroes:showrunner skill end-to-end on the approved work-item "
+            "%(work_item)s, but launch the spine UNDER TEST rather than the installed "
+            "plugin: read the committed bundle at %(bundle)s and invoke the Workflow tool "
+            "on it with args: {workItem: %(work_item)s, root: %(root)s, libRoot: %(spine_lib)s}. "
+            "After the run reaches a terminal state (ready or parked), compute its "
+            "run-outcome projection via %(spine_lib)s/run_readout.py's "
+            "run_outcome(state) function over the run's end state, and write that projection "
+            "as JSON to this exact path, creating parent directories as needed: %(terminal_path)s. "
+            "Do not merge, release, or force-push anything — this run's changes are confined "
+            "to the work-item's own branch and PR."
+            % {"work_item": work_item, "terminal_path": terminal_path,
+               "bundle": bundle, "spine_lib": spine_lib, "root": root}
+        )
     return (
         "Run the superheroes:showrunner skill end-to-end on the approved work-item "
         "%(work_item)s (invoke it exactly as documented in its SKILL.md — pre-flight, "
@@ -256,20 +282,22 @@ def build_launch_prompt(work_item, terminal_path):
     )
 
 
-def _default_child_factory(stamped, terminal_path=None):
+def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=None):
     """Spawn `claude -p <prompt>` as an isolated process-group leader (UFR-5/UFR-6).
 
     `-p`/`--print` is the CLI's actual non-interactive form (there is no `--headless`
     flag); the prompt (`build_launch_prompt`) directs the session to drive
     `superheroes:showrunner` on the stamped work-item and persist its run-outcome
-    projection to `terminal_path`. Sets the execution-context + deny-only markers on the
-    child env. Returns a `_RealChild` handle for the watch loop.
+    projection to `terminal_path`. `spine_lib` (when set) pins the spine under test into
+    the prompt (#235); `root` is threaded so the override's `args.root` names the real
+    repo root. Sets the execution-context + deny-only markers on the child env. Returns a
+    `_RealChild` handle for the watch loop.
     """
     env = dict(os.environ)
     env[_CONTEXT_MARKER] = "1"
     env[_DENY_ONLY_MARKER] = "1"
     work_item = stamped.get("work_item") if isinstance(stamped, dict) else stamped
-    prompt = build_launch_prompt(work_item, terminal_path)
+    prompt = build_launch_prompt(work_item, terminal_path, spine_lib=spine_lib, root=root)
     proc = subprocess.Popen(
         ["claude", "-p", prompt],
         start_new_session=True,

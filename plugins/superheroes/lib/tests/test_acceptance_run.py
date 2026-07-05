@@ -55,6 +55,29 @@ def test_happy_path_is_pass_one_record_one_report_lease_released():
     assert rec["spend"] == 1.25 and rec["elapsed_sec"] == 42.0
 
 
+def test_spine_provenance_seam_stamps_record_and_report():
+    # #235: when the deps carry a spine_provenance seam (a `--spine-lib` run), the single
+    # record AND the plain-language report must both name which spine was under test.
+    prov = {"lib_path": "/repo/plugins/superheroes/lib",
+            "bundle_sha256": "cafef00d", "version": "0.11.0"}
+    d = _deps(spine_provenance=lambda: prov)
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    rec = d["_state"]["records_written"][0]
+    assert rec["spine_provenance"] == prov
+    assert "/repo/plugins/superheroes/lib" in r["report"]
+    assert "cafef00d" in r["report"]
+
+
+def test_no_spine_provenance_seam_leaves_record_and_report_unchanged():
+    # Default (installed-plugin) path: no seam -> no spine_provenance key, no report section.
+    d = _deps()
+    r = run.invoke(d)
+    rec = d["_state"]["records_written"][0]
+    assert "spine_provenance" not in rec
+    assert "Spine under test" not in r["report"]
+
+
 def test_confirmed_alive_prior_run_refuses_creating_nothing():
     d = _deps(reclaim_probe=lambda: ({"in_flight": True, "stamp": "old", "has_record": True},
                                      "alive"))

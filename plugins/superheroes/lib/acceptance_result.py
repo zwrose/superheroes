@@ -117,6 +117,18 @@ def render_report(result):
             "",
         ]
 
+    # #235 pre-release gate: name WHICH spine this verdict validated, so a pre-release pass
+    # is attributable to the exact bundle it ran (present only on a `--spine-lib` run).
+    provenance = result.get("spine_provenance")
+    if isinstance(provenance, dict):
+        lines += [
+            "### Spine under test",
+            "- lib path: %s" % (provenance.get("lib_path") or "(unknown)"),
+            "- bundle SHA-256: %s" % (provenance.get("bundle_sha256") or "(unreadable)"),
+            "- version.txt: %s" % (provenance.get("version") or "(none)"),
+            "",
+        ]
+
     cleaned = result.get("cleaned_up") or []
     left = result.get("left_behind") or []
     lines.append("### Cleaned up")
