@@ -12,8 +12,11 @@ Flow (the CLI wires the I/O; the functions below are pure and unit-tested):
      the ONLY consumer of the classifier at runtime; the owed-summary it emits is the single
      authority on what a release owes (#231) — the `release-eval` skill reads that summary and
      never re-derives it.
-  2. Parse the LAST valid fenced `release-eval-evidence` JSON block across the PR's comments
-     (a corrected re-post supersedes an earlier one).
+  2. Pool the instrument entries from EVERY valid fenced `release-eval-evidence` JSON block
+     across the PR's comments (each entry inheriting its block's `releaseSha`), so evidence can
+     be posted incrementally and still count. Staleness is not a risk — the SHA-binding in step 3
+     rejects any entry not bound to the current release head, so an old block can never satisfy a
+     new release.
   3. For each owed instrument, require a `verdict: pass` entry bound to the release head SHA:
        - acceptance → the evidence's `bundleSha256` equals the SHA-256 of `showrunner.bundle.js`
          at the release head (content binding — the #235 spine-provenance hash), AND the

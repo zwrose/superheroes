@@ -1,26 +1,33 @@
 #!/usr/bin/env python3
-"""Deterministic release classifier (stdlib only) — the single home of the release-class globs.
+"""Deterministic release classifier (stdlib only) — the single home of the release-class rules.
 
 Reads the set of files a release ships (the commit range being released) and answers exactly
 one question: which live verification instruments does this release *owe* before it can be cut?
 
-Two axes, from the globs below (issue #237):
+Two axes (issue #237):
 
 - **spine-carrying** — the showrunner pipeline the acceptance harness exercises end-to-end
-  changed. Anchored on the committed spine bundle (`showrunner.bundle.js`, which CI keeps
-  drift-locked to its 27 source modules via `bundle_showrunner.js --check`, so a change to any
-  bundled module forces a bundle change in the same commit), plus the spine entry/bundler and
-  the loop / phase / review-round-policy machinery named in the issue. Owes the **acceptance**
-  run.
+  changed. Two mechanisms, because JS and Python have different safety nets:
+  - **JS side (positive globs).** The committed `showrunner.bundle.js` is drift-locked to its
+    source modules — CI (`bundle_showrunner.js --check`) fails any PR that changes a bundled
+    module without rebuilding the bundle — so matching the bundle + entry + bundler catches every
+    JS spine change. Kept narrow.
+  - **Python side (default-IN / exclude-out, FAIL CLOSED).** Python deciders have no bundle
+    drift-lock, so a positive-glob allowlist silently under-owns — a NEW decider (or an existing
+    one nobody remembered to list, e.g. `pr_entry.py`, `dod_gate.py`) would classify "neither" and
+    owe no acceptance run even though it is live spine. So EVERY `plugins/superheroes/lib/**` file
+    (minus `lib/tests/**`) is spine-carrying by default, MINUS a short curated list of non-runtime
+    modules the live pipeline never exercises (calibration / configure / view layer). The safe
+    direction is over-owning an acceptance run; silently owing nothing is not.
 - **reviewer-touching** — a reviewer seat's methodology changed (`agents/*-reviewer.md`) or the
   shared rubric it reads (`rubric/*`). Owes the **benchmark** (review A/B eval).
 
 A release can be both, or **neither** (docs-only / repo-plumbing) — a neither release owes no
 instrument and its evidence check is trivially green.
 
-These globs live in EXACTLY ONE place (this module). The CI evidence check consumes this
-classifier; the runbook and the `release-eval` skill never re-derive the globs (#231) — the skill
-is driven entirely by the check's owed-summary.
+These rules live in EXACTLY ONE place (this module). The CI evidence check consumes this
+classifier; the runbook and the `release-eval` skill never re-derive them (#231) — the skill is
+driven entirely by the check's owed-summary.
 
 The matcher is a pure function over a list of repo-relative paths so it is unit-testable without
 git; the CLI resolves the range via git and prints the owed instruments + the exact commands.
@@ -31,12 +38,12 @@ import json
 import subprocess
 import sys
 
-# --- the globs (repo-relative, fnmatch) --------------------------------------------------
+# --- spine classification (repo-relative paths) ------------------------------------------
 
-# Spine = what the acceptance harness validates end-to-end. `showrunner.bundle.js` is
-# drift-locked to every bundled module, so listing it covers all 27 JS spine modules; the
-# remaining patterns add the entry, the bundler, and the loop / phase / policy machinery
-# (including the Python deciders the skills invoke, which are not in the bundle).
+_LIB_PREFIX = "plugins/superheroes/lib/"
+_LIB_TESTS_PREFIX = "plugins/superheroes/lib/tests/"
+
+# JS side — kept as-is (bundle drift-lock, see module docstring). Narrow on purpose.
 SPINE_GLOBS = (
     "plugins/superheroes/lib/showrunner.js",
     "plugins/superheroes/lib/showrunner.bundle.js",
@@ -45,6 +52,22 @@ SPINE_GLOBS = (
     "plugins/superheroes/lib/*phase*",
     "plugins/superheroes/lib/review_round_policy.*",
 )
+
+# Python side — default-IN. A lib/*.py file is spine UNLESS its basename is one of these
+# explicitly non-runtime modules. KEEP THIS LIST SHORT and justify every entry against the ACTUAL
+# pipeline: an exclude is only safe if NO phase of the acceptance run (plan → review → tasks →
+# review → build → review-code → test-pilot → ship) reaches it. A wrong exclude silently owes
+# nothing — the exact fail-open bug this design closes; a missing exclude merely over-owns an
+# acceptance run (acceptable). When in doubt, do NOT exclude. (Deliberately excluded from this set,
+# because they ARE pipeline-reachable and must stay spine: `calibration_resolve.py` /
+# `core_md.py` — exec'd in the review phases; `architect_config.py` — reached via
+# `definition_doc` on the showrunner gate paths.)
+_PY_SPINE_EXCLUDE = frozenset({
+    "catalog.py",  # marketplace catalog helper (validate/repo plumbing; no pipeline caller)
+})
+# ...plus every `configure_*.py` (the whole `configure` skill's internals; the pipeline never
+# runs `configure`, so none of them is reachable from an acceptance run).
+_PY_SPINE_EXCLUDE_GLOBS = ("configure_*.py",)
 
 # Reviewer = a reviewer seat's methodology or the shared rubric it reads.
 REVIEWER_GLOBS = (
@@ -61,6 +84,21 @@ def _match(path, globs):
     return any(fnmatch.fnmatch(path, g) for g in globs)
 
 
+def _is_spine(path):
+    """Spine-carrying? Test files never owe an acceptance run; the JS globs are the bundle
+    drift-lock; every other lib/*.py is spine by default unless explicitly excluded (fail closed)."""
+    if path.startswith(_LIB_TESTS_PREFIX):
+        return False
+    if _match(path, SPINE_GLOBS):
+        return True
+    if path.startswith(_LIB_PREFIX) and path.endswith(".py"):
+        base = path.rsplit("/", 1)[-1]
+        if base in _PY_SPINE_EXCLUDE or _match(base, _PY_SPINE_EXCLUDE_GLOBS):
+            return False
+        return True
+    return False
+
+
 def classify(changed_paths):
     """Pure classifier over repo-relative changed paths.
 
@@ -68,7 +106,7 @@ def classify(changed_paths):
     paths that triggered each axis (for a legible, auditable readout).
     """
     paths = [p for p in (changed_paths or []) if p]
-    spine_hits = sorted({p for p in paths if _match(p, SPINE_GLOBS)})
+    spine_hits = sorted({p for p in paths if _is_spine(p)})
     reviewer_hits = sorted({p for p in paths if _match(p, REVIEWER_GLOBS)})
     spine = bool(spine_hits)
     reviewer = bool(reviewer_hits)

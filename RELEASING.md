@@ -38,15 +38,16 @@ explicitly bypassed). The ritual is **classify → run → record → merge**:
    (release class + which instruments are owed + the exact commands). That comment/output is the
    single authority on what the release owes — nothing re-derives it. Preview locally any time:
    `python3 .github/scripts/classify_release.py`.
-   - **spine-carrying** — the showrunner spine the acceptance harness exercises changed (the
-     committed `showrunner.bundle.js` is drift-locked to its source modules) → owes the
-     **acceptance** run.
+   - **spine-carrying** — the showrunner spine the acceptance harness exercises changed. Any
+     `lib/*.py` decider is spine by default (fail closed — a new decider owes an acceptance run
+     unless it is explicitly non-runtime), and the committed `showrunner.bundle.js` is drift-locked
+     to its JS source modules → owes the **acceptance** run.
    - **reviewer-touching** — a reviewer seat's methodology or the shared rubric changed → owes
      the **benchmark** (review A/B eval).
    - **neither** — docs-only / repo-plumbing → owes nothing; the check is trivially green, merge
      freely.
 
-   The exact globs behind each class live in exactly one place —
+   The exact classification rules live in exactly one place —
    [`classify_release.py`](.github/scripts/classify_release.py) — and are never restated
    elsewhere; the owed-summary is what tells you which class this release is.
 2. **Run** the owed instrument(s). The one-session path is the repo-local **`release-eval`**
