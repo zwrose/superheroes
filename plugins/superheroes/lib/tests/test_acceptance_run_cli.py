@@ -142,6 +142,17 @@ def test_cli_threads_ceiling_overrides_to_the_real_builder():
     assert calls[0]["ceilings"] == {"elapsed_sec": 7.0, "spend": 123.0}
 
 
+def test_cli_bad_ceilings_config_returns_argparse_status_without_raising(tmp_path):
+    env = dict(os.environ)
+    env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+    code = run._cli([
+        "--fixture", FIXTURE, "--root", ROOT,
+        "--ceilings-config", str(tmp_path / "missing.json"),
+    ], env, io.StringIO(), io.StringIO(), deps_builder=lambda fixture, root: {})
+
+    assert code == 2
+
+
 def test_cli_drives_a_real_invocation_via_an_injected_deps_builder():
     """With a fake (but complete) deps bundle injected, `_cli` must actually call
     `acceptance_run.invoke` — not merely parse args and refuse — and surface its

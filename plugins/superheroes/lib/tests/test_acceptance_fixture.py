@@ -1,8 +1,10 @@
 # plugins/superheroes/lib/tests/test_acceptance_fixture.py
 import os, sys, tempfile, shutil
+import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_fixture as af
 import acceptance_deps as deps
+import acceptance_phases
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "..", "..", "eval", "fixtures", "acceptance")
 
@@ -50,6 +52,30 @@ def test_fixture_expected_phases_match_showrunner_source_of_truth():
     assert "review-plan" in phases
     assert "workhorse" in phases
     assert "review" not in phases
+
+
+def test_pipeline_phase_reader_fails_closed_when_literal_missing(tmp_path):
+    source = tmp_path / "showrunner.js"
+    source.write_text("const OTHER = ['plan']\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="not found"):
+        acceptance_phases.read_pipeline_phases(str(source))
+
+
+def test_pipeline_phase_reader_fails_closed_when_literal_unparseable(tmp_path):
+    source = tmp_path / "showrunner.js"
+    source.write_text("const PHASES = [plan]\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="not parseable"):
+        acceptance_phases.read_pipeline_phases(str(source))
+
+
+def test_pipeline_phase_reader_fails_closed_when_literal_is_not_string_list(tmp_path):
+    source = tmp_path / "showrunner.js"
+    source.write_text("const PHASES = ['plan', 1]\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="non-empty string list"):
+        acceptance_phases.read_pipeline_phases(str(source))
 
 
 def test_drift_check_fails_on_phase_list_drift():

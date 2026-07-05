@@ -165,9 +165,21 @@ def real_reclaim_probe(root, reserved_stamp=None):
     lease = _read_lease(root)
     if lease is None:
         return {"in_flight": False, "stamp": None, "has_record": False}, "dead"
-    has_record = acceptance_result.read_record(_record_dir(root)) is not None
+    has_record = _record_belongs_to_stamp(
+        acceptance_result.read_record(_record_dir(root)), lease.get("stamp"))
     liveness = _lease_liveness(lease)
     return {"in_flight": True, "stamp": lease.get("stamp"), "has_record": has_record}, liveness
+
+
+def _record_belongs_to_stamp(record, stamp):
+    if not isinstance(record, dict) or not stamp:
+        return False
+    if record.get("run_stamp") == stamp:
+        return True
+    for attempt in record.get("attempts") or []:
+        if isinstance(attempt, dict) and attempt.get("stamp") == stamp:
+            return True
+    return False
 
 
 def real_release_lease(root):

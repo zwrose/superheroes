@@ -88,6 +88,14 @@ def test_liveness_unconfirmable_on_malformed_pid(monkeypatch):
     assert deps._lease_liveness(lease) == "unconfirmable"
 
 
+def test_record_belongs_to_stamp_does_not_accept_unstamped_refusal_record():
+    assert deps._record_belongs_to_stamp({"attempts": []}, "old-run") is False
+    assert deps._record_belongs_to_stamp({"run_stamp": "old-run", "attempts": []},
+                                         "old-run") is True
+    assert deps._record_belongs_to_stamp({"attempts": [{"stamp": "old-run"}]},
+                                         "old-run") is True
+
+
 # --- real_run_outcome --------------------------------------------------------------------
 
 
@@ -269,6 +277,16 @@ def test_real_gh_reader_classifies_infra_check_runner_error(monkeypatch):
     assert result["failure_kind"] == "check-runner-errored-before-running"
 
 
+def test_check_failure_kind_covers_all_runner_infra_shapes():
+    for rollup in (
+        [{"conclusion": "STARTUP_FAILURE"}],
+        [{"conclusion": "TIMED_OUT"}],
+        [{"status": "ERROR"}],
+        [{"state": "ERROR"}],
+    ):
+        assert deps._check_failure_kind(rollup) == "check-runner-errored-before-running"
+
+
 def test_real_preflight_combines_fixture_drift_and_showrunner_preflight(monkeypatch, tmp_path):
     import acceptance_fixture
     import preflight
@@ -289,6 +307,56 @@ def test_real_preflight_combines_fixture_drift_and_showrunner_preflight(monkeypa
 
     assert result["ok"] is False
     assert "github-access" in result["reason"]
+
+
+def test_real_preflight_refuses_when_config_does_not_resolve(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {"ok": True, "reason": "fixture ok"})
+    monkeypatch.setattr(preflight, "probe",
+                        lambda work_item, root: {"gh": {"ok": True}, "config_resolves": False})
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is False
+    assert "config-resolves" in result["reason"]
+
+
+def test_real_preflight_accepts_when_fixture_and_live_probes_pass(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {"ok": True, "reason": "fixture ok"})
+    monkeypatch.setattr(preflight, "probe",
+                        lambda work_item, root: {"gh": {"ok": True}, "config_resolves": True})
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is True
+
+
+def test_real_preflight_fails_closed_when_phase_source_unreadable(monkeypatch, tmp_path):
+    import acceptance_phases
+
+    monkeypatch.setattr(acceptance_phases, "read_pipeline_phases",
+                        lambda: (_ for _ in ()).throw(RuntimeError("missing PHASES")))
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is False
+    assert "pipeline phase source drift" in result["reason"]
 
 
 def test_real_launcher_threads_owner_configured_ceilings(monkeypatch):

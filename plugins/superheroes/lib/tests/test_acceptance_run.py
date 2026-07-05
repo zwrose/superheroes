@@ -92,6 +92,28 @@ def test_free_lease_still_runs_recordless_discovery_cleanup_before_new_run():
     assert "wi-accept-harness-leftover" in rec["cleaned_up"]
 
 
+def test_preflight_refusal_record_includes_prior_discovery_cleanup():
+    def discover_artifacts(stamp):
+        if stamp is None:
+            return [{"kind": "branch", "name": "wi-accept-harness-leftover"}]
+        return [{"kind": "branch", "name": "b-s1"}]
+
+    def reap(planned):
+        return {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
+    d = _deps(
+        discover_artifacts=discover_artifacts,
+        reap=reap,
+        preflight_ok=lambda wi: {"ok": False, "reason": "config-resolves preflight failed"},
+    )
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    rec = d["_state"]["records_written"][0]
+    assert "wi-accept-harness-leftover" in rec["cleaned_up"]
+    assert rec["run_stamp"] == "s1"
+
+
 def test_reclaimed_dead_run_reaps_its_own_leftover_artifacts_before_proceeding():
     # UFR-8: a confirmed-dead prior run's leftover branch/PR/work-item-dir artifacts must
     # be reaped via a record-less discovery cleanup (run_stamp=None), not just backstopped
@@ -175,7 +197,17 @@ def test_ceiling_kill_fails_tears_down_and_never_retries():
 
 
 def test_unconfirmed_kill_skips_cleanup_because_process_group_may_still_be_alive():
+    def discover_artifacts(stamp):
+        if stamp is None:
+            return [{"kind": "branch", "name": "wi-accept-harness-leftover"}]
+        return [{"kind": "branch", "name": "b-s1"}]
+
+    def reap(planned):
+        return {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
     d = _deps(
+        discover_artifacts=discover_artifacts,
+        reap=reap,
         launcher=lambda stamped, budget_consumed=None, attempt=1: {
             "outcome": "kill-unconfirmed", "ceiling": "elapsed", "terminal_location": None,
             "spend_partial": False, "spend": 0.25, "elapsed_sec": 99.0,
@@ -183,12 +215,10 @@ def test_unconfirmed_kill_skips_cleanup_because_process_group_may_still_be_alive
         },
         run_outcome=lambda loc: (_ for _ in ()).throw(AssertionError("unsafe kill has no terminal")),
     )
-    reaped = []
-    d["reap"] = lambda planned: reaped.append(planned) or {"cleaned_up": ["b-s1"], "left_behind": []}
     r = run.invoke(d)
     assert r["verdict"] == "fail"
-    assert reaped == []
     rec = d["_state"]["records_written"][0]
+    assert rec["cleaned_up"] == ["wi-accept-harness-leftover"]
     assert rec["left_behind"]
     assert "cleanup skipped" in str(rec["left_behind"][0])
 

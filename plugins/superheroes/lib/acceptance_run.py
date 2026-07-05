@@ -172,21 +172,11 @@ def invoke(deps):
         if reclaim["action"] == "reclaim" and reclaim.get("write_orphan_record"):
             # The dead prior run left no record — write its orphan failed record before
             # proceeding, honestly reflecting what the discovery teardown above reaped.
-            deps["write_record"]({
-                "verdict": "fail",
-                "reason": "orphan record for a reclaimed dead prior run",
-                "pr_link": "",
-                "phases": [],
-                "spend": None,
-                "spend_partial": True,
-                "elapsed_sec": 0.0,
-                "launched_at": deps["clock_now"](),
-                "terminated_at": deps["clock_now"](),
-                "retried": False,
-                "attempts": [{"stamp": recorded_state.get("stamp"), "verdict": "fail"}],
-                "cleaned_up": dead_run_teardown.get("cleaned_up") or [],
-                "left_behind": dead_run_teardown.get("left_behind") or [],
-            })
+                deps["write_record"](_record_payload(
+                    deps, "fail", "orphan record for a reclaimed dead prior run",
+                    None, [{"stamp": recorded_state.get("stamp"), "verdict": "fail"}],
+                    False, dead_run_teardown, spend_partial=True,
+                    run_stamp=recorded_state.get("stamp")))
 
         # 2. Materialize the stamped throwaway fixture work-item.
         stamped = deps["materialize"]()
@@ -196,8 +186,9 @@ def invoke(deps):
         pf = deps["preflight_ok"](stamped.get("work_item"))
         if not pf.get("ok"):
             reason = "preflight refused the fixture: %s" % pf.get("reason", "prerequisite not met")
-            teardown = _teardown(deps, stamp)
-            record_path = _finalize(deps, "fail", reason, None, [], False, teardown)
+            teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
+            record_path = _finalize(deps, "fail", reason, None, [], False, teardown,
+                                    run_stamp=stamp)
             return {
                 "verdict": "fail",
                 "report": _report("fail", reason, record_path, teardown),
@@ -252,14 +243,14 @@ def invoke(deps):
         # keeping, so we don't attempt a second reap of the same (already-attempted) artifacts.
         if not pre_retry_cleanup_failed:
             if launch.get("teardown_safe") is False:
-                teardown = {
+                teardown = _merge_teardown(dead_run_teardown, {
                     "cleaned_up": [],
                     "left_behind": [{
                         "kind": "process-group",
                         "name": stamp,
                         "reason": "kill not confirmed; cleanup skipped",
                     }],
-                }
+                })
             else:
                 teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
 
@@ -279,6 +270,7 @@ def invoke(deps):
             elapsed_sec=total_elapsed,
             pr_link=(outcome.get("readout_pr_link") if isinstance(outcome, dict) else "") or "",
             phases=(outcome.get("phases") if isinstance(outcome, dict) else []) or [],
+            run_stamp=stamp,
         )
 
         # 10. Render the single verdict report.
@@ -293,14 +285,14 @@ def invoke(deps):
         # Fail-CLOSED: any internal error still teardowns and yields a fail naming the error.
         reason = "internal harness error: %s" % exc
         try:
-            teardown = _teardown(deps, stamp)
+            teardown = _merge_teardown(locals().get("dead_run_teardown"), _teardown(deps, stamp))
         except Exception as td_exc:
             teardown = {"cleaned_up": [], "left_behind": [],
                         "note": "teardown also failed: %s" % td_exc}
         record_path = None
         try:
             record_path = _finalize(deps, "fail", reason, None, attempts,
-                                    len(attempts) > 1, teardown)
+                                    len(attempts) > 1, teardown, run_stamp=stamp)
         except Exception:
             record_path = None
         return {
@@ -345,13 +337,9 @@ def _discovery_teardown(deps):
     return deps["reap"](planned)
 
 
-def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
-              spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None):
-    """Write the single record, then release the lease ONLY after a durable write.
-
-    If `write_record` raises, the lease is NOT released (held so the UFR-8 backstop stays
-    armed) and the failure propagates to the caller as a fail. Returns the record path.
-    """
+def _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
+                    spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
+                    run_stamp=None):
     record = {
         "verdict": verdict,
         "reason": reason,
@@ -367,6 +355,22 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
         "cleaned_up": (teardown or {}).get("cleaned_up") or [],
         "left_behind": (teardown or {}).get("left_behind") or [],
     }
+    if run_stamp:
+        record["run_stamp"] = run_stamp
+    return record
+
+
+def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
+              spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
+              run_stamp=None):
+    """Write the single record, then release the lease ONLY after a durable write.
+
+    If `write_record` raises, the lease is NOT released (held so the UFR-8 backstop stays
+    armed) and the failure propagates to the caller as a fail. Returns the record path.
+    """
+    record = _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
+                             spend_partial=spend_partial, elapsed_sec=elapsed_sec,
+                             pr_link=pr_link, phases=phases, run_stamp=run_stamp)
     record_path = deps["write_record"](record)
     # Only after the record is durably written do we release the lease.
     deps["release_lease"]()
@@ -374,23 +378,12 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
 
 
 def _write_record_only(deps, verdict, reason, spend, attempts, retried, teardown,
-                       spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None):
-    record = {
-        "verdict": verdict,
-        "reason": reason,
-        "pr_link": pr_link,
-        "phases": phases or [],
-        "spend": spend,
-        "spend_partial": bool(spend_partial),
-        "elapsed_sec": elapsed_sec if elapsed_sec is not None else 0.0,
-        "launched_at": deps["clock_now"](),
-        "terminated_at": deps["clock_now"](),
-        "retried": bool(retried),
-        "attempts": attempts,
-        "cleaned_up": (teardown or {}).get("cleaned_up") or [],
-        "left_behind": (teardown or {}).get("left_behind") or [],
-    }
-    return deps["write_record"](record)
+                       spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
+                       run_stamp=None):
+    return deps["write_record"](_record_payload(
+        deps, verdict, reason, spend, attempts, retried, teardown,
+        spend_partial=spend_partial, elapsed_sec=elapsed_sec, pr_link=pr_link,
+        phases=phases, run_stamp=run_stamp))
 
 
 def _cli(argv, env, stdout, stderr, deps_builder=None):
@@ -439,7 +432,10 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
         print(refusal["reason"], file=stderr)
         return 3
 
-    ceilings = _ceilings_from_args(args, parser)
+    try:
+        ceilings = _ceilings_from_args(args, parser)
+    except SystemExit as exc:
+        return int(exc.code or 2)
 
     if deps_builder is None:
         import acceptance_deps
