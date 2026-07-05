@@ -49,6 +49,26 @@ import acceptance_run as run          # noqa: E402
 import acceptance_deps                # noqa: E402
 
 
+def _tmp_git_root(tmp_path):
+    """A throwaway git repo to hand the subprocess as --root.
+
+    NEVER pass the real repo root here: `invoke`'s step-1 record-less discovery
+    teardown sweeps the --root repo's git for reserved-stamp artifacts BEFORE the
+    bogus fixture can fail, and (because the subprocess's store is tmp-pinned) it
+    sees no lease — so it force-reaps any live acceptance run's build branch and
+    worktree in the REAL repo. This killed live run 8 of the 0.10.0 qualification
+    mid-spine: the worktree-aware reap (PR #244, finding #8) made the previously
+    failing `branch -D` on a checked-out branch succeed, weaponizing this escape.
+    """
+    root = tmp_path / "cli-root-repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "seed"],
+                   cwd=str(root), check=True)
+    return str(root)
+
+
 def _invoke_subprocess(tmp_path, env_extra=None, fixture=BOGUS_FIXTURE):
     env = dict(os.environ)
     # Never let a surrounding acceptance/showrunner context leak into the top-level cases.
@@ -58,7 +78,7 @@ def _invoke_subprocess(tmp_path, env_extra=None, fixture=BOGUS_FIXTURE):
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
-        [sys.executable, RUN_PY, "--fixture", fixture, "--root", ROOT],
+        [sys.executable, RUN_PY, "--fixture", fixture, "--root", _tmp_git_root(tmp_path)],
         capture_output=True,
         text=True,
         env=env,
