@@ -96,9 +96,14 @@ These are owner actions, performed once via GitHub settings (not by the automati
   and the App's authority is bounded to releases).
 - **Merge method: squash-only** (disable merge-commit and rebase), with the squash subject set
   to the PR title — so the validated PR title is the message release-please reads.
-- **Branch protection on `main`** applies to the App with bypass disabled, and requires the
-  status checks `validate`, `pr-title`, `release-evidence` (the pre-release evidence gate above;
-  trivially green on non-release and docs-only PRs), and any plugin test suites.
+- **The `main protection` ruleset** (Settings → Rules → Rulesets; classic branch protection is
+  retired — the ruleset is the single home for these rules) requires a pull request and the
+  status checks `validate`, `pr-title` (both pinned to the GitHub Actions app), and
+  `release-evidence` (the pre-release evidence gate above; trivially green on non-release and
+  docs-only PRs; deliberately unpinned — posting a status already requires write access), with
+  branches required to be **up to date** before merging, plus no-force-push and no-deletion.
+  **Repository admins are the ruleset's bypass actors** — that is the deliberate override path
+  (see Override above). The release App is *not* a bypass actor, so every rule applies to it.
 - **Tag-protection rules for `*-v*`** so published tags can't be moved.
 
 ## Before the first release (one-time verification)
