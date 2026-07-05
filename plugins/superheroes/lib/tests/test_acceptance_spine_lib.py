@@ -89,6 +89,78 @@ def test_preflight_refuses_bad_override_before_touching_fixture(monkeypatch, tmp
     assert list(tmp_path.iterdir()) == [fixture]
 
 
+# --- path normalization at the single seam (build) ------------------------------------
+
+def _capture_launcher_spine(monkeypatch):
+    """Swap real_launcher for a spy that records the (already-normalized) spine_lib build()
+    hands it — the same value that flows into the child launch prompt's paths + libRoot."""
+    captured = {}
+    monkeypatch.setattr(
+        deps, "real_launcher",
+        lambda root, ceilings=None, spine_lib=None, child_model=None:
+        captured.__setitem__("spine", spine_lib) or (lambda *a, **k: None))
+    return captured
+
+
+def test_build_normalizes_relative_spine_lib_to_absolute(monkeypatch, tmp_path):
+    # A resolvable RELATIVE override must be absolutized ONCE at build() before it reaches
+    # the launch prompt (child cwd is not guaranteed) and the provenance record.
+    lib = _valid_spine_lib(tmp_path)          # tmp_path/lib (a valid override)
+    captured = _capture_launcher_spine(monkeypatch)
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    monkeypatch.chdir(tmp_path)               # so "lib" resolves against tmp_path
+
+    d = deps.build(str(fixture), str(tmp_path / "root"), spine_lib="lib")
+
+    launch_spine = captured["spine"]
+    assert os.path.isabs(launch_spine)                     # not the raw relative "lib"
+    assert launch_spine != "lib"
+    assert launch_spine == os.path.abspath("lib")          # resolved from cwd
+    # the SAME absolute path reaches the provenance record, and it actually points at the
+    # real bundle (a non-None hash proves the resolved path was the one probed/hashed).
+    prov = d["spine_provenance"]()
+    assert prov["lib_path"] == launch_spine == str(lib)
+    assert prov["bundle_sha256"] is not None
+
+
+def test_build_expands_tilde_spine_lib(monkeypatch, tmp_path):
+    # A `~`-prefixed override to a real dir must expand (today it never would — it fails
+    # closed with a confusing literal `~/...` name).
+    home = tmp_path / "home"
+    home.mkdir()
+    lib = _valid_spine_lib(home)              # ~/lib
+    monkeypatch.setenv("HOME", str(home))
+    captured = _capture_launcher_spine(monkeypatch)
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+
+    d = deps.build(str(fixture), str(tmp_path / "root"), spine_lib="~/lib")
+
+    assert captured["spine"] == str(lib)                   # expanded + absolute
+    prov = d["spine_provenance"]()
+    assert prov["lib_path"] == str(lib)
+    assert prov["bundle_sha256"] is not None               # resolved path accepted + hashed
+
+
+def test_build_refusal_names_resolved_absolute_path(monkeypatch, tmp_path):
+    # A relative override to a MISSING dir refuses naming the RESOLVED ABSOLUTE path, not
+    # the raw relative string.
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    d = deps.build(str(fixture), "root", spine_lib="no-such-lib")
+    out = d["preflight_ok"]("wi")
+
+    assert out["ok"] is False
+    resolved = os.path.abspath("no-such-lib")
+    assert os.path.isabs(resolved)
+    assert resolved in out["reason"]
+    assert "no-such-lib" != out["reason"]                  # not the bare relative token
+
+
 # --- provenance (record + report carry lib path + bundle hash) ------------------------
 
 def test_spine_provenance_seam_reports_lib_path_hash_version_and_child_model(tmp_path):

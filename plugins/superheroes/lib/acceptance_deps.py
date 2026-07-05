@@ -779,6 +779,16 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None):
     # never disagree about what drove the run.
     resolved_child_model = child_model or acceptance_launch.DEFAULT_CHILD_MODEL
 
+    # Normalize the spine-lib override to a resolved absolute path ONCE, here at the single
+    # entry point — never per call-site. Downstream the value is embedded verbatim into the
+    # child launch prompt (whose cwd is not guaranteed) and stamped into the provenance
+    # record, so a relative path would be fragile and a `~` would never expand (failing
+    # closed with a confusing name). Expanding + absolutizing here means the refusal reason,
+    # the prompt paths, the `libRoot` arg, the phase source, and the recorded provenance path
+    # are all the exact same resolved path that was probed/hashed.
+    if spine_lib:
+        spine_lib = os.path.abspath(os.path.expanduser(spine_lib))
+
     state = {
         "stamped": None,
         "reserved_stamp": acceptance_fixture.make_stamp(uuid.uuid4().hex),
