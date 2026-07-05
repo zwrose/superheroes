@@ -6821,10 +6821,10 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
   const docPath = docPathFor(workItem, doc)
-  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + deferred-set seed + load-summary +
-  // entry coverage read. Seed runtimeDeferred from it and hand it to the panel as `preloaded`. A
-  // gather transport failure -> null: fall back to a plain mkdir and let the panel read its own
-  // entry state (correct, just unfolded).
+  // fold 2 (#141; #211 decision shape): ONE gather leaf does the run-dir mkdir + deferred-set seed +
+  // resume DECISION + round-1 plan + entry coverage read (no records ride up). Seed runtimeDeferred
+  // from it and hand it to the panel as `preloaded`. A gather transport failure -> null: fall back to
+  // a plain mkdir and let the panel read its own entry state (correct, just unfolded).
   const setup = await gatherReviewSetup({
     runDir, reviewerSet: DOC_REVIEWERS, context: { workItem, docType: doc, docPath },
     legKind: { panel: true, code: false }, ioApi: io(),
@@ -8097,9 +8097,10 @@ async function reviewCodePhase(workItem, opts) {
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
   : `/tmp/showrunner-${workItem}-review-code`)
-  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + load-summary + entry coverage read (the
-  // code leg has no deferred-set seed — doc-only — but the round-1 tally still folds via the
-  // gathered deferredSet). Gather failure -> null: fall back to a plain mkdir + the panel's own reads.
+  // fold 2 (#141; #211 decision shape): ONE gather leaf does the run-dir mkdir + resume DECISION +
+  // round-1 plan + entry coverage read (no records ride up; the code leg has no deferred-set seed —
+  // doc-only — but the round-1 tally still folds via the gathered deferredSet). Gather failure ->
+  // null: fall back to a plain mkdir + the panel's own reads.
   const coverageDecisionPath = joinPath(runDir, 'review-coverage-decisions.json')
   const setup = await gatherReviewSetup({
     runDir, reviewerSet: REVIEW_CODE_REVIEWERS, context: { workItem, coverageDecisionPath },

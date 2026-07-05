@@ -68,6 +68,10 @@ SHOWRUNNER_SMOKES = [
     # #211 Phase 4c — the ADVERSARIAL proof: mangling any >4KB courier answer never breaks the loop
     # (nothing that big crosses), and a mangled SMALL decider answer fails closed, never silently wrong.
     "plugins/superheroes/lib/tests/showrunner_reviewloop_adversarial_smoke.js",
+    # #211 PR 3 — the JS reassembler's regression net: force the receipt+chunk EMERGENCY FALLBACK and
+    # pin _readReceiptText's raw-text reassembly (happy multi-chunk) + both fail-closed guards (per-chunk
+    # chunkHash, final reassembly-hash backstop) -> a mangled chunk parks round-memory-unreadable.
+    "plugins/superheroes/lib/tests/showrunner_reviewloop_fallback_smoke.js",
     # #115 Task 13a: args-based front-half selector (globalThis flags + bundle ENTRY text assertion).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).
