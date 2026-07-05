@@ -152,12 +152,15 @@ def invoke(deps):
         if reclaim["action"] == "refuse":
             reason = "a prior acceptance run is in flight (%s); refusing to start another" % liveness
             record_path = None
-            try:
-                record_path = _write_record_only(
-                    deps, "fail", reason, None, [], False,
-                    {"cleaned_up": [], "left_behind": []}, spend_partial=True)
-            except Exception:
-                record_path = None
+            writer = deps.get("write_refusal_record") if isinstance(deps, dict) else None
+            if callable(writer):
+                try:
+                    record_path = _write_record_only(
+                        deps, "fail", reason, None, [], False,
+                        {"cleaned_up": [], "left_behind": []}, spend_partial=True,
+                        writer=writer)
+                except Exception:
+                    record_path = None
             return {
                 "verdict": "fail",
                 "report": _report(
@@ -263,6 +266,9 @@ def invoke(deps):
         retried = len(attempts) > 1
         total_spend = sum(a.get("spend") or 0.0 for a in attempts)
         total_elapsed = sum(a.get("elapsed_sec") or 0.0 for a in attempts)
+        unsafe_kill = launch.get("teardown_safe") is False
+        if unsafe_kill and callable(deps.get("quarantine_lease")):
+            deps["quarantine_lease"](stamp)
         record_path = _finalize(
             deps, verdict["verdict"], verdict["reason"],
             total_spend, attempts, retried, teardown,
@@ -271,6 +277,7 @@ def invoke(deps):
             pr_link=(outcome.get("readout_pr_link") if isinstance(outcome, dict) else "") or "",
             phases=(outcome.get("phases") if isinstance(outcome, dict) else []) or [],
             run_stamp=stamp,
+            release_lease=not unsafe_kill,
         )
 
         # 10. Render the single verdict report.
@@ -362,7 +369,7 @@ def _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
 
 def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
               spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
-              run_stamp=None):
+              run_stamp=None, release_lease=True):
     """Write the single record, then release the lease ONLY after a durable write.
 
     If `write_record` raises, the lease is NOT released (held so the UFR-8 backstop stays
@@ -373,14 +380,15 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
                              pr_link=pr_link, phases=phases, run_stamp=run_stamp)
     record_path = deps["write_record"](record)
     # Only after the record is durably written do we release the lease.
-    deps["release_lease"]()
+    if release_lease:
+        deps["release_lease"]()
     return record_path
 
 
 def _write_record_only(deps, verdict, reason, spend, attempts, retried, teardown,
                        spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
-                       run_stamp=None):
-    return deps["write_record"](_record_payload(
+                       run_stamp=None, writer=None):
+    return (writer or deps["write_record"])(_record_payload(
         deps, verdict, reason, spend, attempts, retried, teardown,
         spend_partial=spend_partial, elapsed_sec=elapsed_sec, pr_link=pr_link,
         phases=phases, run_stamp=run_stamp))

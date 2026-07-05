@@ -23,6 +23,7 @@ import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_deps as deps
+import acceptance_result
 import hostinfo
 import control_plane
 import journal
@@ -85,6 +86,17 @@ def test_liveness_unconfirmable_on_permission_error_never_alive_or_dead(monkeypa
 
 def test_liveness_unconfirmable_on_malformed_pid(monkeypatch):
     lease = {"pid": "not-an-int", "host": socket.gethostname(), "bootId": None}
+    assert deps._lease_liveness(lease) == "unconfirmable"
+
+
+def test_quarantined_lease_is_unconfirmable(tmp_path):
+    root = str(tmp_path)
+    deps.real_quarantine_lease(root)("accept-harness-unsafe")
+
+    lease = deps._read_lease(root)
+
+    assert lease["stamp"] == "accept-harness-unsafe"
+    assert lease["reason"] == "kill-unconfirmed"
     assert deps._lease_liveness(lease) == "unconfirmable"
 
 
@@ -262,6 +274,25 @@ def test_real_gh_reader_missing_work_item_is_unreadable():
     assert result["unreadable"] == ["pr_exists"]
 
 
+def test_real_gh_reader_classifies_host_unreachable_from_required_read_probe(monkeypatch):
+    import gh_preflight
+
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            return 1, "", "network down"
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    monkeypatch.setattr(gh_preflight, "probe", lambda root: {"ok": False})
+    monkeypatch.setattr(gh_preflight, "decide",
+                        lambda probe, required="read": (False, "indeterminate", "retry"))
+
+    result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
+
+    assert result["unreadable"] == ["pr_exists"]
+    assert result["failure_kind"] == "host-unreachable"
+
+
 def test_real_gh_reader_classifies_infra_check_runner_error(monkeypatch):
     def fake_run(args, cwd, timeout=15):
         if args[:3] == ["gh", "pr", "list"]:
@@ -285,6 +316,52 @@ def test_check_failure_kind_covers_all_runner_infra_shapes():
         [{"state": "ERROR"}],
     ):
         assert deps._check_failure_kind(rollup) == "check-runner-errored-before-running"
+
+
+def test_check_failure_kind_keeps_behavioral_red_checks_unclassified():
+    assert deps._check_failure_kind([{"conclusion": "FAILURE"}]) is None
+    assert deps._check_failure_kind([{"conclusion": "CANCELLED"}]) is None
+
+
+def test_real_gh_reader_keeps_behavioral_red_check_non_retryable(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            return 0, json.dumps([
+                {"number": 1, "url": "https://x/pr/1", "isDraft": False,
+                 "headRefName": "superheroes/accept-harness-abc-def456",
+                 "statusCheckRollup": [{"conclusion": "FAILURE"}]},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
+    assert result["checks_green"] is False
+    assert result["failure_kind"] is None
+
+
+def test_real_write_refusal_record_uses_sidecar_not_canonical_record(tmp_path):
+    root = str(tmp_path)
+    record = {
+        "verdict": "fail",
+        "reason": "refused",
+        "pr_link": "",
+        "phases": [],
+        "spend": None,
+        "spend_partial": True,
+        "elapsed_sec": 0.0,
+        "launched_at": "2026-07-02T00:00:00Z",
+        "terminated_at": "2026-07-02T00:00:00Z",
+        "retried": False,
+        "attempts": [],
+        "cleaned_up": [],
+        "left_behind": [],
+    }
+
+    path = deps.real_write_refusal_record(root)(record)
+
+    assert "/refusals/" in path
+    assert acceptance_result.read_record(deps._record_dir(root)) is None
+    assert acceptance_result.read_record(os.path.dirname(path))["reason"] == "refused"
 
 
 def test_real_preflight_combines_fixture_drift_and_showrunner_preflight(monkeypatch, tmp_path):
@@ -325,6 +402,25 @@ def test_real_preflight_refuses_when_config_does_not_resolve(monkeypatch, tmp_pa
 
     assert result["ok"] is False
     assert "config-resolves" in result["reason"]
+
+
+def test_real_preflight_returns_fixture_drift_without_running_live_probe(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {
+                            "ok": False, "reason": "fixture drift"})
+    monkeypatch.setattr(preflight, "probe",
+                        lambda work_item, root: (_ for _ in ()).throw(
+                            AssertionError("live probe should not run after fixture drift")))
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result == {"ok": False, "reason": "fixture drift"}
 
 
 def test_real_preflight_accepts_when_fixture_and_live_probes_pass(monkeypatch, tmp_path):
@@ -373,7 +469,7 @@ def test_real_launcher_threads_owner_configured_ceilings(monkeypatch):
     launch({"stamp": "s1", "work_item": "accept-harness-abc"})
 
     assert captured["ceilings"]["elapsed_sec"] == 7.0
-    assert captured["ceilings"]["spend"] == deps.acceptance_ceiling.DEFAULT_CEILINGS["spend"]
+    assert captured["ceilings"]["spend"] == 5_000_000.0
 
 
 def test_real_spend_sampler_reads_measured_token_telemetry(tmp_path):

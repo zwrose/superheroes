@@ -6,7 +6,8 @@ import acceptance_run as run
 
 def _deps(**over):
     """A fully-stubbed happy-path dep bundle; override any seam per test."""
-    state = {"records_written": [], "lease_released": False}
+    state = {"records_written": [], "refusal_records_written": [], "lease_released": False,
+             "lease_quarantined": None}
     base = dict(
         reclaim_probe=lambda: ({"in_flight": False, "stamp": None, "has_record": False}, "dead"),
         preflight_ok=lambda wi: {"ok": True},
@@ -25,6 +26,9 @@ def _deps(**over):
         discover_artifacts=lambda stamp: [{"kind": "branch", "name": "b-s1"}],
         reap=lambda planned: {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []},
         write_record=lambda rec: state["records_written"].append(rec) or "/rec.json",
+        write_refusal_record=lambda rec: state["refusal_records_written"].append(rec)
+        or "/refusal-rec.json",
+        quarantine_lease=lambda stamp: state.__setitem__("lease_quarantined", stamp),
         release_lease=lambda: state.__setitem__("lease_released", True),
         clock_now=lambda: "2026-07-02T00:00:00Z",
         _state=state,
@@ -61,9 +65,10 @@ def test_confirmed_alive_prior_run_writes_refusal_record_without_releasing_other
                                      "alive"))
     r = run.invoke(d)
     assert r["verdict"] == "fail"
-    assert r["record_path"] == "/rec.json"
-    assert len(d["_state"]["records_written"]) == 1
-    rec = d["_state"]["records_written"][0]
+    assert r["record_path"] == "/refusal-rec.json"
+    assert len(d["_state"]["records_written"]) == 0
+    assert len(d["_state"]["refusal_records_written"]) == 1
+    rec = d["_state"]["refusal_records_written"][0]
     assert rec["verdict"] == "fail"
     assert "prior acceptance run" in rec["reason"]
     assert d["_state"]["lease_released"] is False
@@ -221,6 +226,8 @@ def test_unconfirmed_kill_skips_cleanup_because_process_group_may_still_be_alive
     assert rec["cleaned_up"] == ["wi-accept-harness-leftover"]
     assert rec["left_behind"]
     assert "cleanup skipped" in str(rec["left_behind"][0])
+    assert d["_state"]["lease_quarantined"] == "s1"
+    assert d["_state"]["lease_released"] is False
 
 
 def test_internal_harness_error_still_teardowns_and_fails_never_pass():

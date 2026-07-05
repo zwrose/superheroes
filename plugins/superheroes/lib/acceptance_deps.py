@@ -190,6 +190,27 @@ def real_release_lease(root):
         pass
 
 
+def real_quarantine_lease(root):
+    """Mark the lease unconfirmable after a child process group could not be killed safely."""
+    def _quarantine(stamp):
+        path = _lease_path(root)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "stamp": stamp,
+            "pid": "unconfirmed-child",
+            "host": socket.gethostname(),
+            "bootId": hostinfo.boot_id(),
+            "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "ttl": _LEASE_TTL,
+            "reason": "kill-unconfirmed",
+        }
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)
+    return _quarantine
+
+
 # --- materialize / preflight -----------------------------------------------------------
 
 
@@ -608,6 +629,13 @@ def real_write_record(root):
     return _write
 
 
+def real_write_refusal_record(root):
+    def _write(record):
+        dest = os.path.join(_harness_dir(root), "refusals", uuid.uuid4().hex)
+        return acceptance_result.write_record(record, dest)
+    return _write
+
+
 # --- assembly --------------------------------------------------------------------------
 
 
@@ -667,6 +695,8 @@ def build(fixture_dir, root, ceilings=None):
         "discover_artifacts": discover_artifacts,
         "reap": real_reap(root, current_stamp),
         "write_record": real_write_record(root),
+        "write_refusal_record": real_write_refusal_record(root),
+        "quarantine_lease": real_quarantine_lease(root),
         "release_lease": lambda: real_release_lease(root),
         "clock_now": real_clock_now(),
     }
