@@ -38,13 +38,17 @@ explicitly bypassed). The ritual is **classify → run → record → merge**:
    (release class + which instruments are owed + the exact commands). That comment/output is the
    single authority on what the release owes — nothing re-derives it. Preview locally any time:
    `python3 .github/scripts/classify_release.py`.
-   - **spine-carrying** — the showrunner spine changed (`lib/showrunner*`, `lib/*loop*`,
-     `lib/*phase*`, `lib/review_round_policy*`; the committed `showrunner.bundle.js` is
-     drift-locked to its source modules) → owes the **acceptance** run.
-   - **reviewer-touching** — a reviewer seat or the shared rubric changed
-     (`agents/*-reviewer.md`, `rubric/*`) → owes the **benchmark** (review A/B eval).
+   - **spine-carrying** — the showrunner spine the acceptance harness exercises changed (the
+     committed `showrunner.bundle.js` is drift-locked to its source modules) → owes the
+     **acceptance** run.
+   - **reviewer-touching** — a reviewer seat's methodology or the shared rubric changed → owes
+     the **benchmark** (review A/B eval).
    - **neither** — docs-only / repo-plumbing → owes nothing; the check is trivially green, merge
      freely.
+
+   The exact globs behind each class live in exactly one place —
+   [`classify_release.py`](.github/scripts/classify_release.py) — and are never restated
+   elsewhere; the owed-summary is what tells you which class this release is.
 2. **Run** the owed instrument(s). The one-session path is the repo-local **`release-eval`**
    skill (`/release-eval`): it reads the check's owed-summary, dispatches only the owed
    instruments (the live acceptance run via the repo-local `acceptance` skill; the benchmark
@@ -59,6 +63,13 @@ explicitly bypassed). The ritual is **classify → run → record → merge**:
    live model). Append the dated verdict to `plugins/superheroes/eval/RESULTS.md` too: the
    comment is what gates, the ledger is what remembers.
 4. **Merge** — once `release-evidence` is green.
+
+> **If `main` moves while you're discharging** (release-please regenerates its PR on every push
+> to `main`), the release head SHA changes and the just-posted evidence — bound to the old SHA —
+> no longer matches. The check re-arms to red and the owed-summary shows the new `releaseSha`;
+> that is the SHA-binding working, not a bug. Just re-run `/release-eval` against the refreshed
+> owed-summary. (The acceptance content binding usually still holds, since a version-bump commit
+> doesn't touch the spine bundle — only the ref binding re-arms.)
 
 **Override.** `release-evidence` is a required status. If you must merge without it (the evidence
 is genuinely inapplicable, or an instrument is broken), use the owner's **admin bypass** at merge

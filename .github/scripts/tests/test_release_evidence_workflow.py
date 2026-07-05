@@ -36,9 +36,25 @@ def test_never_uses_pull_request_target():
 
 
 def test_gated_to_release_please_branch():
+    import yaml
+    with open(_WF) as fh:
+        data = yaml.safe_load(fh)
     text = _text()
-    assert "release-please--*" in text  # is_release guard
-    assert "is_release == 'true'" in text  # every side-effect step is gated
+    assert "release-please--*" in text  # is_release guard set in the ctx step
+    # The side-effecting data steps (checkout, materialize, verify, upsert) must be gated on
+    # is_release so a non-release PR touches nothing; the status step is deliberately `always()`
+    # (it must report on every PR) and self-guards on IS_RELEASE instead. Assert both invariants.
+    steps = data["jobs"]["evidence"]["steps"]
+    def _named(substr):
+        return [s for s in steps if substr.lower() in (s.get("name", "").lower())]
+    for label in ("Checkout", "Materialize", "Verify release evidence", "Upsert"):
+        matched = _named(label)
+        assert matched, f"no step named ~{label!r}"
+        assert all("is_release == 'true'" in str(s.get("if", "")) for s in matched), \
+            f"side-effect step ~{label!r} not gated on is_release"
+    status = _named("commit status")
+    assert status and status[0].get("if") == "always()", "status step must be always()"
+    assert 'is_release != "true"' in text  # ...and self-guard the non-release case internally
 
 
 def test_checks_out_trusted_base_not_head():
@@ -68,9 +84,31 @@ def test_no_untrusted_payload_interpolated_into_run():
             assert b not in line, f"untrusted payload inlined outside env: {line}"
 
 
-def test_runs_the_verifier_and_classifier_scripts():
+def test_runs_the_verifier_which_drives_the_classifier():
+    # the workflow runs the verifier directly; the verifier imports the classifier (the single
+    # home of the release-class globs), so classification runs transitively — assert both links.
+    assert ".github/scripts/verify_release_evidence.py" in _text()
+    verifier = os.path.join(_ROOT, ".github", "scripts", "verify_release_evidence.py")
+    with open(verifier) as fh:
+        assert "import classify_release" in fh.read()
+
+
+def test_evidence_comments_are_author_filtered():
+    # forged-evidence guard: only comments from a write-access author count as evidence.
     text = _text()
-    assert ".github/scripts/verify_release_evidence.py" in text
+    assert "author_association" in text
+    assert '"OWNER"' in text
+
+
+def test_data_steps_tolerate_failure_so_status_always_reports():
+    import yaml
+    with open(_WF) as fh:
+        steps = yaml.safe_load(fh)["jobs"]["evidence"]["steps"]
+    # materialize + verify + upsert must be continue-on-error so an upstream hiccup can't skip
+    # the always() status step and strand the required check.
+    for label in ("Materialize", "Verify release evidence", "Upsert"):
+        s = [x for x in steps if label.lower() in x.get("name", "").lower()][0]
+        assert s.get("continue-on-error") is True, f"{label} must be continue-on-error"
 
 
 def test_publishes_a_commit_status_named_release_evidence():

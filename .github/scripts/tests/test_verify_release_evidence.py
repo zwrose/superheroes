@@ -151,3 +151,22 @@ def test_sha256_file_roundtrip(tmp_path):
 
 def test_sha256_missing_file_is_none():
     assert V.sha256_file("/no/such/bundle.js") is None
+
+
+# --- producer↔consumer format contract ----------------------------------------------------
+
+def test_release_eval_skill_documents_the_verified_format():
+    # The evidence schema is authored in the release-eval skill (a markdown heredoc) and
+    # independently enforced here — they can't share a constant across the language boundary,
+    # so this binds the two: the skill must document the fence label and every field the
+    # verifier binds on, or a rename here silently strands the skill's posted evidence.
+    root = os.path.abspath(os.path.join(_HERE, "..", "..", ".."))
+    skill = os.path.join(root, ".claude", "skills", "release-eval", "SKILL.md")
+    with open(skill, encoding="utf-8") as fh:
+        body = fh.read()
+    assert V.EVIDENCE_FENCE in body                 # ```release-eval-evidence
+    for field in ("releaseSha", "instrument", "verdict", "bundleSha256"):
+        assert field in body, f"skill omits verified field {field!r}"
+    # and the instrument names the check keys on
+    import classify_release as CR
+    assert CR.SPINE_INSTRUMENT in body and CR.REVIEWER_INSTRUMENT in body

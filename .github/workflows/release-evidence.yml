@@ -86,16 +86,26 @@ jobs:
           python-version: "3.12"
 
       - name: Materialize the release head as data (bundle blob + fetch for the range)
+        # continue-on-error so a transient fetch/API hiccup can't skip the status step below and
+        # leave the required check permanently unreported — the verify/status steps degrade to a
+        # loud red instead (they run under `always()` / an `is_release` gate).
         if: steps.ctx.outputs.is_release == 'true'
+        continue-on-error: true
         env:
           SHA: ${{ steps.ctx.outputs.sha }}
+          NUM: ${{ steps.ctx.outputs.pr }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin "$SHA"
           # Read the head's committed bundle without checking out (never execute head code).
           git show "$SHA:plugins/superheroes/lib/showrunner.bundle.js" > head-bundle.js
-          gh api "repos/$REPO/issues/${{ steps.ctx.outputs.pr }}/comments" --paginate \
-            --jq '[.[] | {body: .body}]' > comments.json
+          # Evidence integrity: only comments from an author with write access count as evidence.
+          # bundleSha256 + releaseSha are both publicly computable, so an unfiltered fetch would
+          # let ANY commenter forge a passing evidence block (best-effort authorship gate per #56;
+          # the owner still merges, so this defends the owner's own green signal, not merge rights).
+          gh api "repos/$REPO/issues/$NUM/comments" --paginate \
+            --jq '[.[] | select(.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR") | {body: .body}]' \
+            > comments.json
 
       - name: Verify release evidence
         id: verify
@@ -127,6 +137,7 @@ jobs:
         # Only on branch-push / dispatch — NOT on issue_comment, so the upsert never re-triggers
         # itself (issue_comment is also skipped by the job `if`, this is belt-and-braces).
         if: steps.ctx.outputs.is_release == 'true' && github.event_name != 'issue_comment'
+        continue-on-error: true
         env:
           NUM: ${{ steps.ctx.outputs.pr }}
         run: |
@@ -140,29 +151,51 @@ jobs:
           fi
 
       - name: Publish the release-evidence commit status
-        # Runs on EVERY PR so the required `release-evidence` status always reports: a non-release
-        # (or docs-only) PR is trivially success, a release PR carries the verify verdict. Without
-        # this, a required status that never reports would block every ordinary PR forever.
+        # `always()`: this MUST run even if an earlier step failed. It runs on EVERY PR so the
+        # required `release-evidence` status always reports — a non-release / docs-only PR is
+        # trivially success, a release PR carries the verify verdict, and an internal error
+        # reports a loud RED (never nothing). Without `always()`, a transient failure upstream
+        # would skip this step and leave a required status permanently unreported → PR stuck.
+        # (Fork PRs get a read-only token and cannot POST a status at all; those are unmergeable
+        # by branch protection regardless — an accepted limitation for this owner-only repo.)
+        if: always()
         env:
           IS_RELEASE: ${{ steps.ctx.outputs.is_release }}
           SHA: ${{ steps.ctx.outputs.sha }}
           RC: ${{ steps.verify.outputs.rc }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ -z "${SHA:-}" ]; then
             echo "no head SHA resolved (not a PR context) — nothing to status"; exit 0
           fi
-          if [ "$IS_RELEASE" != "true" ]; then
-            STATE=success
-            DESC="not a release PR — no evidence owed"
-          elif [ "$RC" = "0" ]; then
-            STATE=success
-            DESC=$(python3 -c "import json;s=json.load(open('summary.json'));print(('owes nothing' if not s['owed'] else 'evidence satisfied: '+', '.join(s['owed']))[:140])")
-          else
-            STATE=failure
-            DESC=$(python3 -c "import json;s=json.load(open('summary.json'));print(('evidence owed: '+', '.join(s['missing']))[:140])")
-          fi
+          # Derive the status from summary.json, tolerating a missing/partial file: any read/parse
+          # failure is itself a RED verdict, never a crashed step (a crash would skip the POST and
+          # strand the required check). python prints "STATE\tDESC".
+          OUT=$(IS_RELEASE="$IS_RELEASE" RC="$RC" python3 - <<'PY'
+          import json, os
+          is_release, rc = os.environ.get("IS_RELEASE", ""), os.environ.get("RC", "")
+          if is_release != "true":
+              print("success\tnot a release PR — no evidence owed")
+          else:
+              try:
+                  s = json.load(open("summary.json"))
+              except Exception:
+                  s = None
+              if s is None:
+                  print("failure\trelease-evidence check errored — see the run log")
+              elif rc == "0":
+                  owed = s.get("owed") or []
+                  d = "owes nothing" if not owed else "evidence satisfied: " + ", ".join(owed)
+                  print("success\t" + d[:140])
+              else:
+                  d = "evidence owed: " + ", ".join(s.get("missing") or ["(unknown)"])
+                  print("failure\t" + d[:140])
+          PY
+          )
+          STATE="${OUT%%$'\t'*}"
+          DESC="${OUT#*$'\t'}"
+          [ -n "$STATE" ] || { STATE=failure; DESC="release-evidence check errored — see the run log"; }
           gh api -X POST "repos/$REPO/statuses/$SHA" \
             -f state="$STATE" \
             -f context="release-evidence" \
