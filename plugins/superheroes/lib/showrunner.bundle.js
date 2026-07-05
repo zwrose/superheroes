@@ -409,20 +409,21 @@ function _sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // libRootProbe: a shell prefix that fail-closes when an ABSOLUTE spine code root has gone missing
 // (e.g. a plugin-cache eviction between phases). It rides an ALREADY-composed command —
 // `${libRootProbe()}python3 <lib>/recover_entry.py …` — so it adds NO leaf. When the dir is absent it
-// echoes a PARSEABLE failure object carrying MISSING_MARKER and exits 0; when present it is a no-op
-// passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the compose stays
-// byte-identical.
+// echoes a PARSEABLE failure object carrying MISSING_MARKER, then __SR_EXIT:0, and exits 0; when
+// present it is a no-op passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the
+// compose stays byte-identical.
 //
 // The payload is a JSON `{"ok":false,"reason":"<marker>"}` (not a bare echo) so BOTH probe sites map
 // it to the same named park uniformly: the exec-based launch probe (reconcile) substring-matches the
-// marker in raw stdout, and the runCourierJson-based back-half probe (persistPhase) gets it back
-// verbatim as an `ok:false` failure (retryRealFailure:false) — a bare echo would be unparseable JSON,
-// making that courier retry then throw a GENERIC transport error instead of the named reason.
+// marker in raw stdout, and the runCourierMarkedJson-based back-half probe (persistPhase) gets it
+// back verbatim as an `ok:false` failure only AFTER execution is proven via __SR_EXIT (#218). The
+// failure branch must echo __SR_EXIT before exit — wrapMarkedCommand's trailing marker never runs
+// after `exit 0`, and without an in-branch marker a genuine missing libRoot looks like a lazy parrot.
 const MISSING_MARKER = '__SR_LIBROOT_MISSING__'
 function libRootProbe() {
   if (!isAbsoluteLibRoot()) return ''
   const payload = '{"ok":false,"reason":"' + MISSING_MARKER + '"}'
-  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; exit 0; }; "
+  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; echo __SR_EXIT:0; exit 0; }; "
 }
 
 // pyLibDir: a Python EXPRESSION that evaluates to the lib dir, for embedded
@@ -570,6 +571,15 @@ function intersects(a, b) {
   return false
 }
 function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _roundRecordedFix(roundRec) {
+  // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
+  // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
+  // usually carries no fix — keeps the max-iterations detail honest instead of always claiming one.
+  const fix = roundRec && roundRec.fix
+  if (!fix || typeof fix !== 'object') return false
+  const fixes = fix.fixes
+  return Array.isArray(fixes) ? fixes.length > 0 : !!fixes
+}
 function _generalizeKeys(roundRec) {
   return new Set((roundRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
 }
@@ -594,8 +604,22 @@ function checkCircuitBreaker(rounds, maxRounds) {
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
   const latest = _blocking(rounds[n - 1])
   if (n >= maxRounds && latest.length > 0) {
+    // Honest halt detail (#212 class): name the ACTUAL round reached (n) alongside the cap — a resume
+    // can run past the cap, so n may exceed maxRounds — and only claim "fixes committed" when the final
+    // round actually recorded a fix. The cap-halt fires right after a review and before that round's
+    // fixer runs, so the latest round usually carries no fix; saying otherwise misreads a park that
+    // needs a fix-then-relaunch as one that only needs a re-review.
+    const tail = _roundRecordedFix(rounds[n - 1])
+      ? "the final round's fixes are committed but not yet re-reviewed"
+      : 'no fix was applied this round — the finding(s) remain unaddressed'
+    // Don't overstate how many REAL reviews ran: n counts every recorded round (the gate uses it),
+    // but a transport-failed / all-missing round inflates it. When fewer rounds were actually reviewed
+    // than recorded, say so (same honesty _reviewedRounds gives criteria 1-2).
+    let capNote = `cap ${maxRounds}`
+    const reviewedN = _reviewedRounds(rounds).length
+    if (reviewedN < n) capNote += `, ${reviewedN} reviewed`
     return { halt: true, reason: 'max-iterations',
-      detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
+      detail: `Reached round ${n} (${capNote}); the latest review still showed ${latest.length} blocking finding(s) (${tail}).` }
   }
   const reviewed = _reviewedRounds(rounds)
   const rn = reviewed.length
@@ -2453,6 +2477,110 @@ async function callOnce(label, command, promptOpts) {
   return currentAgent()(promptFor(command, promptOpts), { label, courier: true })
 }
 
+// __badCourierAnswer: TRUE when a marker-carrying command's answer signals the shell DID NOT run.
+// Mirrors bundle_showrunner.js __sh — detects (a) a missing __SR_EXIT marker and (b) the literal
+// unexpanded '__SR_EXIT:$?' from an echoed command (live wf_1494a8fa-e28).
+function badCourierAnswer(a) {
+  const s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
+
+// markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
+// Fence tolerance matches bundle __helperResult so a haiku courier that fences AFTER the marker
+// still yields clean stdout for JSON extraction.
+function markerSliceStdout(s) {
+  s = String(s || '')
+  const re = /__SR_EXIT:(\d+)/g
+  let m, last = null
+  while ((m = re.exec(s)) !== null) last = m
+  const status = last ? Number(last[1]) : 1
+  let stdout = last ? s.slice(0, last.index) : s
+  const markerTail = last ? s.slice(last.index + last[0].length) : ''
+  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
+  if (/^\s*`/.test(stdout) && (/`\s*$/.test(stdout) || /^\s*`\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\s*`/, '').replace(/`\s*$/, '')
+  }
+  return { status, stdout }
+}
+
+function markedPromptFor(command) {
+  return 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
+    'Do not echo, fence, summarize, or describe the command:\n\n' + rootedCommand(command)
+}
+
+function wrapMarkedCommand(command) {
+  return String(command) + ' 2>&1; echo __SR_EXIT:$?'
+}
+
+// dispatchMarked: the #194/__sh courier protocol — lean superheroes:courier agent, marker guard with
+// retry + default-dispatch fallback. Shared by runCourierMarkedText/Json (#218: libRoot probe sites).
+async function dispatchMarked(label, markedCmd) {
+  const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
+  const prompt = markedPromptFor(markedCmd)
+  let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
+  if (badCourierAnswer(ans)) {
+    ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
+    if (badCourierAnswer(ans)) {
+      const fo = Object.assign({}, baseOpts)
+      delete fo.agentType
+      ans = stdoutOf(await currentAgent()(prompt, fo))
+    }
+  }
+  return ans
+}
+
+// runCourierMarkedText: dumb-pipe a shell command through the __SR_EXIT marker protocol and return
+// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218).
+async function runCourierMarkedText(label, command) {
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const sliced = markerSliceStdout(ans)
+    if (sliced.stdout.trim() !== '') return sliced.stdout
+    last = 'empty stdout'
+  }
+  throw new CourierTransportError(label, last)
+}
+
+// runCourierMarkedJson: runCourierJson semantics over the __SR_EXIT marker protocol — execution is
+// proven before a probe's embedded ok:false (e.g. __SR_LIBROOT_MISSING__) is accepted, so a lazy
+// courier that parrots the failure branch from the prompt cannot park the run (#218).
+async function runCourierMarkedJson(label, command, opts) {
+  const options = opts || {}
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const out = markerSliceStdout(ans).stdout
+    if (out.trim() === '') {
+      last = 'empty stdout'
+      continue
+    }
+    const parsed = extractJson(out)
+    if (parsed == null) {
+      last = 'unparseable JSON'
+      continue
+    }
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    const missing = missingRequired(parsed, options.require || [])
+    if (missing) {
+      last = `missing required field ${missing}`
+      continue
+    }
+    return parsed
+  }
+  throw new CourierTransportError(label, last)
+}
+
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
 // legitimate content may itself contain ``` fences — unfencing here would corrupt it. JSON
 // couriers get the fence-tolerant treatment in runCourierJson (extractJson) instead.
@@ -2508,8 +2636,11 @@ async function runCourierBatchJson(label, commands, opts) {
 
 module.exports = {
   CourierTransportError,
+  badCourierAnswer,
   extractJson,
   runCourierJson,
+  runCourierMarkedJson,
+  runCourierMarkedText,
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
@@ -7286,7 +7417,7 @@ async function persistPhase(workItem, opts) {
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
-    const res = await courier.runCourierJson(
+    const res = await courier.runCourierMarkedJson(
       'save phase progress',
       probedCmd,
       { require: required, retryRealFailure: false },
@@ -7373,10 +7504,14 @@ async function cmdRunner(cmd, { schema, label }) {
 async function reconcile(workItem) {
   const preRoot = checkoutRoot()
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
-  const results = await exec([
-    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`,
-  ], 'gather snapshot')
-  const _snapStdout = (results[0] && results[0].stdout) || ''
+  const snapCmd =
+    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`
+  let _snapStdout = ''
+  try {
+    _snapStdout = await courier.runCourierMarkedText('gather snapshot', snapCmd)
+  } catch (_e) {
+    return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
+  }
   // #170 fail-closed probe: an ABSOLUTE spine code root that vanished mid-run (e.g. plugin-cache
   // eviction) short-circuits the compose to MISSING_MARKER instead of a file-not-found python error —
   // park with a NAMED reason so the readout says exactly what's wrong. Relative (dev) libRoot never

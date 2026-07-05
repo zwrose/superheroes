@@ -53,6 +53,17 @@ def _blocking(round_findings):
     return [f for f in round_findings["findings"] if f["severity"] in BLOCKING]
 
 
+def _round_recorded_fix(round_rec):
+    """True when this round's fixer actually recorded applied fixes (rec['fix']['fixes']).
+    The cap-halt is evaluated right after a review round and BEFORE that round's fix leg, so the
+    latest round normally carries no fix — its findings are still unaddressed. Used to keep the
+    max-iterations detail honest instead of always claiming the fixes were committed."""
+    fix = round_rec.get("fix")
+    if not isinstance(fix, dict):
+        return False
+    return bool(fix.get("fixes"))
+
+
 def _generalize_keys(round_rec):
     return {g.get("classKey") for g in round_rec.get("generalizeRequired", [])
             if isinstance(g, dict) and g.get("classKey")}
@@ -87,12 +98,27 @@ def check_circuit_breaker(rounds, max_rounds):
 
     # Criterion 3: max iterations (only halts while blocking findings remain).
     if n >= max_rounds and len(latest_blocking) > 0:
+        # Honest halt detail (#212 class): name the ACTUAL round reached (n) alongside the cap — a
+        # resume can run past the cap, so n may exceed max_rounds — and only claim "fixes committed"
+        # when the final round actually recorded a fix. The cap-halt fires right after a review and
+        # before that round's fixer runs, so the latest round usually carries no fix; saying otherwise
+        # misreads a park that needs a fix-then-relaunch as one that only needs a re-review.
+        if _round_recorded_fix(rounds[n - 1]):
+            tail = "the final round's fixes are committed but not yet re-reviewed"
+        else:
+            tail = "no fix was applied this round — the finding(s) remain unaddressed"
+        # Don't overstate how many REAL reviews ran: n counts every recorded round (the gate uses it),
+        # but a transport-failed / all-missing round inflates it. When fewer rounds were actually
+        # reviewed than recorded, say so — the same honesty `_reviewed_rounds` gives criteria 1-2.
+        cap_note = f"cap {max_rounds}"
+        reviewed_n = len(_reviewed_rounds(rounds))
+        if reviewed_n < n:
+            cap_note += f", {reviewed_n} reviewed"
         return {
             "halt": True,
             "reason": "max-iterations",
-            "detail": (f"Reached {max_rounds} rounds; the latest review still showed "
-                       f"{len(latest_blocking)} blocking finding(s) (the final round's "
-                       f"fixes are committed but not yet re-reviewed)."),
+            "detail": (f"Reached round {n} ({cap_note}); the latest review still showed "
+                       f"{len(latest_blocking)} blocking finding(s) ({tail})."),
         }
 
     # Criterion 2: no net progress across two consecutive round-transitions.

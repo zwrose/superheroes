@@ -5,6 +5,7 @@
 // lease-held park) must NOT issue a release.
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
+const { markedStdout } = require('./_marked_stdout.js')
 
 const CHECKOUT_ROOT = globalThis.__SR_ROOT
 
@@ -17,9 +18,9 @@ function agentFor(generation, releaseCalls) {
     const label = (opts && opts.label) || ''
     if (opts && opts.courier) {
       if (prompt.includes('recover_entry')) {
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null, world: WORLD, generation, root: CHECKOUT_ROOT,
-        }) }]
+        })
       }
       if (prompt.includes('read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"pending"}' }]
     }

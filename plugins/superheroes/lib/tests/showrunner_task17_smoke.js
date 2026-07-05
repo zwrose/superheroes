@@ -27,6 +27,7 @@ const crypto = require('crypto')
 // ---------------------------------------------------------------------------
 const sr = require('../showrunner.js')
 const modelTier = require('../model_tier.js')
+const { markedStdout } = require('./_marked_stdout.js')
 
 async function partA() {
   // Track agent calls to find the overrides exec
@@ -45,12 +46,12 @@ async function partA() {
       // by the command in the prompt rather than the old bare 'exec' label.
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         // reconcile: return empty snapshot -> world_derive -> proceed
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null,
           world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
           generation: 1,
           root: globalThis.__SR_ROOT,
-        }) }]
+        })
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         // readGate for spec: 'passed'
@@ -108,12 +109,12 @@ async function partA() {
     }
     if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null,
           world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
           generation: 1,
           root: globalThis.__SR_ROOT,
-        }) }]
+        })
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]

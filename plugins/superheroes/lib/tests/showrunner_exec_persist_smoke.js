@@ -15,7 +15,8 @@ const assert = require('assert')
 const sr = require('../showrunner.js')
 
 function saveProgressOk(extra) {
-  return [{ ok: true, stdout: JSON.stringify(Object.assign({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }, extra || {})) }]
+  const body = JSON.stringify(Object.assign({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }, extra || {}))
+  return body + '\n__SR_EXIT:0'
 }
 
 ;(async () => {
@@ -90,7 +91,7 @@ function saveProgressOk(extra) {
     calls.push({ prompt, opts: opts || {} })
     if ((opts && opts.label) !== 'save phase progress') return saveProgressOk()
     batchCall += 1
-    return batchCall === 1 ? [{ ok: true, stdout: '' }] : saveProgressOk()
+    return batchCall === 1 ? '' : saveProgressOk()
   }
   const dropRecovered = await sr.persistPhase('wi-drop', { journalPayload: { phase: 'plan' }, step: 1, phase: 'plan' })
   assert.deepStrictEqual(dropRecovered, { ok: true, recovered: false }, 'persistPhase retries once on a dropped stdout and returns {ok:true}')
@@ -102,11 +103,11 @@ function saveProgressOk(extra) {
     calls.push({ prompt, opts: opts || {} })
     if ((opts && opts.label) !== 'save phase progress') return saveProgressOk()
     batchCall2 += 1
-    return [{ ok: true, stdout: '' }]
+    return ''
   }
   const dropPersists = await sr.persistPhase('wi-drop2', { journalPayload: { phase: 'plan' }, step: 1, phase: 'plan' })
   assert.ok(dropPersists && dropPersists.ok === false, 'persistPhase fails closed when stdout is dropped on BOTH attempts')
-  assert.strictEqual(batchCall2, 2, 'persistPhase retries exactly once before failing closed (2 save calls)')
+  assert.strictEqual(batchCall2, 6, 'persistPhase exhausts 2 attempts × 3 dispatchMarked tries before failing closed')
 
   calls.length = 0
   let batchCall3 = 0
@@ -142,7 +143,7 @@ function saveProgressOk(extra) {
     calls.push({ prompt, opts: opts || {} })
     if ((opts && opts.label) === 'save phase progress') {
       batchCall5 += 1
-      return [{ ok: false, stdout: 'transport failed' }]
+      return JSON.stringify({ ok: false, journal_confirmed: false, checkpoint_confirmed: false }) + '\n__SR_EXIT:0'
     }
     return saveProgressOk()
   }
