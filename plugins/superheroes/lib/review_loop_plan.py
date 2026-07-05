@@ -26,7 +26,7 @@ Phase-0 census: `resumeRound`, `buildPreviousDimensionState`, `carryForwardDimen
 `assembleRounds`→breaker, `buildFixContext`), reading the record content from disk instead of an
 in-memory copy. The equivalence smoke pins decider ≡ shell over shared fixtures.
 
-Two scalars ride DOWN from the shell as command args because they are *decisions the shell must
+Three scalars ride DOWN from the shell as command args because they are *decisions the shell must
 compute at the moment the reviewer answers arrive*, not content:
   - the **gate** (clean/blocking/cannot-certify + confidence + missing[]) — the durable skeleton
     strips each dim's `verificationReceipt`, so the confirmation-round gate cannot be faithfully
@@ -34,8 +34,15 @@ compute at the moment the reviewer answers arrive*, not content:
     discards the findings immediately after persisting them down.
   - **present-blocking** — the count of current (non-carried) blocking findings, likewise from
     the live answers.
+  - the **uncertified reason** (#212) — the named cannot-certify reason (seat + defect class) from
+    `panel_tally.uncertified_reason` over the live per-seat results; the receipt-missing/stale/
+    malformed flags it needs are stripped from the skeleton, so it too rides down.
 Everything else (breaker, terminal, confirmation follow-up, certification) the deciders compute
 from disk. Every fail-closed path in the shell stays fail-closed here.
+
+Two folds keep the round to ONE new courier leaf (#118): plan-round optionally folds the per-round
+coverage read (`--coverage-path`), and tally-round folds the fix-context compose (`--worklist-out-
+path`) so the fixer worklist is written to disk here and only its pointer rides back.
 
 Staging note: in this first stacked PR these deciders are DORMANT — the live shell still runs its
 own in-memory copies, so nothing here decides a real run yet and there is no production drift. The
@@ -294,6 +301,42 @@ def _record_for_round(records, round_no):
     return None
 
 
+def _latest_coverage_ids(records):
+    """review_panel_shell's confirmation coverage-marker check reads the LATEST record's coverage
+    decision ids (`records[records.length-1].coverageDecisions` → ids). The durable skeleton keeps
+    coverageDecisions, so the plan decider surfaces this small scalar list for the shell to verify
+    against the live coverage read (a decision lost between marking and confirmation → park)."""
+    latest = None
+    best = None
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        try:
+            n = int(rec.get("round") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if best is None or n >= best:
+            best = n
+            latest = rec
+    ids = []
+    for d in ((latest or {}).get("coverageDecisions") or []):
+        if isinstance(d, dict) and d.get("id"):
+            ids.append(d["id"])
+    return ids
+
+
+def _load_coverage_state(coverage_path, coverage_mode):
+    """Fold the loop's per-round coverage read (coverage_decisions.load_decisions — decisions + the
+    fence hash over the exact on-disk bytes, Python-side) into a plan-round answer so the round-entry
+    read is ONE leaf (plan + coverage), not two (#118). Fail-closed shape is preserved verbatim so the
+    shell parks on it exactly as it does on a standalone coverage-load helper."""
+    try:
+        import coverage_decisions as cov
+        return cov.load_decisions(coverage_path, coverage_mode or "code")
+    except Exception as exc:  # noqa: BLE001 — an unreadable coverage read fails closed like the helper
+        return {"ok": False, "state": "unreadable", "reason": "coverage-load-failed: " + str(exc)}
+
+
 # ── decider: entry-bootstrap (evolve #199) — the resume DECISION only ──
 def entry_bootstrap(path, dimensions, extras_path=None):
     """The resume seam: read the durable records and answer only the resume DECISION — the round
@@ -335,7 +378,8 @@ def entry_bootstrap(path, dimensions, extras_path=None):
 
 
 # ── decider: plan-round — the per-dimension schedule for the round about to run ──
-def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked):
+def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked,
+                       coverage_path=None, coverage_mode="code"):
     """Answer the next round's schedule: whether it is the full confirmation panel, the run/skip/
     tier per dimension (via the plan_round twin over disk-read previous state), and the carried
     dimension state for each skip. Small, meaningful JSON — the carried dimension state carries NO
@@ -344,11 +388,17 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
     ["findings"]` is always empty. That is what keeps this answer O(1) — if the skip policy ever
     changed to skip dims WITH findings, the answer would silently start scaling with finding count,
     which the `carried[...]["findings"] == []` pin turns into a loud test failure. A load failure
-    fails toward MORE review (run-all-deep, unknown surface)."""
+    fails toward MORE review (run-all-deep, unknown surface).
+
+    When `coverage_path` is given the per-round coverage read is FOLDED IN (#118): the answer carries
+    `coverage` (decisions + fence hash, the coverage_decisions.load_decisions shape) so the shell's
+    round-entry read is one leaf, not two. `latestCoverageDecisionIds` rides for the shell's
+    confirmation coverage-marker check (a decision lost between marking and confirmation → park)."""
+    coverage = _load_coverage_state(coverage_path, coverage_mode) if coverage_path else None
     state = _load_records(path, dimensions)
     if not state.get("ok"):
         # Fail-closed direction: unreadable memory → run every dimension deep, no confirmation.
-        return {
+        out = {
             "ok": True,
             "round": round_no,
             "roundKind": "intermediate",
@@ -359,7 +409,11 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
                                "reason": "round memory unreadable — run-all-deep"}
                            for d in (dimensions or [])},
             "carried": {},
+            "latestCoverageDecisionIds": [],
         }
+        if coverage is not None:
+            out["coverage"] = coverage
+        return out
     records = state.get("records") or []
     enter_confirmation = _confirmation_ready(records, round_no, just_marked)
     plan = review_round_policy.plan_round({
@@ -374,7 +428,7 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
     for name, sched in scheduled.items():
         if isinstance(sched, dict) and sched.get("action") == "skip":
             carried[name] = _carry_forward_dimension(records, name, sched.get("carriedFromRound"))
-    return {
+    out = {
         "ok": True,
         "round": round_no,
         "roundKind": plan.get("roundKind"),
@@ -382,18 +436,34 @@ def plan_round_decider(path, round_no, dimensions, changed_subjects, just_marked
         "escalationPolicy": plan.get("escalationPolicy"),
         "dimensions": scheduled,
         "carried": carried,
+        "latestCoverageDecisionIds": _latest_coverage_ids(records),
     }
+    if coverage is not None:
+        out["coverage"] = coverage
+    return out
 
 
 # ── decider: tally-round — the verdict, from disk + two ride-down scalars ──
 def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, missing,
                         present_blocking, deferred_path, fix_status, verify_result,
-                        enter_confirmation):
+                        enter_confirmation, uncertified_reason=None,
+                        coverage_path=None, coverage_mode="code",
+                        current_findings_path=None, worklist_out_path=None):
     """Answer the loop terminal: run the breaker over the durable rounds, apply the terminal
     precedence (`panel_tally.decide_terminal`), fold in the #174 confirmation-bar economics, and
     attach the honest certification summary on a certifying terminal. The gate + present-blocking
     ride down as scalars (see module docstring); everything else is read from disk. No findings in
-    the answer. A missing roster or an exception fails closed (halted / cannot-certify)."""
+    the answer. A missing roster or an exception fails closed (halted / cannot-certify).
+
+    Three more scalars ride DOWN because they are answer-time facts the durable skeleton can't hold:
+      - `uncertified_reason` (#212): the NAMED cannot-certify reason (seat + defect class) computed
+        by `panel_tally.uncertified_reason` over the LIVE per-seat results — the receipt-missing/stale/
+        malformed flags are stripped from the skeleton, so it can't be recomputed from disk. Preferred
+        over the missing-angle fallback; and a `cannot-certify` GATE rides the `uncertified` flag even
+        when the round routes to the fix leg (terminal continue), exactly like the shell's #215 tally.
+    And the fix-context compose is FOLDED into this leaf (#118): when the terminal is `continue` and
+    `worklist_out_path` is given, the worklist is written to disk here (compose_fix_context) and only
+    its POINTER (`worklistPath`) rides back — the fixer reads the findings from the file."""
     safe_missing = missing if isinstance(missing, list) else []
     if not roster:
         return {"ok": True, "schemaVersion": SCHEMA_VERSION, "terminal": "cannot-certify",
@@ -441,8 +511,13 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
             reason = ("verify command timed out — cannot certify clean"
                       if verify_result == "timeout"
                       else "verify command failed — cannot certify clean")
-        if terminal == "cannot-certify" and safe_missing:
-            reason = "coverage incomplete — missing review angle(s): " + ", ".join(safe_missing)
+        if terminal == "cannot-certify":
+            # #212 honest reason: the NAMED per-seat defect class (ridden down from the live results)
+            # is preferred; the old missing-angle enrichment is the fallback when no seat classified.
+            if uncertified_reason:
+                reason = uncertified_reason
+            elif safe_missing:
+                reason = "coverage incomplete — missing review angle(s): " + ", ".join(safe_missing)
 
         marked_pending = any(isinstance(r, dict) and r.get("confirmationPending") for r in records)
         if terminal in ("clean", "clean-with-skips") and marked_pending and not enter_confirmation:
@@ -469,6 +544,24 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
             "breaker": {"halt": breaker_halt, "reason": brk.get("reason"),
                         "detail": _clamp_reason(brk.get("detail"))},
         }
+        # #212 uncertified flag: a cannot-certify GATE rides the verdict even when this round routes
+        # to the fix leg (terminal continue) — the readout/phase layer sees the coverage gap while
+        # fixes land. Mirrors review_panel_shell.tallyRound's `if (gate === 'cannot-certify')`.
+        if gate == "cannot-certify":
+            out["uncertified"] = True
+        # #118 fix-context fold: on a continue terminal, write the fixer worklist to disk here and
+        # ride only its pointer back. A compose failure fails closed (worklistPath null + reason) —
+        # the shell parks rather than dispatch a fixer with no worklist.
+        if terminal == "continue" and worklist_out_path:
+            fc = compose_fix_context(path, current_findings_path, coverage_path, coverage_mode,
+                                     round_no, roster, worklist_out_path)
+            if fc.get("ok"):
+                out["worklistPath"] = fc.get("path")
+                out["worklistBytes"] = fc.get("bytes")
+                out["worklistSha256"] = fc.get("sha256")
+            else:
+                out["worklistPath"] = None
+                out["worklistReason"] = fc.get("reason") or "fix-context-write-failed"
         if terminal in ("clean", "clean-with-skips"):
             out["certification"] = _certification_summary(records)
         return out
@@ -485,15 +578,16 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
     """Write the fixer's worklist to a runDir FILE and answer only {ok, path, bytes, sha256}.
 
     Content flows disk → the fixer's Read, never through a courier answer. The worklist mirrors
-    `review_panel_shell.buildFixContext`. Its `findings` array holds, in round order: prior rounds'
-    durable-skeleton findings (all severities, evidence BODIES stripped — the classKeys are
-    preserved, so classKeys/generalizeRequired stay faithful) followed by THIS round's full-bodied
-    findings (the shell staged the live reviewer answer down to `current_findings_path`). The list
-    is named `findings`, not `priorFindings`, precisely because it holds both — the current round's
-    findings are the actionable fix targets (they carry evidence), the prior ones are recurrence
-    context. Alongside: the classKeys over all of them, the recurrence-derived generalizeRequired,
-    the union of changedSubjects, and the coverage decisions. A load failure fails closed
-    (ok:false)."""
+    `review_panel_shell.buildFixContext`. Its `findings` array holds, in round order, every round's
+    findings (all severities). When `current_findings_path` is given the current round's rows are the
+    FULL-bodied staged answer (evidence carried); otherwise — the folded tally-round path, which
+    writes NO large body down — every round including the current one is the durable SKELETON
+    (file/line/title/severity/classKey survive; evidence BODIES stripped). Either way classKeys are
+    preserved, so classKeys/generalizeRequired stay faithful and the fixer has the location + severity
+    of every blocking finding (it reads the code detail itself via Read/Edit). The list is named
+    `findings`, not `priorFindings`, because it holds the current round too. Alongside: the classKeys
+    over all of them, the recurrence-derived generalizeRequired, the union of changedSubjects, and the
+    coverage decisions. A load failure fails closed (ok:false)."""
     state = _load_records(records_path, dimensions)
     if not state.get("ok"):
         return {"ok": False, "reason": state.get("reason") or "round-memory-unreadable"}
@@ -509,19 +603,26 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
         except Exception:  # noqa: BLE001 — coverage context is best-effort worklist enrichment
             coverage_decisions = []
 
+    # When the caller staged this round's FULL-bodied findings to a file (current_findings_path),
+    # the current round is taken from there and skipped in the on-disk records. When it did NOT
+    # (the folded tally-round path — no large body-write crosses down), the current round's durable
+    # SKELETON stands in: file/line/title/severity/classKey survive skeletonization, which is what
+    # a fixer needs to locate and act (it has Read/Edit for the code detail). Either way changed
+    # subjects fold over ALL rounds.
+    have_current_file = bool(current_findings_path)
     prior_findings = []
     changed_subjects = []
     for rec in records:
         if not isinstance(rec, dict):
             continue
-        if rec.get("round") == round_no:
-            continue  # this round's full findings come from the staged file below
-        for f in rec.get("findings") or []:
-            if isinstance(f, dict):
-                prior_findings.append(f)
         cs = rec.get("changedSubjects")
         if isinstance(cs, list):
             changed_subjects.extend(cs)
+        if have_current_file and rec.get("round") == round_no:
+            continue  # this round's full-bodied findings come from the staged file below
+        for f in rec.get("findings") or []:
+            if isinstance(f, dict):
+                prior_findings.append(f)
 
     current_findings = []
     if current_findings_path:
@@ -577,6 +678,9 @@ def _build_parser():
                     help="JSON array of changed subjects; omit for unknown (run-all-deep)")
     pr.add_argument("--just-marked", action="store_true",
                     help="a fix marked confirmation THIS shell iteration (loop-local truth)")
+    pr.add_argument("--coverage-path", default=None,
+                    help="fold the per-round coverage read in (one round-entry leaf, #118)")
+    pr.add_argument("--coverage-mode", default="code")
 
     tr = sub.add_parser("tally-round")
     tr.add_argument("--path", required=True)
@@ -591,6 +695,14 @@ def _build_parser():
     tr.add_argument("--fix-status", default="completed")
     tr.add_argument("--verify-result", default=None)
     tr.add_argument("--enter-confirmation", action="store_true")
+    tr.add_argument("--uncertified-reason", default=None,
+                    help="#212 named cannot-certify reason, computed from live per-seat results")
+    tr.add_argument("--coverage-path", default=None)
+    tr.add_argument("--coverage-mode", default="code")
+    tr.add_argument("--current-findings-path", default=None,
+                    help="optional staged full-bodied current findings for the folded fix-context")
+    tr.add_argument("--worklist-out-path", default=None,
+                    help="when set and terminal is continue, write the fixer worklist here (fold)")
 
     fc = sub.add_parser("compose-fix-context")
     fc.add_argument("--records-path", required=True)
@@ -611,13 +723,17 @@ def main(argv):
         result = plan_round_decider(
             args.path, args.round, _json_arg(args.dimensions, []),
             _json_arg(args.changed_subjects, None) if args.changed_subjects is not None else None,
-            args.just_marked)
+            args.just_marked, coverage_path=args.coverage_path, coverage_mode=args.coverage_mode)
     elif args.cmd == "tally-round":
         result = tally_round_decider(
             args.path, args.round, _json_arg(args.roster, []), args.max_rounds,
             args.gate, args.confidence, _json_arg(args.missing, []),
             args.present_blocking, args.deferred_path, args.fix_status,
-            args.verify_result, args.enter_confirmation)
+            args.verify_result, args.enter_confirmation,
+            uncertified_reason=args.uncertified_reason,
+            coverage_path=args.coverage_path, coverage_mode=args.coverage_mode,
+            current_findings_path=args.current_findings_path,
+            worklist_out_path=args.worklist_out_path)
     elif args.cmd == "compose-fix-context":
         result = compose_fix_context(
             args.records_path, args.current_findings_path, args.coverage_path,
