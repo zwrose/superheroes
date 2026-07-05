@@ -56,6 +56,16 @@ explicitly bypassed). The ritual is **classify → run → record → merge**:
    dual-dispatch per `plugins/superheroes/eval/README.md`), posts the evidence, watches the check
    flip green, and stops before merge (merging stays yours). By hand: run the commands the
    owed-summary prints.
+
+   *Machine prerequisite (one-time):* the acceptance harness's headless child invokes the
+   showrunner **Workflow** orchestrator, and the auto-mode permission classifier
+   non-deterministically blocks that call (it pattern-matches a self-authorizing prompt
+   running a non-cached bundle — indistinguishable from injection from where it sits; found
+   live in the 0.10.0 qualification). Make the ritual deterministic with a project-local
+   allow rule on the machine that runs it: add `"Workflow"` to `permissions.allow` in
+   `.claude/settings.local.json` (machine-local, gitignored). Subagent-level permission
+   checks still apply — this only stops re-litigating "may the harness start its own
+   orchestrator" on every run.
 3. **Record** — evidence is a fenced ` ```release-eval-evidence ` JSON block posted as a PR
    comment (the skill posts it; the check fetches comments and parses it). It is **SHA-bound**:
    the acceptance leg's `bundleSha256` must equal the released `showrunner.bundle.js` hash and
