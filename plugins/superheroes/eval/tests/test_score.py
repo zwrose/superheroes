@@ -293,8 +293,13 @@ def test_smoke_real_refactor_fixture(tmp_path):
 
 # ---- Failure-Mode whole-flow classes (premortem-reviewer) ------------------
 
-
-@pytest.mark.parametrize("taxonomy", [
+# CONVENTIONS §11.3: this is a deliberate test-INPUT enumeration of the Failure-Mode
+# whole-flow classes, blessed as a tripwire — NOT a contract test restating the home.
+# The authoritative agent-table ↔ score.py sync is enforced by test_taxonomy_sync.py
+# (which reads the premortem-reviewer agent table live). Typed once here as a single
+# module-local constant, reused by the parametrize and the coverage assertion below, so
+# these classes exercise scoring behavior from one place rather than two hand-kept copies.
+_WHOLE_FLOW_CLASSES = (
     "concurrency/race",
     "partial-failure",
     "dependency-failure",
@@ -302,7 +307,10 @@ def test_smoke_real_refactor_fixture(tmp_path):
     "migration-rollback",
     "fail-direction",
     "transport-contract",
-])
+)
+
+
+@pytest.mark.parametrize("taxonomy", _WHOLE_FLOW_CLASSES)
 def test_failure_mode_seed_matches_at_flow_distance(tmp_path, taxonomy):
     # Whole-flow classes are function-scoped: a correct finding citing a
     # different line of the same flow (10 lines off) must still match.
@@ -412,12 +420,8 @@ def test_smoke_failure_modes_perfect_recall():
         findings.append({"dimension": seed["dimension"],
                          "file": seed["file"], "line": line})
     r = score.score_fixture(fdir, findings)
-    assert r["recall"]["total"] == 7
-    assert {s["taxonomy"] for s in expected["seeds"]} == {
-        "concurrency/race", "partial-failure", "dependency-failure",
-        "resource-exhaustion", "migration-rollback",
-        "fail-direction", "transport-contract",
-    }
+    assert r["recall"]["total"] == len(_WHOLE_FLOW_CLASSES)
+    assert {s["taxonomy"] for s in expected["seeds"]} == set(_WHOLE_FLOW_CLASSES)
     assert r["recall"]["matched"] == r["recall"]["total"] == len(expected["seeds"])
     assert r["precision"]["traps_flagged"] == 0
 

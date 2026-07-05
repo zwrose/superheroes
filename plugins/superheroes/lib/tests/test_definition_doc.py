@@ -459,6 +459,22 @@ def test_default_location_matches_architect_config():
     assert DD.DEFAULT_LOCATION == architect_config.DEFAULT_LOCATION
 
 
+def test_default_location_matches_showrunner_js_template():
+    # CONVENTIONS §11 (single source of truth): the showrunner's JS doc-dir fallback
+    # restates the Python DEFAULT_LOCATION as a template literal. Guard the JS copy
+    # against the Python home so a rename of the default doc location breaks CI in both.
+    with open(os.path.join(_REPO_ROOT, "plugins/superheroes/lib/showrunner.js"),
+              encoding="utf-8") as fh:
+        text = fh.read()
+    matches = re.findall(r"`(docs/[A-Za-z0-9_-]+)/\$\{workItem\}`", text)
+    assert len(matches) == 1, (
+        "showrunner.js: expected exactly one `docs/<loc>/${workItem}` doc-dir template, "
+        "found %d" % len(matches))
+    assert matches[0] == DD.DEFAULT_LOCATION, (
+        "showrunner.js doc-dir template %r drifted from definition_doc.DEFAULT_LOCATION %r"
+        % (matches[0], DD.DEFAULT_LOCATION))
+
+
 def test_resolve_write_path_inrepo_returns_md(tmp_path):
     d = os.path.join(str(tmp_path), "docs", "superheroes", WI)
     os.makedirs(d, exist_ok=True)

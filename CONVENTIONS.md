@@ -1111,3 +1111,82 @@ path** (`lib/pr_entry.py` seeds the table at draft and parks the mark-ready flip
 the review-discipline rubric cites this section, so the **review seat — not a code gate — is the
 backstop** there. Wiring a deterministic DoD gate into the standalone path is deferred (there is no
 single ship seam to hook the way `pr_entry.py` gives the showrunner).
+
+---
+
+## 11. One home per cross-boundary fact (single source of truth)
+
+> **This is a repo-specific convention for us as builders of superheroes** — not (yet) a
+> portable band contract like §1–§10. It earns its place here because superheroes' own
+> source spans two languages (Workflow JS + Python libs), skill markdown, and fixtures, so
+> the same fact is easy to re-type in four places. If it proves out, it can graduate into
+> the portable rubric later, the way `review-discipline.md` did. Provenance: the PR #205
+> phase-list defect ([#226](https://github.com/zwrose/superheroes/issues/226)), whose
+> structural enabler was exactly this — two hand-maintained copies of the pipeline phase
+> list in two languages, with no link between them ([#231](https://github.com/zwrose/superheroes/issues/231)).
+
+**One home per cross-boundary fact.** A fact consumed across a **module or language
+boundary** (phase lists, event/verb names, schema field sets, verdict/reason tokens, path
+layouts, reviewer rosters) has **exactly one authoritative definition**. Every other
+consumer either **reads that home at runtime**, or keeps a **copy guarded by a drift test**
+that reads the authoritative home and asserts equality — so a change to the truth **breaks
+CI in every copy-holder**. **Two hand-maintained copies with no drift test is a
+review-blocking violation, citable by name (this §).** A reviewer seeing a bare
+`PIPELINE_PHASES = [...]` re-typed from JS now has a rule to object with; without one it
+looks like an ordinary constant, which is how #205 shipped.
+
+**Scope — what counts.** The boundary is what matters, not the value. A constant with a
+single owner and only same-module callers is not in scope (that is ordinary code). A fact
+becomes cross-boundary when a **second language, module, skill doc, or fixture restates it**
+so that the two can silently disagree. When in doubt, ask: *if I renamed the authoritative
+copy, would anything else keep the old value and still pass CI?* If yes, it needs one of the
+two patterns below.
+
+### 11.1 Pattern 1 — shared data file (read the one home at runtime)
+
+The fact lives in a **checked-in data file** that every consumer reads; no consumer restates
+it. Best when the fact is plain data (a list, a field set, a map) and every consumer can load
+a file at startup.
+
+*Illustrative:* a checked-in `phases.json` that `showrunner.js` derives its `PHASES` array
+from at load and the Python harness `json.load`s directly. One edit, both move; nothing to
+drift. (Superheroes' phase list happens to use Pattern 2 today because the JS literal
+predates any shared file and the harness read is test-time only — but a new cross-boundary
+fact with several runtime consumers should prefer Pattern 1.)
+
+### 11.2 Pattern 2 — copy + drift test (fail-closed reader + equality assertion)
+
+A consumer keeps its own copy for ergonomics, but a **drift test parses the authoritative
+home and asserts equality**. The reader **must fail closed** — if it parses nothing (literal
+renamed, moved, duplicated, or malformed) it raises rather than returning an empty set that
+would make the equality vacuously pass. A rename of the truth then **fails the drift test**,
+not production.
+
+*Worked example (the phase list, shipped by [#233](https://github.com/zwrose/superheroes/issues/233)):*
+`showrunner.js` owns the canonical `const PHASES = [...]` literal. Python does **not** re-type
+it: `lib/acceptance_phases.py::read_pipeline_phases` parses that JS literal and **fails closed**
+on every not-found / duplicated / unparseable / non-string-list shape (see its five
+`RuntimeError` paths and the matching `test_acceptance_fixture.py` fail-closed tests). The
+drift test `test_acceptance_fixture.py::test_fixture_expected_phases_match_showrunner_source_of_truth`
+asserts the committed fixture's `expected_phases` equals what the reader returns — so a phase
+rename in `showrunner.js` **breaks CI** (mutation-verified). This is the canonical Pattern-2
+reference; **do not rebuild it.**
+
+**Caveat — a copy-list drift test is only as complete as the copies it enumerates.** Pattern 2
+catches drift in the copies the test names; a **new** copy someone adds later is invisible until
+it is added to the test. So the enumerating drift test must name every known copy-holder (a comment
+listing them), and **adding a copy means extending the drift test** — checked at review under this §.
+The roster guard `test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents` follows
+this: it enumerates all six copy-holders (two `showrunner.js` JS literals, two Python `DIMENSIONS`,
+and the same roster re-keyed as two `AGENT_SUFFIX` dicts) against the `agents/*-reviewer` home. When
+a single runtime home is cheap to read, Pattern 1 sidesteps this failure mode entirely.
+
+### 11.3 Test corollary — a contract test must read the home, never restate it
+
+**A test for a cross-boundary contract must not restate the constant** — it **imports or
+reads the authoritative home**, or it is merely testing the copy against itself and proves
+nothing. This is how #205's 172 green tests locked the defect in: they asserted the wrong
+`PIPELINE_PHASES` copy against a fixture that restated the *same* wrong copy, so the tautology
+passed while the two real homes disagreed. A drift test that reads one copy and asserts against
+a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
+must trace back to the authoritative home (directly, or via the fixture the home also feeds).
