@@ -1,5 +1,5 @@
 # plugins/superheroes/lib/tests/test_acceptance_launch.py
-import os, subprocess, sys, time
+import os, shutil, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_launch as al
 
@@ -436,3 +436,134 @@ def test_default_child_factory_finite_bg_ceiling_when_provided(monkeypatch):
     al._default_child_factory("accept-harness-abc123", terminal_path="/t.json",
                               bg_wait_ceiling_ms=3600000)
     assert captured["env"]["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "3600000"
+
+
+# --- issue #245: live-child registry + bare-pgid orphan reap ---------------------------
+
+
+def test_real_child_exposes_captured_pgid():
+    # The pgid persisted into the lease is the leader pid captured at spawn (start_new_session
+    # -> leader pid IS the pgid). Must be the captured value, not re-derived after the leader
+    # exits (which would raise once reaped).
+    class _P:
+        pid = 4242
+    child = al._RealChild(_P(), "/t.json")
+    assert child.pgid() == 4242
+
+
+def test_current_live_child_published_during_run_and_cleared_after():
+    # The harness signal handler reads current_live_child() at delivery time; run() must
+    # publish the child for the duration of the watch and clear it on exit.
+    observed = []
+
+    class _ObservingChild:
+        def __init__(self):
+            self.calls = 0
+
+        def poll(self):
+            observed.append(al.current_live_child())
+            self.calls += 1
+            return None if self.calls < 2 else 0
+
+        def terminal_location(self):
+            return "/t.json"
+
+    assert al.current_live_child() is None
+    child = _ObservingChild()
+    al.run("wi", CEIL, child_factory=lambda: child, clock=FakeClock([0, 1, 2]),
+           spend_sampler=lambda: (0.1, True), engine_pref_reader=lambda: {"all": "claude"})
+    assert observed and observed[0] is child          # published while the loop watched
+    assert al.current_live_child() is None             # cleared on exit (finally)
+
+
+def test_current_live_child_cleared_even_when_watch_raises():
+    # If an exception (e.g. the signal handler's _SignalTermination) unwinds the loop, the
+    # finally still clears the slot — the handler has already captured the child by then.
+    class _BoomChild:
+        def poll(self):
+            raise RuntimeError("boom")
+
+        def terminal_location(self):
+            return "/t.json"
+
+    try:
+        al.run("wi", CEIL, child_factory=lambda: _BoomChild(), clock=FakeClock([0, 1, 2]),
+               spend_sampler=lambda: (0.1, True), engine_pref_reader=lambda: {"all": "claude"})
+    except RuntimeError:
+        pass
+    assert al.current_live_child() is None
+
+
+def _spawn_orphan_group():
+    """Spawn a real, ORPHANED process group and return its pgid. Double-fork: an intermediate
+    child calls setsid() (new session/group), forks a grandchild that execs `sleep`, then the
+    intermediate exits immediately — so the grandchild is re-parented to init/a subreaper (as a
+    harness orphan would be after an ungraceful death) and is auto-reaped on death, leaving no
+    zombie for the test process. This mirrors the real scenario the bare-pgid reaper must
+    handle, where killpg confirms the group empty because someone else reaps the dead members."""
+    if not hasattr(os, "fork"):
+        import pytest
+        pytest.skip("os.fork unavailable (real orphan-group reap is a POSIX-only test)")
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # intermediate child
+        os.close(r)
+        os.setsid()
+        pid2 = os.fork()
+        if pid2 == 0:  # grandchild -> becomes the sleeping group member
+            os.write(w, str(os.getpgrp()).encode())  # pgrp == intermediate pid == the pgid
+            os.close(w)
+            os.execvp("sleep", ["sleep", "30"])
+            os._exit(127)
+        os._exit(0)   # intermediate exits -> grandchild orphaned (re-parented to init)
+    os.close(w)
+    pgid = int(os.read(r, 32).decode())
+    os.close(r)
+    os.waitpid(pid, 0)  # reap the intermediate (our only direct child)
+    return pgid
+
+
+def test_reap_group_by_pgid_kills_a_live_orphan_group():
+    # End-to-end: the bare-pgid reaper actually signals a live group to death and confirms it
+    # empty — the real primitive the lease-reclaim orphan check relies on (issue #245).
+    import pytest
+    pgid = _spawn_orphan_group()
+    try:
+        os.killpg(pgid, 0)                          # sanity: alive before reap
+        assert al.reap_group_by_pgid(pgid) is True  # reaped to confirmed-empty
+        with pytest.raises(ProcessLookupError):     # genuinely gone
+            os.killpg(pgid, 0)
+    finally:
+        try:
+            os.killpg(pgid, 9)
+        except OSError:
+            pass
+
+
+def test_reap_group_by_pgid_already_empty_confirms_dead():
+    # A pgid whose group already has no surviving member confirms "dead" without hanging.
+    pgid = _spawn_orphan_group()
+    os.killpg(pgid, 9)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    assert al.reap_group_by_pgid(pgid) is True
+
+
+def test_reap_group_by_pgid_unsignalable_group_is_not_confirmed(monkeypatch):
+    # A present-but-unsignalable group (PermissionError from killpg probe — e.g. owned by
+    # another user) must NOT be declared empty: the escalation ends unconfirmed (False) so the
+    # lease reclaim fails closed rather than reclaiming under a live orphan.
+    monkeypatch.setattr(al.time, "sleep", lambda s: None)
+
+    def perm_killpg(pgid, sig):
+        if sig == 0:
+            raise PermissionError()
+        # signalling attempts are swallowed; the group never becomes confirmable
+
+    monkeypatch.setattr(al.os, "killpg", perm_killpg)
+    assert al.reap_group_by_pgid(1234567) is False

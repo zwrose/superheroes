@@ -41,12 +41,14 @@ through the same cleanup → fail-verdict-naming-the-error → record write → 
 """
 import os
 import json
+import signal
 
 import acceptance_reclaim
 import acceptance_verdict
 import acceptance_cleanup
 import acceptance_retry
 import acceptance_result
+import acceptance_launch
 
 
 def nesting_refusal(env):
@@ -64,6 +66,113 @@ def nesting_refusal(env):
             "reason": "refusing to nest: already inside a showrunner/acceptance run",
         }
     return {"refuse": False, "reason": "top-level invocation; safe to proceed"}
+
+
+class _SignalTermination(Exception):
+    """Raised in the main thread by the harness's SIGTERM/SIGINT handler so an in-flight run
+    unwinds through `invoke`'s teardown/record path instead of the process dying with the
+    child group orphaned (issue #245).
+
+    Before #245 no signal handler existed anywhere in the harness stack: a SIGTERM to the
+    harness process (observed live during the 0.10.0 qualification) exited WITHOUT killing the
+    child group or running teardown. Carries the live child handle captured AT signal-delivery
+    time (while the launcher's watch loop is still on the stack and the live-child slot is
+    populated), so the except path can hard-kill the group even after the launcher has unwound.
+    """
+
+    def __init__(self, signum, child=None):
+        super().__init__("terminated by signal %s" % signum)
+        self.signum = signum
+        self.child = child
+
+
+def _termination_handler(signum, frame):
+    """SIGTERM/SIGINT handler: capture the live child, DISARM further termination signals so a
+    second signal can't re-enter teardown mid-kill (kill-unconfirmed double-report guard), then
+    raise `_SignalTermination` so the main thread unwinds through `invoke`'s except path — which
+    runs the EXISTING hard-kill + teardown + record machinery. Deliberately minimal: the actual
+    reap happens on the main stack in the except path, not inside this async handler."""
+    child = acceptance_launch.current_live_child()
+    # Disarm: while teardown runs, ignore further SIGTERM/SIGINT so the bounded kill completes
+    # and records exactly once. Bounded work (escalation ~seconds, reaps have subprocess
+    # timeouts) makes ignoring the operator's second signal an acceptable tradeoff for a clean,
+    # single teardown/record over a second ungraceful death.
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError):
+        pass
+    raise _SignalTermination(signum, child)
+
+
+def _install_termination_handlers():
+    """Install the SIGTERM/SIGINT handlers routing through `invoke`'s teardown path; return a
+    zero-arg `restore()` that puts the previous handlers back. No-op (returns a no-op restore)
+    when not on the main thread, where `signal.signal` is unavailable — the launcher's finite
+    bg-wait ceiling (PR #244) remains the backstop there."""
+    try:
+        prev_term = signal.signal(signal.SIGTERM, _termination_handler)
+        prev_int = signal.signal(signal.SIGINT, _termination_handler)
+    except (ValueError, OSError):
+        return lambda: None
+
+    def restore():
+        try:
+            signal.signal(signal.SIGTERM, prev_term)
+            signal.signal(signal.SIGINT, prev_int)
+        except (ValueError, OSError):
+            pass
+
+    return restore
+
+
+def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
+                         orphan_record_path):
+    """Route a caught `_SignalTermination` through the EXISTING kill+teardown+record path
+    (issue #245): hard-kill the live child group FIRST (reusing `_hard_kill_group`), then apply
+    the same kill-unconfirmed quarantine semantics the ceiling-kill path uses today — an
+    unconfirmed group kill records `kill-unconfirmed`, SKIPS artifact cleanup, quarantines the
+    lease, and holds it; a confirmed-dead group tears down normally and releases the lease.
+
+    The single record's reason is the honest "terminated by signal". No parallel path is built:
+    the reap uses `acceptance_launch._hard_kill_group`, cleanup uses `_unsafe_kill_teardown` /
+    `_teardown`, and the record/lease go through `_finalize` — exactly as steps 7–9 do."""
+    confirmed = True
+    if child is not None:
+        confirmed = acceptance_launch._hard_kill_group(child)
+    unsafe_kill = not confirmed
+    reason = "terminated by signal"
+    if unsafe_kill:
+        reason += " but the process group was not confirmed dead; cleanup skipped"
+
+    try:
+        if unsafe_kill:
+            teardown = _unsafe_kill_teardown(dead_run_teardown, stamp)
+        else:
+            teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
+    except Exception as td_exc:
+        teardown = {"cleaned_up": [], "left_behind": [],
+                    "note": "teardown also failed: %s" % td_exc}
+
+    if unsafe_kill and callable(deps.get("quarantine_lease")):
+        try:
+            deps["quarantine_lease"](stamp)
+        except Exception:
+            pass
+
+    record_path = None
+    try:
+        record_path = _finalize(
+            deps, "fail", reason, None, attempts, len(attempts) > 1, teardown,
+            run_stamp=stamp, release_lease=not unsafe_kill, spine_provenance=prov)
+    except Exception:
+        record_path = None
+    return {
+        "verdict": "fail",
+        "report": _report("fail", reason, record_path, teardown,
+                          orphan_record_path=orphan_record_path, spine_provenance=prov),
+        "record_path": record_path,
+    }
 
 
 def _spine_provenance(deps):
@@ -309,6 +418,15 @@ def invoke(deps):
             "record_path": record_path,
         }
 
+    except _SignalTermination as sig_exc:
+        # SIGTERM/SIGINT arrived (issue #245): hard-kill the live child group captured by the
+        # handler, then route through the SAME kill+teardown+record machinery — kill-unconfirmed
+        # quarantine semantics preserved (skip artifact cleanup + hold+quarantine the lease when
+        # the group can't be confirmed dead), exactly as the ceiling-kill path does today.
+        return _terminate_by_signal(
+            deps, sig_exc.child, stamp, attempts,
+            locals().get("dead_run_teardown"), prov, orphan_record_path)
+
     except Exception as exc:
         # Fail-CLOSED: any internal error still teardowns and yields a fail naming the error.
         # If the last launch's process-group kill was unconfirmed, normal cleanup stays
@@ -526,7 +644,15 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
     else:
         deps = deps_builder(args.fixture, args.root)
 
-    result = invoke(deps)
+    # Install SIGTERM/SIGINT handlers so an ungraceful harness termination routes through
+    # invoke's kill+teardown+record path instead of exiting with the child group orphaned
+    # (issue #245). Restored unconditionally so the process's signal disposition is not left
+    # mutated (e.g. if invoke returns normally without a signal).
+    restore = _install_termination_handlers()
+    try:
+        result = invoke(deps)
+    finally:
+        restore()
     print(result["report"], file=stdout)
     return 0 if result["verdict"] == "pass" else 1
 

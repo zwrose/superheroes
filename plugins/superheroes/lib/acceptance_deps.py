@@ -85,6 +85,50 @@ def _lease_payload(stamp):
     }
 
 
+def _persist_child_pgid(root, stamp, child_pgid):
+    """Rewrite THIS invocation's (already-held) lease to record the live child's process-group
+    id + the current bootId, so a reclaim after an ungraceful harness death can probe/kill the
+    orphaned group instead of classifying the lease reclaimable and deleting the artifacts the
+    orphan is still building on (issue #245).
+
+    Called at spawn time by `real_launcher`'s child factory, once the pgid is known. Only
+    patches the lease when it still names THIS invocation's `stamp` (never clobbers a lease a
+    concurrent winner holds). Best-effort: a write failure here must NOT abort the spawn — the
+    bounded orphan lifetime (2× elapsed bg-wait ceiling, PR #244) remains the backstop.
+
+    Schema compatibility: this only ADDS a `childPgid` field; a lease written before this (or
+    when persistence fails) simply lacks it, and `_orphan_group_liveness` treats an absent
+    pgid as today's behavior."""
+    if not stamp or child_pgid is None:
+        return
+    try:
+        lease = _read_lease(root)
+        if not isinstance(lease, dict) or lease.get("stamp") != stamp:
+            return
+        lease["childPgid"] = int(child_pgid)
+        lease["bootId"] = hostinfo.boot_id()
+        path = _lease_path(root)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(lease, fh)
+        os.replace(tmp, path)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _child_pgid(child):
+    """Read a spawned child's process-group id via its `pgid()` accessor, or None when the
+    handle does not expose one (a legacy/fake factory) — pgid persistence is best-effort."""
+    getter = getattr(child, "pgid", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
 def _write_lease(root, stamp):
     """Overwrite the lease unconditionally. Only ever called after this invocation has
     already WON the atomic acquire in `_try_acquire_lease` (or on the fixed reclaim path
@@ -121,7 +165,14 @@ def _try_acquire_lease(root, stamp):
 def _lease_liveness(lease):
     """"alive"|"dead"|"unconfirmable" for a recorded lease dict — mirrors file_lock.is_stale's
     pid/host/bootId staleness test, but reports a tri-state so an unreadable/foreign-host
-    lease refuses fail-closed (UFR-4) instead of being silently treated as reclaimable."""
+    lease refuses fail-closed (UFR-4) instead of being silently treated as reclaimable.
+
+    When the HARNESS pid is dead but the lease recorded a live child process group (issue
+    #245), the orphan is reaped (the shared SIGTERM→SIGKILL escalation) BEFORE the lease can
+    be reclaimed: a confirmed-dead group → "dead" (reclaimable, safe to clean up its
+    artifacts); an un-confirmable group → "unconfirmable" (refuse to reclaim — never delete
+    artifacts a live orphan is still building on). A recorded pgid from a PREVIOUS boot is
+    meaningless and is never probed/killed (bootId mismatch → "dead", today's behavior)."""
     if not isinstance(lease, dict) or not lease.get("pid"):
         return "unconfirmable"
     if lease.get("host") != socket.gethostname():
@@ -130,14 +181,43 @@ def _lease_liveness(lease):
     boot = lease.get("bootId")
     cur_boot = hostinfo.boot_id()
     if boot is not None and cur_boot is not None and boot != cur_boot:
-        return "dead"  # the host rebooted since the lease was written; the pid is meaningless
+        return "dead"  # host rebooted since the lease was written; the pid AND any
+        #                recorded child pgid name meaningless (recycled) identities.
     try:
         os.kill(int(lease["pid"]), 0)
     except ProcessLookupError:
-        return "dead"
+        pass  # harness pid gone — fall through to the orphan-group check below
     except (PermissionError, ValueError, OverflowError, TypeError):
         return "unconfirmable"
-    return "alive"
+    else:
+        return "alive"
+    # The harness pid is dead. Before declaring the lease reclaimable, honor any recorded
+    # live child group so a reclaim never tramples an orphan still mutating artifacts.
+    return _orphan_group_liveness(lease, boot, cur_boot)
+
+
+def _orphan_group_liveness(lease, boot, cur_boot):
+    """Classify a HARNESS-DEAD lease by its recorded child process group (issue #245).
+
+    Old-schema lease (no `childPgid`) → "dead" (today's behavior, unchanged — schema
+    compatibility). A pgid is only meaningful on the SAME boot: absent/mismatched bootId on
+    either side → the recorded pgid cannot be trusted to name the same group, so it is NOT
+    probed/killed and the lease stays "dead" as before. On a confirmed bootId match the group
+    is probed live via the shared escalation: already-empty → "dead" (reclaimable); still
+    alive and reaped-to-confirmed-empty → "dead"; alive and NOT confirmable → "unconfirmable"
+    (fail-closed refuse — the reclaim decider treats it as alive and declines)."""
+    pgid = lease.get("childPgid")
+    if pgid is None:
+        return "dead"
+    # Same-boot pgids only (a recycled pid on a new boot could name an unrelated group).
+    # A confirmed bootId match is required before we signal anything.
+    if boot is None or cur_boot is None or boot != cur_boot:
+        return "dead"
+    try:
+        pgid_int = int(pgid)
+    except (TypeError, ValueError):
+        return "dead"  # malformed pgid — nothing safe to signal; behave as pre-#245
+    return "dead" if acceptance_launch.reap_group_by_pgid(pgid_int) else "unconfirmable"
 
 
 def real_reclaim_probe(root, reserved_stamp=None):
@@ -791,9 +871,16 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
         bg_ms = int(float(norm["elapsed_sec"]) * 2 * 1000)
 
         def _child_factory():
-            return acceptance_launch._default_child_factory(
+            child = acceptance_launch._default_child_factory(
                 stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root,
                 child_model=child_model, bg_wait_ceiling_ms=bg_ms)
+            # Persist the live child's pgid into the lease at spawn time (issue #245) so a
+            # reclaim after an ungraceful harness death reaps the orphan group rather than
+            # deleting the artifacts it is still building on. Best-effort — never blocks spawn.
+            _persist_child_pgid(
+                root, stamped.get("stamp") if isinstance(stamped, dict) else None,
+                _child_pgid(child))
+            return child
 
         return acceptance_launch.run(
             stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,

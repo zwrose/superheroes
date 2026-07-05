@@ -516,3 +516,140 @@ def test_freeform_failure_reason_alone_does_not_trigger_environmental_retry():
     r = run.invoke(d)
     assert r["verdict"] == "fail"
     assert launches == [1]
+
+
+# --- issue #245: SIGTERM/SIGINT routes through the kill+teardown+record path ------------
+#
+# Before #245 no signal handler existed anywhere in the harness stack: a SIGTERM to the
+# harness (observed live during the 0.10.0 qualification) exited WITHOUT killing the child
+# group or running teardown, orphaning the `claude -p` group. The handler now raises
+# `_SignalTermination` (carrying the live child captured at delivery time), and invoke's
+# except path hard-kills that group FIRST, then routes through the EXISTING teardown/record
+# machinery — kill-unconfirmed quarantine semantics preserved. These exercise that logic by
+# raising `_SignalTermination` from a fake launcher (and calling the handler directly), so no
+# real signal is ever sent to the test process.
+import signal as _signal          # noqa: E402
+import acceptance_launch as _al    # noqa: E402
+
+
+class _SigChild:
+    """Fake live child for the signal-kill path. Records signals; `group_empty()` returns
+    `confirm` (True = confirmed empty on first probe, False = never confirmable -> the bounded
+    escalation ends unconfirmed)."""
+
+    def __init__(self, confirm=True):
+        self.signals = []
+        self._confirm = confirm
+
+    def killpg(self, sig):
+        self.signals.append(sig)
+
+    def group_empty(self):
+        return self._confirm
+
+    def poll(self):
+        return 0
+
+
+def test_signal_termination_hard_kills_group_then_teardown_and_records():
+    child = _SigChild(confirm=True)
+
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        raise run._SignalTermination(_signal.SIGTERM, child)
+
+    reaped = []
+    d = _deps(launcher=_launcher)
+    d["reap"] = lambda planned: reaped.append(planned) or {"cleaned_up": ["b-s1"],
+                                                           "left_behind": []}
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "terminated by signal" in r["report"].lower()
+    # the live group was hard-killed FIRST (SIGTERM), reusing the existing escalation.
+    assert child.signals and child.signals[0] == _signal.SIGTERM
+    assert reaped                                  # confirmed kill -> normal teardown ran
+    rec = d["_state"]["records_written"][0]
+    assert rec["reason"].startswith("terminated by signal")
+    assert d["_state"]["lease_released"] is True   # confirmed kill releases the lease
+
+
+def test_signal_termination_unconfirmed_kill_skips_cleanup_and_quarantines(monkeypatch):
+    # A group that can't be confirmed dead must NOT reclaim: record kill-unconfirmed, SKIP
+    # artifact cleanup for the stamp, quarantine + HOLD the lease — exactly the ceiling-kill
+    # kill-unconfirmed semantics, now honored on the signal path too.
+    monkeypatch.setattr(_al.time, "sleep", lambda s: None)  # don't sleep through the escalation
+    child = _SigChild(confirm=False)
+
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        raise run._SignalTermination(_signal.SIGINT, child)
+
+    d = _deps(launcher=_launcher)
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    rec = d["_state"]["records_written"][0]
+    assert rec["reason"].startswith("terminated by signal")
+    assert "cleanup skipped" in rec["reason"]
+    assert rec["cleaned_up"] == []                 # the current stamp was NOT torn down
+    assert rec["left_behind"] and "cleanup skipped" in str(rec["left_behind"][0])
+    assert d["_state"]["lease_quarantined"] == "s1"
+    assert d["_state"]["lease_released"] is False  # lease held under a possibly-live orphan
+    assert len(child.signals) >= 2                 # SIGTERM then SIGKILL escalation
+
+
+def test_signal_termination_with_no_live_child_still_teardowns_and_records():
+    # A signal arriving with no live child (e.g. during preflight/materialize, or after the
+    # launcher already returned) still routes through teardown + a single honest record.
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        raise run._SignalTermination(_signal.SIGTERM, None)
+
+    reaped = []
+    d = _deps(launcher=_launcher)
+    d["reap"] = lambda planned: reaped.append(planned) or {"cleaned_up": [], "left_behind": []}
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "terminated by signal" in r["report"].lower()
+    assert reaped                                  # no live child -> confirmed -> teardown ran
+    assert d["_state"]["lease_released"] is True
+    assert len(d["_state"]["records_written"]) == 1
+
+
+def test_termination_handler_captures_live_child_and_disarms_without_real_signal(monkeypatch):
+    # The handler itself, driven directly (no OS signal): it must capture the CURRENT live
+    # child, disarm further SIGTERM/SIGINT (so a second signal can't re-enter teardown), and
+    # raise _SignalTermination carrying that child + signum.
+    sentinel = object()
+    monkeypatch.setattr(_al, "_live_child", sentinel)
+    prev_term = _signal.getsignal(_signal.SIGTERM)
+    prev_int = _signal.getsignal(_signal.SIGINT)
+    try:
+        raised = None
+        try:
+            run._termination_handler(_signal.SIGTERM, None)
+        except run._SignalTermination as exc:
+            raised = exc
+        assert raised is not None
+        assert raised.child is sentinel
+        assert raised.signum == _signal.SIGTERM
+        # further termination signals disarmed while teardown runs (double-report guard).
+        assert _signal.getsignal(_signal.SIGTERM) == _signal.SIG_IGN
+        assert _signal.getsignal(_signal.SIGINT) == _signal.SIG_IGN
+    finally:
+        _signal.signal(_signal.SIGTERM, prev_term)
+        _signal.signal(_signal.SIGINT, prev_int)
+
+
+def test_install_termination_handlers_installs_and_restore_reverts():
+    prev_term = _signal.getsignal(_signal.SIGTERM)
+    prev_int = _signal.getsignal(_signal.SIGINT)
+    try:
+        restore = run._install_termination_handlers()
+        assert _signal.getsignal(_signal.SIGTERM) is run._termination_handler
+        assert _signal.getsignal(_signal.SIGINT) is run._termination_handler
+        restore()
+        assert _signal.getsignal(_signal.SIGTERM) == prev_term
+        assert _signal.getsignal(_signal.SIGINT) == prev_int
+    finally:
+        _signal.signal(_signal.SIGTERM, prev_term)
+        _signal.signal(_signal.SIGINT, prev_int)
