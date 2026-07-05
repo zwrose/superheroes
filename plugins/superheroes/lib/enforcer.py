@@ -35,6 +35,14 @@ import allowance  # noqa: E402
 import escalation  # noqa: E402  (same-tree sibling core; no band_lib, no subprocess)
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Acceptance-harness enforcement marker (UFR-6). Set by the child-process launcher on the
+# showrunner child's env (inherited by every subagent/grandchild, so it is independent of
+# cwd / worktree / store resolution — including the fresh build worktree under
+# ~/.superheroes-worktrees whose checkout has no gitignored docs/superheroes/ tree). When
+# present, the owner-authority (gated) set is a STRUCTURAL deny — the child cannot merge,
+# publish, run workflows, force-push, or push to the default branch, no matter the host,
+# scope, or a minted allowance. This is the never-merge floor the acceptance run runs behind.
+_DENY_ONLY_ENV = "SUPERHEROES_ACCEPTANCE_DENY_ONLY"
 # Tool-name surfaces, HOST-AGNOSTIC: Claude names Bash / Edit|Write|MultiEdit; Codex names
 # shell / apply_patch (the patch carries the target path in its body). Accepting both makes
 # the single enforcer.py genuinely host-agnostic — without the `shell`/`apply_patch` aliases
@@ -175,6 +183,12 @@ def _bash_writes_to_safety_machinery(command):
     return False
 
 
+def _deny_only():
+    """True iff the acceptance-harness enforcement marker is set on the environment. Read
+    live from os.environ so it tracks the child's inherited env (independent of cwd)."""
+    return bool(os.environ.get(_DENY_ONLY_ENV))
+
+
 def gated_action(command):
     """The owner-authority action name this command performs, or None. Used both by the
     classifier (gate decision) and by the hook (whether to run the Codex allowance
@@ -230,6 +244,16 @@ def classify_command(command, host="codex", in_scope=True):
         return ("deny", "Bash write to band safety-machinery is refused")
     action = gated_action(command)
     if action:
+        # Acceptance-harness deny-only floor (UFR-6): evaluated BEFORE the not-in-scope
+        # short-circuit — the showrunner child's Build phase runs from a build worktree whose
+        # fresh checkout has no gitignored docs/superheroes/, so in_scope is False there; if
+        # this deny sat after the short-circuit, an owner-authority action from that worktree
+        # would fall through to allow and the never-merge floor would be bypassed. The marker
+        # denies regardless of host and regardless of in_scope; a minted allowance cannot flip
+        # it (the hook overlay is guarded on `not _deny_only()`).
+        if _deny_only():
+            return ("deny", "owner-authority action '%s' denied: acceptance-harness "
+                            "deny-only floor" % action)
         if not in_scope:
             return ("allow", "")
         if host == "claude":
@@ -350,6 +374,7 @@ def hook(stdin_text, host="codex"):
         # approve a compound `cp x <band>/enforcer.py && gh pr merge` and the safety-write
         # would ride through). Re-checking those surfaces here keeps them unconditional.
         if (decision == "deny" and host != "claude" and in_scope and action
+                and not _deny_only()
                 and not _CANARY.search(command)
                 and not _bash_writes_to_safety_machinery(command)):
             if allowance.consume(command, cwd):

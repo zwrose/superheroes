@@ -6,7 +6,9 @@
     "name": "zwrose"
   },
   "skills": [
+    "acceptance",
     "architect-discovery",
+    "architect-init",
     "architect-plan",
     "architect-spec",
     "architect-tasks",
@@ -17,6 +19,7 @@
     "review-plan",
     "review-spec",
     "review-tasks",
+    "showrunner",
     "test-pilot-execute",
     "test-pilot-init",
     "test-pilot-plan",

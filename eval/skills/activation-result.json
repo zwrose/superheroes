@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-06-27",
+  "recordedAt": "2026-07-03",
   "observations": [
     {
       "skill": "superheroes/audit-debt",
@@ -2034,6 +2034,132 @@
     {
       "skill": "superheroes/showrunner",
       "phrase": "elicit requirements from the owner and produce a spec definition-doc",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "run the acceptance harness against the showrunner",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "run the acceptance harness against the showrunner",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "run the acceptance harness against the showrunner",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "acceptance-test the showrunner end-to-end on the canned fixture",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "acceptance-test the showrunner end-to-end on the canned fixture",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "acceptance-test the showrunner end-to-end on the canned fixture",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "verify the showrunner pipeline works using the throwaway fixture work-item",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "verify the showrunner pipeline works using the throwaway fixture work-item",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "verify the showrunner pipeline works using the throwaway fixture work-item",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "kick off the standalone acceptance harness and give me one pass/fail verdict",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "kick off the standalone acceptance harness and give me one pass/fail verdict",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "kick off the standalone acceptance harness and give me one pass/fail verdict",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "launch the showrunner on this approved work-item and take it to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "launch the showrunner on this approved work-item and take it to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "launch the showrunner on this approved work-item and take it to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/acceptance",
+      "phrase": "the tasks doc is approved, build it and ship to a ready-for-review PR",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
