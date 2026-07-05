@@ -130,6 +130,36 @@ def test_js_const_str_list_fails_closed(text, name, match):
         _parse_js_const_str_list(text, name, "<test>")
 
 
+_REVIEWER_SUFFIX = "-reviewer"
+
+
+def test_agent_suffix_values_are_derivable_and_match_skill_tables():
+    """CONVENTIONS §11: the `AGENT_SUFFIX` values (and the SKILL.md findings-filename
+    column) are NOT an independent cross-boundary home — each is the reviewer slug minus
+    the `-reviewer` suffix, derivable from the roster keys already guarded above. Pin the
+    derivation so a hand-edited value (or doc column) that diverges from
+    `slug - '-reviewer'` fails, and the values stay single-homed in the keys.
+    """
+    import code_loop_plan
+    import spec_loop_plan
+    for label, mapping in [("code_loop_plan", code_loop_plan.AGENT_SUFFIX),
+                           ("spec_loop_plan", spec_loop_plan.AGENT_SUFFIX)]:
+        for slug, suffix in mapping.items():
+            assert slug.endswith(_REVIEWER_SUFFIX), "%s: unexpected key %r" % (label, slug)
+            assert suffix == slug[:-len(_REVIEWER_SUFFIX)], (
+                "%s.AGENT_SUFFIX[%r] = %r is not the derivable slug-minus-'-reviewer'"
+                % (label, slug, suffix))
+
+    # The SKILL.md dispatch tables' middle column (the findings filename stem) is the
+    # same derived suffix — guard the doc copy too (test_full_crew_table already pins the
+    # slug column; this pins the previously-unasserted findings column).
+    for skill in ["review-plan", "review-code", "review-spec", "review-tasks", "audit-debt"]:
+        for slug, findings_stem, _dim in _table_rows(os.path.join("skills", skill, "SKILL.md")):
+            assert findings_stem == slug[:-len(_REVIEWER_SUFFIX)], (
+                "%s: findings-column %r != %r (slug minus '-reviewer')"
+                % (skill, findings_stem, slug[:-len(_REVIEWER_SUFFIX)]))
+
+
 def _rubric_dimensions():
     text = _read(os.path.join("rubric", "review-base.md"))
     m = re.search(r"\*\*Dimensions\*\*.*?:\s*(`[A-Za-z-]+`(?:,\s*`[A-Za-z-]+`)*)", text, re.S)

@@ -2,7 +2,7 @@
 the premortem-reviewer's taxonomy table (the human-authored source of truth) and
 the eval scorer's matching sets.
 
-The seven Failure-Mode class names are duplicated verbatim across the agent file,
+The Failure-Mode class names are duplicated verbatim across the agent file,
 ``eval/score.py``, ``eval/README.md`` (twice), and the failure-modes fixture. A
 rename in the agent table would silently desync ``score.py``'s verbatim taxonomy
 matching (the function-scoped ±15 window keys on these exact strings), so this
@@ -17,6 +17,23 @@ tables:
 
 Both files are parsed as text (no import) to match the dependency-free style of
 the sibling structural guards in this directory.
+
+Per CONVENTIONS §11 (single source of truth), the copy-holders are dispositioned as
+follows (a NEW copy must be added here — the §11.2 caveat):
+
+- **agent table** (``agents/premortem-reviewer.md``) — the authoritative home; read
+  live, so this guard is correct whether the roster is 5 or 7 classes (#188/#239).
+- **``eval/score.py`` FUNCTION_SCOPED** — the load-bearing exact copy; exact-equality
+  guarded (``test_whole_flow_classes_match_agent_and_scorer``).
+- **``eval/README.md`` (twice)** — human prose; PRESENCE-guarded
+  (``test_readme_documents_every_whole_flow_class``): every current whole-flow class
+  must be documented; a stale prose name is harmless doc cruft, not a code desync.
+- **failure-modes fixture** — a DATA seed (one seed per class), not a restatement of
+  the vocabulary; its coverage is behaviorally checked by ``eval/tests/test_score.py``
+  (``recall total == 5``), so it is excluded from this structural guard by design.
+- **``eval/tests/test_score.py`` whole-flow enumeration** — a deliberate test-INPUT
+  tripwire, blessed in place with a §11.3 comment (not a contract test restating the
+  home; the authoritative sync is this file).
 """
 import os
 import re
@@ -78,6 +95,20 @@ def test_whole_flow_classes_match_agent_and_scorer():
     table = _premortem_taxonomy()
     function_scoped_additions = _function_scoped() - PRE_FAILURE_MODE_FUNCTION_SCOPED
     assert table == function_scoped_additions | LINE_SCOPED_FAILURE_CLASSES
+
+
+def test_readme_documents_every_whole_flow_class():
+    # CONVENTIONS §11 (§11.2 caveat): eval/README.md restates the whole-flow class names
+    # in prose (twice). README is human documentation, not consumed by code, so assert
+    # PRESENCE — every current whole-flow class must appear as a backticked token —
+    # rather than exact-equality (the load-bearing exact copy is score.py, pinned above).
+    # A class added to the home but not documented fails here; a stale prose-only name is
+    # harmless doc cruft, not a code desync.
+    whole_flow = _function_scoped() - PRE_FAILURE_MODE_FUNCTION_SCOPED
+    readme = _read(os.path.join("eval", "README.md"))
+    backticked = set(re.findall(r"`([a-z][a-z/-]*)`", readme))
+    missing = whole_flow - backticked
+    assert not missing, "eval/README.md is missing whole-flow class(es): %s" % sorted(missing)
 
 
 def test_line_scoped_classes_in_table_but_not_function_scoped():
