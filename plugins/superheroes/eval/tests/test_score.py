@@ -300,6 +300,8 @@ def test_smoke_real_refactor_fixture(tmp_path):
     "dependency-failure",
     "resource-exhaustion",
     "migration-rollback",
+    "fail-direction",
+    "transport-contract",
 ])
 def test_failure_mode_seed_matches_at_flow_distance(tmp_path, taxonomy):
     # Whole-flow classes are function-scoped: a correct finding citing a
@@ -410,10 +412,11 @@ def test_smoke_failure_modes_perfect_recall():
         findings.append({"dimension": seed["dimension"],
                          "file": seed["file"], "line": line})
     r = score.score_fixture(fdir, findings)
-    assert r["recall"]["total"] == 5
+    assert r["recall"]["total"] == 7
     assert {s["taxonomy"] for s in expected["seeds"]} == {
         "concurrency/race", "partial-failure", "dependency-failure",
         "resource-exhaustion", "migration-rollback",
+        "fail-direction", "transport-contract",
     }
     assert r["recall"]["matched"] == r["recall"]["total"] == len(expected["seeds"])
     assert r["precision"]["traps_flagged"] == 0
