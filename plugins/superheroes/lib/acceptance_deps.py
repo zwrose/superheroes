@@ -433,7 +433,11 @@ def real_discover_artifacts(root):
             rc, out, _err = _run(["git", "branch", "--list", pattern], cwd=root)
             if rc == 0:
                 for line in out.splitlines():
-                    name = line.strip().lstrip("* ").strip()
+                    # `git branch --list` prefixes: "* " (current) and "+ " (checked out
+                    # in another worktree — every live build branch, since the spine
+                    # builds in a managed worktree; found live: reap ran
+                    # `git branch -D "+ superheroes/..."` and failed, stranding the branch).
+                    name = line.strip().lstrip("*+ ").strip()
                     if name:
                         branch_names.add(name)
             else:
@@ -491,6 +495,22 @@ def real_reap(root, current_stamp):
             ok = False
             if kind == "branch":
                 rc, _out, _err = _run(["git", "branch", "-D", name], cwd=root)
+                if rc != 0:
+                    # A branch checked out in a managed build worktree can't be deleted;
+                    # remove that worktree first, then retry. Only stamped artifacts ever
+                    # reach this reap list (acceptance_cleanup.plan's parse_stamp routing),
+                    # so the worktree removed here is always the run's own build worktree.
+                    rc_l, out_l, _e2 = _run(["git", "worktree", "list", "--porcelain"], cwd=root)
+                    if rc_l == 0:
+                        wt_path, cur = None, None
+                        for ln in out_l.splitlines():
+                            if ln.startswith("worktree "):
+                                cur = ln[len("worktree "):].strip()
+                            elif ln.strip() == "branch refs/heads/" + name:
+                                wt_path = cur
+                        if wt_path:
+                            _run(["git", "worktree", "remove", "--force", wt_path], cwd=root)
+                            rc, _out, _err = _run(["git", "branch", "-D", name], cwd=root)
                 ok = rc == 0
             elif kind == "pr":
                 # `name` here is the PR's head branch (see real_discover_artifacts) — look

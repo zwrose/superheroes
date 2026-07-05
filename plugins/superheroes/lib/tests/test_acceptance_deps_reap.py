@@ -129,3 +129,44 @@ def test_discover_success_lists_no_degraded_placeholder(monkeypatch):
     discover = deps.real_discover_artifacts("root")
     artifacts = discover("some-stamp")
     assert artifacts == []
+
+
+def test_discover_strips_worktree_checkout_marker_from_branch_names(monkeypatch):
+    """0.10.0 qualification finding #8a: `git branch --list` prefixes a branch checked out
+    in another worktree with "+ " — every live build branch. The old parse stripped only
+    "* ", so reap ran `git branch -D "+ superheroes/..."` and stranded the branch."""
+    def fake_run(argv, cwd=None):
+        if argv[:3] == ["git", "branch", "--list"]:
+            return 0, "+ superheroes/accept-harness-aa11bb22-cafe\n* main\n", ""
+        return 0, "", ""
+    monkeypatch.setattr(deps, "_run", fake_run)
+    discover = deps.real_discover_artifacts("/repo")
+    names = [a["name"] for a in discover("accept-harness-aa11bb22") if a["kind"] == "branch"]
+    assert "superheroes/accept-harness-aa11bb22-cafe" in names
+    assert not any(n.startswith("+") for n in names)
+
+
+def test_reap_branch_checked_out_in_worktree_removes_worktree_then_deletes(monkeypatch):
+    """0.10.0 qualification finding #8b: a live build branch is checked out in its managed
+    worktree, so plain `git branch -D` fails. Reap must remove that worktree first and
+    retry — the live run 7 record shows the branch stranded (`reap action failed`)."""
+    calls = []
+    state = {"worktree_removed": False}
+    BR = "superheroes/accept-harness-aa11bb22-cafe"
+    WTP = "/wt/accept-harness-aa11bb22-cafe"
+    def fake_run(argv, cwd=None):
+        calls.append(argv)
+        if argv[:3] == ["git", "branch", "-D"]:
+            return (0, "", "") if state["worktree_removed"] else (1, "", "checked out at " + WTP)
+        if argv[:4] == ["git", "worktree", "list", "--porcelain"]:
+            return 0, "worktree /repo\nbranch refs/heads/main\n\nworktree %s\nbranch refs/heads/%s\n" % (WTP, BR), ""
+        if argv[:3] == ["git", "worktree", "remove"]:
+            state["worktree_removed"] = True
+            return 0, "", ""
+        return 0, "", ""
+    monkeypatch.setattr(deps, "_run", fake_run)
+    reap = deps.real_reap("/repo", lambda: None)
+    result = reap({"reap": [{"kind": "branch", "name": BR}], "leave_behind": []})
+    assert result["cleaned_up"] == [BR]
+    assert result["left_behind"] == []
+    assert ["git", "worktree", "remove", "--force", WTP] in calls
