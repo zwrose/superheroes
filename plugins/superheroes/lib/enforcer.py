@@ -396,12 +396,19 @@ def selfcheck():
     """Deterministic startup self-check: the gate classifies the full matrix correctly,
     the escalation lib the Edit guard depends on RESOLVES, and the hook config exists.
     Exit 0 iff armed; the producer refuses to run on non-zero."""
+    # Under the acceptance deny-only marker (UFR-6), "deny" IS the correct armed
+    # classification for the owner-authority set on every host and scope — asserting
+    # "ask"/"allow" there would make the harness's own safety marker fail the spine's
+    # step-0 arming gate (mutual-deadlock, found live in the 0.10.0 qualification).
+    gated_expected = "deny" if _deny_only() else "ask"
     ok = (
         # gated merge: ask on Claude, deny on a deny-only host (both in-scope)...
-        classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "ask"
+        classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == gated_expected
         and classify_command("gh pr merge 1", host="codex", in_scope=True)[0] == "deny"
-        # ...and NOT gated outside a superheroes repo (flaw #1)...
-        and classify_command("gh pr merge 1", host="claude", in_scope=False)[0] == "allow"
+        # ...and NOT gated outside a superheroes repo (flaw #1) — except under
+        # deny-only, which denies the owner-authority set regardless of scope (UFR-6)...
+        and classify_command("gh pr merge 1", host="claude", in_scope=False)[0]
+            == ("deny" if _deny_only() else "allow")
         # ...unconditional surfaces hold regardless of host/scope...
         and classify_command(": workhorse-enforcer-canary")[0] == "deny"
         # ...and the producer's own commands stay allowed.

@@ -21,3 +21,11 @@ def _isolate_store_root(monkeypatch, tmp_path):
     own SUPERHEROES_WORKTREES_ROOT still wins (applies after this fixture)."""
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "_store_isolation"))
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "_worktrees_isolation"))
+    # 0.10.0 qualification finding #7: the acceptance harness's child env carries the
+    # SUPERHEROES_ACCEPTANCE_* markers, and a build-worktree verify run inherits them —
+    # making any marker-sensitive test (e.g. enforcer selfcheck arming) fail inside a
+    # live acceptance run while passing everywhere else. Scrub them so the suite is
+    # hermetic wherever it runs; a test exercising marker behavior sets its own (applies
+    # after this fixture).
+    monkeypatch.delenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", raising=False)
+    monkeypatch.delenv("SUPERHEROES_ACCEPTANCE_CONTEXT", raising=False)

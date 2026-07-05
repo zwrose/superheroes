@@ -89,3 +89,15 @@ def test_bash_write_guard_covers_every_safety_machinery_basename():
     esc_set = set(_esc_mod().SAFETY_MACHINERY)
     assert esc_set.issubset(set(enforcer._SAFETY_BASENAMES)), \
         esc_set - set(enforcer._SAFETY_BASENAMES)
+
+
+def test_selfcheck_armed_under_acceptance_deny_only_marker(capsys, monkeypatch):
+    """0.10.0 qualification finding (mutual-deadlock seam): under the harness's
+    SUPERHEROES_ACCEPTANCE_DENY_ONLY marker the enforcer correctly denies the whole
+    owner-authority set -- and selfcheck must treat that as ARMED, not as a broken
+    classifier. Before the fix, the harness's own safety marker parked every live
+    acceptance run at the spine's step-0 arming gate."""
+    monkeypatch.setenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", "1")
+    rc = enforcer.selfcheck()
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["armed"] is True and out["classifier_ok"] is True

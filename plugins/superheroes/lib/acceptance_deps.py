@@ -323,7 +323,29 @@ def real_materialize(fixture_dir, root, reserved_stamp=None, lease_acquired=Fals
         stamp_id = uuid.uuid4().hex
         stamp = acceptance_fixture.make_stamp(stamp_id)
         _write_lease(root, stamp)
-    stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, _harness_dir(root))
+    # Materialize into the mode-resolved definition-docs location — the ONLY place
+    # preflight's spec-approved probe and the spine's phase readers resolve work-items
+    # from. The harness dir is control-plane state (lease, records), not doc storage;
+    # a fixture materialized there is invisible to every consumer (live finding,
+    # 0.10.0 qualification).
+    if acceptance_fixture.parse_stamp(stamp) != stamp:
+        # Identity, not truthiness: parse_stamp matches an EMBEDDED stamp, so a
+        # prefixed/suffixed value would pass a bare-truthiness check and flow into
+        # rmtree guards downstream (security review, PR #244).
+        raise ValueError("reserved stamp %r is not a bare valid stamp" % (stamp,))
+    import definition_doc
+    wi_dir = definition_doc.resolve_work_item_dir(stamp, root=root, cwd=root)
+    try:
+        stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, os.path.dirname(wi_dir))
+    except Exception:
+        # A mid-write failure would strand a partial fixture in the consumer-visible
+        # docs location (invoke's except path tears down with stamp=None, which skips
+        # artifact cleanup). The dest dir is this invocation's own stamped dir — same
+        # guard real_reap uses — so removing it before re-raising is safe.
+        if os.path.basename(wi_dir) == stamp and os.path.isdir(wi_dir):
+            import shutil
+            shutil.rmtree(wi_dir, ignore_errors=True)
+        raise
     stamped["stamp"] = stamp
     return stamped
 
@@ -419,6 +441,35 @@ def real_discover_artifacts(root):
     """
     def _discover(_stamp):
         artifacts = []
+        # Fixture DIRECTORY artifacts (both the legacy harness-dir location and the
+        # docs-resolved location real_materialize targets). Full paths as names: the
+        # stamp parses out of the basename for plan()'s routing, and reap gets the
+        # exact path to remove. Without this class, a run that dies between
+        # materialize and reap strands a pre-approved phantom work-item in the REAL
+        # docs dir forever (premortem finding, PR #244).
+        dir_bases = [_harness_dir(root)]
+        try:
+            import definition_doc
+            probe = acceptance_fixture.make_stamp("0")
+            dir_bases.append(os.path.dirname(
+                definition_doc.resolve_work_item_dir(probe, root=root, cwd=root)))
+        except Exception:
+            artifacts.append({
+                "kind": "store-dir",
+                "name": acceptance_fixture.RESERVED_PREFIX + " discovery degraded: docs location unresolvable",
+            })
+        seen_dirs = set()
+        for base in dir_bases:
+            try:
+                entries = os.listdir(base)
+            except OSError:
+                continue  # base absent -> nothing materialized there
+            for entry in entries:
+                full = os.path.join(base, entry)
+                if (entry.startswith(acceptance_fixture.RESERVED_PREFIX)
+                        and os.path.isdir(full) and full not in seen_dirs):
+                    seen_dirs.add(full)
+                    artifacts.append({"kind": "store-dir", "name": full})
         branch_names = set()
         branch_lookup_failed = False
         for pattern in ("wi-%s*" % acceptance_fixture.RESERVED_PREFIX,
@@ -426,7 +477,11 @@ def real_discover_artifacts(root):
             rc, out, _err = _run(["git", "branch", "--list", pattern], cwd=root)
             if rc == 0:
                 for line in out.splitlines():
-                    name = line.strip().lstrip("* ").strip()
+                    # `git branch --list` prefixes: "* " (current) and "+ " (checked out
+                    # in another worktree — every live build branch, since the spine
+                    # builds in a managed worktree; found live: reap ran
+                    # `git branch -D "+ superheroes/..."` and failed, stranding the branch).
+                    name = line.strip().lstrip("*+ ").strip()
                     if name:
                         branch_names.add(name)
             else:
@@ -484,6 +539,22 @@ def real_reap(root, current_stamp):
             ok = False
             if kind == "branch":
                 rc, _out, _err = _run(["git", "branch", "-D", name], cwd=root)
+                if rc != 0:
+                    # A branch checked out in a managed build worktree can't be deleted;
+                    # remove that worktree first, then retry. Only stamped artifacts ever
+                    # reach this reap list (acceptance_cleanup.plan's parse_stamp routing),
+                    # so the worktree removed here is always the run's own build worktree.
+                    rc_l, out_l, _e2 = _run(["git", "worktree", "list", "--porcelain"], cwd=root)
+                    if rc_l == 0:
+                        wt_path, cur = None, None
+                        for ln in out_l.splitlines():
+                            if ln.startswith("worktree "):
+                                cur = ln[len("worktree "):].strip()
+                            elif ln.strip() == "branch refs/heads/" + name:
+                                wt_path = cur
+                        if wt_path:
+                            _run(["git", "worktree", "remove", "--force", wt_path], cwd=root)
+                            rc, _out, _err = _run(["git", "branch", "-D", name], cwd=root)
                 ok = rc == 0
             elif kind == "pr":
                 # `name` here is the PR's head branch (see real_discover_artifacts) — look
@@ -509,18 +580,26 @@ def real_reap(root, current_stamp):
                     ok = rc2 == 0
                 else:
                     ok = True  # confirmed: rc == 0 with no match -> already gone
+            elif kind == "store-dir":
+                # Fixture dirs are discovered as full paths; the basename must BE a
+                # bare valid stamp (identity, not embedded-match) or nothing is removed.
+                base = os.path.basename(name or "")
+                if acceptance_fixture.parse_stamp(base) == base and os.path.isdir(name):
+                    import shutil
+                    try:
+                        shutil.rmtree(name)
+                        ok = True
+                    except OSError:
+                        ok = False  # surfaced below — never claim a teardown that failed
+                elif not os.path.isdir(name):
+                    ok = True  # confirmed: already gone
+                else:
+                    ok = False  # structurally suspect path — refuse, surface
             else:
                 ok = True  # unknown kind: nothing this reaper knows how to remove
             (cleaned if ok else left).append(name if ok else
                                              {"kind": kind, "name": name,
                                               "reason": "reap action failed"})
-        # also remove this invocation's own materialized store dir, if present.
-        stamp = current_stamp()
-        if stamp:
-            work_dir = os.path.join(_harness_dir(root), stamp)
-            if os.path.isdir(work_dir):
-                import shutil
-                shutil.rmtree(work_dir, ignore_errors=True)
         return {"cleaned_up": cleaned, "left_behind": left}
     return _reap
 
@@ -705,11 +784,16 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
     def _launch(stamped, budget_consumed=None, attempt=1):
         terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
                                      "terminal-record.json")
+        norm = acceptance_ceiling.normalize_ceilings(ceilings)
+        # 2x the harness elapsed ceiling: far above any supervised run (the watch loop
+        # kills at 1x), but a hard independent bound on an ORPHAN's lifetime if the
+        # harness process itself dies ungracefully (premortem finding, PR #244).
+        bg_ms = int(float(norm["elapsed_sec"]) * 2 * 1000)
 
         def _child_factory():
             return acceptance_launch._default_child_factory(
                 stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root,
-                child_model=child_model)
+                child_model=child_model, bg_wait_ceiling_ms=bg_ms)
 
         return acceptance_launch.run(
             stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,

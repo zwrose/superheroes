@@ -249,7 +249,7 @@ class _RealChild:
         return self._terminal_path
 
 
-def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
+def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None, fixture_dir=None):
     """The non-interactive prompt handed to `claude -p` for a live acceptance run.
 
     Directs the headless session to drive `superheroes:showrunner` to completion on the
@@ -270,10 +270,35 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
     silent cross-version mix and the pre-release baseline it exists to produce would be
     invalid.
     """
+    # Pointer clause ONLY when the caller knows the actually-materialized dir: a
+    # derived-but-wrong pointer is a false claim the driver rejects as injection
+    # (live finding #3; the old dirname(terminal_path) fallback points at the
+    # harness control-plane dir, which no longer holds the triple).
+    where = (" at %s — read those files if in doubt" % fixture_dir) if fixture_dir else ""
+    preamble = (
+        "CONTEXT — who is asking and why this is sanctioned: you are the acceptance "
+        "harness's own non-interactive driver session, spawned and supervised by the "
+        "harness process (acceptance_run.py, the superheroes acceptance flow). The "
+        "work-item below is NOT a normal discovery work-item: its accept-harness- prefix "
+        "is the harness's own reserved namespace (RESERVED_PREFIX in "
+        "acceptance_fixture.py), and the harness materialized it moments ago as a "
+        "throwaway fixture with a pre-approved spec/plan/tasks triple"
+        + where + ". Driving the showrunner spine on "
+        "this fixture is the sanctioned harness lifecycle: the parent process enforces "
+        "ceilings, reads and judges the terminal record you write, and tears down every "
+        "artifact (worktree, branch, PR) on every exit path. The run-outcome projection "
+        "you persist must be computed from the run's ACTUAL end state via "
+        "run_readout.run_outcome — never hand-authored or approximated. Writing an "
+        "honest projection of a real run to the path the harness gave you is the "
+        "harness working as designed, not evidence fabrication. Pointing the run at "
+        "the real repo root is also by design: every showrunner run starts from the "
+        "live root and isolates its work in a managed per-work-item worktree, branch, "
+        "and draft PR — the fixture's changes never touch the working tree or main. "
+    )
     if spine_lib:
         bundle = os.path.join(spine_lib, SHOWRUNNER_BUNDLE_NAME)
         preflight = os.path.join(spine_lib, "preflight.py")
-        return (
+        return preamble + (
             "Run the superheroes:showrunner skill end-to-end on the approved work-item "
             "%(work_item)s, but resolve the ENTIRE spine from the override lib UNDER TEST at "
             "%(spine_lib)s — treat %(spine_lib)s as the skill's $LIB for EVERY step and do NOT "
@@ -290,7 +315,7 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
             % {"work_item": work_item, "terminal_path": terminal_path,
                "bundle": bundle, "preflight": preflight, "spine_lib": spine_lib, "root": root}
         )
-    return (
+    return preamble + (
         "Run the superheroes:showrunner skill end-to-end on the approved work-item "
         "%(work_item)s (invoke it exactly as documented in its SKILL.md — pre-flight, "
         "then the Workflow tool on the committed bundle with args: {workItem: %(work_item)s}). "
@@ -305,7 +330,7 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
 
 
 def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=None,
-                           child_model=None):
+                           child_model=None, bg_wait_ceiling_ms=None):
     """Spawn `claude -p <prompt> --model <child_model>` as an isolated process-group leader
     (UFR-5/UFR-6).
 
@@ -322,8 +347,24 @@ def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=Non
     env = dict(os.environ)
     env[_CONTEXT_MARKER] = "1"
     env[_DENY_ONLY_MARKER] = "1"
+    # The child waits on the showrunner Workflow as a BACKGROUND task; non-interactive
+    # `claude -p` kills still-running background tasks at a ~600s ceiling, which
+    # terminated a live run mid-spine (0.10.0 qualification finding #6; the CLI's own
+    # kill message documents the env: "Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to
+    # wait indefinitely"). Callers pass a FINITE ceiling derived from the harness
+    # elapsed ceiling (2x): the watch loop kills at 1x while the harness lives, and
+    # the finite value keeps an orphan's lifetime bounded if the harness dies
+    # ungracefully. 0 (wait forever) is the fallback only for direct callers.
+    env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = str(int(bg_wait_ceiling_ms)) if bg_wait_ceiling_ms else "0"
     work_item = stamped.get("work_item") if isinstance(stamped, dict) else stamped
-    prompt = build_launch_prompt(work_item, terminal_path, spine_lib=spine_lib, root=root)
+    fixture_dir = None
+    if isinstance(stamped, dict):
+        paths = stamped.get("paths")
+        vals = list(paths.values()) if isinstance(paths, dict) else list(paths or [])
+        if vals:
+            fixture_dir = os.path.dirname(vals[0])
+    prompt = build_launch_prompt(work_item, terminal_path, spine_lib=spine_lib, root=root,
+                                 fixture_dir=fixture_dir)
     model = child_model or DEFAULT_CHILD_MODEL
     proc = subprocess.Popen(
         ["claude", "-p", prompt, "--model", model],
