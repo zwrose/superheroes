@@ -34,20 +34,30 @@ function _sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // libRootProbe: a shell prefix that fail-closes when an ABSOLUTE spine code root has gone missing
 // (e.g. a plugin-cache eviction between phases). It rides an ALREADY-composed command —
 // `${libRootProbe()}python3 <lib>/recover_entry.py …` — so it adds NO leaf. When the dir is absent it
-// echoes a PARSEABLE failure object carrying MISSING_MARKER and exits 0; when present it is a no-op
-// passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the compose stays
-// byte-identical.
+// echoes a PARSEABLE failure object carrying MISSING_MARKER, then __SR_EXIT:0, and exits 0; when
+// present it is a no-op passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the
+// compose stays byte-identical.
 //
 // The payload is a JSON `{"ok":false,"reason":"<marker>"}` (not a bare echo) so BOTH probe sites map
 // it to the same named park uniformly: the exec-based launch probe (reconcile) substring-matches the
-// marker in raw stdout, and the runCourierJson-based back-half probe (persistPhase) gets it back
-// verbatim as an `ok:false` failure (retryRealFailure:false) — a bare echo would be unparseable JSON,
-// making that courier retry then throw a GENERIC transport error instead of the named reason.
+// marker in raw stdout, and the runCourierMarkedJson-based back-half probe (persistPhase) gets it
+// back verbatim as an `ok:false` failure only AFTER execution is proven via __SR_EXIT (#218). The
+// failure branch must echo __SR_EXIT before exit — wrapMarkedCommand's trailing marker never runs
+// after `exit 0`, and without an in-branch marker a genuine missing libRoot looks like a lazy parrot.
+//
+// Residual fabricability (#218): the __SR_EXIT guard proves a marker-SHAPED answer, not that Bash
+// ran. This compose now embeds both the failure payload AND `echo __SR_EXIT:0` in the prompt, so a
+// courier that SIMULATES the failure branch (payload + marker, no execution) would still pass the
+// guard. Do NOT "harden" this with proof-of-execution (nonce/hash/timestamp) — the Workflow sandbox
+// has no crypto, wall-clock, or RNG primitives, so the JS side cannot verify a computed proof; that
+// is why #218 chose the marker protocol. The guard rejects the observed did-not-run shapes (bare
+// payload with no marker; echoed command with literal __SR_EXIT:$?), and runCourierMarked*'s 2×3
+// retry-then-default-dispatch chain bounds the residual simulation class.
 const MISSING_MARKER = '__SR_LIBROOT_MISSING__'
 function libRootProbe() {
   if (!isAbsoluteLibRoot()) return ''
   const payload = '{"ok":false,"reason":"' + MISSING_MARKER + '"}'
-  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; exit 0; }; "
+  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; echo __SR_EXIT:0; exit 0; }; "
 }
 
 // pyLibDir: a Python EXPRESSION that evaluates to the lib dir, for embedded

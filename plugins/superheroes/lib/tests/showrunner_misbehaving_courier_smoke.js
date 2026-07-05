@@ -36,6 +36,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { markedStdout } = require('./_marked_stdout.js')
 
 function sha256(text) { return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex') }
 
@@ -199,7 +200,9 @@ function shellResponse(cmd) {
     }
     return body
   }
-  if (cmd.includes('recover_entry.py')) return JSON.stringify({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
+  if (cmd.includes('recover_entry.py')) {
+    return markedStdout({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
+  }
   if (cmd.includes('front_half_usable.py')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
     usableCalls[doc] = (usableCalls[doc] || 0) + 1
@@ -209,7 +212,9 @@ function shellResponse(cmd) {
     return cmd.includes('--json') ? JSON.stringify({ review: 'pending' }) : 'passed'
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
-  if (cmd.includes('phase_progress_entry.py')) return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  if (cmd.includes('phase_progress_entry.py')) {
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  }
   if (cmd.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-x', path: '/tmp/wt', outcome: 'reused' })
   if (cmd.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 })
   if (cmd.includes('fence_cli.py')) return JSON.stringify({ ok: true })
@@ -248,7 +253,7 @@ const COURIER_JSON = {
     if (/set-gate/.test(prompt) && !/--expected-hash 'current'/.test(prompt)) {
       throw new Error('set-gate rode a runtime-computed hash — courier-read text entered a fence')
     }
-    return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
   },
   'save round state': () => JSON.stringify({ ok: true }),
   'gather build state': () => JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' }),

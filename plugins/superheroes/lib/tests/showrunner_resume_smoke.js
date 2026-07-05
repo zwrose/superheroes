@@ -6,6 +6,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const sr = require('../showrunner.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 
 const run = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-smoke-'))
 const tally = 'plugins/superheroes/lib/panel_tally.py'
@@ -36,7 +37,7 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 global.agent = async (prompt, opts) => {
   if ((opts && opts.label) === 'save phase progress') savePrompt = prompt
-  return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  return saveProgressOk()
 }
 
 sr.persistPhase('wi', { journalPayload: { phase: 'review-tasks' }, step: 3, phase: 'review-tasks', sideEffect: { ready: true } }).then((res) => {

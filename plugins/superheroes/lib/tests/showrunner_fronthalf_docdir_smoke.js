@@ -12,6 +12,7 @@ const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
 const { io } = require('../io_seam.js')
+const { markedStdout, saveProgressOk } = require('./_marked_stdout.js')
 
 globalThis.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 globalThis.log = () => {}
@@ -96,7 +97,7 @@ async function partReviewReadInner(resolved, legacy) {
     if (label === 'resume') return '1'
     if (label === 'save phase progress') {
       persistPrompts.push(prompt)
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
+      return saveProgressOk()
     }
     if (label === 'save round state') return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
     if (opts && opts.courier) {
@@ -144,12 +145,12 @@ async function partStartupPlants() {
         doc_dir: '/abs/proj-store/docs/wi-s' }) }]
     }
     if (opts && opts.courier) {
-      if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+      if (prompt.includes('recover_entry.py')) return markedStdout({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
         generation: 1,
         root: globalThis.__SR_ROOT,
-      }) }]
+      })
       if (prompt.includes('definition_doc.py read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
@@ -171,12 +172,12 @@ async function partStartupPlants() {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
     if (opts && opts.courier) {
-      if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+      if (String(prompt).includes('recover_entry.py')) return markedStdout({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
         generation: 1,
         root: globalThis.__SR_ROOT,
-      }) }]
+      })
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     return null

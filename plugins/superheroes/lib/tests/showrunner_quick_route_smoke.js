@@ -7,6 +7,7 @@
 // (D) the full route is unchanged — it still gates on the spec and records no skips.
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
+const { markedStdout, saveProgressOk } = require('./_marked_stdout.js')
 global.log = () => {}
 
 const CHECKOUT_ROOT = globalThis.__SR_ROOT
@@ -74,8 +75,8 @@ function makeAgent(startupFacts, trace, opts) {
   return async (prompt, agopts) => {
     const label = (agopts && agopts.label) || ''
     if (prompt.includes('recover_entry')) {
-      return [{ index: 0, ok: true, stdout: JSON.stringify({
-        checkpoint: opts.checkpoint || null, world: WORLD, generation: 7, root: CHECKOUT_ROOT }) }]
+      return markedStdout({
+        checkpoint: opts.checkpoint || null, world: WORLD, generation: 7, root: CHECKOUT_ROOT })
     }
     if (label === 'read startup state') {
       return [{ ok: true, stdout: JSON.stringify(Object.assign({ ok: true }, startupFacts)) }]
@@ -92,7 +93,7 @@ function makeAgent(startupFacts, trace, opts) {
       return 'pending'
     }
     if (label === 'save phase progress') {
-      return JSON.stringify({ ok: true, journal_confirmed: true })
+      return saveProgressOk({ checkpoint_confirmed: false })
     }
     if (label === 'release lease') {
       trace.releases.push(prompt)

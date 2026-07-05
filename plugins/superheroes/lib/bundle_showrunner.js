@@ -143,17 +143,9 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
-// __badCourierAnswer: TRUE when a courier answer to a marker-carrying command signals the command
-// DID NOT run. Two observed dispatch-failure shapes, both from the plugin-subagent prompt-drop bug:
-//   (a) the answer omits the __SR_EXIT marker entirely (echo/empty shape); or
-//   (b) the leaf echoes the command back as text instead of running it, so the answer contains the
-//       LITERAL unexpanded '__SR_EXIT:$?' (live 2026-07-03 run wf_1494a8fa-e28, agent aecd0b3ad) —
-//       the marker STRING is present, so a bare presence check would wrongly pass.
-// A genuinely-executed command can never print '$?' unexpanded (the shell expands it to a number),
-// so the literal '__SR_EXIT:$?' is an unambiguous did-not-run tell.
+// __badCourierAnswer: delegate to courier_exec (single source of truth — see badCourierAnswer there).
 function __badCourierAnswer(a) {
-  var s = String(a == null ? '' : a)
-  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+  return __require('courier_exec').badCourierAnswer(a)
 }
 async function __sh(cmd, opts) {
   // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
@@ -252,23 +244,10 @@ function __contentHash(text) {
   for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
   return out
 }
-// __helperResult: parse a leaf-bash helper answer (stdout + trailing __SR_EXIT:N marker) into the
-// runHelper result shape. Shared by runHelper and stageAndRunHelper (fold 1, #141) so both keep the
-// SAME fence tolerance + exit-marker slice. Find the LAST marker anywhere (a misbehaving haiku
-// courier stochastically fences the answer AFTER the marker), slice stdout up to it, strip one
-// wrapping fence pair.
+// __helperResult: delegate to courier_exec.helperResult (single source of truth for fence-tolerant
+// __SR_EXIT slice — shared by runHelper and stageAndRunHelper, fold 1 #141).
 function __helperResult(s) {
-  s = String(s || '')
-  var re = /__SR_EXIT:(\\d+)/g, m, last = null
-  while ((m = re.exec(s)) !== null) last = m
-  var status = last ? Number(last[1]) : 1
-  var stdout = last ? s.slice(0, last.index) : s
-  var markerTail = last ? s.slice(last.index + last[0].length) : ''
-  stdout = stdout.replace(/^\\s*\`\`\`[a-zA-Z0-9]*\\n?/, '').replace(/\\n?\`\`\`\\s*$/, '').replace(/\\n$/, '')
-  if (/^\\s*\\x60/.test(stdout) && (/\\x60\\s*$/.test(stdout) || /^\\s*\\x60\\s*$/.test(markerTail))) {
-    stdout = stdout.replace(/^\\s*\\x60/, '').replace(/\\x60\\s*$/, '')
-  }
-  return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+  return __require('courier_exec').helperResult(s)
 }
 const __PAYLOAD_BOUND = 3000
 const __PAYLOAD_CHARS = 2400

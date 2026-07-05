@@ -5,13 +5,14 @@
 const assert = require('assert')
 const showrunner = require('../showrunner.js')
 const cm = require('../cost_meter.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 
 ;(async () => {
   global.log = () => {}
   const seen = []
   global.agent = async (prompt, opts) => {
     seen.push({ prompt, label: opts && opts.label })
-    return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
+    return saveProgressOk()
   }
 
   // recordCost folds --cost-payload into the ONE save leaf

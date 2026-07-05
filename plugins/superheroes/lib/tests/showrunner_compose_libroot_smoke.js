@@ -10,6 +10,7 @@
 //       NAMED park ('spine code root missing (libRoot)'), not a raw python file-not-found.
 'use strict'
 const assert = require('assert')
+const { execFileSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
@@ -51,12 +52,15 @@ async function reconcileWith(libRootValue, snapshotStdout) {
   delete require.cache[require.resolve('../showrunner.js')]
   const sr = require('../showrunner.js')
   let captured = null
-  globalThis.agent = async (prompt) => { captured = String(prompt); return [{ index: 0, ok: true, stdout: snapshotStdout }] }
+  globalThis.agent = async (prompt) => {
+    captured = String(prompt)
+    return snapshotStdout + (String(snapshotStdout).includes('__SR_EXIT') ? '' : '\n__SR_EXIT:0')
+  }
   const result = await sr.reconcile('wi-x')
   return { result, prompt: captured }
 }
 
-// persistPhase rides the runCourierJson path (not exec) — the courier returns a bare stdout string.
+// persistPhase rides runCourierMarkedJson (#218) — the courier returns stdout + __SR_EXIT marker.
 async function persistWith(libRootValue, courierStdout) {
   resetGlobals()
   globalThis.__SR_LIB = libRootValue
@@ -65,7 +69,10 @@ async function persistWith(libRootValue, courierStdout) {
   let captured = null
   globalThis.agent = async (prompt, opts) => {
     if (opts && opts.label === 'save phase progress') captured = String(prompt)
-    return courierStdout
+    const body = typeof courierStdout === 'string' && courierStdout.includes('__SR_EXIT')
+      ? courierStdout
+      : courierStdout + '\n__SR_EXIT:0'
+    return body
   }
   const result = await sr.persistPhase('wi-x', { step: 1, phase: 'x', journalPayload: { phase: 'x' } })
   return { result, prompt: captured }
@@ -110,11 +117,36 @@ const MISSING_PAYLOAD = JSON.stringify({ ok: false, reason: libRootMod.MISSING_M
     // (C2) persistPhase / back-half once-per-phase durable write.
     const { result, prompt } = await persistWith(MISS, MISSING_PAYLOAD)
     assert.ok(prompt && prompt.includes(`test -d '${MISS}'`), '(C2) persistPhase save compose arms the probe')
+    assert.ok(prompt.includes('__SR_EXIT:$?'), '(C2) persistPhase save rides the __SR_EXIT marker protocol (#218)')
     assert.ok(prompt.includes(MISS + '/phase_progress_entry.py'), '(C2) save compose resolves under the absolute libRoot')
     assert.ok(!prompt.includes('plugins/superheroes/lib'), '(C2) no repo-relative literal in the save compose')
     assert.strictEqual(result.ok, false, '(C2) a missing spine code root fails the durable write closed')
     assert.strictEqual(result.error, 'spine code root missing (libRoot)',
       `(C2) the back-half durable write must fail with the SAME named reason.\nGot: ${JSON.stringify(result)}`)
+  }
+  {
+    // (C3) #218 lazy courier: parrots the embedded failure branch without executing — must NOT park.
+    resetGlobals()
+    globalThis.__SR_LIB = MISS
+    delete require.cache[require.resolve('../showrunner.js')]
+    const sr = require('../showrunner.js')
+    globalThis.agent = async () => MISSING_PAYLOAD
+    const parrot = await sr.persistPhase('wi-x', { step: 1, phase: 'x', journalPayload: { phase: 'x' } })
+    assert.strictEqual(parrot.error, 'phase progress save transport failed (courier): missing execution marker',
+      '(C3) a marker-less parrot exhausts transport and must NOT fabricate a libRoot park')
+    assert.strictEqual(parrot.ok, false, '(C3) transport exhaustion still fails closed')
+  }
+  {
+    // (C4) shell-execute the probe compose: a genuine missing absolute libRoot must emit __SR_EXIT
+    // in-branch (wrapMarkedCommand's trailing marker never runs after exit 0).
+    const MISS = '/opt/sr-missing-libroot-shell'
+    globalThis.__SR_LIB = MISS
+    const probeOnly = libRootMod.libRootProbe() + 'true'
+    const marked = probeOnly + ' 2>&1; echo __SR_EXIT:$?'
+    const out = execFileSync('bash', ['-c', marked], { encoding: 'utf8' })
+    assert.ok(out.includes(libRootMod.MISSING_MARKER), '(C4) genuine missing libRoot echoes the marker payload')
+    assert.ok(out.includes('__SR_EXIT:0'), '(C4) genuine missing libRoot emits __SR_EXIT before exit')
+    resetGlobals()
   }
 
   // (D) default (relative) libRoot -> byte-identical pre-#170 compose, probe emits nothing.
@@ -128,5 +160,5 @@ const MISSING_PAYLOAD = JSON.stringify({ ok: false, reason: libRootMod.MISSING_M
   }
 
   resetGlobals()
-  console.log('OK: #170 libRoot compose guard (A bundle-static, B absolute-resolve, C1/C2 fail-closed probe reconcile+persistPhase, D default byte-identical)')
+  console.log('OK: #170 libRoot compose guard (A bundle-static, B absolute-resolve, C1/C2/C3/C4 fail-closed probe reconcile+persistPhase+shell, D default byte-identical)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })

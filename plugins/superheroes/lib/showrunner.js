@@ -1351,7 +1351,7 @@ async function persistPhase(workItem, opts) {
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
-    const res = await courier.runCourierJson(
+    const res = await courier.runCourierMarkedJson(
       'save phase progress',
       probedCmd,
       { require: required, retryRealFailure: false },
@@ -1367,8 +1367,11 @@ async function persistPhase(workItem, opts) {
     return confirmed
       ? { ok: true, recovered: false }
       : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
-  } catch (_e) {
-    return { ok: false, error: 'phase progress read-back mismatch' }
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) {
+      return { ok: false, error: 'phase progress save transport failed (courier): ' + e.reason }
+    }
+    return { ok: false, error: 'phase progress save transport failed (courier)' }
   }
 }
 
@@ -1438,10 +1441,14 @@ async function cmdRunner(cmd, { schema, label }) {
 async function reconcile(workItem) {
   const preRoot = checkoutRoot()
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
-  const results = await exec([
-    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`,
-  ], 'gather snapshot')
-  const _snapStdout = (results[0] && results[0].stdout) || ''
+  const snapCmd =
+    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`
+  let _snapStdout = ''
+  try {
+    _snapStdout = await courier.runCourierMarkedText('gather snapshot', snapCmd)
+  } catch (_e) {
+    return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
+  }
   // #170 fail-closed probe: an ABSOLUTE spine code root that vanished mid-run (e.g. plugin-cache
   // eviction) short-circuits the compose to MISSING_MARKER instead of a file-not-found python error —
   // park with a NAMED reason so the readout says exactly what's wrong. Relative (dev) libRoot never
