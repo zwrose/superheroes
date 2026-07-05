@@ -118,17 +118,21 @@ async function callOnce(label, command, promptOpts) {
   return currentAgent()(promptFor(command, promptOpts), { label, courier: true })
 }
 
-// __badCourierAnswer: TRUE when a marker-carrying command's answer signals the shell DID NOT run.
-// Mirrors bundle_showrunner.js __sh — detects (a) a missing __SR_EXIT marker and (b) the literal
-// unexpanded '__SR_EXIT:$?' from an echoed command (live wf_1494a8fa-e28).
+// badCourierAnswer: TRUE when a marker-carrying command's answer signals the shell DID NOT run.
+// Single source of truth for both courier_exec and the bundle preamble (__sh / #194). Detects:
+//   (a) a missing __SR_EXIT marker (bare payload / echo shape); and
+//   (b) the literal unexpanded '__SR_EXIT:$?' from an echoed command (live wf_1494a8fa-e28).
+// This proves marker-SHAPE, not execution. A courier simulating the full embedded failure branch
+// (payload + __SR_EXIT:0, as libRootProbe now embeds) would still pass — #218 bounds that residual
+// via runCourierMarked*'s 2 outer attempts × dispatchMarked's 3-dispatch retry/fallback chain.
+// Do NOT add proof-of-execution here: the Workflow sandbox has no crypto/wall-clock/RNG primitives.
 function badCourierAnswer(a) {
   const s = String(a == null ? '' : a)
   return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
 }
 
 // markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
-// Fence tolerance matches bundle __helperResult so a haiku courier that fences AFTER the marker
-// still yields clean stdout for JSON extraction.
+// helperResult wraps this for the bundle __runHelperCommand / stageAndRunHelper result shape.
 function markerSliceStdout(s) {
   s = String(s || '')
   const re = /__SR_EXIT:(\d+)/g
@@ -144,6 +148,11 @@ function markerSliceStdout(s) {
   return { status, stdout }
 }
 
+function helperResult(s) {
+  const sliced = markerSliceStdout(s)
+  return { ok: sliced.status === 0, status: sliced.status, stdout: sliced.stdout, stderr: '' }
+}
+
 function markedPromptFor(command) {
   return 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
     'Do not echo, fence, summarize, or describe the command:\n\n' + rootedCommand(command)
@@ -155,6 +164,9 @@ function wrapMarkedCommand(command) {
 
 // dispatchMarked: the #194/__sh courier protocol — lean superheroes:courier agent, marker guard with
 // retry + default-dispatch fallback. Shared by runCourierMarkedText/Json (#218: libRoot probe sites).
+// Each outer attempt calls dispatchMarked once; dispatchMarked itself retries up to 3 dispatches
+// (courier agent → courier agent → default agent) when badCourierAnswer fires — 2×3 total before
+// CourierTransportError. That chain bounds residual simulation (see badCourierAnswer / libRootProbe).
 async function dispatchMarked(label, markedCmd) {
   const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
   const prompt = markedPromptFor(markedCmd)
@@ -279,6 +291,8 @@ module.exports = {
   CourierTransportError,
   badCourierAnswer,
   extractJson,
+  helperResult,
+  markerSliceStdout,
   runCourierJson,
   runCourierMarkedJson,
   runCourierMarkedText,
