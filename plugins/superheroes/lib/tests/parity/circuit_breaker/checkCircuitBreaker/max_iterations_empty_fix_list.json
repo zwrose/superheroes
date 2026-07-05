@@ -1,0 +1,1 @@
+{"input": [[{"round": 1, "findings": [{"severity": "Critical", "file": "a.js", "title": "Null deref"}], "fix": {"fixes": []}}], 1], "expected": {"halt": true, "reason": "max-iterations", "detail": "Reached round 1 (cap 1); the latest review still showed 1 blocking finding(s) (no fix was applied this round — the finding(s) remain unaddressed)."}}
