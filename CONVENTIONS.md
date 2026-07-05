@@ -1062,3 +1062,52 @@ keeps its superpowers dependency, untouched.) Full superpowers removal across th
 tracked by [#111](https://github.com/zwrose/superheroes/issues/111); the durable repeatable
 agentic acceptance of the live run by
 [#112](https://github.com/zwrose/superheroes/issues/112).
+
+### 10.7 Ship-phase honesty gates (DoD disposition + stub markers)
+
+The ship phase gates on CI-green + branch-current, but a PR can be internally consistent and
+still **silently incomplete** — a Definition-of-done bullet dropped with no trace, or a
+deliberately-unwired seam disclosed only in a docstring nobody reads (the class
+[#228](https://github.com/zwrose/superheroes/issues/228) closes). Two deterministic,
+fail-closed gates operate on the PR body at draft/mark-ready time.
+
+**DoD disposition gate.** The draft-PR step seeds a **Definition of done** disposition table
+into the PR body — one row per spec DoD bullet (parsed from the spec's `## Definition of done`
+section), anchored on the machine-readable `superheroes:dod-table` marker. The build/ship legs
+**fill** each row: `done` (with an evidence pointer — test name, quoted record, link) or
+`deferred` (with a filed issue `#NNN` **and** a one-line reason). Before the ready flip,
+`lib/dod_gate.py` (pure `decide()`, house decider style) re-reads the table and **parks** the
+run — naming the unaddressed bullet — if any bullet has no row, a `done` with no evidence, or a
+`deferred` with no issue. It verifies *presence and shape*, not quality (a weak pointer passes):
+it converts a silent omission into a visible claim the owner judges at review. A spec-less quick
+route (§3.4, [#25](https://github.com/zwrose/superheroes/issues/25)) returns `not-applicable`;
+a spec-driven run with a missing/empty DoD section **parks** (never silently skips).
+
+There is **no automated filler** — dispositioning each bullet is deliberate work, not something a
+leg fabricates (a fabricated `done` is exactly the silent-completion this gate exists to prevent).
+So a spec-driven run whose table is still blank **parks at mark-ready by design**: it is a
+supervised park (§ review-discipline) the owner resolves by dispositioning the rows and resuming,
+never a defect to auto-clear.
+
+**No-silent-stubs marker.** Any deliberately-unwired seam (a placeholder function, a hardcoded
+default standing in for a real source) **must** carry a machine-findable marker on or above it:
+
+    # STUB(#NNN): <one-line description of what is unwired and the live effect>
+
+The issue number is **mandatory** — a stub without a tracked follow-up is a violation.
+`.github/scripts/validate_stubs.py` (CI) greps the plugin source for `STUB(…)` markers and fails
+any missing a valid issue reference (it does **not** hunt unmarked stubs — that is out of scope
+by design; it catches only stubs the author already flagged but under-specified). The literal
+`#NNN` is the reserved documentation placeholder. At draft-PR time the pipeline greps the PR
+*diff* for markers and writes a **generated** "Stubbed seams" section (anchored on
+`superheroes:stubbed-seams`) — one line per marker (file, issue, description). Generated, not
+authored, so it cannot be omitted; an empty section is omitted entirely. The grammar lives in
+`lib/stub_markers.py` (single source of truth, shared by the validator and the body generator).
+
+**Where each gate bites.** The **stub-marker validator runs in CI on every PR — both paths**, since
+it scans source, not the run. The **DoD disposition gate is code-enforced only on the showrunner
+path** (`lib/pr_entry.py` seeds the table at draft and parks the mark-ready flip). On the
+**standalone review/ship path** the `workhorse` skill authors both sections per this convention and
+the review-discipline rubric cites this section, so the **review seat — not a code gate — is the
+backstop** there. Wiring a deterministic DoD gate into the standalone path is deferred (there is no
+single ship seam to hook the way `pr_entry.py` gives the showrunner).
