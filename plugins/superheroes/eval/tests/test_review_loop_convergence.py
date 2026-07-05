@@ -158,7 +158,9 @@ def test_degraded_confirmation_does_not_anchor_certification():
 def test_resume_memory_restores_fix_context():
     observed = run_fixture("resume_memory.json")
     ctx = observed["fixContexts"][0]["context"]
-    assert ctx["priorFindings"]
+    # #211: the fix worklist (read from disk by the runner) holds `findings` (prior + current), not
+    # the old in-memory `priorFindings` — the fixer reads the worklist file, never inlined findings.
+    assert ctx["findings"]
     assert any("Test::coverage" in key for key in ctx["classKeys"])
     assert "generalizeRequired" in ctx
     assert "Test" in ctx["changedSubjects"]

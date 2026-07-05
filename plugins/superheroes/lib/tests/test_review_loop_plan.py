@@ -226,6 +226,48 @@ def test_plan_round_delegates_to_plan_round_twin(tmp_path, monkeypatch):
     assert "previous" in seen["state"], "plan_round must receive the disk-derived previous state"
 
 
+def test_plan_round_folds_coverage_read(tmp_path):
+    # #118 fold: the per-round coverage read rides the plan-round answer, so a round-entry read is ONE
+    # leaf, not two. The coverage shape is byte-identical to coverage_decisions.load_decisions.
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    cov = tmp_path / "review-coverage-decisions.json"
+    cov.write_text(json.dumps([{"id": "RCD-1", "classKey": "Code::x::y"}]))
+    ans = rlp.plan_round_decider(path, 2, DIMS, ["Code"], just_marked=False,
+                                 coverage_path=str(cov), coverage_mode="code")
+    assert ans["coverage"]["ok"] is True
+    assert ans["coverage"]["decisions"] == [{"id": "RCD-1", "classKey": "Code::x::y"}]
+    assert ans["coverage"]["contentHash"] == review_memory.content_hash(cov.read_text())
+
+
+def test_plan_round_no_coverage_key_when_not_folded(tmp_path):
+    path = _write_records(tmp_path, [_skeleton_round(1, {"code-reviewer": _dim()})])
+    ans = rlp.plan_round_decider(path, 2, DIMS, ["Code"], just_marked=False)
+    assert "coverage" not in ans, "coverage rides only when --coverage-path folds it in"
+
+
+def test_plan_round_surfaces_latest_coverage_ids(tmp_path):
+    # The shell's confirmation coverage-marker check needs the latest record's coverage ids.
+    recs = [
+        _skeleton_round(1, {"code-reviewer": _dim()},
+                        coverage=[{"id": "RCD-old", "classKey": "Code::a::b"}]),
+        _skeleton_round(2, {"code-reviewer": _dim()},
+                        coverage=[{"id": "RCD-new", "classKey": "Code::c::d"}]),
+    ]
+    path = _write_records(tmp_path, recs)
+    ans = rlp.plan_round_decider(path, 3, DIMS, ["Code"], just_marked=False)
+    assert ans["latestCoverageDecisionIds"] == ["RCD-new"], "the LATEST record's coverage ids ride up"
+
+
+def test_plan_round_coverage_fold_fails_closed(tmp_path):
+    path = _write_records(tmp_path, [_skeleton_round(1, {"code-reviewer": _dim()})])
+    cov = tmp_path / "cov.json"
+    cov.write_text("{not a list")
+    ans = rlp.plan_round_decider(path, 2, DIMS, ["Code"], just_marked=False,
+                                 coverage_path=str(cov), coverage_mode="code")
+    assert ans["coverage"]["ok"] is False, "a corrupt coverage read fails closed in the fold"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # tally-round
 # ─────────────────────────────────────────────────────────────────────────────
@@ -468,6 +510,72 @@ def test_tally_certifies_after_qualifying_confirmation(tmp_path):
     assert ans["certification"]["fullPanels"] == 1
 
 
+# ── #212 ride-down: named uncertified reason + the uncertified flag ──
+def test_tally_uncertified_reason_rides_down_preferred_over_missing_angle(tmp_path):
+    # The #215 honest reason: the NAMED seat+defect reason (computed from the live results the
+    # skeleton strips, so it rides DOWN) is preferred over the generic missing-angle fallback.
+    recs = [_skeleton_round(1, {"code-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    named = "code-reviewer: receipt-missing — uncertifiable"
+    ans = _tally(path, 1, gate="cannot-certify", confidence="low",
+                 missing=["security-reviewer"], present_blocking=0, uncertified_reason=named)
+    assert ans["terminal"] == "cannot-certify"
+    assert ans["reason"] == named, "the named per-seat reason wins over the missing-angle fallback"
+    assert ans["uncertified"] is True
+
+
+def test_tally_missing_angle_is_fallback_when_no_named_reason(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="cannot-certify", confidence="low",
+                 missing=["security-reviewer"], present_blocking=0, uncertified_reason=None)
+    assert "missing review angle(s): security-reviewer" in ans["reason"]
+    assert ans["uncertified"] is True
+
+
+def test_tally_uncertified_flag_rides_even_when_routing_to_fix(tmp_path):
+    # #215: a cannot-certify GATE that still holds a fixable blocker routes to the fix leg (terminal
+    # continue) BUT the verdict carries the uncertified flag so the readout sees the gap while fixes land.
+    finding = {"title": "bug", "file": "a.js", "severity": "Critical", "dimension": "Code"}
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[finding]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="cannot-certify", confidence="low", present_blocking=1)
+    assert ans["terminal"] == "continue", "a cannot-certify gate with a fixable blocker fixes first"
+    assert ans["uncertified"] is True, "the uncertified flag rides even on the continue/fix route"
+
+
+# ── #118 fold: tally-round writes the fixer worklist and rides only its pointer ──
+def test_tally_folds_fix_context_and_answers_worklist_pointer(tmp_path):
+    finding = {"title": "bug", "file": "a.js", "line": 2, "severity": "Critical", "dimension": "Code",
+               "classKey": "Code::x::bug"}
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[finding]),
+                                "security-reviewer": _dim()}, changed_subjects=["Code"])]
+    path = _write_records(tmp_path, recs)
+    out = tmp_path / "fix-context-r1.json"
+    ans = _tally(path, 1, gate="blocking", present_blocking=1, worklist_out_path=str(out))
+    assert ans["terminal"] == "continue"
+    assert ans["worklistPath"] == str(out)
+    assert os.path.exists(out), "the worklist is written to disk in the folded tally leaf"
+    worklist = json.loads(out.read_text())
+    # with no staged current-findings file, the current round's SKELETON stands in (file/line/title
+    # survive) so the fixer has the blocker's location without a large body-write crossing down.
+    titles = [f["title"] for f in worklist["findings"]]
+    assert "bug" in titles
+    assert "worklistPath" in ans and "findings" not in ans, "only the POINTER rides back, never findings"
+
+
+def test_tally_no_worklist_on_terminal_round(tmp_path):
+    # A clean/terminal round does not route to fix → no worklist is composed even if a path is given.
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    out = tmp_path / "fix-context-r1.json"
+    ans = _tally(path, 1, gate="clean", present_blocking=0, worklist_out_path=str(out))
+    assert ans["terminal"] == "clean"
+    assert "worklistPath" not in ans
+    assert not os.path.exists(out), "no fixer worklist on a terminal round"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # compose-fix-context
 # ─────────────────────────────────────────────────────────────────────────────
@@ -521,6 +629,27 @@ def test_compose_fix_context_unreadable_fails_closed(tmp_path):
     assert ans["ok"] is False
 
 
+def test_compose_fix_context_includes_current_round_skeleton_when_no_staged_file(tmp_path):
+    # The folded path (no current_findings_path) must NOT drop the current round: its durable
+    # skeleton stands in, so the fixer still gets THIS round's blockers (location + severity).
+    prior = {"title": "prior bug", "file": "a.js", "severity": "Critical", "dimension": "Code",
+             "classKey": "Code::x::prior bug"}
+    current = {"title": "current bug", "file": "b.js", "line": 7, "severity": "Important",
+               "dimension": "Code", "classKey": "Code::y::current bug"}
+    recs = [
+        _skeleton_round(1, {"code-reviewer": _dim(findings=[prior])}, changed_subjects=["Code"]),
+        _skeleton_round(2, {"code-reviewer": _dim(findings=[current])}, changed_subjects=["Code"]),
+    ]
+    records_path = _write_records(tmp_path, recs)
+    out = tmp_path / "fc.json"
+    ans = rlp.compose_fix_context(records_path, None, None, "code", 2, DIMS, str(out))
+    assert ans["ok"] is True
+    worklist = json.loads(out.read_text())
+    titles = [f["title"] for f in worklist["findings"]]
+    assert "prior bug" in titles and "current bug" in titles, \
+        "the current round's skeleton must be included when no full-body file is staged"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # the #211 SIZE invariant — no decider answer scales with run size
 # ─────────────────────────────────────────────────────────────────────────────
@@ -566,6 +695,29 @@ def test_tally_round_answer_is_small(tmp_path):
                      "--gate", "blocking", "--confidence", "high", "--present-blocking", "30")
     assert size < LIMIT, f"tally-round answer {size}B must stay < {LIMIT}B on a big fixture"
     assert _max_list_len(ans) < 50, "a decider answer list must not scale with finding count"
+
+
+def test_tally_round_answer_is_small_with_worklist_fold(tmp_path):
+    # The fix-context fold writes a LARGE worklist file (50 verbose findings) but the tally ANSWER
+    # rides only the pointer — it must still be < 2 KB. A single blocking round routes to fix
+    # (continue) without tripping the recurrence breaker.
+    findings = [{
+        "title": f"finding {i} " + ("lorem ipsum dolor sit amet " * 8),
+        "file": f"path/to/module_{i}.js", "line": i, "severity": "Critical",
+        "dimension": "Code", "classKey": f"Code::cls{i}::finding {i}",
+        "summary": "S" * 300, "evidence": "E" * 600,
+    } for i in range(50)]
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=findings),
+                                "security-reviewer": _dim()}, changed_subjects=["Code"])]
+    path = _write_records(tmp_path, recs)
+    out = tmp_path / "fix-context-r1.json"
+    ans, size = _run("tally-round", "--path", path, "--round", "1", "--roster", json.dumps(DIMS),
+                     "--gate", "blocking", "--confidence", "high", "--present-blocking", "10",
+                     "--worklist-out-path", str(out))
+    assert ans["terminal"] == "continue"
+    assert ans["worklistPath"] == str(out)
+    assert size < LIMIT, f"tally-round answer with the worklist fold {size}B must stay < {LIMIT}B"
+    assert os.path.getsize(out) > LIMIT, "the worklist file itself is large — only the pointer rides"
 
 
 def test_compose_fix_context_answer_is_small(tmp_path):

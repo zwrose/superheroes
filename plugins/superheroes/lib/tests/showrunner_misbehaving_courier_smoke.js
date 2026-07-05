@@ -97,14 +97,41 @@ function runHelperResponse(cmdline) {
     }
   }
   if (script.endsWith('review_setup_gather.py')) {
-    // fold 2 (#141): the ONE pre-round gather leaf (mkdir + load-summary + deferred seed + coverage).
+    // #211: the ONE pre-round gather leaf rides DECISIONS (resume + round-1 plan + coverage + deferred).
     // A misbehaving courier fences this read helper too (mode 5, below) — the bundle must still parse it.
+    const dims = JSON.parse(args[args.indexOf('--dimensions') + 1] || '[]')
+    const schedule = {}
+    for (const d of dims) schedule[d] = { action: 'run', tier: 'reviewer-deep' }
     return JSON.stringify({
       ok: true,
-      memory: { ok: true, state: 'missing', records: [], contentHash: sha256(''), extras: null },
+      resume: { ok: true, state: 'missing', round: 1, contentHash: sha256(''), extras: null,
+        confirmationPending: false, markedRound: null, roundCount: 0 },
+      plan: { ok: true, round: 1, roundKind: 'baseline', enterConfirmation: false,
+        escalationPolicy: 'deep-only', dimensions: schedule, carried: {}, latestCoverageDecisionIds: [] },
       deferredSet: {},
       coverage: { ok: true, decisions: [], contentHash: sha256('') },
     })
+  }
+  if (script.endsWith('review_loop_plan.py')) {
+    // #211 deciders — small meaningful JSON. The canned run is one clean round per phase.
+    const dims = JSON.parse((args.indexOf('--dimensions') >= 0 && args[args.indexOf('--dimensions') + 1]) ||
+      (args.indexOf('--roster') >= 0 && args[args.indexOf('--roster') + 1]) || '[]')
+    const round = Number(args[args.indexOf('--round') + 1]) || 1
+    if (args[0] === 'plan-round') {
+      const schedule = {}
+      for (const d of dims) schedule[d] = { action: 'run', tier: 'reviewer-deep' }
+      return JSON.stringify({ ok: true, round, roundKind: 'intermediate', enterConfirmation: false,
+        escalationPolicy: 'deep-only', dimensions: schedule, carried: {}, latestCoverageDecisionIds: [],
+        coverage: { ok: true, decisions: [], contentHash: sha256('') } })
+    }
+    if (args[0] === 'tally-round') {
+      const gate = args[args.indexOf('--gate') + 1] || 'clean'
+      const terminal = gate === 'clean' ? 'clean' : (gate === 'blocking' ? 'continue' : 'cannot-certify')
+      const out = { ok: true, schemaVersion: 1, terminal, reason: 'clean', gate, confidence: 'high',
+        round, missing: [], presentBlocking: 0, presentDeferred: 0, breaker: { halt: false } }
+      if (terminal === 'clean') out.certification = { fullPanels: 0, lastPanelSurfacedResolved: false }
+      return JSON.stringify(out)
+    }
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
@@ -166,7 +193,7 @@ function shellResponse(cmd) {
     // write, round-memory load-summary). io.runHelper must locate the marker despite the trailing
     // fence; on the pre-fix bundle the end-anchored match misses -> status 1 -> the helper reads as
     // failed -> cannot-certify at review-plan.
-    if (/review_setup_gather\.py|review_memory\.py' '(load-summary|entry-bootstrap)'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
+    if (/review_setup_gather\.py|review_loop_plan\.py|review_memory\.py' '(load-summary|entry-bootstrap)'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
       counters.fencedHelpers += 1
       return '```\n' + body + '\n```'
     }
@@ -312,8 +339,15 @@ async function main() {
   assert.strictEqual(outcome.outcome, 'ready',
     `the run must survive the misbehaving courier and reach 'ready' (got ${JSON.stringify(outcome)})`)
 
-  // every misbehavior mode actually fired
-  assert.ok(counters.proseReads >= 1, 'the prose-for-missing-file read mode must be exercised')
+  // every misbehavior mode actually fired. NOTE (#211): the review loop's last prose-vulnerable JS
+  // read — the deferred-set cat — moved Python-side (the tally decider reads it via --deferred-path,
+  // fail-soft to {} on a missing/odd file), so the whole pipeline no longer does a missing-file JS
+  // cat and proseReads is 0. The prose shim stays as a defensive net (a future JS read that cats a
+  // missing file would return prose and the "reaches ready" + terminal-record checks would catch any
+  // poisoning). The decider answers are instead stress-tested by the FENCED-answer mode below (now
+  // covering review_loop_plan.py) and by showrunner_reviewloop_adversarial_smoke.js (fail-closed).
+  assert.strictEqual(counters.proseReads, 0,
+    '#211: the review loop no longer does a prose-vulnerable JS missing-file read (deferred read is Python-side)')
   assert.ok(counters.chattyAcks >= 1, 'the chatty-write-ack mode must be exercised')
   assert.strictEqual(counters.sabotagedWrites, 1, 'the content-mangled compose-terminal verdict must fire exactly once')
   assert.ok(counters.mangledAnswers >= 2, 'the mangled persist answer must be retried (>=2 helper calls)')

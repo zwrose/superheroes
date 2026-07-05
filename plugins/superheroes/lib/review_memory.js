@@ -132,7 +132,7 @@ function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, 
 // ships inline (Python re-applies summarize_record on arrival, so a drift here can widen the
 // leaf payload but can never widen the on-disk contract).
 const _SKELETON_FIELDS = ['file', 'line', 'title', 'severity', 'taxonomy', 'dimension',
-                          'classKey', 'carried', 'sourceRound']
+                          'classKey', 'carried', 'sourceRound', 'synthesisUnverified']
 function _skeletonFinding(finding) {
   if (!finding || typeof finding !== 'object') return {}
   const out = {}
@@ -149,8 +149,11 @@ function _summarizeDimension(dim) {
   if (!dim || typeof dim !== 'object') return {}
   const findings = Array.isArray(dim.findings) ? dim.findings : []
   const out = {}
+  // `usage` is a small scalar object ({total,input,output}); the skeleton keeps it so a carried
+  // (skipped) dimension carries its prior round's usage forward and the telemetry stays complete
+  // (#211: the loop reads the carried dim from the durable skeleton, not an in-memory copy).
   for (const k of ['dimension', 'status', 'confidence', 'round', 'subjects',
-                   'carriedFromRound', 'escalated', 'tier']) if (k in dim) out[k] = dim[k]
+                   'carriedFromRound', 'escalated', 'tier', 'usage']) if (k in dim) out[k] = dim[k]
   out.findings = findings.map(_skeletonFinding)
   out.hasFindings = findings.length > 0 || !!dim.hasFindings
   out.blockingCount = findings.filter((f) => f && typeof f === 'object' && BLOCKING.has(f.severity)).length
