@@ -1,0 +1,170 @@
+name: Release Evidence
+
+# Ties the deliberately-manual live verification instruments (acceptance run, review
+# benchmark) to the moment a release is cut (issue #237). Runs ONLY on the release-please PR,
+# and NEVER calls a live model — it verifies that the evidence a release owes exists, is a pass,
+# and is bound to the released SHA. The verdict is carried by a re-triggerable commit status
+# (`release-evidence`) on the PR head SHA, so posting evidence later flips it green without a
+# force-push clobbering it. See RELEASING.md.
+#
+# Security posture: this job holds statuses:write + issues:write, so it must never execute code
+# from the (untrusted) PR head. It checks out the TRUSTED base branch for the scripts and reads
+# the release head only as data — the bundle blob via `git show`, the range via `git diff`.
+# Fork PRs additionally receive a read-only token from GitHub, and the job no-ops on any branch
+# not named `release-please--*`.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Release PR number to (re)check"
+        required: true
+
+permissions:
+  contents: read
+  statuses: write
+  issues: write
+  pull-requests: read
+
+jobs:
+  evidence:
+    # Skip the check's own owed-summary comment so an upsert can't re-trigger itself.
+    if: >
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       !contains(github.event.comment.body, '<!-- release-evidence-owed -->'))
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      EVENT_NAME: ${{ github.event_name }}
+      # Payload values are read as data only — never interpolated into a shell command. A
+      # branch name (head.ref) is attacker-influenced, so it is passed via env and quoted.
+      PR_EVENT_NUM: ${{ github.event.pull_request.number }}
+      PR_EVENT_REF: ${{ github.event.pull_request.head.ref }}
+      PR_EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_EVENT_BASE: ${{ github.event.pull_request.base.ref }}
+      ISSUE_NUM: ${{ github.event.issue.number }}
+      DISPATCH_PR: ${{ github.event.inputs.pr }}
+    steps:
+      - name: Resolve the release PR context
+        id: ctx
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            NUM="$PR_EVENT_NUM"; REF="$PR_EVENT_REF"; SHA="$PR_EVENT_SHA"; BASE="$PR_EVENT_BASE"
+          else
+            NUM="${ISSUE_NUM:-$DISPATCH_PR}"
+            read REF SHA BASE < <(gh pr view "$NUM" --repo "$REPO" \
+              --json headRefName,headRefOid,baseRefName \
+              --jq '[.headRefName, .headRefOid, .baseRefName] | @tsv')
+          fi
+          IS_RELEASE=false
+          case "$REF" in release-please--*) IS_RELEASE=true ;; esac
+          {
+            echo "pr=$NUM"
+            echo "sha=$SHA"
+            echo "base=$BASE"
+            echo "is_release=$IS_RELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the TRUSTED base branch (scripts run from here, not the PR head)
+        if: steps.ctx.outputs.is_release == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.ctx.outputs.base }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        if: steps.ctx.outputs.is_release == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Materialize the release head as data (bundle blob + fetch for the range)
+        if: steps.ctx.outputs.is_release == 'true'
+        env:
+          SHA: ${{ steps.ctx.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$SHA"
+          # Read the head's committed bundle without checking out (never execute head code).
+          git show "$SHA:plugins/superheroes/lib/showrunner.bundle.js" > head-bundle.js
+          gh api "repos/$REPO/issues/${{ steps.ctx.outputs.pr }}/comments" --paginate \
+            --jq '[.[] | {body: .body}]' > comments.json
+
+      - name: Verify release evidence
+        id: verify
+        if: steps.ctx.outputs.is_release == 'true'
+        continue-on-error: true
+        env:
+          SHA: ${{ steps.ctx.outputs.sha }}
+        run: |
+          set +e
+          python3 .github/scripts/verify_release_evidence.py \
+            --head-sha "$SHA" \
+            --bundle head-bundle.js \
+            --comments comments.json \
+            --owed-comment-out owed.md \
+            > summary.json
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish owed-summary to the job summary
+        if: steps.ctx.outputs.is_release == 'true'
+        run: |
+          {
+            echo '### Release evidence — owed summary'
+            echo '```json'
+            cat summary.json 2>/dev/null || echo '{}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert the sticky owed-summary comment
+        # Only on branch-push / dispatch — NOT on issue_comment, so the upsert never re-triggers
+        # itself (issue_comment is also skipped by the job `if`, this is belt-and-braces).
+        if: steps.ctx.outputs.is_release == 'true' && github.event_name != 'issue_comment'
+        env:
+          NUM: ${{ steps.ctx.outputs.pr }}
+        run: |
+          set -euo pipefail
+          ID=$(gh api "repos/$REPO/issues/$NUM/comments" --paginate \
+                 --jq 'map(select(.body | contains("<!-- release-evidence-owed -->"))) | last | .id')
+          if [ -n "$ID" ] && [ "$ID" != "null" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$ID" -F body=@owed.md >/dev/null
+          else
+            gh api -X POST "repos/$REPO/issues/$NUM/comments" -F body=@owed.md >/dev/null
+          fi
+
+      - name: Publish the release-evidence commit status
+        # Runs on EVERY PR so the required `release-evidence` status always reports: a non-release
+        # (or docs-only) PR is trivially success, a release PR carries the verify verdict. Without
+        # this, a required status that never reports would block every ordinary PR forever.
+        env:
+          IS_RELEASE: ${{ steps.ctx.outputs.is_release }}
+          SHA: ${{ steps.ctx.outputs.sha }}
+          RC: ${{ steps.verify.outputs.rc }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SHA:-}" ]; then
+            echo "no head SHA resolved (not a PR context) — nothing to status"; exit 0
+          fi
+          if [ "$IS_RELEASE" != "true" ]; then
+            STATE=success
+            DESC="not a release PR — no evidence owed"
+          elif [ "$RC" = "0" ]; then
+            STATE=success
+            DESC=$(python3 -c "import json;s=json.load(open('summary.json'));print(('owes nothing' if not s['owed'] else 'evidence satisfied: '+', '.join(s['owed']))[:140])")
+          else
+            STATE=failure
+            DESC=$(python3 -c "import json;s=json.load(open('summary.json'));print(('evidence owed: '+', '.join(s['missing']))[:140])")
+          fi
+          gh api -X POST "repos/$REPO/statuses/$SHA" \
+            -f state="$STATE" \
+            -f context="release-evidence" \
+            -f description="$DESC" \
+            -f target_url="$RUN_URL" >/dev/null

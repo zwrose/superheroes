@@ -4,25 +4,26 @@ description: Use to run the standalone showrunner acceptance harness — "run th
 user-invocable: true
 ---
 
-This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.
+# Acceptance harness — the developer front door
 
-# Acceptance harness — the owner front door
+> **Repo-local dev tool.** This skill validates the superheroes band itself; it is not
+> distributed with the plugin (issue #237). It lives in the repo checkout and resolves the
+> harness lib from that checkout — repo-local skills cannot use `${CLAUDE_PLUGIN_ROOT}`, and
+> that's correct: the acceptance run is checkout-bound by definition (it points the run at this
+> tree). It runs on Claude Code; each "run this shell command" step is the Bash tool.
 
-Durabilize the one-shot manual acceptance run into one owner-invoked command. The skill is
-**control-flow narration only**: it takes **no free-form input** (the fixture is canned — UFR-7),
-refuses **before any launch or create** when it detects it is running inside a showrunner or
-acceptance run (UFR-5), and otherwise delegates the whole invocation to `acceptance_run.invoke`.
-Every judgement stays a pure decider; the skill asks no question a decider can answer and **never
+Durabilize the one-shot manual acceptance run into one command. The skill is **control-flow
+narration only**: it takes **no free-form input** (the fixture is canned — UFR-7), refuses
+**before any launch or create** when it detects it is running inside a showrunner or acceptance
+run (UFR-5), and otherwise delegates the whole invocation to `acceptance_run.invoke`. Every
+judgement stays a pure decider; the skill asks no question a decider can answer and **never
 merges, releases, or force-pushes** — the launcher structurally denies those owner-authority
 actions in the child (UFR-6), and the final verdict is the owner's to act on.
 
-It resolves host-neutral actions via the host tool map like every other skill (CONVENTIONS §7).
-Escalation follows the F5 policy (`escalation-base.md`): act autonomously on agent-verifiable /
-reversible steps, escalate only owner-authority decisions.
-
-Resolve the plugin lib dir once: `export LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`, and the
-repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1 reads `LIB` back via
-`os.environ["LIB"]` inside a quoted heredoc child process, which only sees exported variables.
+Resolve the repo root and the plugin lib dir from the checkout once:
+`ROOT=$(git rev-parse --show-toplevel); export LIB="$ROOT/plugins/superheroes/lib"`. The
+`export` matters: step 1 reads `LIB` back via `os.environ["LIB"]` inside a quoted heredoc child
+process, which only sees exported variables.
 
 ## Start
 
@@ -71,7 +72,7 @@ repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1
    **Pre-release gate (`--spine-lib`).** By default the child launches the spine from the
    installed plugin cache — the last *released* version — so merged-but-unreleased spine
    changes are invisible (post-release smoke). To gate merged `main` **before** cutting a
-   release, pass `--spine-lib <lib-dir>` pointing at the checkout's own
+   release, pass `--spine-lib "$LIB"` pointing at the checkout's own
    `plugins/superheroes/lib` (must contain `showrunner.bundle.js` + `showrunner.js`): the
    child then resolves the **entire** spine from that tree — pre-flight, the committed bundle,
    the Workflow `libRoot`, and the run-outcome projection — never a cross-version mix of a
@@ -82,12 +83,12 @@ repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1
    pointing `--spine-lib` at that same checkout's lib:
 
    ```bash
-   git -C ~/superheroes checkout main && git pull
-   python3 plugins/superheroes/lib/acceptance_run.py \
-     --fixture plugins/superheroes/eval/fixtures/acceptance \
-     --root /Users/zwrose/superheroes \
-     --spine-lib /Users/zwrose/superheroes/plugins/superheroes/lib
-   # green verdict (recording main's bundle hash + driver model) -> merge the release PR
+   git -C "$ROOT" checkout main && git -C "$ROOT" pull
+   python3 "$LIB/acceptance_run.py" \
+     --fixture "$LIB/../eval/fixtures/acceptance" \
+     --root "$ROOT" \
+     --spine-lib "$LIB"
+   # green verdict (recording main's bundle hash + driver model) -> the release evidence gate
    ```
 
    The child **driver** session is pinned to `sonnet` by default so it never inherits the
