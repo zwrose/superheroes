@@ -219,7 +219,9 @@ def test_fix_push_no_change_parks(tmp_path):
     out = json.loads(r.stdout)
     assert out["pushed"] is False
     assert out["ok"] is False
-    assert "no change" in out["reason"] or "nothing" in out["reason"]
+    # no origin remote here → the honest park reason is the unreadable remote PR head
+    # (a true in-sync no-op keeps "no change to push — nothing the fixer produced").
+    assert "unreadable" in out["reason"], out["reason"]
 
 
 def test_revert_draft_no_pr_fails_closed(tmp_path, monkeypatch):
@@ -411,7 +413,8 @@ def test_fix_push_clean_tree_diverged_remote_still_parks(tmp_path):
                        capture_output=True, text=True, cwd=str(work), env=monkey, timeout=60)
     out = json.loads(r.stdout)
     assert out["ok"] is False and out["pushed"] is False, r.stdout
-    assert "no change" in out["reason"] or "nothing" in out["reason"]
+    # honest park reason: this is NOT a "fixer produced nothing" no-op — the histories diverged.
+    assert "diverged" in out["reason"], out["reason"]
 
 
 def test_post_push_read_back_checks_branch_ref_before_pr_api():

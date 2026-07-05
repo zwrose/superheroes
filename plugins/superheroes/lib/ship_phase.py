@@ -88,9 +88,11 @@ def _replay_push_onto_remote(work_item, branch, wt):
 
 def _push_read_back(work_item, branch, wt, local, attempts=3, delay=2.0):
     """Confirm a just-accepted push is visible on the remote. The branch ref via ls-remote is
-    checked FIRST — it updates atomically with the accepted push; the PR API head (gh) can lag
-    a pushed ref by seconds, which made a successful push read back as failed (run-32 false
-    park). Bounded retries absorb that lag; False only when the remote never shows the head."""
+    the LOAD-BEARING check and comes first — it updates atomically with the accepted push; the
+    PR API head (gh) can lag a pushed ref by seconds, which made a successful push read back as
+    failed (run-32 false park). gh is consulted only on the FIRST attempt as corroboration;
+    retries are ls-remote-only, keeping the worst case inside the leaf's timeout budget.
+    Bounded retries absorb the lag; False only when the remote never shows the head."""
     for i in range(attempts):
         if i:
             time.sleep(delay)
@@ -98,25 +100,30 @@ def _push_read_back(work_item, branch, wt, local, attempts=3, delay=2.0):
             rc, out = _git(["ls-remote", "origin", branch], cwd=wt)
             if rc == 0 and out and out.split()[0] == local:
                 return True
-        if _remote_pr_head(work_item, branch, wt) == local:
+        if i == 0 and _remote_pr_head(work_item, branch, wt) == local:
             return True
     return False
 
 
 def _fixer_committed_ahead(work_item, branch, wt):
-    """True when the CI fixer committed its own fix instead of leaving it uncommitted: the tree
-    is clean and the local HEAD is STRICTLY ahead of a READABLE remote PR head (run-31 park —
-    the commit was the fixer's product, but the empty staged tree read as "nothing produced").
-    An unreadable remote, an already-synced head, or a diverged history stays False — the
-    caller parks fail-closed rather than guess-push."""
+    """(qualifies, park_reason): qualifies is True when the CI fixer committed its own fix
+    instead of leaving it uncommitted — the tree is clean and the local HEAD is STRICTLY ahead
+    of a READABLE remote PR head (run-31 park — the commit was the fixer's product, but the
+    empty staged tree read as "nothing produced"). An unreadable remote, an already-synced
+    head, or a diverged/unprovable history stays False — the caller parks fail-closed rather
+    than guess-push, with park_reason naming which case it hit."""
     local = _local_head(wt)
     if not local:
-        return False
+        return False, "no change to push — nothing the fixer produced"
     remote = _remote_pr_head(work_item, branch, wt)
-    if not remote or remote == local:
-        return False
+    if not remote:
+        return False, "clean tree and remote PR head unreadable — park"
+    if remote == local:
+        return False, "no change to push — nothing the fixer produced"
     rc, _ = _git(["merge-base", "--is-ancestor", remote, local], cwd=wt)
-    return rc == 0
+    if rc != 0:
+        return False, "clean tree but local and remote PR head have diverged — park (no guess-push)"
+    return True, ""
 
 
 def _fence_check(work_item, generation, root):
@@ -270,9 +277,10 @@ elif a.step == "reconcile-head":
         return _push_read_back(a.work_item, branch, wt, local)    # read-back-confirm the push landed
 
     res = ship_reconcile.reconcile_head(local, _remote_pr_head(a.work_item, branch, wt), branch, _push)
+    # trust the apply result: _push() already read-back-confirmed with retries; re-probing here
+    # (no-sleep single attempt) could flip a just-confirmed push back to false.
     read_back = bool(res.get("ok")) and (
-        res.get("already") is True
-        or _push_read_back(a.work_item, branch, wt, local, attempts=1)
+        res.get("already") is True or res.get("applied") is True
     )
     print(json.dumps({"ok": bool(res["ok"]),
                       "head": local if res["ok"] else None,
@@ -373,11 +381,13 @@ elif a.step == "fix-push":
             print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
                               "reason": "commit failed"}))
             sys.exit(0)
-    elif not _fixer_committed_ahead(a.work_item, branch, wt):
-        print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
-                          "reason": "no change to push — nothing the fixer produced"}))
-        sys.exit(0)
-    # else: the fixer committed its own fix — the local-ahead commit IS the product; push it as-is.
+    else:
+        ahead, park_reason = _fixer_committed_ahead(a.work_item, branch, wt)
+        if not ahead:
+            print(json.dumps({"ok": False, "head": _local_head(wt), "pushed": False,
+                              "reason": park_reason}))
+            sys.exit(0)
+        # the fixer committed its own fix — the local-ahead commit IS the product; push it as-is.
     push_rc, _ = _git(["push", "origin", branch], cwd=wt)         # ordinary non-force push (FR-9)
     if push_rc == 0:
         head = _local_head(wt)
@@ -386,8 +396,10 @@ elif a.step == "fix-push":
                           "reason": "fix pushed"}))
         sys.exit(0)
     # non-fast-forward: replay local-ahead onto the current remote PR head (never base, never force).
+    # ok requires read_back too — an unconfirmed replay-push must not read as confirmed.
     _ok, head, read_back, reason = _replay_push_onto_remote(a.work_item, branch, wt)
-    print(json.dumps({"ok": _ok, "head": head, "pushed": _ok, "read_back": bool(read_back), "reason": reason}))
+    print(json.dumps({"ok": _ok and bool(read_back), "head": head, "pushed": _ok,
+                      "read_back": bool(read_back), "reason": reason}))
 elif a.step == "prepare-ci-fix":
     try:
         failing = json.loads(a.failing) if a.failing else []
@@ -436,10 +448,12 @@ elif a.step == "push-ci-fix-recheck":
         if commit_rc != 0:
             fail["reason"] = "commit failed"
             print(json.dumps(fail)); sys.exit(0)
-    elif not _fixer_committed_ahead(a.work_item, branch, wt):
-        fail["reason"] = "no change to push — nothing the fixer produced"
-        print(json.dumps(fail)); sys.exit(0)
-    # else: the fixer committed its own fix — the local-ahead commit IS the product; push it as-is.
+    else:
+        ahead, park_reason = _fixer_committed_ahead(a.work_item, branch, wt)
+        if not ahead:
+            fail["reason"] = park_reason
+            print(json.dumps(fail)); sys.exit(0)
+        # the fixer committed its own fix — the local-ahead commit IS the product; push it as-is.
     push_rc, _ = _git(["push", "origin", branch], cwd=wt)
     if push_rc != 0:
         _ok, head, read_back, reason = _replay_push_onto_remote(a.work_item, branch, wt)
@@ -450,7 +464,10 @@ elif a.step == "push-ci-fix-recheck":
     else:
         head = _local_head(wt)
         read_back = _push_read_back(a.work_item, branch, wt, head)
-        reason = "fix pushed and rechecked" if read_back else "push read-back failed"
+        # the push WAS accepted; an unconfirmed read-back still parks fail-closed (ok/pushed stay
+        # derived from read_back) but the narrative must not claim the push itself failed.
+        reason = ("fix pushed and rechecked" if read_back
+                  else "push accepted; remote head not yet visible — will reconcile on resume")
     checks = _emit_checks_payload(a.work_item, wt)
     print(json.dumps({"ok": bool(read_back), "head": head, "pushed": bool(read_back),
                       "read_back": bool(read_back), "checks": checks, "reason": reason}))
