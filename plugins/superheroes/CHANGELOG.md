@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.8.0...superheroes-v0.9.0) (2026-07-05)
+
+
+### Features
+
+* **superheroes:** quick-discovery the-architect leg — routing, in-session task authoring, alignment probe, gate/launch wiring ([#25](https://github.com/zwrose/superheroes/issues/25) · PR 2) ([#210](https://github.com/zwrose/superheroes/issues/210)) ([ceafd72](https://github.com/zwrose/superheroes/commit/ceafd72a57df7dd9390ac42faa56abddfe57dc64))
+* **superheroes:** quick-route showrunner intake — spec-less-but-never-review-less ([#25](https://github.com/zwrose/superheroes/issues/25) · PR 1) ([#200](https://github.com/zwrose/superheroes/issues/200)) ([761e79b](https://github.com/zwrose/superheroes/commit/761e79b1a19437263b5ba36917be8652b510b1be))
+* **superheroes:** review-discipline convention — repo rule + portable to calibrated projects ([#190](https://github.com/zwrose/superheroes/issues/190)) ([7d5898a](https://github.com/zwrose/superheroes/commit/7d5898af4e920575f50dcb50358677991a664447))
+* **superheroes:** review-loop deciders — decisions up, pointers down ([#211](https://github.com/zwrose/superheroes/issues/211) · PR 1 of 3) ([#214](https://github.com/zwrose/superheroes/issues/214)) ([c7dfd8d](https://github.com/zwrose/superheroes/commit/c7dfd8d508d9bd5b20548551261cf44420ff2f13))
+* **superheroes:** review-loop shell cutover — decisions up, pointers down ([#211](https://github.com/zwrose/superheroes/issues/211) · PR 2 of 3) ([#216](https://github.com/zwrose/superheroes/issues/216)) ([d517cc3](https://github.com/zwrose/superheroes/commit/d517cc37e12ad1aa1a594f6c29e37cb23f439299))
+
+
+### Bug Fixes
+
+* **superheroes:** first test-pilot status write must treat an absent file as apply-needed ([#209](https://github.com/zwrose/superheroes/issues/209)) ([d15dda0](https://github.com/zwrose/superheroes/commit/d15dda09e7f81ff77dab86c29f31a9ed16becd53))
+* **superheroes:** raw-text read-chunk fallback + delete the cutover-orphaned machinery ([#211](https://github.com/zwrose/superheroes/issues/211) · PR 3 of 3) ([#217](https://github.com/zwrose/superheroes/issues/217)) ([2ff4b28](https://github.com/zwrose/superheroes/commit/2ff4b280c3dde5d1d909a8edf8d59397e4b27556))
+* **superheroes:** review-loop cures receipt-less answers — corrective retry, fix-before-park, honest reasons ([#212](https://github.com/zwrose/superheroes/issues/212)) ([#215](https://github.com/zwrose/superheroes/issues/215)) ([b588ff0](https://github.com/zwrose/superheroes/commit/b588ff09392bafc84727e7be7d4dcd23e22ef285))
+* **superheroes:** self-cert gate snippets use the fenced set-gate form ([#213](https://github.com/zwrose/superheroes/issues/213)) ([7894b6b](https://github.com/zwrose/superheroes/commit/7894b6b64c569d02d4a55913394bc3c81a377662))
+
 ## [0.8.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.7.0...superheroes-v0.8.0) (2026-07-04)
 
 
