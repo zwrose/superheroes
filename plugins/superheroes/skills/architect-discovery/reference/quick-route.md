@@ -1,9 +1,10 @@
-<!-- quick-route-version: 1 -->
+<!-- quick-route-version: 2 -->
 
 ## Contents
 
 Quick discovery — the **spec-less-but-never-review-less** flow the-architect runs for a genuine
-chore, once the owner has signed off on the `quick` route (parent SKILL, `## Choose the route`).
+chore, once the owner has signed off on the `quick` route at the framing brief (parent SKILL,
+`## Route: full or quick` / step 5).
 Sections: **Author the tasks doc** · **The alignment probe** · **The owner's direction gate** ·
 **Gate write + launch**. Host actions resolve via the host tool map (parent SKILL). On this route
 you write the **task list directly** — no spec, no plan — a single-dispatch probe grades it
@@ -20,8 +21,10 @@ WORK_ITEM=$(python3 "$ROOT_DIR/lib/definition_doc.py" mint --title "<concise cho
 ## Author the tasks doc (with clarifying questions)
 
 Quick is **not** mechanical transcription — an issue is not assumed clear enough to go straight to
-tasks. **Ask clarifying questions** (one at a time) for anything ambiguous — at least one, unless
-the chore is genuinely unambiguous. Never assume the *what*.
+tasks. But the **gather + frame** phase already ran before the route was chosen at the framing
+brief (parent SKILL, step 5), so most clarifying dialogue has already happened. **Ask only what is
+still genuinely ambiguous** — one question at a time — and **never re-ask** something the gather
+phase already settled. If nothing is left open, say so and proceed. Never assume the *what*.
 
 Place the doc **exactly where the tasks phase writes it today** (the mode-aware, spec-anchored
 resolver — the showrunner's own intake reads that path), so downstream is byte-identical:
