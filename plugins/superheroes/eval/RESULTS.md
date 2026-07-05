@@ -120,7 +120,7 @@ Own-dimension recall (strict `score.py`) + traps, per dispatch:
 | code-reviewer | refactor | 0/1 † | 0 | 3 († incl. classifyOrder cognitive-complexity; other 2 = cross-dim BFLA/BOPLA true positives) |
 | security-reviewer | refactor | **2/2** (BFLA + BOPLA) | 0 | 0 |
 | test-reviewer | refactor | **1/1** (mock-echo) | 0 | 1 (real coverage gap, not an FP) |
-| premortem-reviewer | failure-modes | **7/7** (all seven classes) | 0 | 0 |
+| premortem-reviewer | failure-modes | **7/7** (all seven classes) | 0 | 0 (9 findings emitted; the two extras — redeem.ts partial-failure, credits.ts race — were window-absorbed into their flows' seed matches, unlike 2026-06-11 where one listed as net_new on out-of-range lines) |
 | premortem-reviewer | failure-modes-bait | n/a (0 findings emitted) | **0** | 0 |
 
 **Mechanical bars (README §Single-variant fixtures): both PASS** — `failure-modes` matched == total (7/7, first run, now including the two newer `fail-direction` + `transport-contract` classes), `failure-modes-bait` traps_flagged == 0 (zero findings emitted at all).
@@ -130,7 +130,7 @@ Own-dimension recall (strict `score.py`) + traps, per dispatch:
 - test/web-handler: the `"returns 401 when not authenticated"` claim/test-mismatch flagged, cited `:74` (outside the ±2 window of the seed's resolved line).
 - code/refactor: `classifyOrder` deep-nesting flagged (`cognitive-complexity spike`) — the seeded function (seed resolves to `orders.ts:12`, inside `classifyOrder`) — but cited `:89` (diff-relative arithmetic) and a non-exact taxonomy string, so neither the ±15 window nor the exact-taxonomy fallback fired.
 
-Substantive own-dimension recall is therefore **8/8 cells** (17/17 seed instances across all dispatches, counting cross-dimension catches once, in their own dimension's cell). **Zero traps flagged in all 10 dispatches** — the precision guardrails (context-line, theme-token, sibling-import, size-only, framework-escaped, clear-non-duplicative, and all three bait reasons) held everywhere.
+Substantive own-dimension recall is therefore **8/8 cells** across the eight four-agent dispatches (the two premortem dispatches are covered by the mechanical bars above) — **16/16 seed instances** across all dispatches (web-handler 4 + refactor 5 + failure-modes 7, counting cross-dimension catches once, in their own dimension's cell). **Zero traps flagged in all 10 dispatches** — the precision guardrails (context-line, theme-token, sibling-import, size-only, framework-escaped, clear-non-duplicative, and all three bait reasons) held everywhere.
 
 **Tokens:** ~50–58k total tokens per dispatch (subagent total incl. reading agent file + rubric + fixture; ~536k across all 10).
 
