@@ -102,6 +102,17 @@ def current_live_child():
     return _live_child
 
 
+def _set_live_child(child):
+    """Publish (or clear, with None) the live-child slot. `run()` owns the lifecycle (set at
+    spawn, cleared in its finally), but the real launcher's spawn wrapper also calls this ONE
+    beat earlier — right after Popen, before the pgid-persist file I/O — so a signal during that
+    (slower, syscall-heavy) window still reaches the live group instead of capturing None and
+    reaping a just-spawned orphan's future artifacts (issue #245 review). The residual Popen→
+    handle-construct gap is irreducible and stays bounded by the 2×-elapsed bg-wait ceiling."""
+    global _live_child
+    _live_child = child
+
+
 def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
         budget_consumed=None, attempt=1):
     """Launch the stamped work-item and watch it against the remaining budget.
@@ -121,11 +132,12 @@ def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_read
 
     child = child_factory()
     # Publish the live child so the harness signal handler can reach the group if a SIGTERM/
-    # SIGINT arrives mid-watch (issue #245). Cleared in the finally on every exit — including
-    # an exception (e.g. the signal handler's) unwinding the loop; the handler has already
-    # captured the child by then, so clearing here cannot lose it.
-    global _live_child
-    _live_child = child
+    # SIGINT arrives mid-watch (issue #245). The real spawn wrapper already published it one
+    # beat earlier (before its pgid-persist I/O); this is the canonical set for every path
+    # (including injected-fake children in tests). Cleared in the finally on every exit —
+    # including an exception (e.g. the signal handler's) unwinding the loop; the handler has
+    # already captured the child by then, so clearing here cannot lose it.
+    _set_live_child(child)
     start = clock.now()
 
     last_spend = None
@@ -177,7 +189,7 @@ def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_read
             if clock is _REAL_CLOCK:
                 time.sleep(_POLL_INTERVAL_SEC)
     finally:
-        _live_child = None
+        _set_live_child(None)
 
 
 def _compute_spend_partial(engine_pref_reader):
@@ -249,7 +261,11 @@ class _PgidGroup:
             os.killpg(self._pgid, 0)
         except ProcessLookupError:
             return True
-        except PermissionError:
+        except (PermissionError, OSError):
+            # Present-but-unsignalable, or an unexpected killpg error (e.g. EINVAL on a
+            # malformed pgid): fail closed — "not empty" keeps the escalation honest and
+            # never declares a false victory. (Callers gate pgid <= 1 upstream; this is
+            # defense in depth so a stray value can never crash the reclaim probe.)
             return False
         else:
             return False

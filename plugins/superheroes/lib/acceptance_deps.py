@@ -211,12 +211,27 @@ def _orphan_group_liveness(lease, boot, cur_boot):
         return "dead"
     # Same-boot pgids only (a recycled pid on a new boot could name an unrelated group).
     # A confirmed bootId match is required before we signal anything.
+    #
+    # Tradeoff (PR #246 review, premortem F3): when bootId is unavailable on either side —
+    # e.g. a host with no /proc/stat btime and no sysctl kern.boottime, where hostinfo.boot_id()
+    # returns None — we deliberately FAIL OPEN here (return "dead", no probe) rather than
+    # "unconfirmable". The alternative would wedge such a host permanently: a genuinely crashed
+    # lease could never be reclaimed. On these hosts #245's orphan protection reverts to
+    # pre-#245 behavior, bounded by the child's 2×-elapsed bg-wait ceiling (PR #244). Most Linux
+    # CI containers expose /proc/stat btime, so this is a narrow, explicitly-accepted gap.
     if boot is None or cur_boot is None or boot != cur_boot:
         return "dead"
     try:
         pgid_int = int(pgid)
     except (TypeError, ValueError):
         return "dead"  # malformed pgid — nothing safe to signal; behave as pre-#245
+    # Reject non-positive-leader pgids from a corrupt/crafted lease BEFORE they reach
+    # os.killpg (which maps to kill(-pgid, sig)): pgid 0 -> the harness's OWN group, 1 ->
+    # a broadcast SIGTERM/SIGKILL to every signalable process, negatives -> EINVAL. A real
+    # child leader pid is always > 1, so treat anything <= 1 as pre-#245 "dead" — never
+    # signalled (the lease is trusted input; this fails closed on garbage, security review).
+    if pgid_int <= 1:
+        return "dead"
     return "dead" if acceptance_launch.reap_group_by_pgid(pgid_int) else "unconfirmable"
 
 
@@ -263,9 +278,19 @@ def _record_belongs_to_stamp(record, stamp):
     return False
 
 
-def real_release_lease(root):
-    """`deps["release_lease"]`: drop the lease file. Idempotent."""
+def real_release_lease(root, expected_stamp=None):
+    """`deps["release_lease"]`: drop the lease file. Idempotent.
+
+    `expected_stamp` (PR #246 review, defense in depth): when given, remove the lease ONLY if it
+    still belongs to this invocation (its `stamp` matches, or is absent). This makes a stray
+    double-release — e.g. a signal racing the normal release path — unable to delete a lease a
+    CONCURRENT winner acquired in between, which would re-open the two-runs hazard. `None`
+    (legacy/pre-materialize callers) keeps the unconditional-remove behavior."""
     try:
+        if expected_stamp is not None:
+            lease = _read_lease(root)
+            if isinstance(lease, dict) and lease.get("stamp") not in (None, expected_stamp):
+                return  # a different holder owns the lease now — never delete theirs
         os.remove(_lease_path(root))
     except OSError:
         pass
@@ -874,6 +899,11 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
             child = acceptance_launch._default_child_factory(
                 stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root,
                 child_model=child_model, bg_wait_ceiling_ms=bg_ms)
+            # Publish the live child BEFORE the (slower, syscall-heavy) pgid-persist file I/O so
+            # a signal in that window still reaches the live group instead of capturing None and
+            # reaping a just-spawned orphan's future artifacts (issue #245 review). run() re-
+            # publishes the same handle and owns the clear.
+            acceptance_launch._set_live_child(child)
             # Persist the live child's pgid into the lease at spawn time (issue #245) so a
             # reclaim after an ungraceful harness death reaps the orphan group rather than
             # deleting the artifacts it is still building on. Best-effort — never blocks spawn.
@@ -1004,7 +1034,7 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None):
         "write_refusal_record": real_write_refusal_record(root),
         "write_orphan_record": real_write_orphan_record(root),
         "quarantine_lease": real_quarantine_lease(root),
-        "release_lease": lambda: real_release_lease(root),
+        "release_lease": lambda: real_release_lease(root, expected_stamp=current_stamp()),
         "clock_now": real_clock_now(),
         "spine_provenance": real_spine_provenance(spine_lib, resolved_child_model),
     }

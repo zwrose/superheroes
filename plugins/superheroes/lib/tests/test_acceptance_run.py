@@ -653,3 +653,68 @@ def test_install_termination_handlers_installs_and_restore_reverts():
     finally:
         _signal.signal(_signal.SIGTERM, prev_term)
         _signal.signal(_signal.SIGINT, prev_int)
+
+
+def test_signal_after_unconfirmed_ceiling_kill_does_not_downgrade_quarantine():
+    # PR #246 review (premortem BLOCKER): a signal arriving AFTER the launcher already returned
+    # kill-unconfirmed (the live-child slot was cleared as run() unwound, so the handler
+    # captures child=None) must NOT downgrade the kill-unconfirmed quarantine into a full reap +
+    # lease release. The prior unsafe verdict is honored: cleanup skipped, lease quarantined+held.
+    quarantine_calls = []
+
+    def _quarantine(stamp):
+        quarantine_calls.append(stamp)
+        if len(quarantine_calls) == 1:
+            # the signal lands mid-step-8, after the launcher already reported unconfirmed
+            raise run._SignalTermination(_signal.SIGTERM, None)
+
+    d = _deps(
+        launcher=lambda stamped, budget_consumed=None, attempt=1: {
+            "outcome": "kill-unconfirmed", "ceiling": "elapsed", "terminal_location": None,
+            "spend_partial": False, "spend": 0.25, "elapsed_sec": 99.0, "teardown_safe": False},
+        run_outcome=lambda loc: (_ for _ in ()).throw(AssertionError("unsafe kill has no terminal")),
+        quarantine_lease=_quarantine,
+    )
+    stamp_reaps = []
+    d["reap"] = lambda planned: stamp_reaps.append(planned) or {
+        "cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    rec = d["_state"]["records_written"][0]
+    # cleanup skipped for the stamp, lease quarantined + HELD — never reclaimed by the signal path.
+    assert rec["cleaned_up"] == []
+    assert rec["left_behind"] and "cleanup skipped" in str(rec["left_behind"][0])
+    assert d["_state"]["lease_released"] is False
+    assert quarantine_calls   # quarantine was (re-)invoked; the lease stays held, never released
+    # the stamp's own artifacts were never reaped (no full teardown of a possibly-live orphan).
+    assert all(
+        not any(a.get("name") == "b-s1" for a in call.get("reap") or [])
+        for call in stamp_reaps)
+
+
+def test_signal_after_record_written_does_not_rewrite_or_double_release(monkeypatch):
+    # PR #246 review: a signal in the window AFTER the record was durably written + the lease
+    # handled (during return-dict construction) must echo the already-computed result — not
+    # re-run teardown, rewrite the record, or release the lease a second time.
+    calls = {"report": 0}
+    real_report = run._report
+
+    def _report_that_signals(*a, **k):
+        calls["report"] += 1
+        if calls["report"] == 1:
+            # first _report call is the success path's, AFTER _finalize wrote the record +
+            # released the lease; simulate the signal landing right then.
+            raise run._SignalTermination(_signal.SIGTERM, None)
+        return real_report(*a, **k)
+
+    monkeypatch.setattr(run, "_report", _report_that_signals)
+    d = _deps()
+    r = run.invoke(d)
+
+    # exactly ONE record write, exactly ONE lease release — the signal did not double them.
+    assert len(d["_state"]["records_written"]) == 1
+    assert d["_state"]["lease_released"] is True
+    # the echoed result still names the durably-written record.
+    assert r["record_path"] == "/rec.json"

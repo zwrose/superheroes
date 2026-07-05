@@ -115,6 +115,21 @@ def test_malformed_child_pgid_falls_back_to_pre_245_dead(monkeypatch):
     assert deps._lease_liveness(lease) == "dead"
 
 
+def test_non_positive_child_pgid_is_never_signalled(monkeypatch):
+    # Security hardening (PR #246 review): os.killpg maps to kill(-pgid, sig), so a corrupt/
+    # crafted lease with childPgid 0 (the harness's own group), 1 (broadcast to every
+    # signalable process), or a negative value must NEVER reach the reaper. A real child
+    # leader pid is always > 1 -> anything <= 1 fails closed to pre-#245 "dead", no signal.
+    _dead_harness(monkeypatch)
+    monkeypatch.setattr(acceptance_launch, "reap_group_by_pgid",
+                        lambda pgid: (_ for _ in ()).throw(
+                            AssertionError("must not signal a non-positive-leader pgid")))
+    for bad in (0, 1, -5):
+        lease = {"pid": 999999, "host": socket.gethostname(),
+                 "bootId": hostinfo.boot_id(), "childPgid": bad}
+        assert deps._lease_liveness(lease) == "dead", "childPgid=%r must not be signalled" % bad
+
+
 # --- _persist_child_pgid: the lease records the child pgid at spawn --------------------
 
 
@@ -205,5 +220,38 @@ def test_real_launcher_persists_child_pgid_at_spawn(monkeypatch):
         lease = deps._read_lease(root)
         assert lease["childPgid"] == 9182
     finally:
+        deps.acceptance_launch._set_live_child(None)  # fake run() never clears the slot
         shutil.rmtree(store, ignore_errors=True)
         shutil.rmtree(root, ignore_errors=True)
+
+
+def test_real_launcher_publishes_live_child_before_persisting_pgid(monkeypatch):
+    # PR #246 review (window B): the live child must be published BEFORE the pgid-persist file
+    # I/O, so a signal during that window still reaches the live group instead of capturing None.
+    seen = {}
+
+    class _FakeChild:
+        def pgid(self):
+            return 7
+
+    monkeypatch.setattr(deps.acceptance_launch, "_default_child_factory",
+                        lambda *a, **k: _FakeChild())
+
+    def _record_slot_at_persist(root, stamp, pgid):
+        seen["live_during_persist"] = deps.acceptance_launch.current_live_child()
+
+    monkeypatch.setattr(deps, "_persist_child_pgid", _record_slot_at_persist)
+
+    def fake_run(stamped, ceilings, child_factory, *a, **k):
+        child_factory()
+        return {"outcome": "exited", "terminal_location": "/t.json",
+                "spend_partial": False, "spend": None, "elapsed_sec": 0.0}
+
+    monkeypatch.setattr(deps.acceptance_launch, "run", fake_run)
+    try:
+        deps.real_launcher("root")(
+            {"stamp": "accept-harness-pub00001", "work_item": "x", "paths": []})
+        assert isinstance(seen.get("live_during_persist"), _FakeChild), (
+            "the live child must be published before _persist_child_pgid runs")
+    finally:
+        deps.acceptance_launch._set_live_child(None)
