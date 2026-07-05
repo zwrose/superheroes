@@ -94,14 +94,18 @@ import sys
 _LIB = os.path.join(_HERE, "..")
 
 
-def _write_core_with_prefs(repo, prefs):
+def _write_core_with_prefs_at(repo, store, prefs):
     import importlib.util as _u
     spec = _u.spec_from_file_location("core_md", os.path.join(_LIB, "core_md.py"))
     cm = _u.module_from_spec(spec)
     spec.loader.exec_module(cm)
     cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
                     "patterns": "", "enginePreferences": prefs}, "confirmed",
-             root=os.path.join(repo, "store"), now="2026-06-30")
+             root=store, now="2026-06-30")
+
+
+def _write_core_with_prefs(repo, prefs):
+    _write_core_with_prefs_at(repo, os.path.join(repo, "store"), prefs)
 
 
 def test_load_engine_prefs_reads_core_md(tmp_path):
@@ -123,6 +127,29 @@ def test_load_engine_prefs_greenfield_is_both_claude(tmp_path):
     # no core.md at all → both claude (fail-open, never raises)
     assert EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store")) == \
         {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude", "effort": {}}
+
+
+def test_load_engine_prefs_store_base_none_vs_repo_root_regression(tmp_path, monkeypatch):
+    """#221 regression: the startup gather passed the repo ROOT into load_engine_prefs's SECOND arg —
+    the store-base override (the ~/.claude/superheroes test seam) — instead of None. For an OUT-OF-REPO
+    core.md that resolves core.md to a nonexistent <repo>/projects/<key>/config/core.md, so the deliberate
+    fail-open silently degraded EVERY run to all-claude. This pins BOTH sides of the fix: store-base=None
+    (the default store, via the SUPERHEROES_STORE_ROOT seam) round-trips the owner's prefs, while passing
+    the repo root degrades to all-claude. A fresh repo with no calibration evidence resolves to GLOBAL
+    (out-of-repo) mode, so the write lands in the store — the copy only reachable via the default store."""
+    repo = str(tmp_path / "repo")
+    store = str(tmp_path / "store")
+    os.makedirs(repo)
+    subprocess.run(["git", "init", "-q", repo], check=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
+    _write_core_with_prefs_at(repo, store, {"reviewer": "codex", "implementation": "cursor"})
+    # The FIXED gather call: store-base=None -> the default store (the env seam) -> round-trips.
+    fixed = EP.load_engine_prefs(repo, None)
+    assert (fixed["reviewer"], fixed["implementation"]) == ("codex", "cursor")
+    # The BUG: the repo root in the store-base slot -> <repo>/projects/<key>/config/core.md (absent) ->
+    # OSError -> the fail-open degenerate all-claude map.
+    degraded = EP.load_engine_prefs(repo, repo)
+    assert (degraded["reviewer"], degraded["implementation"]) == ("claude", "claude")
 
 
 def test_load_engine_prefs_normalizes_bad_values(tmp_path):

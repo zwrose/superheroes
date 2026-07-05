@@ -5166,31 +5166,62 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   return nativeAgentCall()
 }
 
+// #222: the mode-aware ABSOLUTE tasks-doc path. Reuses showrunner.docPathFor (the single source of
+// truth — docDirFor reads the startup-planted __SR_DOC_DIRS, honoring out-of-repo storage, and falls
+// back to the in-repo default when unplanted). Resolved at CALL time via the same lazy showrunner
+// require as exec() above, so the pointer the worker gets is byte-identical to the spine's own.
+function _tasksDocPath(workItem) {
+  return require('./showrunner.js').docPathFor(workItem, 'tasks')
+}
+
+// #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
+// task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
+// the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
+// nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
+// appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
+    + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
+    + `Task ${task.id} in ${docPath} — Read it before writing code; implement THAT, not the title. Never search `
+    + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
+    + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
+    + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
+    + `Co-Authored-By). Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + (retryNote || '')
+  )
+}
+
+// #222: genuine added context on a needs_context re-dispatch — the worker signalled it lacked context,
+// so escalate: name the absolute doc path again and instruct it to Read that exact section. Before this
+// the recovery twin re-dispatched the byte-identical prompt and never added anything (UFR-3 retry).
+function buildRetryNote(task, docPath) {
+  return (
+    ` RETRY — you signalled you were missing context. The full definition of Task ${task.id} is in ${docPath}: `
+    + `open it with Read and implement that checkbox section exactly. Do not proceed from the title, and do not `
+    + `search the filesystem outside the build worktree and that doc path.`
+  )
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
+  const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
+    // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
+    // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
+    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt:
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+      prompt,
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+        prompt,
         { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     if (worker.ok) {
@@ -5270,8 +5301,15 @@ const REVIEW_TASK_SCHEMA = {
 // consumes.
 async function taskReviewAgent(workItem, task, branch, wt, round) {
   const reviewerModel = modelTierTwin.resolveModel('reviewer', _overrides(), null)
+  // #222: give the per-task reviewer the same absolute tasks-doc pointer the worker got, so its
+  // spec_compliance verdict is judged against the real task definition (not the one-line title — which
+  // made "spec_compliance: pass" unfalsifiable in out-of-repo storage), and it never sweeps the
+  // filesystem for the doc either.
+  const docPath = _tasksDocPath(workItem)
   const prompt =
-    `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
+    `In the build worktree at ${wt}, review Task ${task.id} (${task.title}) on branch ${branch}. The task's full `
+    + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
+    + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
     + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
@@ -7636,8 +7674,12 @@ async function readGate(workItem, doc) {
   }
 }
 
-async function readStartupState(workItem) {
-  const script = [
+// #221: the startup-state gather script, extracted so a Node smoke can run the REAL Python against an
+// out-of-repo fixture (the canned-answer smokes were blind to the actual engine-prefs resolution —
+// exactly how the load_engine_prefs store-base bug shipped). pyLibDir() is read at CALL time, so a
+// smoke can point sys.path at the real lib dir by planting an absolute __SR_LIB before calling this.
+function startupStateScript() {
+  return [
     'import json, os, sys',
     `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc, model_tier_overrides',
@@ -7680,13 +7722,21 @@ async function readStartupState(workItem) {
     '_ep_degenerate = {"reviewer": "claude", "implementation": "claude", "effort": {}}',
     'try:',
     '    import engine_pref',
-    '    engine_prefs = engine_pref.load_engine_prefs(root, root)',
+    // #221: the SECOND arg is the store-base override (the ~/.claude/superheroes test seam), NOT the
+    // repo root. `root` here IS the repo root — passing it resolves core.md to a nonexistent
+    // <repo>/projects/<key>/config/core.md, so the deliberate fail-open silently degraded every run
+    // to all-claude. Pass None so core.md resolves at the real store; the repo root rides `cwd` (arg 1).
+    '    engine_prefs = engine_pref.load_engine_prefs(root, None)',
     '    if not isinstance(engine_prefs, dict):',
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
     'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
   ].join('\n')
+}
+
+async function readStartupState(workItem) {
+  const script = startupStateScript()
   try {
     return await courier.runCourierJson(
       'read startup state',
@@ -8649,6 +8699,7 @@ module.exports.exec = exec
 module.exports.persistPhase = persistPhase
 module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
+module.exports.startupStateScript = startupStateScript
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained

@@ -43,6 +43,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    # #221: the startup gather resolves engine prefs from an OUT-OF-REPO core.md — runs the REAL gather
+    # script (store-base=None), asserting the owner's non-claude prefs round-trip and that the (root,root)
+    # bug degrades to all-claude (the canned-answer smokes were blind to the real Python resolution).
+    "plugins/superheroes/lib/tests/showrunner_startup_engineprefs_smoke.js",
     # #25 quick discovery (PR 1 — showrunner leg): route decider + fresh-quick skip journaling +
     # loop entry at build + fail-closed refuse of a missing/malformed tasks artifact + full unchanged.
     "plugins/superheroes/lib/tests/showrunner_quick_route_smoke.js",
@@ -91,6 +95,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_loop_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_setup_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_pertask_smoke.js",
+    # #222: the workhorse build + per-task reviewer prompts carry the mode-aware tasks-doc pointer +
+    # no-sweep guardrail (out-of-repo storage blind-build), and needs_context retry genuinely adds context.
+    "plugins/superheroes/lib/tests/build_phase_docpointer_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_record_budget_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_final_review_smoke.js",
     "plugins/superheroes/lib/tests/build_phase_final_coverage_smoke.js",
