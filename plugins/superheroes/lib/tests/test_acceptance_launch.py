@@ -250,9 +250,9 @@ def test_build_launch_prompt_override_resolves_whole_spine_from_lib():
     assert lib + "/showrunner.bundle.js" in prompt   # bundle from the override tree
     assert "libRoot: " + lib in prompt               # Workflow libRoot from the override tree
     assert lib + "/run_readout.py" in prompt         # run-outcome projection from the override tree
-    # and it explicitly forbids resolving $LIB from the installed plugin cache.
-    assert "$LIB" in prompt
-    assert "cache" in prompt.lower()
+    # and it explicitly forbids resolving $LIB from the installed plugin cache — pinned as the
+    # contiguous forbidding phrase, so an inverted/removed instruction can't slip past.
+    assert "do not let $lib resolve from the installed plugin cache" in prompt.lower()
 
 
 def test_default_child_factory_pins_model_sonnet_by_default(monkeypatch):

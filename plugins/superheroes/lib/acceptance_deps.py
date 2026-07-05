@@ -217,12 +217,14 @@ def real_quarantine_lease(root):
 
 def _spine_showrunner_js(spine_lib):
     """The `showrunner.js` phase source inside a spine-lib override (None -> the sibling
-    default `acceptance_phases` resolves when no override is set)."""
-    return os.path.join(spine_lib, "showrunner.js") if spine_lib else None
+    default `acceptance_phases` resolves when no override is set). The basename is owned by
+    `acceptance_launch` so the guard here and the launch prompt agree on the tree layout."""
+    return (os.path.join(spine_lib, acceptance_launch.SHOWRUNNER_JS_NAME)
+            if spine_lib else None)
 
 
 def _spine_bundle(spine_lib):
-    return os.path.join(spine_lib, "showrunner.bundle.js")
+    return os.path.join(spine_lib, acceptance_launch.SHOWRUNNER_BUNDLE_NAME)
 
 
 def _read_spine_phases(spine_lib):

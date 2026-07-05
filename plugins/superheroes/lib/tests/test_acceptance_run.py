@@ -91,6 +91,20 @@ def test_spine_provenance_resolved_once_record_and_report_agree():
     assert "hash-1" in r["report"]
 
 
+def test_default_run_records_driver_through_invoke():
+    # Stitch the default-run provenance shape through the WHOLE lifecycle: a seam that
+    # returns child_model only (no spine keys, as on a non-override run) must land in the
+    # written record AND the rendered report — so a mutant dropping invoke's default-path
+    # provenance thread is caught end-to-end, not just at the unit layer.
+    d = _deps(spine_provenance=lambda: {"child_model": "sonnet"})
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    rec = d["_state"]["records_written"][0]
+    assert rec["spine_provenance"] == {"child_model": "sonnet"}
+    assert "sonnet" in r["report"]
+    assert "not pinned" in r["report"]      # no spine keys -> "installed plugin (not pinned)"
+
+
 def test_no_spine_provenance_seam_leaves_record_and_report_unchanged():
     # A fake deps bundle with no seam at all -> no spine_provenance key, no report section
     # (the real build() always wires the seam; this pins the seam-absent fallback).

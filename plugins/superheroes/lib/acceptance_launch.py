@@ -75,6 +75,14 @@ _DENY_ONLY_MARKER = "SUPERHEROES_ACCEPTANCE_DENY_ONLY"
 # no-session-model-inheritance governance forbids. Overridable per-run via `--child-model`.
 DEFAULT_CHILD_MODEL = "sonnet"
 
+# Filenames inside a spine-lib override tree. Named here (with the spawn/prompt logic that
+# owns the tree layout) and referenced from BOTH the launch-side prompt builder and the
+# deps-side override guard/provenance (`acceptance_deps._spine_bundle` /
+# `_spine_showrunner_js`), so the two sides can never disagree about which files an override
+# tree must carry — the deps guard validates the exact file the prompt tells the child to launch.
+SHOWRUNNER_BUNDLE_NAME = "showrunner.bundle.js"
+SHOWRUNNER_JS_NAME = "showrunner.js"
+
 
 def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
         budget_consumed=None, attempt=1):
@@ -263,7 +271,7 @@ def build_launch_prompt(work_item, terminal_path, spine_lib=None, root=None):
     invalid.
     """
     if spine_lib:
-        bundle = os.path.join(spine_lib, "showrunner.bundle.js")
+        bundle = os.path.join(spine_lib, SHOWRUNNER_BUNDLE_NAME)
         preflight = os.path.join(spine_lib, "preflight.py")
         return (
             "Run the superheroes:showrunner skill end-to-end on the approved work-item "
