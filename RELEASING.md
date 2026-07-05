@@ -65,7 +65,9 @@ explicitly bypassed). The ritual is **classify → run → record → merge**:
    allow rule on the machine that runs it: add `"Workflow"` to `permissions.allow` in
    `.claude/settings.local.json` (machine-local, gitignored). Subagent-level permission
    checks still apply — this only stops re-litigating "may the harness start its own
-   orchestrator" on every run.
+   orchestrator" on every run. Note the rule's breadth honestly: it auto-allows EVERY
+   Workflow invocation in this project on this machine, not just the ritual's — remove
+   it from `settings.local.json` between releases if that bothers you.
 3. **Record** — evidence is a fenced ` ```release-eval-evidence ` JSON block posted as a PR
    comment (the skill posts it; the check fetches comments and parses it). It is **SHA-bound**:
    the acceptance leg's `bundleSha256` must equal the released `showrunner.bundle.js` hash and

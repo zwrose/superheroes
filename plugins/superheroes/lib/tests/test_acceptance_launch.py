@@ -208,8 +208,9 @@ def _preamble(fixture_dir):
         "work-item below is NOT a normal discovery work-item: its accept-harness- prefix "
         "is the harness's own reserved namespace (RESERVED_PREFIX in "
         "acceptance_fixture.py), and the harness materialized it moments ago as a "
-        "throwaway fixture with a pre-approved spec/plan/tasks triple at "
-        "%(fixture_dir)s — read those files if in doubt. Driving the showrunner spine on "
+        "throwaway fixture with a pre-approved spec/plan/tasks triple"
+        + ((" at %s — read those files if in doubt" % fixture_dir) if fixture_dir else "")
+        + ". Driving the showrunner spine on "
         "this fixture is the sanctioned harness lifecycle: the parent process enforces "
         "ceilings, reads and judges the terminal record you write, and tears down every "
         "artifact (worktree, branch, PR) on every exit path. The run-outcome projection "
@@ -220,13 +221,12 @@ def _preamble(fixture_dir):
         "the real repo root is also by design: every showrunner run starts from the "
         "live root and isolates its work in a managed per-work-item worktree, branch, "
         "and draft PR — the fixture's changes never touch the working tree or main. "
-        % {"fixture_dir": fixture_dir}
     )
 
 
 # #235 default byte-identical guard: with no spine-lib override the prompt must be exactly
 # today's installed-plugin wording (preamble + body) — nothing about the override may leak in.
-_DEFAULT_PROMPT = _preamble("/run/dir") + (
+_DEFAULT_PROMPT = _preamble(None) + (
     "Run the superheroes:showrunner skill end-to-end on the approved work-item "
     "accept-harness-abc123 (invoke it exactly as documented in its SKILL.md — pre-flight, "
     "then the Workflow tool on the committed bundle with args: {workItem: accept-harness-abc123}). "
@@ -248,7 +248,12 @@ def test_build_launch_prompt_threads_explicit_fixture_dir_into_preamble():
         "accept-harness-abc123", "/run/dir/terminal-record.json",
         fixture_dir="/store/docs/accept-harness-abc123")
     assert "triple at /store/docs/accept-harness-abc123 — read those files" in prompt
-    assert "triple at /run/dir — read" not in prompt
+    # No fixture_dir -> the pointer clause is OMITTED (never derived from the terminal
+    # path: that dir no longer holds the triple, and a wrong pointer is a false claim
+    # the driver rejects as injection — review fix, PR #244).
+    bare = al.build_launch_prompt("accept-harness-abc123", "/run/dir/terminal-record.json")
+    assert "read those files" not in bare
+    assert al.build_launch_prompt("accept-harness-abc123", None)  # None terminal_path tolerated
 
 
 def test_default_child_factory_threads_materialized_fixture_dir(monkeypatch):
@@ -414,3 +419,20 @@ def test_default_child_factory_disables_print_mode_bg_wait_ceiling(monkeypatch):
     monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
     al._default_child_factory("accept-harness-abc123", terminal_path="/t.json")
     assert captured["env"].get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS") == "0"
+
+
+def test_default_child_factory_finite_bg_ceiling_when_provided(monkeypatch):
+    """Review fix (PR #244 premortem): real_launcher passes a finite bg-wait ceiling
+    (2x the harness elapsed ceiling) so an orphaned child is lifetime-bounded even if
+    the harness process dies ungracefully; 0/absent stays the direct-caller fallback."""
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+            self.pid = 321
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory("accept-harness-abc123", terminal_path="/t.json",
+                              bg_wait_ceiling_ms=3600000)
+    assert captured["env"]["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] == "3600000"

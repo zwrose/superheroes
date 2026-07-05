@@ -328,9 +328,24 @@ def real_materialize(fixture_dir, root, reserved_stamp=None, lease_acquired=Fals
     # from. The harness dir is control-plane state (lease, records), not doc storage;
     # a fixture materialized there is invisible to every consumer (live finding,
     # 0.10.0 qualification).
+    if acceptance_fixture.parse_stamp(stamp) != stamp:
+        # Identity, not truthiness: parse_stamp matches an EMBEDDED stamp, so a
+        # prefixed/suffixed value would pass a bare-truthiness check and flow into
+        # rmtree guards downstream (security review, PR #244).
+        raise ValueError("reserved stamp %r is not a bare valid stamp" % (stamp,))
     import definition_doc
     wi_dir = definition_doc.resolve_work_item_dir(stamp, root=root, cwd=root)
-    stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, os.path.dirname(wi_dir))
+    try:
+        stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, os.path.dirname(wi_dir))
+    except Exception:
+        # A mid-write failure would strand a partial fixture in the consumer-visible
+        # docs location (invoke's except path tears down with stamp=None, which skips
+        # artifact cleanup). The dest dir is this invocation's own stamped dir — same
+        # guard real_reap uses — so removing it before re-raising is safe.
+        if os.path.basename(wi_dir) == stamp and os.path.isdir(wi_dir):
+            import shutil
+            shutil.rmtree(wi_dir, ignore_errors=True)
+        raise
     stamped["stamp"] = stamp
     return stamped
 
@@ -426,6 +441,35 @@ def real_discover_artifacts(root):
     """
     def _discover(_stamp):
         artifacts = []
+        # Fixture DIRECTORY artifacts (both the legacy harness-dir location and the
+        # docs-resolved location real_materialize targets). Full paths as names: the
+        # stamp parses out of the basename for plan()'s routing, and reap gets the
+        # exact path to remove. Without this class, a run that dies between
+        # materialize and reap strands a pre-approved phantom work-item in the REAL
+        # docs dir forever (premortem finding, PR #244).
+        dir_bases = [_harness_dir(root)]
+        try:
+            import definition_doc
+            probe = acceptance_fixture.make_stamp("0")
+            dir_bases.append(os.path.dirname(
+                definition_doc.resolve_work_item_dir(probe, root=root, cwd=root)))
+        except Exception:
+            artifacts.append({
+                "kind": "store-dir",
+                "name": acceptance_fixture.RESERVED_PREFIX + " discovery degraded: docs location unresolvable",
+            })
+        seen_dirs = set()
+        for base in dir_bases:
+            try:
+                entries = os.listdir(base)
+            except OSError:
+                continue  # base absent -> nothing materialized there
+            for entry in entries:
+                full = os.path.join(base, entry)
+                if (entry.startswith(acceptance_fixture.RESERVED_PREFIX)
+                        and os.path.isdir(full) and full not in seen_dirs):
+                    seen_dirs.add(full)
+                    artifacts.append({"kind": "store-dir", "name": full})
         branch_names = set()
         branch_lookup_failed = False
         for pattern in ("wi-%s*" % acceptance_fixture.RESERVED_PREFIX,
@@ -536,28 +580,26 @@ def real_reap(root, current_stamp):
                     ok = rc2 == 0
                 else:
                     ok = True  # confirmed: rc == 0 with no match -> already gone
+            elif kind == "store-dir":
+                # Fixture dirs are discovered as full paths; the basename must BE a
+                # bare valid stamp (identity, not embedded-match) or nothing is removed.
+                base = os.path.basename(name or "")
+                if acceptance_fixture.parse_stamp(base) == base and os.path.isdir(name):
+                    import shutil
+                    try:
+                        shutil.rmtree(name)
+                        ok = True
+                    except OSError:
+                        ok = False  # surfaced below — never claim a teardown that failed
+                elif not os.path.isdir(name):
+                    ok = True  # confirmed: already gone
+                else:
+                    ok = False  # structurally suspect path — refuse, surface
             else:
                 ok = True  # unknown kind: nothing this reaper knows how to remove
             (cleaned if ok else left).append(name if ok else
                                              {"kind": kind, "name": name,
                                               "reason": "reap action failed"})
-        # also remove this invocation's own materialized store dirs, if present:
-        # the legacy harness-dir location AND the mode-resolved docs location
-        # real_materialize now targets. Both paths end in the reserved stamp
-        # (parse_stamp-validated below), so this cannot touch a real work-item.
-        stamp = current_stamp()
-        if stamp and acceptance_fixture.parse_stamp(stamp):
-            import shutil
-            candidates = [os.path.join(_harness_dir(root), stamp)]
-            try:
-                import definition_doc
-                candidates.append(
-                    definition_doc.resolve_work_item_dir(stamp, root=root, cwd=root))
-            except Exception:
-                pass  # unresolvable mode -> nothing materialized there this run either
-            for work_dir in candidates:
-                if os.path.basename(work_dir) == stamp and os.path.isdir(work_dir):
-                    shutil.rmtree(work_dir, ignore_errors=True)
         return {"cleaned_up": cleaned, "left_behind": left}
     return _reap
 
@@ -742,11 +784,16 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
     def _launch(stamped, budget_consumed=None, attempt=1):
         terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
                                      "terminal-record.json")
+        norm = acceptance_ceiling.normalize_ceilings(ceilings)
+        # 2x the harness elapsed ceiling: far above any supervised run (the watch loop
+        # kills at 1x), but a hard independent bound on an ORPHAN's lifetime if the
+        # harness process itself dies ungracefully (premortem finding, PR #244).
+        bg_ms = int(float(norm["elapsed_sec"]) * 2 * 1000)
 
         def _child_factory():
             return acceptance_launch._default_child_factory(
                 stamped, terminal_path=terminal_path, spine_lib=spine_lib, root=root,
-                child_model=child_model)
+                child_model=child_model, bg_wait_ceiling_ms=bg_ms)
 
         return acceptance_launch.run(
             stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,
