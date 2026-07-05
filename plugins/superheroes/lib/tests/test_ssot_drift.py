@@ -22,6 +22,8 @@ import ast
 import os
 import re
 
+import pytest
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
 
@@ -34,6 +36,11 @@ def _read(rel):
 # --- fail-closed JS literal readers (CONVENTIONS §11.2) ----------------------
 # Each asserts exactly one match and a well-formed literal; parsing nothing raises
 # (never returns an empty value that would make a downstream equality pass vacuously).
+# The sibling test_dispatch_tables.py carries the same fail-closed contract for its own
+# roster reader (`_parse_js_const_str_list`); these are kept per-file rather than shared
+# because the literal SHAPES differ (array / Set / object-map here vs a plain array
+# there) — connascence of algorithm, accepted for test helpers. The fail-closed behavior
+# below is exercised by `test_js_readers_fail_closed`.
 
 def _one(matches, name, label, shape):
     assert len(matches) == 1, (
@@ -73,6 +80,31 @@ def _js_rank_map(text, name, label):
     return {k: int(v) for k, v in pairs}
 
 
+@pytest.mark.parametrize("reader, text, name, match", [
+    # missing literal → zero matches
+    (_js_str_array, "const OTHER = ['a']\n", "A", "expected exactly one"),
+    (_js_str_set, "const OTHER = new Set(['a'])\n", "B", "expected exactly one"),
+    (_js_rank_map, "const OTHER = { A: 0 }\n", "M", "expected exactly one"),
+    # declared twice → ambiguous
+    (_js_str_array, "const A = ['a']\nconst A = ['b']\n", "A", "found 2"),
+    (_js_str_set, "const B = new Set(['a'])\nconst B = new Set(['b'])\n", "B", "found 2"),
+    # not the expected shape (a bare value, not a Set/array/object)
+    (_js_str_set, "const B = 1\n", "B", "expected exactly one"),
+    # malformed contents
+    (_js_str_array, "const A = ['a', 2]\n", "A", "non-empty list of strings"),
+    (_js_str_set, "const B = new Set(['a', 3])\n", "B", "non-empty list of strings"),
+    (_js_rank_map, "const M = {  }\n", "M", "no `key: int` pairs"),
+])
+def test_js_readers_fail_closed(reader, text, name, match):
+    """§11.2: the JS literal readers are the trust anchor for every drift guard in this
+    file — parsing nothing must RAISE, never return an empty/partial value that would let
+    a `== home` assertion pass vacuously. Mirrors the sibling fail-closed tests
+    (test_dispatch_tables.py, test_acceptance_fixture.py). Without these, a regression
+    that defeats fail-closed would ship undetected (the PR #205 class)."""
+    with pytest.raises(AssertionError, match=match):
+        reader(text, name, "<test>")
+
+
 # --- Cluster 1: severity tiers + blocking partition + rank order -------------
 
 def _rubric_severity_tiers():
@@ -90,15 +122,26 @@ def _rubric_severity_tiers():
     return tiers
 
 
+def _rubric_blocking_tiers(text, tiers):
+    """Which tiers BLOCK a verdict, read from the rubric's verdict-mapping section: a
+    tier blocks iff `≥1 <tier>` yields a non-READY label (`0 Critical, ≥1 Important →
+    REVISE`, `≥1 Critical → MAJOR`; `Minor/Nit → READY` do not block). Read from the home
+    rather than assumed positionally, so the blocking set traces to the rubric (§11.3)."""
+    blocking = {t for t in tiers if re.search(r"≥\s*1\s+%s\b" % re.escape(t), text)}
+    assert blocking, "rubric: no blocking tiers derived from the verdict mapping"
+    return blocking
+
+
 def test_severity_vocabulary_is_single_sourced():
     """CONVENTIONS §11: the severity tiers, the blocking/non-blocking partition, and the
     Critical<Important<Minor<Nit rank are re-typed across ~13 Python + JS copy-holders.
-    All must agree with the rubric home (blocking = the first two tiers, non-blocking =
-    the last two, per the rubric's verdict mapping)."""
+    All must agree with the rubric home — the ordered tier vocabulary and the blocking
+    set are both READ from review-base.md (the enum + the verdict mapping), not assumed."""
+    text = _read(os.path.join("rubric", "review-base.md"))
     tiers = _rubric_severity_tiers()          # ['Critical','Important','Minor','Nit']
     vocab = set(tiers)
-    blocking = set(tiers[:2])                  # Critical, Important
-    non_blocking = set(tiers[2:])              # Minor, Nit
+    blocking = _rubric_blocking_tiers(text, tiers)   # read from the verdict mapping
+    non_blocking = vocab - blocking
     rank = {t: i for i, t in enumerate(tiers)}
 
     import circuit_breaker
