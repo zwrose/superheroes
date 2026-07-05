@@ -29,6 +29,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { markedStdout } = require('./_marked_stdout.js')
 
 const CHEAPEST = require('../model_tier.js').DEFAULT_TIERS.mechanical
 const PAYLOAD_TIER = require('../model_tier.js').DEFAULT_TIERS.fixer
@@ -323,8 +324,7 @@ function shellResponse(cmd) {
   }
   // single-command exec/courier pipes, routed by content:
   if (cmd.includes('recover_entry.py')) {
-    // world_derive from step 0, carrying the acquired lease generation (the ship fences renew it)
-    return JSON.stringify({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
+    return markedStdout({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
   }
   if (cmd.includes('front_half_usable.py')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
@@ -342,7 +342,9 @@ function shellResponse(cmd) {
     throw new Error('checkpoint_entry.py write rode its own leaf (#118 every-phase tail)')
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
-  if (cmd.includes('phase_progress_entry.py')) return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  if (cmd.includes('phase_progress_entry.py')) {
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  }
   if (cmd.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-x', path: '/tmp/wt', outcome: 'reused' })
   if (cmd.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 })
   if (cmd.includes('fence_cli.py')) return JSON.stringify({ ok: true })
@@ -377,7 +379,7 @@ function answerCommandPrompt(prompt) {
 
 const COURIER_JSON = {
   'read startup state': () => JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
-  'save phase progress': () => JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }),
+  'save phase progress': () => markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }),
   'save round state': () => JSON.stringify({ ok: true }),
   'gather build state': () => JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' }),
   'record task built': () => JSON.stringify({ ok: true, read_back: true, task: '1' }),

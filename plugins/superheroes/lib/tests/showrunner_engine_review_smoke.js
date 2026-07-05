@@ -17,6 +17,7 @@
 require('./_smoke_checkout_root.js')
 'use strict'
 const assert = require('assert')
+const { markedStdout } = require('./_marked_stdout.js')
 
 const sr = require('../showrunner.js')
 const engineDispatchMod = require('../engine_dispatch.js')
@@ -58,12 +59,12 @@ async function partA() {
         throw new Error('engine_pref_load.py dispatched as its own leaf — must ride read startup state (#118)')
       }
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null,
           world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
           generation: 1,
           root: globalThis.__SR_ROOT,
-        }) }]
+        })
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
@@ -99,12 +100,12 @@ async function partA() {
     if (label === 'read startup state') return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
     if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null,
           world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
           generation: 1,
           root: globalThis.__SR_ROOT,
-        }) }]
+        })
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]

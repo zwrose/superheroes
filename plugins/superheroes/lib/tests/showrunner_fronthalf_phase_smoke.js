@@ -12,6 +12,7 @@ require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 const { io } = require('../io_seam.js')
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
@@ -49,11 +50,9 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     if (label === 'save phase progress') {
       savePrompts.push(String(prompt))
       if (setGateFails || setGateStale || journalWriteFails) {
-        // setGateStale: the fenced set-gate refuses a stale snapshot (exits non-zero inside the
-        // batched sideEffectCmd) — the courier reports ok:false and persistPhase fails closed.
-        return jsonOut({ ok: false, reason: setGateFails ? 'set-gate failed' : (setGateStale ? 'stale' : 'durable write failed') })
+        return saveProgressOk({ ok: false, reason: setGateFails ? 'set-gate failed' : (setGateStale ? 'stale' : 'durable write failed') })
       }
-      return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+      return saveProgressOk()
     }
     if (label === 'save round state') return jsonOut({ ok: true })
     if (opts && opts.courier) {
@@ -142,16 +141,16 @@ async function main() {
   // matching all-{"ok":true} batch must return {ok:true}. Proves the parse fold (vs the pre-fix every(r.ok)).
   global.agent = async (_p, opts) => {
     if (opts && opts.label === 'save phase progress') {
-      return jsonOut({ ok: false, reason: 'durable write failed' })
+      return saveProgressOk({ ok: false, reason: 'durable write failed' })
     }
-    return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    return saveProgressOk()
   }
   let pp = await sr.persistPhase('wi-e2', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
   assert.deepStrictEqual(pp, { ok: false, error: 'durable write failed' },
     'persistPhase fails-close when save phase progress returns ok:false (C1)')
   global.agent = async (_p, opts) => {
     if (opts && opts.label === 'save phase progress') {
-      return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+      return saveProgressOk()
     }
     return jsonOut({ ok: true })
   }

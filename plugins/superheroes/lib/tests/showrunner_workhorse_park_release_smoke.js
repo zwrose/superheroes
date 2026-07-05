@@ -3,6 +3,7 @@
 // release-on-park path — targeting the acquire-authority store via --root (and cd when set).
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
+const { saveProgressOk } = require('./_marked_stdout.js')
 global.log = () => {}
 
 const CHECKOUT_ROOT = globalThis.__SR_ROOT
@@ -11,7 +12,7 @@ function agentFor(generation, releaseCalls) {
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'save phase progress') {
-      return JSON.stringify({ ok: true, journal_confirmed: true })
+      return saveProgressOk({ checkpoint_confirmed: false })
     }
     if (label === 'release lease') {
       assert.ok(prompt.includes('fence_cli.py') && prompt.includes('--release'))

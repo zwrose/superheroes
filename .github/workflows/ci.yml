@@ -39,6 +39,9 @@ jobs:
       - name: Validate skill token-shape
         run: python3 .github/scripts/validate_skills.py
 
+      - name: Validate STUB markers carry an issue reference
+        run: python3 .github/scripts/validate_stubs.py
+
       - name: Install pytest
         run: python3 -m pip install --upgrade pytest jsonschema pyyaml
 

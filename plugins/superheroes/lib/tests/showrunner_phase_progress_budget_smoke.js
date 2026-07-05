@@ -1,12 +1,13 @@
 const assert = require('assert')
 const showrunner = require('../showrunner.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 
 ;(async () => {
   const labels = []
   global.log = () => {}
   global.agent = async (_prompt, opts) => {
     labels.push(opts.label)
-    return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
+    return saveProgressOk()
   }
 
   let result = await showrunner.persistPhase('wi', {
@@ -20,7 +21,7 @@ const showrunner = require('../showrunner.js')
   labels.length = 0
   global.agent = async (_prompt, opts) => {
     labels.push(opts.label)
-    return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: false }) }]
+    return saveProgressOk({ checkpoint_confirmed: false })
   }
   result = await showrunner.persistPhase('wi', {
     step: 2,

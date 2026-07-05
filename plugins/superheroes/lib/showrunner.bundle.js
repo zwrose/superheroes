@@ -103,17 +103,9 @@ function __sc(cmd) {
   if (t.startsWith('cd ')) return cmd
   return 'cd ' + __q(root) + ' && ' + cmd
 }
-// __badCourierAnswer: TRUE when a courier answer to a marker-carrying command signals the command
-// DID NOT run. Two observed dispatch-failure shapes, both from the plugin-subagent prompt-drop bug:
-//   (a) the answer omits the __SR_EXIT marker entirely (echo/empty shape); or
-//   (b) the leaf echoes the command back as text instead of running it, so the answer contains the
-//       LITERAL unexpanded '__SR_EXIT:$?' (live 2026-07-03 run wf_1494a8fa-e28, agent aecd0b3ad) —
-//       the marker STRING is present, so a bare presence check would wrongly pass.
-// A genuinely-executed command can never print '$?' unexpanded (the shell expands it to a number),
-// so the literal '__SR_EXIT:$?' is an unambiguous did-not-run tell.
+// __badCourierAnswer: delegate to courier_exec (single source of truth — see badCourierAnswer there).
 function __badCourierAnswer(a) {
-  var s = String(a == null ? '' : a)
-  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+  return __require('courier_exec').badCourierAnswer(a)
 }
 async function __sh(cmd, opts) {
   // #194: every dumb-pipe leaf dispatches on the lean 'superheroes:courier' agent (tools: Bash only).
@@ -212,23 +204,10 @@ function __contentHash(text) {
   for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
   return out
 }
-// __helperResult: parse a leaf-bash helper answer (stdout + trailing __SR_EXIT:N marker) into the
-// runHelper result shape. Shared by runHelper and stageAndRunHelper (fold 1, #141) so both keep the
-// SAME fence tolerance + exit-marker slice. Find the LAST marker anywhere (a misbehaving haiku
-// courier stochastically fences the answer AFTER the marker), slice stdout up to it, strip one
-// wrapping fence pair.
+// __helperResult: delegate to courier_exec.helperResult (single source of truth for fence-tolerant
+// __SR_EXIT slice — shared by runHelper and stageAndRunHelper, fold 1 #141).
 function __helperResult(s) {
-  s = String(s || '')
-  var re = /__SR_EXIT:(\d+)/g, m, last = null
-  while ((m = re.exec(s)) !== null) last = m
-  var status = last ? Number(last[1]) : 1
-  var stdout = last ? s.slice(0, last.index) : s
-  var markerTail = last ? s.slice(last.index + last[0].length) : ''
-  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
-  if (/^\s*\x60/.test(stdout) && (/\x60\s*$/.test(stdout) || /^\s*\x60\s*$/.test(markerTail))) {
-    stdout = stdout.replace(/^\s*\x60/, '').replace(/\x60\s*$/, '')
-  }
-  return { ok: status === 0, status: status, stdout: stdout, stderr: '' }
+  return __require('courier_exec').helperResult(s)
 }
 const __PAYLOAD_BOUND = 3000
 const __PAYLOAD_CHARS = 2400
@@ -409,20 +388,30 @@ function _sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // libRootProbe: a shell prefix that fail-closes when an ABSOLUTE spine code root has gone missing
 // (e.g. a plugin-cache eviction between phases). It rides an ALREADY-composed command —
 // `${libRootProbe()}python3 <lib>/recover_entry.py …` — so it adds NO leaf. When the dir is absent it
-// echoes a PARSEABLE failure object carrying MISSING_MARKER and exits 0; when present it is a no-op
-// passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the compose stays
-// byte-identical.
+// echoes a PARSEABLE failure object carrying MISSING_MARKER, then __SR_EXIT:0, and exits 0; when
+// present it is a no-op passthrough. In dev/dogfood mode (relative libRoot) it emits nothing, so the
+// compose stays byte-identical.
 //
 // The payload is a JSON `{"ok":false,"reason":"<marker>"}` (not a bare echo) so BOTH probe sites map
 // it to the same named park uniformly: the exec-based launch probe (reconcile) substring-matches the
-// marker in raw stdout, and the runCourierJson-based back-half probe (persistPhase) gets it back
-// verbatim as an `ok:false` failure (retryRealFailure:false) — a bare echo would be unparseable JSON,
-// making that courier retry then throw a GENERIC transport error instead of the named reason.
+// marker in raw stdout, and the runCourierMarkedJson-based back-half probe (persistPhase) gets it
+// back verbatim as an `ok:false` failure only AFTER execution is proven via __SR_EXIT (#218). The
+// failure branch must echo __SR_EXIT before exit — wrapMarkedCommand's trailing marker never runs
+// after `exit 0`, and without an in-branch marker a genuine missing libRoot looks like a lazy parrot.
+//
+// Residual fabricability (#218): the __SR_EXIT guard proves a marker-SHAPED answer, not that Bash
+// ran. This compose now embeds both the failure payload AND `echo __SR_EXIT:0` in the prompt, so a
+// courier that SIMULATES the failure branch (payload + marker, no execution) would still pass the
+// guard. Do NOT "harden" this with proof-of-execution (nonce/hash/timestamp) — the Workflow sandbox
+// has no crypto, wall-clock, or RNG primitives, so the JS side cannot verify a computed proof; that
+// is why #218 chose the marker protocol. The guard rejects the observed did-not-run shapes (bare
+// payload with no marker; echoed command with literal __SR_EXIT:$?), and runCourierMarked*'s 2×3
+// retry-then-default-dispatch chain bounds the residual simulation class.
 const MISSING_MARKER = '__SR_LIBROOT_MISSING__'
 function libRootProbe() {
   if (!isAbsoluteLibRoot()) return ''
   const payload = '{"ok":false,"reason":"' + MISSING_MARKER + '"}'
-  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; exit 0; }; "
+  return 'test -d ' + _sq(libRoot()) + " || { echo '" + payload + "'; echo __SR_EXIT:0; exit 0; }; "
 }
 
 // pyLibDir: a Python EXPRESSION that evaluates to the lib dir, for embedded
@@ -570,6 +559,15 @@ function intersects(a, b) {
   return false
 }
 function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _roundRecordedFix(roundRec) {
+  // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
+  // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
+  // usually carries no fix — keeps the max-iterations detail honest instead of always claiming one.
+  const fix = roundRec && roundRec.fix
+  if (!fix || typeof fix !== 'object') return false
+  const fixes = fix.fixes
+  return Array.isArray(fixes) ? fixes.length > 0 : !!fixes
+}
 function _generalizeKeys(roundRec) {
   return new Set((roundRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
 }
@@ -594,8 +592,22 @@ function checkCircuitBreaker(rounds, maxRounds) {
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
   const latest = _blocking(rounds[n - 1])
   if (n >= maxRounds && latest.length > 0) {
+    // Honest halt detail (#212 class): name the ACTUAL round reached (n) alongside the cap — a resume
+    // can run past the cap, so n may exceed maxRounds — and only claim "fixes committed" when the final
+    // round actually recorded a fix. The cap-halt fires right after a review and before that round's
+    // fixer runs, so the latest round usually carries no fix; saying otherwise misreads a park that
+    // needs a fix-then-relaunch as one that only needs a re-review.
+    const tail = _roundRecordedFix(rounds[n - 1])
+      ? "the final round's fixes are committed but not yet re-reviewed"
+      : 'no fix was applied this round — the finding(s) remain unaddressed'
+    // Don't overstate how many REAL reviews ran: n counts every recorded round (the gate uses it),
+    // but a transport-failed / all-missing round inflates it. When fewer rounds were actually reviewed
+    // than recorded, say so (same honesty _reviewedRounds gives criteria 1-2).
+    let capNote = `cap ${maxRounds}`
+    const reviewedN = _reviewedRounds(rounds).length
+    if (reviewedN < n) capNote += `, ${reviewedN} reviewed`
     return { halt: true, reason: 'max-iterations',
-      detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
+      detail: `Reached round ${n} (${capNote}); the latest review still showed ${latest.length} blocking finding(s) (${tail}).` }
   }
   const reviewed = _reviewedRounds(rounds)
   const rn = reviewed.length
@@ -2453,6 +2465,122 @@ async function callOnce(label, command, promptOpts) {
   return currentAgent()(promptFor(command, promptOpts), { label, courier: true })
 }
 
+// badCourierAnswer: TRUE when a marker-carrying command's answer signals the shell DID NOT run.
+// Single source of truth for both courier_exec and the bundle preamble (__sh / #194). Detects:
+//   (a) a missing __SR_EXIT marker (bare payload / echo shape); and
+//   (b) the literal unexpanded '__SR_EXIT:$?' from an echoed command (live wf_1494a8fa-e28).
+// This proves marker-SHAPE, not execution. A courier simulating the full embedded failure branch
+// (payload + __SR_EXIT:0, as libRootProbe now embeds) would still pass — #218 bounds that residual
+// via runCourierMarked*'s 2 outer attempts × dispatchMarked's 3-dispatch retry/fallback chain.
+// Do NOT add proof-of-execution here: the Workflow sandbox has no crypto/wall-clock/RNG primitives.
+function badCourierAnswer(a) {
+  const s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
+
+// markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
+// helperResult wraps this for the bundle __runHelperCommand / stageAndRunHelper result shape.
+function markerSliceStdout(s) {
+  s = String(s || '')
+  const re = /__SR_EXIT:(\d+)/g
+  let m, last = null
+  while ((m = re.exec(s)) !== null) last = m
+  const status = last ? Number(last[1]) : 1
+  let stdout = last ? s.slice(0, last.index) : s
+  const markerTail = last ? s.slice(last.index + last[0].length) : ''
+  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
+  if (/^\s*`/.test(stdout) && (/`\s*$/.test(stdout) || /^\s*`\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\s*`/, '').replace(/`\s*$/, '')
+  }
+  return { status, stdout }
+}
+
+function helperResult(s) {
+  const sliced = markerSliceStdout(s)
+  return { ok: sliced.status === 0, status: sliced.status, stdout: sliced.stdout, stderr: '' }
+}
+
+function markedPromptFor(command) {
+  return 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
+    'Do not echo, fence, summarize, or describe the command:\n\n' + rootedCommand(command)
+}
+
+function wrapMarkedCommand(command) {
+  return String(command) + ' 2>&1; echo __SR_EXIT:$?'
+}
+
+// dispatchMarked: the #194/__sh courier protocol — lean superheroes:courier agent, marker guard with
+// retry + default-dispatch fallback. Shared by runCourierMarkedText/Json (#218: libRoot probe sites).
+// Each outer attempt calls dispatchMarked once; dispatchMarked itself retries up to 3 dispatches
+// (courier agent → courier agent → default agent) when badCourierAnswer fires — 2×3 total before
+// CourierTransportError. That chain bounds residual simulation (see badCourierAnswer / libRootProbe).
+async function dispatchMarked(label, markedCmd) {
+  const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
+  const prompt = markedPromptFor(markedCmd)
+  let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
+  if (badCourierAnswer(ans)) {
+    ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
+    if (badCourierAnswer(ans)) {
+      const fo = Object.assign({}, baseOpts)
+      delete fo.agentType
+      ans = stdoutOf(await currentAgent()(prompt, fo))
+    }
+  }
+  return ans
+}
+
+// runCourierMarkedText: dumb-pipe a shell command through the __SR_EXIT marker protocol and return
+// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218).
+async function runCourierMarkedText(label, command) {
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const sliced = markerSliceStdout(ans)
+    if (sliced.stdout.trim() !== '') return sliced.stdout
+    last = 'empty stdout'
+  }
+  throw new CourierTransportError(label, last)
+}
+
+// runCourierMarkedJson: runCourierJson semantics over the __SR_EXIT marker protocol — execution is
+// proven before a probe's embedded ok:false (e.g. __SR_LIBROOT_MISSING__) is accepted, so a lazy
+// courier that parrots the failure branch from the prompt cannot park the run (#218).
+async function runCourierMarkedJson(label, command, opts) {
+  const options = opts || {}
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const out = markerSliceStdout(ans).stdout
+    if (out.trim() === '') {
+      last = 'empty stdout'
+      continue
+    }
+    const parsed = extractJson(out)
+    if (parsed == null) {
+      last = 'unparseable JSON'
+      continue
+    }
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    const missing = missingRequired(parsed, options.require || [])
+    if (missing) {
+      last = `missing required field ${missing}`
+      continue
+    }
+    return parsed
+  }
+  throw new CourierTransportError(label, last)
+}
+
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
 // legitimate content may itself contain ``` fences — unfencing here would corrupt it. JSON
 // couriers get the fence-tolerant treatment in runCourierJson (extractJson) instead.
@@ -2508,8 +2636,13 @@ async function runCourierBatchJson(label, commands, opts) {
 
 module.exports = {
   CourierTransportError,
+  badCourierAnswer,
   extractJson,
+  helperResult,
+  markerSliceStdout,
   runCourierJson,
+  runCourierMarkedJson,
+  runCourierMarkedText,
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
@@ -5143,31 +5276,62 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   return nativeAgentCall()
 }
 
+// #222: the mode-aware ABSOLUTE tasks-doc path. Reuses showrunner.docPathFor (the single source of
+// truth — docDirFor reads the startup-planted __SR_DOC_DIRS, honoring out-of-repo storage, and falls
+// back to the in-repo default when unplanted). Resolved at CALL time via the same lazy showrunner
+// require as exec() above, so the pointer the worker gets is byte-identical to the spine's own.
+function _tasksDocPath(workItem) {
+  return require('./showrunner.js').docPathFor(workItem, 'tasks')
+}
+
+// #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
+// task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
+// the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
+// nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
+// appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
+    + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
+    + `Task ${task.id} in ${docPath} — Read it before writing code; implement THAT, not the title. Never search `
+    + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
+    + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
+    + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
+    + `Co-Authored-By). Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + (retryNote || '')
+  )
+}
+
+// #222: genuine added context on a needs_context re-dispatch — the worker signalled it lacked context,
+// so escalate: name the absolute doc path again and instruct it to Read that exact section. Before this
+// the recovery twin re-dispatched the byte-identical prompt and never added anything (UFR-3 retry).
+function buildRetryNote(task, docPath) {
+  return (
+    ` RETRY — you signalled you were missing context. The full definition of Task ${task.id} is in ${docPath}: `
+    + `open it with Read and implement that checkbox section exactly. Do not proceed from the title, and do not `
+    + `search the filesystem outside the build worktree and that doc path.`
+  )
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
+  const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
+    // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
+    // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
+    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt:
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+      prompt,
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+        prompt,
         { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     if (worker.ok) {
@@ -5247,8 +5411,15 @@ const REVIEW_TASK_SCHEMA = {
 // consumes.
 async function taskReviewAgent(workItem, task, branch, wt, round) {
   const reviewerModel = modelTierTwin.resolveModel('reviewer', _overrides(), null)
+  // #222: give the per-task reviewer the same absolute tasks-doc pointer the worker got, so its
+  // spec_compliance verdict is judged against the real task definition (not the one-line title — which
+  // made "spec_compliance: pass" unfalsifiable in out-of-repo storage), and it never sweeps the
+  // filesystem for the doc either.
+  const docPath = _tasksDocPath(workItem)
   const prompt =
-    `Review Task ${task.id} (${task.title}) on branch ${branch}. Return JSON `
+    `In the build worktree at ${wt}, review Task ${task.id} (${task.title}) on branch ${branch}. The task's full `
+    + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
+    + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
     + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
@@ -7248,7 +7419,7 @@ async function persistPhase(workItem, opts) {
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
-    const res = await courier.runCourierJson(
+    const res = await courier.runCourierMarkedJson(
       'save phase progress',
       probedCmd,
       { require: required, retryRealFailure: false },
@@ -7264,8 +7435,11 @@ async function persistPhase(workItem, opts) {
     return confirmed
       ? { ok: true, recovered: false }
       : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
-  } catch (_e) {
-    return { ok: false, error: 'phase progress read-back mismatch' }
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) {
+      return { ok: false, error: 'phase progress save transport failed (courier): ' + e.reason }
+    }
+    return { ok: false, error: 'phase progress save transport failed (courier)' }
   }
 }
 
@@ -7335,10 +7509,14 @@ async function cmdRunner(cmd, { schema, label }) {
 async function reconcile(workItem) {
   const preRoot = checkoutRoot()
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
-  const results = await exec([
-    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`,
-  ], 'gather snapshot')
-  const _snapStdout = (results[0] && results[0].stdout) || ''
+  const snapCmd =
+    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`
+  let _snapStdout = ''
+  try {
+    _snapStdout = await courier.runCourierMarkedText('gather snapshot', snapCmd)
+  } catch (_e) {
+    return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
+  }
   // #170 fail-closed probe: an ABSOLUTE spine code root that vanished mid-run (e.g. plugin-cache
   // eviction) short-circuits the compose to MISSING_MARKER instead of a file-not-found python error —
   // park with a NAMED reason so the readout says exactly what's wrong. Relative (dev) libRoot never
@@ -7613,8 +7791,12 @@ async function readGate(workItem, doc) {
   }
 }
 
-async function readStartupState(workItem) {
-  const script = [
+// #221: the startup-state gather script, extracted so a Node smoke can run the REAL Python against an
+// out-of-repo fixture (the canned-answer smokes were blind to the actual engine-prefs resolution —
+// exactly how the load_engine_prefs store-base bug shipped). pyLibDir() is read at CALL time, so a
+// smoke can point sys.path at the real lib dir by planting an absolute __SR_LIB before calling this.
+function startupStateScript() {
+  return [
     'import json, os, sys',
     `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc, model_tier_overrides',
@@ -7657,13 +7839,21 @@ async function readStartupState(workItem) {
     '_ep_degenerate = {"reviewer": "claude", "implementation": "claude", "effort": {}}',
     'try:',
     '    import engine_pref',
-    '    engine_prefs = engine_pref.load_engine_prefs(root, root)',
+    // #221: the SECOND arg is the store-base override (the ~/.claude/superheroes test seam), NOT the
+    // repo root. `root` here IS the repo root — passing it resolves core.md to a nonexistent
+    // <repo>/projects/<key>/config/core.md, so the deliberate fail-open silently degraded every run
+    // to all-claude. Pass None so core.md resolves at the real store; the repo root rides `cwd` (arg 1).
+    '    engine_prefs = engine_pref.load_engine_prefs(root, None)',
     '    if not isinstance(engine_prefs, dict):',
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
     'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
   ].join('\n')
+}
+
+async function readStartupState(workItem) {
+  const script = startupStateScript()
   try {
     return await courier.runCourierJson(
       'read startup state',
@@ -8626,6 +8816,7 @@ module.exports.exec = exec
 module.exports.persistPhase = persistPhase
 module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
+module.exports.startupStateScript = startupStateScript
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained
