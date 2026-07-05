@@ -344,6 +344,12 @@ def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=Non
     env = dict(os.environ)
     env[_CONTEXT_MARKER] = "1"
     env[_DENY_ONLY_MARKER] = "1"
+    # The child waits on the showrunner Workflow as a BACKGROUND task; non-interactive
+    # `claude -p` kills still-running background tasks at a ~600s ceiling, which
+    # terminated a live run mid-spine (0.10.0 qualification finding #6). Waiting
+    # indefinitely is safe by construction: THIS harness owns the elapsed/spend
+    # ceilings and kills the whole process group when they trip.
+    env["CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS"] = "0"
     work_item = stamped.get("work_item") if isinstance(stamped, dict) else stamped
     fixture_dir = None
     if isinstance(stamped, dict):

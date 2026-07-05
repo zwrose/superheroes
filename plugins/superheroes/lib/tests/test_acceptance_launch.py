@@ -397,3 +397,20 @@ def test_default_child_factory_spawns_real_non_interactive_claude_with_prompt(mo
     env = captured["kwargs"].get("env") or {}
     assert env.get("SUPERHEROES_ACCEPTANCE_CONTEXT") == "1"
     assert env.get("SUPERHEROES_ACCEPTANCE_DENY_ONLY") == "1"
+
+
+def test_default_child_factory_disables_print_mode_bg_wait_ceiling(monkeypatch):
+    """0.10.0 qualification finding #6: `claude -p` terminates still-running background
+    tasks after ~600s, killing the child mid-spine while it waits on the showrunner
+    Workflow. The spawn env must disable that ceiling — the harness's own elapsed/spend
+    ceilings (process-group kill) are the real governors."""
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["env"] = kwargs.get("env") or {}
+            self.pid = 321
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory("accept-harness-abc123", terminal_path="/t.json")
+    assert captured["env"].get("CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS") == "0"
