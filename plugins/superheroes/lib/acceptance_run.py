@@ -246,14 +246,7 @@ def invoke(deps):
         # keeping, so we don't attempt a second reap of the same (already-attempted) artifacts.
         if not pre_retry_cleanup_failed:
             if launch.get("teardown_safe") is False:
-                teardown = _merge_teardown(dead_run_teardown, {
-                    "cleaned_up": [],
-                    "left_behind": [{
-                        "kind": "process-group",
-                        "name": stamp,
-                        "reason": "kill not confirmed; cleanup skipped",
-                    }],
-                })
+                teardown = _unsafe_kill_teardown(dead_run_teardown, stamp)
             else:
                 teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
 
@@ -290,16 +283,27 @@ def invoke(deps):
 
     except Exception as exc:
         # Fail-CLOSED: any internal error still teardowns and yields a fail naming the error.
+        # If the last launch's process-group kill was unconfirmed, normal cleanup stays
+        # disabled even here; the child may still be touching stamped artifacts.
         reason = "internal harness error: %s" % exc
+        unsafe_kill = bool(locals().get("unsafe_kill")) or (
+            isinstance(locals().get("launch"), dict)
+            and locals()["launch"].get("teardown_safe") is False
+        )
         try:
-            teardown = _merge_teardown(locals().get("dead_run_teardown"), _teardown(deps, stamp))
+            if unsafe_kill:
+                teardown = _unsafe_kill_teardown(locals().get("dead_run_teardown"), stamp)
+            else:
+                teardown = _merge_teardown(locals().get("dead_run_teardown"),
+                                           _teardown(deps, stamp))
         except Exception as td_exc:
             teardown = {"cleaned_up": [], "left_behind": [],
                         "note": "teardown also failed: %s" % td_exc}
         record_path = None
         try:
             record_path = _finalize(deps, "fail", reason, None, attempts,
-                                    len(attempts) > 1, teardown, run_stamp=stamp)
+                                    len(attempts) > 1, teardown, run_stamp=stamp,
+                                    release_lease=not unsafe_kill)
         except Exception:
             record_path = None
         return {
@@ -325,6 +329,17 @@ def _merge_teardown(*parts):
         cleaned.extend(part.get("cleaned_up") or [])
         left.extend(part.get("left_behind") or [])
     return {"cleaned_up": cleaned, "left_behind": left}
+
+
+def _unsafe_kill_teardown(dead_run_teardown, stamp):
+    return _merge_teardown(dead_run_teardown, {
+        "cleaned_up": [],
+        "left_behind": [{
+            "kind": "process-group",
+            "name": stamp,
+            "reason": "kill not confirmed; cleanup skipped",
+        }],
+    })
 
 
 def _discovery_teardown(deps):

@@ -230,6 +230,41 @@ def test_unconfirmed_kill_skips_cleanup_because_process_group_may_still_be_alive
     assert d["_state"]["lease_released"] is False
 
 
+def test_unconfirmed_kill_exception_path_skips_cleanup_and_keeps_lease():
+    reap_calls = []
+
+    def discover_artifacts(stamp):
+        if stamp is None:
+            return []
+        return [{"kind": "branch", "name": "wi-s1"}]
+
+    def reap(planned):
+        reap_calls.append(planned)
+        return {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
+    d = _deps(
+        discover_artifacts=discover_artifacts,
+        reap=reap,
+        launcher=lambda stamped, budget_consumed=None, attempt=1: {
+            "outcome": "kill-unconfirmed", "ceiling": "elapsed", "terminal_location": None,
+            "spend_partial": False, "spend": 0.25, "elapsed_sec": 99.0,
+            "teardown_safe": False,
+        },
+        quarantine_lease=lambda stamp: (_ for _ in ()).throw(OSError("lease store read-only")),
+        run_outcome=lambda loc: (_ for _ in ()).throw(AssertionError("unsafe kill has no terminal")),
+    )
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "lease store read-only" in r["report"]
+    assert reap_calls == []
+    rec = d["_state"]["records_written"][0]
+    assert rec["cleaned_up"] == []
+    assert rec["left_behind"]
+    assert "cleanup skipped" in str(rec["left_behind"][0])
+    assert d["_state"]["lease_released"] is False
+
+
 def test_internal_harness_error_still_teardowns_and_fails_never_pass():
     boom = _deps()
     boom["gh_reader"] = lambda: (_ for _ in ()).throw(RuntimeError("gh blew up"))

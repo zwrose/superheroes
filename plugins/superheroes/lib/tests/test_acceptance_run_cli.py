@@ -106,7 +106,8 @@ def test_default_deps_builder_is_the_real_wiring_not_a_stub():
     # not a stub that returns an incomplete/placeholder bundle.
     required_seams = {"reclaim_probe", "materialize", "preflight_ok", "launcher",
                       "run_outcome", "gh_reader", "expected_phases", "discover_artifacts",
-                      "reap", "write_record", "release_lease", "clock_now"}
+                      "reap", "write_record", "write_refusal_record", "quarantine_lease",
+                      "release_lease", "clock_now"}
     assert required_seams <= set(captured_deps["deps"].keys())
     assert all(callable(captured_deps["deps"][k]) for k in required_seams)
 
