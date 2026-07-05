@@ -305,6 +305,8 @@ _WHOLE_FLOW_CLASSES = (
     "dependency-failure",
     "resource-exhaustion",
     "migration-rollback",
+    "fail-direction",
+    "transport-contract",
 )
 
 
@@ -418,7 +420,7 @@ def test_smoke_failure_modes_perfect_recall():
         findings.append({"dimension": seed["dimension"],
                          "file": seed["file"], "line": line})
     r = score.score_fixture(fdir, findings)
-    assert r["recall"]["total"] == 5
+    assert r["recall"]["total"] == len(_WHOLE_FLOW_CLASSES)
     assert {s["taxonomy"] for s in expected["seeds"]} == set(_WHOLE_FLOW_CLASSES)
     assert r["recall"]["matched"] == r["recall"]["total"] == len(expected["seeds"])
     assert r["precision"]["traps_flagged"] == 0

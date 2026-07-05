@@ -3,11 +3,11 @@ the premortem-reviewer's taxonomy table (the human-authored source of truth) and
 the eval scorer's matching sets.
 
 The Failure-Mode class names are duplicated verbatim across the agent file,
-``eval/score.py``, ``eval/README.md`` (twice), and the failure-modes fixture. A
-rename in the agent table would silently desync ``score.py``'s verbatim taxonomy
-matching (the function-scoped ±15 window keys on these exact strings), so this
-test pins the relationship the way ``test_dispatch_tables.py`` pins the dispatch
-tables:
+``eval/score.py``, ``eval/README.md`` (twice), and — for the classes with seeds —
+the failure-modes fixture. A rename in the agent table would silently desync
+``score.py``'s verbatim taxonomy matching (the function-scoped ±15 window keys on
+these exact strings), so this test pins the relationship the way
+``test_dispatch_tables.py`` pins the dispatch tables:
 
 - The agent's WHOLE-FLOW classes are exactly ``score.py``'s ``FUNCTION_SCOPED``
   additions (``FUNCTION_SCOPED`` minus its five pre-Failure-Mode members).
@@ -28,9 +28,10 @@ follows (a NEW copy must be added here — the §11.2 caveat):
 - **``eval/README.md`` (twice)** — human prose; PRESENCE-guarded
   (``test_readme_documents_every_whole_flow_class``): every current whole-flow class
   must be documented; a stale prose name is harmless doc cruft, not a code desync.
-- **failure-modes fixture** — a DATA seed (one seed per class), not a restatement of
-  the vocabulary; its coverage is behaviorally checked by ``eval/tests/test_score.py``
-  (``recall total == 5``), so it is excluded from this structural guard by design.
+- **failure-modes fixture** — a DATA seed (one seed per seeded whole-flow class), not a
+  restatement of the vocabulary; its coverage is behaviorally checked by
+  ``eval/tests/test_score.py`` (``recall total == len(_WHOLE_FLOW_CLASSES)``), so it is
+  excluded from this structural guard by design.
 - **``eval/tests/test_score.py`` whole-flow enumeration** — a deliberate test-INPUT
   tripwire, blessed in place with a §11.3 comment (not a contract test restating the
   home; the authoritative sync is this file).

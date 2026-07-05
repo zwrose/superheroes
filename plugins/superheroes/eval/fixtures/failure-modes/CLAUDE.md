@@ -21,3 +21,17 @@ verification window — never in the same pass that writes the new field.
 This is a multi-tenant service; any handler can run concurrently with itself.
 Check-then-act flows on shared rows need an atomic guard (compare-and-set
 filter, unique constraint, or a transaction with the read inside).
+
+## Safety gates
+Gates that decide whether a risky action proceeds (risk/limit/approval checks)
+fail CLOSED: an absent, unknown, or unavailable signal must BLOCK the action,
+never default to allow. A gate that returns "permit" on a missing/undefined
+signal is a fail-direction bug.
+
+## Queue / transport payloads
+A record that crosses a serialization boundary (queue, outbox, worker
+re-parse) is validated and bounded on the receiving side before it drives a
+write — the consumer does not trust re-serialized fields as-is. A malformed or
+partial message fails closed (is rejected), never applied on best-effort
+defaults. A raw `JSON.parse` of a queue message with no schema/bounds check and
+no fidelity verification is a transport-contract bug.
