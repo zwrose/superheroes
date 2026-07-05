@@ -1716,8 +1716,12 @@ async function readGate(workItem, doc) {
   }
 }
 
-async function readStartupState(workItem) {
-  const script = [
+// #221: the startup-state gather script, extracted so a Node smoke can run the REAL Python against an
+// out-of-repo fixture (the canned-answer smokes were blind to the actual engine-prefs resolution —
+// exactly how the load_engine_prefs store-base bug shipped). pyLibDir() is read at CALL time, so a
+// smoke can point sys.path at the real lib dir by planting an absolute __SR_LIB before calling this.
+function startupStateScript() {
+  return [
     'import json, os, sys',
     `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc, model_tier_overrides',
@@ -1760,13 +1764,21 @@ async function readStartupState(workItem) {
     '_ep_degenerate = {"reviewer": "claude", "implementation": "claude", "effort": {}}',
     'try:',
     '    import engine_pref',
-    '    engine_prefs = engine_pref.load_engine_prefs(root, root)',
+    // #221: the SECOND arg is the store-base override (the ~/.claude/superheroes test seam), NOT the
+    // repo root. `root` here IS the repo root — passing it resolves core.md to a nonexistent
+    // <repo>/projects/<key>/config/core.md, so the deliberate fail-open silently degraded every run
+    // to all-claude. Pass None so core.md resolves at the real store; the repo root rides `cwd` (arg 1).
+    '    engine_prefs = engine_pref.load_engine_prefs(root, None)',
     '    if not isinstance(engine_prefs, dict):',
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
     'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
   ].join('\n')
+}
+
+async function readStartupState(workItem) {
+  const script = startupStateScript()
   try {
     return await courier.runCourierJson(
       'read startup state',
@@ -2729,6 +2741,7 @@ module.exports.exec = exec
 module.exports.persistPhase = persistPhase
 module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
+module.exports.startupStateScript = startupStateScript
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained
