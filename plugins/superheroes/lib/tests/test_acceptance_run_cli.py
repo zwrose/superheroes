@@ -143,6 +143,98 @@ def test_cli_threads_ceiling_overrides_to_the_real_builder():
     assert calls[0]["ceilings"] == {"elapsed_sec": 7.0, "spend": 123.0}
 
 
+def test_cli_threads_spine_lib_to_the_real_builder():
+    # #235: `--spine-lib` must reach the real `acceptance_deps.build` as its `spine_lib`
+    # kwarg (and coexist with the ceiling overrides).
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root, ceilings=None, spine_lib=None):
+        calls.append({"fixture": fixture, "root": root, "ceilings": ceilings,
+                      "spine_lib": spine_lib})
+        return real_build(fixture, root, ceilings=ceilings, spine_lib=spine_lib)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted before any live launch",
+                "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli([
+            "--fixture", FIXTURE, "--root", ROOT,
+            "--spine-lib", "/repo/plugins/superheroes/lib",
+        ], env, io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+
+    assert code == 1
+    assert calls[0]["spine_lib"] == "/repo/plugins/superheroes/lib"
+    # unset ceilings still not forced through (only pass kwargs that were given)
+    assert calls[0]["ceilings"] is None
+
+
+def test_cli_threads_child_model_to_the_real_builder():
+    # #235 scope addition: `--child-model` must reach the real `acceptance_deps.build` as
+    # its `child_model` kwarg; unset leaves it to build's own default (sonnet).
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root, ceilings=None, spine_lib=None, child_model=None):
+        calls.append({"child_model": child_model})
+        return real_build(fixture, root, ceilings=ceilings, spine_lib=spine_lib,
+                          child_model=child_model)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted", "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli(["--fixture", FIXTURE, "--root", ROOT, "--child-model", "opus"],
+                        env, io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+    assert code == 1
+    assert calls[0]["child_model"] == "opus"
+
+
+def test_cli_unset_child_model_not_forced_through():
+    # When --child-model is omitted, the CLI must NOT pass the kwarg (so a legacy 2-arg
+    # spy builder still works); build's own default (sonnet) then applies.
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root):   # legacy 2-arg signature
+        calls.append((fixture, root))
+        return real_build(fixture, root)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted", "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli(["--fixture", FIXTURE, "--root", ROOT], env,
+                        io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+    assert code == 1
+    assert calls == [(FIXTURE, ROOT)]
+
+
 def test_cli_bad_ceilings_config_returns_argparse_status_without_raising(tmp_path):
     env = dict(os.environ)
     env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)

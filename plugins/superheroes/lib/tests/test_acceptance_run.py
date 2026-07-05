@@ -55,6 +55,66 @@ def test_happy_path_is_pass_one_record_one_report_lease_released():
     assert rec["spend"] == 1.25 and rec["elapsed_sec"] == 42.0
 
 
+def test_spine_provenance_seam_stamps_record_and_report():
+    # #235: when the deps carry a spine_provenance seam (a `--spine-lib` run), the single
+    # record AND the plain-language report must both name which spine was under test.
+    prov = {"lib_path": "/repo/plugins/superheroes/lib",
+            "bundle_sha256": "cafef00d", "version": "0.11.0"}
+    d = _deps(spine_provenance=lambda: prov)
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    rec = d["_state"]["records_written"][0]
+    assert rec["spine_provenance"] == prov
+    assert "/repo/plugins/superheroes/lib" in r["report"]
+    assert "cafef00d" in r["report"]
+
+
+def test_spine_provenance_resolved_once_record_and_report_agree():
+    # premortem #235: the seam re-hashes the bundle on every call, so resolving it twice
+    # (once for the report, once for the record) could record a hash that disagrees with
+    # the report's. invoke must resolve it ONCE and thread the same value to both.
+    calls = {"n": 0}
+
+    def _counting_seam():
+        calls["n"] += 1
+        return {"lib_path": "/repo/lib", "bundle_sha256": "hash-%d" % calls["n"],
+                "version": "0.11.0"}
+
+    d = _deps(spine_provenance=_counting_seam)
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    rec = d["_state"]["records_written"][0]
+    # exactly one resolution across the whole invocation...
+    assert calls["n"] == 1
+    # ...so the record's hash and the report's hash are the SAME single read.
+    assert rec["spine_provenance"]["bundle_sha256"] == "hash-1"
+    assert "hash-1" in r["report"]
+
+
+def test_default_run_records_driver_through_invoke():
+    # Stitch the default-run provenance shape through the WHOLE lifecycle: a seam that
+    # returns child_model only (no spine keys, as on a non-override run) must land in the
+    # written record AND the rendered report — so a mutant dropping invoke's default-path
+    # provenance thread is caught end-to-end, not just at the unit layer.
+    d = _deps(spine_provenance=lambda: {"child_model": "sonnet"})
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    rec = d["_state"]["records_written"][0]
+    assert rec["spine_provenance"] == {"child_model": "sonnet"}
+    assert "sonnet" in r["report"]
+    assert "not pinned" in r["report"]      # no spine keys -> "installed plugin (not pinned)"
+
+
+def test_no_spine_provenance_seam_leaves_record_and_report_unchanged():
+    # A fake deps bundle with no seam at all -> no spine_provenance key, no report section
+    # (the real build() always wires the seam; this pins the seam-absent fallback).
+    d = _deps()
+    r = run.invoke(d)
+    rec = d["_state"]["records_written"][0]
+    assert "spine_provenance" not in rec
+    assert "Provenance" not in r["report"]
+
+
 def test_confirmed_alive_prior_run_refuses_creating_nothing():
     d = _deps(reclaim_probe=lambda: ({"in_flight": True, "stamp": "old", "has_record": True},
                                      "alive"))

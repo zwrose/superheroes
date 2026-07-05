@@ -68,6 +68,32 @@ repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1
    the built-in defaults: 1800 elapsed seconds and 5,000,000 measured output tokens. The
    `spend` ceiling is measured output tokens, not dollars.
 
+   **Pre-release gate (`--spine-lib`).** By default the child launches the spine from the
+   installed plugin cache — the last *released* version — so merged-but-unreleased spine
+   changes are invisible (post-release smoke). To gate merged `main` **before** cutting a
+   release, pass `--spine-lib <lib-dir>` pointing at the checkout's own
+   `plugins/superheroes/lib` (must contain `showrunner.bundle.js` + `showrunner.js`): the
+   child then resolves the **entire** spine from that tree — pre-flight, the committed bundle,
+   the Workflow `libRoot`, and the run-outcome projection — never a cross-version mix of a
+   cached pre-flight against a main bundle. Phase-truth follows the same tree, and the
+   record/report record the bundle's SHA-256 so the pass is attributable to the exact spine.
+   A missing dir / bundle / `showrunner.js` refuses pre-launch, naming the path (never a
+   silent fall-back to the installed plugin). The exact happy path — run it on merged `main`,
+   pointing `--spine-lib` at that same checkout's lib:
+
+   ```bash
+   git -C ~/superheroes checkout main && git pull
+   python3 plugins/superheroes/lib/acceptance_run.py \
+     --fixture plugins/superheroes/eval/fixtures/acceptance \
+     --root /Users/zwrose/superheroes \
+     --spine-lib /Users/zwrose/superheroes/plugins/superheroes/lib
+   # green verdict (recording main's bundle hash + driver model) -> merge the release PR
+   ```
+
+   The child **driver** session is pinned to `sonnet` by default so it never inherits the
+   invoking user's CLI model (model-governance); override with `--child-model <model>` if
+   needed. Every verdict's provenance names both the spine under test and the driver model.
+
 4. **Render the single verdict report.** Print the orchestrator's one plain-language report — the
    pass/fail verdict, the reason, where the result record lives, and what was cleaned up or left
    behind — and stop. **Never instruct merging**; the run mutates no real state and the verdict is

@@ -196,6 +196,118 @@ def test_build_launch_prompt_forbids_merging():
     assert "do not merge" in prompt
 
 
+# #235 default byte-identical guard: with no spine-lib override the prompt must be exactly
+# today's installed-plugin wording — nothing about the override may leak in.
+_DEFAULT_PROMPT = (
+    "Run the superheroes:showrunner skill end-to-end on the approved work-item "
+    "accept-harness-abc123 (invoke it exactly as documented in its SKILL.md — pre-flight, "
+    "then the Workflow tool on the committed bundle with args: {workItem: accept-harness-abc123}). "
+    "After the run reaches a terminal state (ready or parked), compute its "
+    "run-outcome projection via plugins/superheroes/lib/run_readout.py's "
+    "run_outcome(state) function over the run's end state, and write that projection "
+    "as JSON to this exact path, creating parent directories as needed: /run/dir/terminal-record.json. "
+    "Do not merge, release, or force-push anything — this run's changes are confined "
+    "to the work-item's own branch and PR."
+)
+
+
+def test_build_launch_prompt_default_is_byte_identical_when_spine_lib_unset():
+    # The default (installed-plugin) path must be unchanged: byte-for-byte the documented
+    # prompt, and it must never name a bundle path or a libRoot arg.
+    prompt = al.build_launch_prompt("accept-harness-abc123", "/run/dir/terminal-record.json")
+    assert prompt == _DEFAULT_PROMPT
+    assert "libRoot" not in prompt
+    assert "showrunner.bundle.js" not in prompt
+    # Passing spine_lib=None (the explicit default) is identical to omitting it.
+    assert al.build_launch_prompt(
+        "accept-harness-abc123", "/run/dir/terminal-record.json", spine_lib=None) == _DEFAULT_PROMPT
+
+
+def test_build_launch_prompt_override_names_bundle_path_and_libRoot():
+    prompt = al.build_launch_prompt(
+        "accept-harness-abc123", "/run/dir/terminal-record.json",
+        spine_lib="/repo/plugins/superheroes/lib", root="/repo")
+    # names the override bundle path explicitly...
+    assert "/repo/plugins/superheroes/lib/showrunner.bundle.js" in prompt
+    # ...and pins the spine via the existing libRoot launch seam + the real root.
+    assert "libRoot: /repo/plugins/superheroes/lib" in prompt
+    assert "root: /repo" in prompt
+    assert "accept-harness-abc123" in prompt
+    assert "/run/dir/terminal-record.json" in prompt
+    # still drives the showrunner, still forbids merging.
+    assert "superheroes:showrunner" in prompt
+    assert "do not merge" in prompt.lower()
+
+
+def test_build_launch_prompt_override_resolves_whole_spine_from_lib():
+    # #235 item 2 (the headline self-check): the override must resolve the ENTIRE spine from
+    # the override tree — pre-flight AND bundle AND libRoot — so pre-flight can't run from
+    # the installed cache while the bundle comes from main (a silent cross-version mix).
+    lib = "/repo/plugins/superheroes/lib"
+    prompt = al.build_launch_prompt(
+        "accept-harness-abc123", "/run/dir/terminal-record.json", spine_lib=lib, root="/repo")
+    assert lib + "/preflight.py" in prompt          # pre-flight from the override tree
+    assert lib + "/showrunner.bundle.js" in prompt   # bundle from the override tree
+    assert "libRoot: " + lib in prompt               # Workflow libRoot from the override tree
+    assert lib + "/run_readout.py" in prompt         # run-outcome projection from the override tree
+    # and it explicitly forbids resolving $LIB from the installed plugin cache — pinned as the
+    # contiguous forbidding phrase, so an inverted/removed instruction can't slip past.
+    assert "do not let $lib resolve from the installed plugin cache" in prompt.lower()
+
+
+def test_default_child_factory_pins_model_sonnet_by_default(monkeypatch):
+    # #235 scope addition: the spawn must pin the driver model so it never inherits the
+    # invoking user's CLI default (model-governance). Default is sonnet.
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            self.pid = 321
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory({"work_item": "accept-harness-abc123"},
+                              terminal_path="/run/dir/terminal-record.json")
+    argv = captured["argv"]
+    assert "--model" in argv
+    assert argv[argv.index("--model") + 1] == "sonnet"
+    assert al.DEFAULT_CHILD_MODEL == "sonnet"
+
+
+def test_default_child_factory_honors_child_model_override(monkeypatch):
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            self.pid = 654
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory({"work_item": "accept-harness-abc123"},
+                              terminal_path="/run/dir/terminal-record.json",
+                              child_model="opus")
+    argv = captured["argv"]
+    assert argv[argv.index("--model") + 1] == "opus"
+
+
+def test_default_child_factory_threads_spine_lib_into_prompt(monkeypatch):
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            self.pid = 222
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory(
+        {"work_item": "accept-harness-abc123"},
+        terminal_path="/run/dir/terminal-record.json",
+        spine_lib="/repo/plugins/superheroes/lib", root="/repo")
+    prompt = captured["argv"][2]
+    assert "/repo/plugins/superheroes/lib/showrunner.bundle.js" in prompt
+    assert "libRoot: /repo/plugins/superheroes/lib" in prompt
+
+
 def test_default_child_factory_spawns_real_non_interactive_claude_with_prompt(monkeypatch):
     """code-001: the real spawn must use `-p`/`--print` (never the invalid `--headless`
     flag) and must pass a prompt that actually drives the showrunner on the stamped

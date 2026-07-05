@@ -117,6 +117,24 @@ def render_report(result):
             "",
         ]
 
+    # #235 pre-release gate: state WHAT this verdict validated and WHAT drove it. The driver
+    # (`child_model`) is always recorded; the spine lib/hash/version lines appear only on a
+    # `--spine-lib` run (their absence is the honest signal that no spine was pinned — a
+    # default run validated whatever the installed plugin is).
+    provenance = result.get("spine_provenance")
+    if isinstance(provenance, dict):
+        lines += ["### Provenance (spine + driver)",
+                  "- driver (child model): %s" % (provenance.get("child_model") or "(unset)")]
+        if "lib_path" in provenance or "bundle_sha256" in provenance:
+            lines += [
+                "- spine lib path: %s" % (provenance.get("lib_path") or "(unknown)"),
+                "- bundle SHA-256: %s" % (provenance.get("bundle_sha256") or "(unreadable)"),
+                "- version.txt: %s" % (provenance.get("version") or "(none)"),
+            ]
+        else:
+            lines.append("- spine: installed plugin (not pinned)")
+        lines.append("")
+
     cleaned = result.get("cleaned_up") or []
     left = result.get("left_behind") or []
     lines.append("### Cleaned up")
