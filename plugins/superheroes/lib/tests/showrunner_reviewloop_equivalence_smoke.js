@@ -148,6 +148,25 @@ function main() {
   assertTallyEquivalent([rec(1, { dims: cleanDims })], 1,
     { gate: 'clean', verifyResult: 'fail' }, 'tally verify-fail')
 
+  // synthesisUnverified asymmetry (the subtle #211 parity branch): a no-location finding synthesis
+  // could not verify is EXCLUDED from the CURRENT round's breaker + present-deferred but KEPT for
+  // prior-round recurrence. present-blocking still counts it (rides down from the live answer). The
+  // deepStrictEqual on breaker + presentDeferred pins that decider and oracle filter it identically —
+  // this kills the mutant where the decider drops the filter or applies it to recurrence too.
+  const UNVER = Object.assign({}, CRIT, { file: null, line: null, synthesisUnverified: true })
+  assertTallyEquivalent(
+    [rec(1, { dims: { 'code-reviewer': { findings: [CRIT] } }, findings: [CRIT] }),
+      rec(2, { dims: { 'code-reviewer': { findings: [UNVER] } }, findings: [UNVER] })],
+    2, { gate: 'blocking', presentBlocking: 1 }, 'tally synthesisUnverified asymmetry')
+
+  // deferred-set skip path: a present blocker whose identity is deferred — decider and oracle must
+  // agree on present-deferred, the terminal, and the breaker input once the deferred blocker is skipped.
+  const circuitBreaker = require('../circuit_breaker.js')
+  assertTallyEquivalent(
+    [rec(1, { dims: { 'code-reviewer': { findings: [CRIT] }, 'security-reviewer': {} }, findings: [CRIT] })],
+    1, { gate: 'clean', presentBlocking: 1, deferredSet: { [circuitBreaker.findingIdentity(CRIT)]: 'Critical' } },
+    'tally deferred-skip')
+
   console.log('ok: the review-loop deciders are behavior-equivalent to the in-memory oracle (#211 Phase 4a)')
 }
 

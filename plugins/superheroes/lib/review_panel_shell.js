@@ -26,8 +26,12 @@ const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Fa
 const _MAX_REASON = 480
 function _clampReason(text) {
   const s = text === null || text === undefined ? '' : String(text)
-  if (s.length <= _MAX_REASON) return s
-  return s.slice(0, _MAX_REASON).replace(/\s+$/, '') + ' …(truncated)'
+  // Count/slice by Unicode CODE POINTS (Array.from), matching Python's len(s)/s[:_MAX_REASON] — a
+  // UTF-16 .length/.slice would cut astral-plane text (emoji in a finding title) at a different
+  // boundary and break byte-parity with the review_loop_plan._clamp_reason twin.
+  const cps = Array.from(s)
+  if (cps.length <= _MAX_REASON) return s
+  return cps.slice(0, _MAX_REASON).join('').replace(/\s+$/, '') + ' …(truncated)'
 }
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
@@ -88,14 +92,8 @@ function _failClosed() {
 }
 
 function deferredSetPath(runDir) { return `${runDir}/deferred-set.json` }
-
-async function loadDeferredSet(runDir) {
-  // Deliberate degrade: a courier prose-flake on a missing/corrupt deferred-set reads as {}.
-  // Worst case a deferred finding re-blocks or gets re-reviewed (waste, not corruption) — the
-  // tally's skip-set is advisory; record_deferred.py is the authoritative write path.
-  const set = await io().readJson(deferredSetPath(runDir), {})
-  return (set && typeof set === 'object' && !Array.isArray(set)) ? set : {}
-}
+// (#211: the JS loadDeferredSet is gone — the tally decider reads deferred-set.json Python-side via
+// --deferred-path, fail-soft to {}. This retired the review loop's last prose-vulnerable JS read.)
 
 function resumeRound(records) {
   let best = 0
@@ -166,14 +164,6 @@ function buildFixContext(records, coverageDecisions) {
 
 function reviewerContext(context, coverageDecisions, receiptContext) {
   return Object.assign({}, context || {}, { coverageDecisions: coverageDecisions || [], receiptContext })
-}
-
-function wouldOtherwiseCertify(roundFindings, reviewerSet) {
-  for (const name of reviewerSet || []) {
-    const result = roundFindings[name]
-    if (!result || result.confidence !== 'high' || (result.findings || []).length > 0) return false
-  }
-  return true
 }
 
 function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSet) {
@@ -366,6 +356,11 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
   return { ok: true, text }
 }
 
+// ORPHANED by the #211 cutover: loadRoundRecords / _loadRoundRecordsOnce / probeRoundRecords are the
+// old standalone entry-read path (records up). The shell now enters via gatherReviewSetup (decisions
+// up), so nothing calls these. They are NOT the equivalence oracle (that is the pure decision helpers
+// exported at the bottom). They ride the receipt+chunk read machinery (_readReceiptText, still live
+// for the gather) that PR 3 reworks (rb64 → raw text slices); PR 3 removes this trio with it.
 async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
   const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
   let parsed = _jsonFromStdout(out)
@@ -478,16 +473,8 @@ async function dumpRoundBodiesBestEffort(runDir, round, verdict, fixReport, ioAp
   } catch (_) { /* best-effort by contract */ }
 }
 
-// mergeRoundRecords: the in-memory twin of persist_record's merge (dedupe the round, sort) —
-// persist-skeleton never echoes the merged records back through the pipe, and the in-memory
-// copy keeps the CURRENT session's full-bodied record (richer fix context than the durable
-// skeleton; a resume gets the skeletons, same as before D3).
-function mergeRoundRecords(records, record) {
-  const merged = (records || []).filter((r) => r && r.round !== record.round)
-  merged.push(record)
-  merged.sort((a, b) => (Number(a.round) || 0) - (Number(b.round) || 0))
-  return merged
-}
+// (#211: mergeRoundRecords is gone — the shell no longer keeps an in-memory records copy; the
+// durable skeleton on disk is the single source of truth the deciders read.)
 
 // The post-fix update ships only the SMALL delta (confirmation marker, changed subjects,
 // coverage decisions, fix summary) — never the round body — via review_memory.py update-round,
@@ -495,7 +482,7 @@ function mergeRoundRecords(records, record) {
 // the safe inline size — the delta is usually small but coverageDecisions/fixes are unbounded).
 // Deferred entries ride slimmed (identity/severity/reason + skeleton finding): their full
 // bodies go to the round-bodies dump, not through this pipe or into round-records.json.
-async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
+async function persistPostFixRecord(runDir, reviewerSet, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: reviewMemory.skeletonCoverageDecisions(recordedCoverageDecisions || []),
@@ -517,8 +504,9 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   if (lease) args.push('--lease', lease)
   const parsed = await _selfVerifiedHelper(ioApi, args, stagedPath, updatesJson, 'updates-corrupt')
   if (!parsed.ok) return { ok: false, reason: parsed.reason || 'helper-failed' }
-  const records = (recordsForFix || []).map((r) => (r && r.round === round) ? Object.assign({}, r, updates) : r)
-  return { ok: true, contentHash: parsed.contentHash, records }
+  // #211: only the CAS hash rides back — the shell keeps no in-memory record copy (the durable
+  // skeleton on disk is the source of truth the deciders read next round).
+  return { ok: true, contentHash: parsed.contentHash }
 }
 
 async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
@@ -907,7 +895,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // anyway, and this ordering shrinks the crash window in which the audit bodies are
     // lost while the delta survives (or vice versa) at zero protocol cost.
     await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
-    const postFix = await persistPostFixRecord(runDir, reviewerSet, null, round, fixResult.fixResult || {}, recordedCoverageDecisions, memoryContentHash, runId, lease, ioApi, legKind)
+    const postFix = await persistPostFixRecord(runDir, reviewerSet, round, fixResult.fixResult || {}, recordedCoverageDecisions, memoryContentHash, runId, lease, ioApi, legKind)
     if (!postFix.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
