@@ -284,8 +284,12 @@ def test_real_gh_reader_classifies_host_unreachable_from_required_read_probe(mon
 
     monkeypatch.setattr(deps, "_run", fake_run)
     monkeypatch.setattr(gh_preflight, "probe", lambda root: {"ok": False})
-    monkeypatch.setattr(gh_preflight, "decide",
-                        lambda probe, required="read": (False, "indeterminate", "retry"))
+
+    def fake_decide(probe, required="write"):
+        assert required == "read"
+        return (False, "indeterminate", "retry")
+
+    monkeypatch.setattr(gh_preflight, "decide", fake_decide)
 
     result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
 

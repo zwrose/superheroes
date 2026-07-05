@@ -56,6 +56,8 @@ def test_retry_breach_is_invocation_scoped_not_fresh_ceiling():
 
 def test_partial_owner_ceilings_merge_with_defaults_and_never_raise():
     assert c.DEFAULT_CEILINGS["spend"] == EXPECTED_DEFAULT_SPEND
+    assert c.normalize_ceilings({"elapsed_sec": "bad", "spend": False}) == c.DEFAULT_CEILINGS
+    assert c.normalize_ceilings(["not", "a", "dict"]) == c.DEFAULT_CEILINGS
     r = c.decide({
         "ceilings": {"elapsed_sec": 10.0},
         "elapsed_sec": 1.0,
