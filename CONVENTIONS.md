@@ -1172,6 +1172,15 @@ asserts the committed fixture's `expected_phases` equals what the reader returns
 rename in `showrunner.js` **breaks CI** (mutation-verified). This is the canonical Pattern-2
 reference; **do not rebuild it.**
 
+**Caveat — a copy-list drift test is only as complete as the copies it enumerates.** Pattern 2
+catches drift in the copies the test names; a **new** copy someone adds later is invisible until
+it is added to the test. So the enumerating drift test must name every known copy-holder (a comment
+listing them), and **adding a copy means extending the drift test** — checked at review under this §.
+The roster guard `test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents` follows
+this: it enumerates all six copy-holders (two `showrunner.js` JS literals, two Python `DIMENSIONS`,
+and the same roster re-keyed as two `AGENT_SUFFIX` dicts) against the `agents/*-reviewer` home. When
+a single runtime home is cheap to read, Pattern 1 sidesteps this failure mode entirely.
+
 ### 11.3 Test corollary — a contract test must read the home, never restate it
 
 **A test for a cross-boundary contract must not restate the constant** — it **imports or

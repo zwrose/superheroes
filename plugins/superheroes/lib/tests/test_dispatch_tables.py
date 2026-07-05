@@ -51,46 +51,83 @@ def _table_rows(rel):
     return ROW_RE.findall(_read(rel))
 
 
-def _js_const_str_list(rel, name):
-    """Fail-closed read of `const NAME = [ ... ]` from a JS source file.
+def _parse_js_const_str_list(text, name, label):
+    """Fail-closed core of `_js_const_str_list` (CONVENTIONS §11.2).
 
-    CONVENTIONS §11 (single source of truth): a hand-maintained copy of a
-    cross-boundary fact is only safe if its drift test *fails closed* — parsing
-    nothing must raise, never return an empty list that makes the downstream
-    equality assertion vacuously pass. So this asserts exactly one match and a
-    non-empty string list before returning.
+    A hand-maintained copy of a cross-boundary fact is only safe if its drift test
+    *fails closed* — parsing nothing must raise, never return an empty list that
+    makes the downstream equality assertion vacuously pass. So this asserts exactly
+    one match and a non-empty string list before returning. A reformat the regex
+    cannot read (an inline comment inside the brackets, a `new Set([...])` / `.concat`
+    wrapper, a nested array) also raises here — a hard, honest CI failure, never a
+    false clean.
     """
-    text = _read(rel)
     matches = re.findall(r"^const\s+%s\s*=\s*(\[[^\]]+\])" % re.escape(name), text, re.M)
     assert len(matches) == 1, (
-        "%s: expected exactly one `const %s = [...]` literal, found %d"
-        % (rel, name, len(matches)))
+        "%s: expected exactly one plain `const %s = [...]` string-array literal, found "
+        "%d (a rename, or a reformat the drift parser can't read — inline comment, "
+        "Set/concat wrapper)" % (label, name, len(matches)))
     value = ast.literal_eval(matches[0])
     assert isinstance(value, list) and value and all(
         isinstance(x, str) and x for x in value), (
-        "%s: `%s` must be a non-empty list of strings" % (rel, name))
+        "%s: `%s` must be a non-empty list of strings" % (label, name))
     return value
+
+
+def _js_const_str_list(rel, name):
+    """Fail-closed read of `const NAME = [ ... ]` from a JS source file (§11.2)."""
+    return _parse_js_const_str_list(_read(rel), name, rel)
 
 
 def test_code_reviewer_rosters_match_bundled_agents():
     """CONVENTIONS §11: the reviewer roster is a cross-boundary fact re-typed as a
     hand-maintained copy in JS (`showrunner.js` REVIEW_CODE_REVIEWERS / DOC_REVIEWERS)
-    and Python (`code_loop_plan.DIMENSIONS`, `spec_loop_plan.DIMENSIONS`). The
-    authoritative home is the set of `agents/*-reviewer` files; each copy must equal
-    it, so adding/removing/renaming a reviewer breaks CI in every copy-holder rather
-    than letting them silently diverge (the PR #205 class). The generated
-    `showrunner.bundle.js` copy is guarded separately by test_bundle_drift.
+    and Python (`code_loop_plan` / `spec_loop_plan` DIMENSIONS, and the same roster
+    re-keyed as AGENT_SUFFIX). The authoritative home is the set of `agents/*-reviewer`
+    files; each copy must equal it, so adding/removing/renaming a reviewer breaks CI in
+    every enumerated copy-holder rather than letting them silently diverge (the PR #205
+    class). This enumeration is only as complete as the copies listed below — a NEW copy
+    must be added here (see the §11.2 caveat). The generated `showrunner.bundle.js` copy
+    is guarded separately by test_bundle_drift.
     """
     home = _agent_slugs()
 
-    js = os.path.join("lib", "showrunner.js")
-    assert set(_js_const_str_list(js, "REVIEW_CODE_REVIEWERS")) == home
-    assert set(_js_const_str_list(js, "DOC_REVIEWERS")) == home
-
     import code_loop_plan
     import spec_loop_plan
-    assert set(code_loop_plan.DIMENSIONS) == home
-    assert set(spec_loop_plan.DIMENSIONS) == home
+    js = os.path.join("lib", "showrunner.js")
+    rosters = {
+        "showrunner.js REVIEW_CODE_REVIEWERS": _js_const_str_list(js, "REVIEW_CODE_REVIEWERS"),
+        "showrunner.js DOC_REVIEWERS": _js_const_str_list(js, "DOC_REVIEWERS"),
+        "code_loop_plan.DIMENSIONS": list(code_loop_plan.DIMENSIONS),
+        "spec_loop_plan.DIMENSIONS": list(spec_loop_plan.DIMENSIONS),
+        # AGENT_SUFFIX is the same roster re-keyed — its keys are a copy too.
+        "code_loop_plan.AGENT_SUFFIX": list(code_loop_plan.AGENT_SUFFIX),
+        "spec_loop_plan.AGENT_SUFFIX": list(spec_loop_plan.AGENT_SUFFIX),
+    }
+    for label, roster in rosters.items():
+        # duplicate-sensitive: set() alone would let a copy that duplicates one slug
+        # while dropping another pass (sizes coincide once the set collapses the dup).
+        assert len(roster) == len(set(roster)), "%s has a duplicate entry: %r" % (label, roster)
+        assert set(roster) == home, "%s drifted from the agents/*-reviewer home" % label
+
+
+@pytest.mark.parametrize("text, name, match", [
+    # literal renamed / removed → zero matches
+    ("const OTHER = ['a', 'b']\n", "REVIEWERS", "expected exactly one"),
+    # literal declared twice → ambiguous, refuse
+    ("const R = ['a']\nconst R = ['b']\n", "R", "found 2"),
+    # a non-string element → not a plain string-array
+    ("const R = ['a', 2]\n", "R", "non-empty list of strings"),
+    # an empty-string element → not a non-empty string
+    ("const R = ['a', '']\n", "R", "non-empty list of strings"),
+])
+def test_js_const_str_list_fails_closed(text, name, match):
+    """§11.2: the drift reader must RAISE (not return a partial/empty list) on every
+    shape that isn't exactly one plain string-array — otherwise the equality assertion
+    that guards each roster copy could pass vacuously. Mirrors the canonical Pattern-2
+    reference's fail-closed tests (test_acceptance_fixture.py)."""
+    with pytest.raises(AssertionError, match=match):
+        _parse_js_const_str_list(text, name, "<test>")
 
 
 def _rubric_dimensions():
