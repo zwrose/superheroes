@@ -21,10 +21,12 @@ WORK_ITEM=$(python3 "$ROOT_DIR/lib/definition_doc.py" mint --title "<concise cho
 ## Author the tasks doc (with clarifying questions)
 
 Quick is **not** mechanical transcription — an issue is not assumed clear enough to go straight to
-tasks. But the **gather + frame** phase already ran before the route was chosen at the framing
-brief (parent SKILL, step 5), so most clarifying dialogue has already happened. **Ask only what is
-still genuinely ambiguous** — one question at a time — and **never re-ask** something the gather
-phase already settled. If nothing is left open, say so and proceed. Never assume the *what*.
+tasks. Much of this clarifying dialogue may already have happened in the **gather + frame** phase
+before the route was chosen at the framing brief (parent SKILL, step 5), so **don't re-ask what
+gather already settled**. Still **ask at least one clarifying question unless the chore is genuinely
+unambiguous** — one at a time — and where the route was called early (the first or second exchange,
+so gather has probed little yet), surface what is still open before authoring. Never assume the
+*what*.
 
 Place the doc **exactly where the tasks phase writes it today** (the mode-aware, spec-anchored
 resolver — the showrunner's own intake reads that path), so downstream is byte-identical:
