@@ -250,6 +250,14 @@ the PR-action decision is a code gate, not free-form judgment. Reversible → **
 (report the link in the readout). The enforcer permits `gh pr create`/`git push`
 (non-force); it refuses `gh pr merge`.
 
+**Ship-phase honesty (CONVENTIONS §10.7).** The PR body must carry two sections before it
+is handed back: a **Definition of done** disposition table (`superheroes:dod-table`) with one
+row per spec DoD bullet, each marked `done` (+ an evidence pointer) or `deferred` (+ a filed
+issue `#NNN` and a one-line reason); and a generated **Stubbed seams** section
+(`superheroes:stubbed-seams`) listing every `# STUB(#NNN): …` marker in the diff. Any
+deliberately-unwired seam **must** carry that marker (issue mandatory, CI-validated by
+`validate_stubs.py`) — a stub disclosed only in a docstring is a defect, not a shipped seam.
+
 Write `checkpoint.write(…, phase="verify", lastGoodStep=3, pr=<pr-object: {number, url, isDraft}>, lockGeneration=generation)`
 (a dict, not a bare number — `render_brief` reads `pr.get("url")` and the reconcile reads `pr.get("state")`/`number`).
 

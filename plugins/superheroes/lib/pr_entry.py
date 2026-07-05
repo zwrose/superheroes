@@ -5,7 +5,7 @@ a gh isDraft read -> flip if needed. Fail-closed: any 'gate' decision returns ok
 import argparse, json, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import checkpoint as ckpt_lib, control_plane, pr_phase, recover, ship_gate, test_pilot_status
-import idempotent_write
+import idempotent_write, dod_gate
 
 
 def _gh_pr(branch):
@@ -41,6 +41,104 @@ def push_branch(branch, run=None, timeout=120):
     if r.returncode != 0:
         return "branch push failed before PR create: %s" % (r.stderr or "")[-300:]
     return None
+
+
+# --- ship-phase honesty gates (issue #228) --------------------------------
+
+def _spec_lookup(root, work_item):
+    """(spec_present, spec_text) for the run's work-item. spec_present=False is the #25 quick
+    route (a tasks doc with no spec.md) -> the DoD gate is not-applicable. A present-but-unreadable
+    spec returns (True, "") so the DoD gate fail-closes (parks). Propagates
+    mode_registry.UnknownSchemaVersion so the caller can fail closed on an undeterminable mode."""
+    import definition_doc
+    d = definition_doc.resolve_work_item_dir(work_item, root=root, cwd=root)
+    spec_path = os.path.join(d, "spec.md")
+    if not os.path.isfile(spec_path):
+        return (False, None)
+    try:
+        with open(spec_path, encoding="utf-8") as fh:
+            return (True, fh.read())
+    except OSError:
+        return (True, "")
+
+
+def _gh_pr_body(number):
+    """The PR's body text, or None on any unreadable read (the DoD gate fail-closes on None)."""
+    if not number:
+        return None
+    try:
+        r = subprocess.run(["gh", "pr", "view", str(number), "--json", "body", "--jq", ".body"],
+                           capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout
+
+
+def _gh_edit_body(number, body):
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix="pr-body-", suffix=".md")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        subprocess.run(["gh", "pr", "edit", str(number), "--body-file", tmp],
+                       capture_output=True, text=True, timeout=60)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _branch_diff(branch, base, root):
+    """Unified diff of `branch` vs its base (three-dot: changes introduced on the branch), for
+    the STUB-marker scan. Empty string on any git error (best-effort — no markers surfaced)."""
+    import base_ref
+    base_name = base or "main"
+    resolved = base_ref.resolve_configured_base(root, base_name) or base_name
+    ref = branch or "HEAD"
+    try:
+        r = subprocess.run(["git", "diff", "%s...%s" % (resolved, ref)],
+                           capture_output=True, text=True, timeout=60, cwd=root)
+    except Exception:
+        return ""
+    return r.stdout or "" if r.returncode == 0 else ""
+
+
+def _seed_pr_body(root, work_item, branch, base, number):
+    """Best-effort: seed the DoD disposition table + generated Stubbed-seams section into the PR
+    body at draft time, so the build/ship legs FILL the table rather than invent it. Fail-open —
+    the mark-ready DoD gate is the fail-closed enforcement, so a failed seed simply parks there.
+    Never writes to stdout (the courier reads a single JSON line from it)."""
+    import pr_body, stub_markers
+    if not number:
+        return
+    spec_present, spec_text = _spec_lookup(root, work_item)
+    dod_bullets = dod_gate.parse_dod_bullets(spec_text) if spec_present else None
+    markers = stub_markers.markers_in_diff(_branch_diff(branch, base, root))
+    dod_block = pr_body.seed_dod_block(dod_bullets or [])
+    stubs_block = pr_body.stubbed_seams_block(markers)
+    if not dod_block and not stubs_block:
+        return
+    current = _gh_pr_body(number)
+    if current is None:
+        sys.stderr.write("draft-PR body seed skipped: PR body unreadable\n")
+        return
+    new_body = pr_body.compose_body(current, dod_block, stubs_block)
+    if not new_body or new_body.rstrip() == (current or "").rstrip():
+        return
+    _gh_edit_body(number, new_body)
+
+
+def _draft_success(root, work_item, branch, base, pr, read_back):
+    """Seed the PR body (best-effort), then emit the draft-step success JSON and exit."""
+    try:
+        _seed_pr_body(root, work_item, branch, base, pr.get("number") if isinstance(pr, dict) else None)
+    except Exception as e:                               # seeding is best-effort; never fail the draft
+        sys.stderr.write("draft-PR body seed skipped: %s\n" % e)
+    print(json.dumps({"ok": True, "pr": pr, "read_back": bool(read_back)}))
+    sys.exit(0)
 
 
 def main(argv=None):
@@ -80,7 +178,7 @@ def main(argv=None):
         if act == "adopt":
             current = _gh_pr(branch)
             read_back = isinstance(current, dict) and isinstance(world["pr"], dict) and current.get("number") == world["pr"].get("number")
-            print(json.dumps({"ok": True, "pr": world["pr"], "read_back": bool(read_back)})); sys.exit(0)
+            _draft_success(root, a.work_item, branch, a.base, world["pr"], read_back)
         # create: only after the ship-gate proves SDD build + review-code ran over the SHIPPED HEAD —
         # the build branch's tip (what the PR ships), resolved from checkpoint.branch, not the cwd HEAD.
         try:
@@ -132,7 +230,7 @@ def main(argv=None):
             sys.exit(0)
         current = _gh_pr(branch)
         read_back = isinstance(current, dict) and current.get("number") == pr.get("number")
-        print(json.dumps({"ok": True, "pr": pr, "read_back": bool(read_back)}))
+        _draft_success(root, a.work_item, branch, a.base, pr, read_back)
     else:  # mark-ready
         pr = _gh_pr(branch)
         decision = pr_phase.mark_ready_action(pr)
@@ -150,6 +248,26 @@ def main(argv=None):
         if status_decision["action"] == "gate":
             print(json.dumps({"ok": False, "read_back": False, "reason": status_decision["reason"]})); sys.exit(0)
         if decision == "flip":
+            # DoD disposition gate (issue #228): before the FIRST ready flip, every spec
+            # Definition-of-done bullet must be disposed (done+evidence or deferred+issue) in the
+            # PR body. Fail-closed — a spec-less quick route (#25) is not-applicable and passes; a
+            # spec present with an unaddressed bullet, an unreadable body, or an undeterminable
+            # store mode parks the run (never flips ready). Runs only on the flip (an already-ready
+            # PR on resume is not re-gated).
+            try:
+                _spec_present, _spec_text = _spec_lookup(root, a.work_item)
+            except Exception as e:
+                print(json.dumps({"ok": False, "read_back": False,
+                                  "reason": "DoD gate: spec location undeterminable (%s) — fail closed" % e})); sys.exit(0)
+            _dod_bullets = dod_gate.parse_dod_bullets(_spec_text) if _spec_present else None
+            _body = _gh_pr_body(pr.get("number"))
+            if _spec_present and _body is None:
+                print(json.dumps({"ok": False, "read_back": False,
+                                  "reason": "DoD gate: PR body unreadable — fail closed"})); sys.exit(0)
+            _dod = dod_gate.decide(_dod_bullets, _body or "", spec_present=_spec_present)
+            if _dod["verdict"] == "park":
+                print(json.dumps({"ok": False, "read_back": False,
+                                  "reason": "DoD gate: %s" % _dod["reason"]})); sys.exit(0)
             n = str(pr["number"])
 
             def _reader():

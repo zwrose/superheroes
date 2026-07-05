@@ -23,6 +23,20 @@ fast-follow):
 - **A review that halts with an open blocker** (circuit breaker, park) is resolved
   or explicitly owner-accepted in the PR body — never quietly merged.
 
+## Ship-phase honesty (CONVENTIONS §10.7)
+
+A green, branch-current PR can still be silently incomplete. Two fail-closed gates
+operate on the PR body — a review seat flags a PR missing either:
+
+- **Definition of done disposition table** (`superheroes:dod-table`): one row per spec
+  DoD bullet, each marked `done` (with an evidence pointer) or `deferred` (with a filed
+  issue `#NNN` and a one-line reason). The mark-ready gate parks on any unaddressed
+  bullet; the review seat rejects a row whose evidence or deferral is empty or hollow.
+- **Stubbed seams** (`superheroes:stubbed-seams`, generated): every deliberately-unwired
+  seam carries a `# STUB(#NNN): <what is unwired and the live effect>` marker (issue
+  mandatory, CI-validated) and surfaces in this generated section. A seam disclosed only
+  in a docstring is a finding.
+
 ## Why it is stated this strongly
 
 The convention's audience includes autonomous sessions building without a human
