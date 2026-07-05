@@ -267,7 +267,7 @@ function reviewerRetryCorrection(retryReason) {
 }
 
 const FIX_RESULT_INSTRUCTION =
-  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Prefer changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode); file paths are accepted but the scheduler derives subjects from fixes+files+priorFindings. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
+  'Read the fix worklist JSON at the path in fixContext.worklistPath (#211 — the findings are on disk, never inlined here). It holds: findings (every round\'s findings, this round\'s first — each with file, line, title, severity, classKey; read the code at each file:line for detail), classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Fix every blocking finding. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode) for EVERY dimension you touched — the scheduler re-runs those dimensions, so under-declaring skips a needed re-review. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
@@ -375,7 +375,7 @@ function reviewCodeLeaves(tiers, opts) {
   // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
   const fixStep = async (fixContext, verdict, runDir) => {
     const prompt =
-      `You are the code-fixer. ${FIX_RESULT_INSTRUCTION} Attempt every blocking finding from priorFindings, commit fixes, tag upstream-traced blockers. ` +
+      `You are the code-fixer. ${FIX_RESULT_INSTRUCTION} Attempt every blocking finding from the worklist, commit fixes, tag upstream-traced blockers. ` +
       `Never edit the review-loop machinery. Fix context:\n${JSON.stringify(fixContext)}${targetSuffix}`
     const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
     if (iEngine !== 'claude') {

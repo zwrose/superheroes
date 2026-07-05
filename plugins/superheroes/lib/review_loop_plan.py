@@ -484,7 +484,13 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
 
         current_findings = [f for f in (current.get("findings") or [])
                             if isinstance(f, dict)]
-        pdef = panel_tally.present_deferred(current_findings, deferred_set)
+        # #211 parity: the CURRENT round's breaker + present-deferred view is the synthesis-VERIFIED
+        # set (the OLD shell's `compiled`) — drop findings synthesis could not verify (no keep verdict,
+        # flagged `synthesisUnverified` at graft). Prior rounds + recurrence keep the full record
+        # (unfiltered below), preserving the #174 generalize-grace's current=compiled / prior=record
+        # asymmetry the OLD in-memory tally relied on.
+        verified_current = [f for f in current_findings if not f.get("synthesisUnverified")]
+        pdef = panel_tally.present_deferred(verified_current, deferred_set)
 
         prior = [r for r in _assemble_rounds(records, deferred_set)
                  if r.get("round") != round_no]
@@ -492,7 +498,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         coverage_decisions = current.get("coverageDecisions") or []
         this_round = {
             "round": round_no,
-            "findings": [f for f in current_findings
+            "findings": [f for f in verified_current
                          if circuit_breaker.finding_identity(f) not in skip],
             "dimensions": _breaker_round_dimensions(current.get("dimensions")),
             "coverageDecisions": coverage_decisions,

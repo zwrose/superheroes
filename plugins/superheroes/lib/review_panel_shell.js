@@ -19,6 +19,68 @@ const BLOCKING = new Set(['Critical', 'Important'])
 const _VERIFY_OK = new Set(['pass', 'skipped'])
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
+// #211 parity twin of review_loop_plan._clamp_reason: the breaker's recurring-finding detail joins
+// ALL recurring class keys (unbounded in finding count). The decider clamps it in its ANSWER; this
+// twin lets the equivalence oracle (checkCircuitBreaker, unclamped) compare against the clamped
+// decider verdict — and keeps any shell-side reason that folds the detail bounded.
+const _MAX_REASON = 480
+function _clampReason(text) {
+  const s = text === null || text === undefined ? '' : String(text)
+  if (s.length <= _MAX_REASON) return s
+  return s.slice(0, _MAX_REASON).replace(/\s+$/, '') + ' …(truncated)'
+}
+
+// ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
+// small meaningful JSON — never findings. Each reads the durable round-records.json from disk; the
+// scalars the durable skeleton can't hold (gate/present-blocking/uncertified reason) ride DOWN as
+// args. A mangled/unparseable answer returns null → the caller fails closed (the decider's
+// documented direction). Cheap tier (`courier: true`); the answers carry no oversized payload.
+function _jsonAnswer(out) {
+  try { const p = JSON.parse((out && out.stdout) || ''); return (p && typeof p === 'object') ? p : null }
+  catch (_) { return null }
+}
+
+async function planRoundDecider({ runDir, round, roster, changedSubjects, justMarked, coverageTarget, ioApi }) {
+  const args = [libPath('review_loop_plan.py'), 'plan-round',
+    '--path', ioApi.join(runDir, 'round-records.json'),
+    '--round', String(round),
+    '--dimensions', JSON.stringify(roster || [])]
+  if (coverageTarget) args.push('--coverage-path', coverageTarget.path, '--coverage-mode', coverageTarget.mode)
+  if (changedSubjects !== null && changedSubjects !== undefined) args.push('--changed-subjects', JSON.stringify(changedSubjects))
+  if (justMarked) args.push('--just-marked')
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'plan review round', courier: true }))
+    if (ans && ans.ok) return ans
+  }
+  return null
+}
+
+async function tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+  presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
+  worklistOutPath, ioApi }) {
+  const args = [libPath('review_loop_plan.py'), 'tally-round',
+    '--path', ioApi.join(runDir, 'round-records.json'),
+    '--round', String(round),
+    '--roster', JSON.stringify(roster || []),
+    '--max-rounds', String(maxRounds),
+    '--gate', gate,
+    '--confidence', confidence,
+    '--missing', JSON.stringify(missing || []),
+    '--present-blocking', String(presentBlocking || 0),
+    '--deferred-path', deferredSetPath(runDir),
+    '--fix-status', fixStatus || 'completed']
+  if (coverageTarget) args.push('--coverage-path', coverageTarget.path, '--coverage-mode', coverageTarget.mode)
+  if (worklistOutPath) args.push('--worklist-out-path', worklistOutPath)
+  if (verifyResult !== null && verifyResult !== undefined) args.push('--verify-result', String(verifyResult))
+  if (enterConfirmation) args.push('--enter-confirmation')
+  if (uncertifiedReason) args.push('--uncertified-reason', uncertifiedReason)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'tally review round', courier: true }))
+    if (ans && typeof ans.terminal === 'string') return ans
+  }
+  return null
+}
+
 function _usable(v) { return v && typeof v.terminal === 'string' }
 function _failClosed() {
   return { schemaVersion: SCHEMA_VERSION, terminal: 'halted', recordMissing: true,
@@ -642,7 +704,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
     if (!read.ok) return null
     try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
   }
-  if (parsed && parsed.ok && parsed.memory && parsed.coverage) {
+  if (parsed && parsed.ok && parsed.resume && parsed.coverage) {
     if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
     return parsed
   }
@@ -656,82 +718,96 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   const runId = runKey || runDir
   const lease = legKind && legKind.lease
   const ioApi = io()
-  // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
-  // entry-bootstrap (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
-  // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
-  // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
-  // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).
-  let memoryState = (preloaded && preloaded.memory) ? preloaded.memory
-    : await loadRoundRecords(runDir, reviewerSet || [], ioApi)
-  let entryCoverage = (preloaded && preloaded.coverage) ? preloaded.coverage : null
-  let entryDeferredSet = preloaded ? preloaded.deferredSet : undefined
-  let records = memoryState.ok ? memoryState.records : []
-  let round = resumeRound(records)
-  let lastExtras = memoryState.extras !== undefined ? memoryState.extras : null
-  let justMarkedForConfirmation = false
-  let fixRanThisRun = false
-  const allUsage = {}
-
-  if (!memoryState.ok) {
-    return await finalizeVerdict(
-      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-unreadable', round },
-      records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  // #211: the entry read rides DECISIONS, not records. The doc/code leg hands us a PRELOADED gather
+  // (resume decision + round-1 plan + coverage + deferred, folded into ONE leaf); standalone (the
+  // smokes) we self-gather. The shell holds NO findings — only decisions + the CAS hash. One retry,
+  // then a mangled/unreadable entry parks cannot-certify (never a fresh round on an unverifiable seed).
+  let setup = (preloaded && preloaded.resume) ? preloaded
+    : await gatherReviewSetup({ runDir, reviewerSet: reviewerSet || [], context, legKind, ioApi })
+  if (!setup || !setup.resume) {
+    setup = await gatherReviewSetup({ runDir, reviewerSet: reviewerSet || [], context, legKind, ioApi })
   }
+  const resume = setup && setup.resume
+  let round = (resume && resume.round) || 1
+  const allUsage = {}
+  let fixRanThisRun = false
+  if (!resume || !resume.ok) {
+    // a stable machine-readable park reason (round-memory-<state>), never a raw loader exception —
+    // a mangled gather (resume null) is 'round-memory-unreadable', a corrupt file 'round-memory-corrupt'.
+    const reason = (resume && resume.state) ? 'round-memory-' + resume.state
+      : 'round-memory-unreadable'
+    return await finalizeVerdict(
+      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason, round },
+      reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  }
+  let memoryContentHash = resume.contentHash
+  let lastExtras = resume.extras !== undefined ? resume.extras : null
+  let entryPlan = setup.plan || null
+  let entryCoverage = setup.coverage || null
+  let justMarkedForConfirmation = false
 
   if (!reviewerSet || reviewerSet.length === 0) {
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
-                                   roundFindings: {}, records, legKind, verifyResult: null,
+                                   roundFindings: {}, legKind, verifyResult: null,
                                    policy: { roundKind: 'baseline' }, coverageDecisions: [],
-                                   runId, extras: lastExtras })
-    return _usable(v) ? await finalizeVerdict(v, records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
+                                   coverageTarget: null, runId, extras: lastExtras, ioApi })
+    return _usable(v) ? await finalizeVerdict(v, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
   }
 
   while (true) {
-    const recoveringCorruptMemory = !memoryState.ok
-    records = memoryState.ok ? memoryState.records : []
-    const enterConfirmation = !recoveringCorruptMemory && confirmationReady(records, round, justMarkedForConfirmation)
-    justMarkedForConfirmation = false
-
     const coverageTarget = await coverageDecisionTarget(runDir, context, legKind, ioApi)
-    // fold 2 (#141): consume the gathered entry coverage on the first round; every later round
-    // re-reads (a fix can record new coverage decisions mid-loop — lines below already re-read).
-    let coverageState
-    if (entryCoverage) { coverageState = entryCoverage; entryCoverage = null }
-    else coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
-    if (!coverageState.ok) {
+    // The PLAN decision (schedule + carried + enterConfirmation) and the per-round coverage read.
+    // Round 1: both came from the entry gather (consume once). Later rounds: the plan-round decider
+    // with the coverage read FOLDED in (one round-entry leaf, #118). A mangled plan answer parks.
+    let plan, coverageState
+    if (entryPlan) {
+      plan = entryPlan; entryPlan = null
+      coverageState = entryCoverage; entryCoverage = null
+    } else {
+      plan = await planRoundDecider({ runDir, round, roster: reviewerSet,
+        changedSubjects: (lastExtras && lastExtras.changedSubjects),
+        justMarked: justMarkedForConfirmation, coverageTarget, ioApi })
+      if (!plan) {
+        return await finalizeVerdict(
+          { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-plan-unreadable', round },
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      }
+      coverageState = plan.coverage || null
+    }
+    justMarkedForConfirmation = false
+    if (!coverageState || !coverageState.ok) {
       return await finalizeVerdict(
-        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (coverageState.state || coverageState.reason || 'unreadable'), round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + ((coverageState && (coverageState.state || coverageState.reason)) || 'unreadable'), round },
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
     const coverageDecisions = coverageState.decisions
     let coverageContentHash = coverageState.contentHash
+    const enterConfirmation = !!plan.enterConfirmation
+    const roundKind = plan.roundKind
 
-    if (enterConfirmation && records.length) {
-      const latest = records[records.length - 1]
-      const ids = ((latest && latest.coverageDecisions) || []).map((d) => d.id).filter(Boolean)
+    // #174 confirmation coverage-marker check: every coverage id the latest record marked (the plan
+    // decider surfaces them from disk) must still be visible in the live coverage — a decision lost
+    // between marking and confirmation parks rather than certifies over a missing principle.
+    if (enterConfirmation && Array.isArray(plan.latestCoverageDecisionIds) && plan.latestCoverageDecisionIds.length) {
       const visible = new Set(coverageDecisions.map((d) => d.id))
-      if (ids.some((id) => !visible.has(id))) {
+      if (plan.latestCoverageDecisionIds.some((id) => !visible.has(id))) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decision-marker-missing', round },
-          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
       }
     }
 
-    const policy = roundPolicy.planRound({
-      round,
-      dimensions: reviewerSet,
-      changedSubjects: recoveringCorruptMemory ? null : (lastExtras && lastExtras.changedSubjects),
-      previous: buildPreviousDimensionState(records),
-      confirmation: enterConfirmation,
-    })
-    const scheduled = policy.dimensions || {}
+    const scheduled = plan.dimensions || {}
     const roundFindings = {}
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: coverageDecisions.map((d) => d.id).filter(Boolean) }
     await parallel(reviewerSet
       .filter((r) => (scheduled[r] || {}).action !== 'skip')
-      .map((r) => () => dispatchReviewer(r, reviewerContext(context, coverageDecisions, receiptContext), rubric, runDir, round, roundFindings, Object.assign({}, scheduled[r], { roundKind: policy.roundKind, coverageDecisions, receiptContext, receiptArtifact: receiptContext.artifact }))))
+      .map((r) => () => dispatchReviewer(r, reviewerContext(context, coverageDecisions, receiptContext), rubric, runDir, round, roundFindings, Object.assign({}, scheduled[r], { roundKind, coverageDecisions, receiptContext, receiptArtifact: receiptContext.artifact }))))
     for (const [name, sched] of Object.entries(scheduled)) {
-      if (sched.action === 'skip') roundFindings[name] = carryForwardDimension(records, name, sched)
+      // the carried (skipped-dimension) state comes from the plan decider (structurally clean —
+      // findings empty by construction); a defensive fallback covers a missing carried entry.
+      if (sched.action === 'skip') roundFindings[name] = (plan.carried && plan.carried[name]) ||
+        { status: 'skipped', findings: [], confidence: 'low', carriedFromRound: sched && sched.carriedFromRound }
     }
 
     let synthesized = null
@@ -758,34 +834,27 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     Object.assign(allUsage, tokenUsage)
 
     const roundCoverageDecisions = annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSet)
-    const record = reviewMemory.recordFromDimensionResults(round, policy.roundKind, roundFindings, lastExtras && lastExtras.changedSubjects, roundCoverageDecisions, tokenUsage, enterConfirmation && policy.roundKind === 'confirmation')
-    const persisted = await persistRoundRecord(runDir, reviewerSet, record, memoryState.contentHash, runId, lease, ioApi)
+    const record = reviewMemory.recordFromDimensionResults(round, roundKind, roundFindings, lastExtras && lastExtras.changedSubjects, roundCoverageDecisions, tokenUsage, enterConfirmation && roundKind === 'confirmation')
+    // persist the SKELETON down (the verified CAS write, unchanged) — then discard it: the tally
+    // decider reads the just-persisted disk state, so the shell keeps no record copy in memory.
+    const persisted = await persistRoundRecord(runDir, reviewerSet, record, memoryContentHash, runId, lease, ioApi)
     if (!persisted.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
-    const recordsForFix = Array.isArray(persisted.records) ? persisted.records : mergeRoundRecords(records, record)
-    records = recordsForFix
-    memoryState = { ok: true, records: recordsForFix, contentHash: persisted.contentHash }
+    memoryContentHash = persisted.contentHash
 
-    if (recoveringCorruptMemory && wouldOtherwiseCertify(roundFindings, reviewerSet)) {
-      return await finalizeVerdict(
-        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-corrupt-recovery', round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
-    }
-
-    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set (no fix has run between the
-    // entry gather and this tally, so it is byte-identical to a fresh disk read). It is consumed
-    // once — every later round re-reads (a fix may defer findings in between).
+    // the tally reads the just-persisted rounds from disk (breaker + terminal + confirmation
+    // economics + certification) and, on a continue, writes the fixer worklist to the SAME leaf and
+    // rides only its pointer back. gate / present-blocking / uncertified-reason ride DOWN (below).
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
-      roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions: roundCoverageDecisions,
-      runId, extras: lastExtras, enterConfirmation, preloadedDeferredSet: entryDeferredSet })
-    entryDeferredSet = undefined
+      roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
+      coverageTarget, runId, extras: lastExtras, enterConfirmation, ioApi })
     if (!_usable(verdict)) return _failClosed()
 
     if (verdict.terminal !== 'continue') {
-      return await finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      return await finalizeVerdict(verdict, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
 
     if (verdict.reason === 'awaiting final confirmation round') {
@@ -794,15 +863,22 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
 
     fixRanThisRun = true
-    const fixContext = buildFixContext(recordsForFix, coverageDecisions)
-    const fixResult = await runFixStep(fixStep, fixContext, verdict, runDir)
+    // #211 pointers-down: the fixer receives the worklist PATH (the tally leaf wrote it), never
+    // inlined findings. A continue with no worklist pointer means the fold write failed — park.
+    const worklistPath = verdict.worklistPath
+    if (!worklistPath) {
+      return await finalizeVerdict(
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'fix-context-' + (verdict.worklistReason || 'write-failed'), round },
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+    const fixResult = await runFixStep(fixStep, { worklistPath, round }, verdict, runDir)
     if (!fixResult.ok) {
       const failVerdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
-        roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions,
-        runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation })
+        roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
+        coverageTarget, runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation, ioApi })
       return await finalizeVerdict(
         _usable(failVerdict) ? failVerdict : _failClosed(),
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
 
     lastExtras = fixResult.extras || { changedSubjects: (fixResult.fixResult && fixResult.fixResult.changedSubjects) || [], needsConfirmation: true }
@@ -814,13 +890,13 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       if (!res.ok) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decision-write-failed', round },
-          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
       }
       const reloaded = await loadCoverageDecisions(target, ioApi)
       if (!reloaded.ok) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (reloaded.state || 'unreadable'), round },
-          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
       }
       recordedCoverageDecisions = reloaded.decisions
       expectedCovHash = reloaded.contentHash
@@ -831,21 +907,20 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // anyway, and this ordering shrinks the crash window in which the audit bodies are
     // lost while the delta survives (or vice versa) at zero protocol cost.
     await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
-    const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi, legKind)
+    const postFix = await persistPostFixRecord(runDir, reviewerSet, null, round, fixResult.fixResult || {}, recordedCoverageDecisions, memoryContentHash, runId, lease, ioApi, legKind)
     if (!postFix.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
-    records = postFix.records || recordsForFix
-    memoryState = { ok: true, records, contentHash: postFix.contentHash }
+    memoryContentHash = postFix.contentHash
     justMarkedForConfirmation = true
     try { await ioApi.writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {}
     round += 1
   }
 }
 
-async function finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
+async function finalizeVerdict(verdict, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
   const expectedLeaves = []
   for (let r = 1; r <= round; r += 1) expectedLeaves.push(...expectedUsageLeaves(reviewerSet, r, legKind, fixRan && r === round))
   const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, runId, lease, ioApi)
@@ -931,7 +1006,13 @@ function graftSynthesizedFindings(roundFindings, synthesized) {
       const kept = keptById[circuitBreaker.findingIdentity(finding)]
       if (!kept) {
         if (finding.file === null || finding.file === undefined || finding.line === null || finding.line === undefined) {
-          findings.push(finding)
+          // synthesis could not verify this no-location finding (no keep verdict) but we keep it so
+          // it still counts for the gate. Flag it `synthesisUnverified` so the tally decider can
+          // reproduce the OLD `compiled` view: the CURRENT round's breaker findings + present-deferred
+          // EXCLUDE it (synthesis dropped it), while recurrence/generalize over prior rounds still
+          // see it (#211 parity — this preserves the #174 generalize-grace, which relied on exactly
+          // this current=compiled / prior=record asymmetry).
+          findings.push(Object.assign({}, finding, { synthesisUnverified: true }))
         }
         continue
       }
@@ -1023,10 +1104,69 @@ function verifyResultFromPayload(verifyCommand, payload, opts) {
   return classified === 'pass' && !opts.allowPass ? null : classified
 }
 
-async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
+// #211 equivalence ORACLE (retained callable; the LIVE path uses the tally-round decider). The OLD
+// in-memory terminal computation — breaker + decideTerminal + #174 confirmation economics + honest
+// #212 reason + certification — over an in-memory `records` array (the current round read from the
+// record on disk, exactly like the decider's `_record_for_round`). review_loop_plan.tally_round_decider
+// is a faithful Python PORT of this; showrunner_reviewloop_equivalence_smoke.js compares the two over
+// shared fixtures. Kept in sync with the decider — BOTH clamp the breaker detail via _clampReason /
+// _clamp_reason so an N-recurring-class halt never re-creates the #211 scaled payload.
+function tallyTerminalInMemory({ records = [], round, roster, maxRounds, gate, confidence,
+  presentBlocking = 0, deferredSet = {}, fixStatus = 'completed', verifyResult = null,
+  enterConfirmation = false, uncertifiedReason = null, missing = [] }) {
+  const safeMissing = Array.isArray(missing) ? missing : []
+  const current = (records || []).find((r) => r && r.round === round) || {}
+  const skip = new Set(Object.keys(deferredSet || {}))
+  const currentFindings = (current.findings || []).filter((f) => f && typeof f === 'object')
+  // #211 parity: the current round's breaker + present-deferred use the synthesis-VERIFIED set
+  // (drop `synthesisUnverified`); prior rounds + recurrence keep the full record (see decider).
+  const verifiedCurrent = currentFindings.filter((f) => !f.synthesisUnverified)
+  const pdef = panelTally.presentDeferred(verifiedCurrent, deferredSet || {})
+  const prior = assembleRounds(records, deferredSet || {}).filter((r) => r.round !== round)
+  const priorRecords = (records || []).filter((r) => r && r.round !== round)
+  const coverageDecisions = current.coverageDecisions || []
+  const thisRound = {
+    round,
+    findings: verifiedCurrent.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
+    dimensions: _breakerRoundDimensions(current.dimensions),
+    coverageDecisions,
+    generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions),
+  }
+  const brk = circuitBreaker.checkCircuitBreaker(prior.concat([thisRound]), maxRounds)
+  const breakerHalt = !!brk.halt
+  let { terminal, reason } = panelTally.decideTerminal(gate, presentBlocking, pdef, fixStatus, round, maxRounds, breakerHalt)
+  if (terminal === 'halted' && breakerHalt && brk.detail) reason = _clampReason(brk.detail)
+  if ((terminal === 'clean' || terminal === 'clean-with-skips') && verifyResult !== null && !_VERIFY_OK.has(verifyResult)) {
+    terminal = 'halted'
+    reason = verifyResult === 'timeout' ? 'verify command timed out — cannot certify clean' : 'verify command failed — cannot certify clean'
+  }
+  if (terminal === 'cannot-certify') {
+    if (uncertifiedReason) reason = uncertifiedReason
+    else if (safeMissing.length) reason = 'coverage incomplete — missing review angle(s): ' + safeMissing.join(', ')
+  }
+  const markedPending = (records || []).some((r) => r && r.confirmationPending)
+  if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
+    const owe = furtherConfirmationOwed(records)
+    if (owe.park) { terminal = 'halted'; reason = owe.reason || 'Critical surfaced at the confirmation-panel cap — certification withheld' }
+    else if (owe.owed) { terminal = 'continue'; reason = 'awaiting final confirmation round' }
+  }
+  const out = { ok: true, schemaVersion: SCHEMA_VERSION, terminal, reason, gate, confidence, round,
+    missing: safeMissing, presentBlocking, presentDeferred: pdef,
+    breaker: { halt: breakerHalt, reason: brk.reason, detail: _clampReason(brk.detail) } }
+  if (gate === 'cannot-certify') out.uncertified = true
+  if (terminal === 'clean' || terminal === 'clean-with-skips') out.certification = certificationSummary(records)
+  return out
+}
+
+// The LIVE tally: compute the answer-time facts from the round's own reviewer answers, ride the
+// scalars the durable skeleton can't hold DOWN to the tally-round decider (which owns the terminal
+// from disk + writes the fix worklist on a continue), and assemble the verdict — this round's
+// findings/drops/downgrades for the readout, the decider's decisions for control flow.
+async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {},
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
-                           runId, enterConfirmation = false, preloadedDeferredSet = undefined }) {
+                           coverageTarget = null, runId, enterConfirmation = false, ioApi }) {
+  const api = ioApi || io()
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
     for (const k of ['fixes', 'deferred', 'parentOrigin']) if (k in extras) safeExtras[k] = extras[k]
@@ -1037,6 +1177,8 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
         findings: [], missing: [], drops: [], downgrades: [], terminal: 'cannot-certify', round,
         reason: 'empty reviewer set — nothing to certify' }, safeExtras)
     }
+    // answer-time facts from the LIVE reviewer answers (the durable skeleton strips the receipts
+    // these need): gate/confidence/missing, present-blocking, and the #212 named uncertified reason.
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: (coverageDecisions || []).map((d) => d.id).filter(Boolean) }
     const gateOut = panelTally.roundGateFromDimensionResults(
       roundFindings, roster, policy.roundKind === 'confirmation', receiptContext)
@@ -1055,71 +1197,29 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
       drops = []
       downgrades = []
     }
-    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set; every later round reads it
-    // fresh (a fix may have deferred findings since the gather).
-    const deferredSet = (preloadedDeferredSet && typeof preloadedDeferredSet === 'object')
-      ? preloadedDeferredSet : await loadDeferredSet(runDir)
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
-    const pdef = panelTally.presentDeferred(compiled, deferredSet)
-    const skip = new Set(Object.keys(deferredSet))
-    const prior = assembleRounds(records, deferredSet).filter((r) => r.round !== round)
-    const priorRecords = (records || []).filter((r) => r && Number(r.round) !== round)
-    const thisRound = {
-      round,
-      findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
-      dimensions: _breakerRoundDimensions(roundFindings),
-      coverageDecisions: coverageDecisions || [],
-      generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions || []),
-    }
-    const brk = circuitBreaker.checkCircuitBreaker(prior.concat([thisRound]), maxRounds)
-    const breakerHalt = !!brk.halt
-    let { terminal, reason } = panelTally.decideTerminal(
-      gate, presentBlocking, pdef, fixStatus, round, maxRounds, breakerHalt)
-    if (terminal === 'halted' && breakerHalt && brk.detail) reason = brk.detail
-    if ((terminal === 'clean' || terminal === 'clean-with-skips') &&
-        verifyResult !== null && !_VERIFY_OK.has(verifyResult)) {
-      terminal = 'halted'
-      reason = verifyResult === 'timeout'
-        ? 'verify command timed out — cannot certify clean'
-        : 'verify command failed — cannot certify clean'
-    }
-    if (terminal === 'cannot-certify') {
-      // #212 honest reason: name the seat(s) that blocked certification + the DISTINCT defect class
-      // (receipt-missing / receipt-stale / malformed / genuinely-incomplete / coverage-gap). This
-      // subsumes the old missing-angle enrichment (a `missing` seat classifies as malformed /
-      // coverage-gap); keep that phrasing only as a fallback if no seat classified (shouldn't happen).
-      const named = panelTally.uncertifiedReason(roundFindings, roster)
-      if (named) reason = named
-      else if (missing.length) reason = 'coverage incomplete — missing review angle(s): ' + missing.join(', ')
-    }
-    const markedPending = (records || []).some((r) => r && r.confirmationPending)
-    if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
-      // #174: a clean intermediate that owes a confirmation either forces one more full panel
-      // (owed), parks when a Critical is still owed at the cap (park), or — when the confirmation
-      // obligation is satisfied — certifies as-is (the ran confirmation + scoped verify suffice).
-      const owe = furtherConfirmationOwed(records)
-      if (owe.park) {
-        terminal = 'halted'
-        reason = owe.reason || 'Critical surfaced at the confirmation-panel cap — certification withheld'
-      } else if (owe.owed) {
-        terminal = 'continue'
-        reason = 'awaiting final confirmation round'
-      }
-    }
-    if ((terminal === 'clean' || terminal === 'clean-with-skips') && policy.roundKind === 'confirmation') {
-      // confirmation round succeeded — clear marker on persisted record handled next round
-    }
+    // #212 named reason only matters on a cannot-certify GATE — compute it from the live per-seat
+    // results and ride it DOWN (the decider can't recompute it: the skeleton strips the receipts).
+    const uncertifiedReason = (gate === 'cannot-certify') ? panelTally.uncertifiedReason(roundFindings, roster) : null
+
+    // the decider owns the terminal (breaker + decideTerminal + #174 economics + certification) from
+    // disk; on a continue it writes the fixer worklist to the SAME leaf and rides only its pointer.
+    const decided = await tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+      presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
+      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), ioApi: api })
+    // a mangled/unparseable decider answer fails closed — never a silent clean (the #211 adversarial
+    // invariant): the shell's _failClosed sentinel halts + flags recordMissing.
+    if (!decided || typeof decided.terminal !== 'string') return _failClosed()
+
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
-      missing, drops, downgrades, terminal, reason, round }, safeExtras)
-    // #212 uncertified flag: a cannot-certify gate rides the verdict even when this round routes to the
-    // fix leg (terminal 'continue') — the readout/phase layer can see the coverage gap while fixes land.
-    if (gate === 'cannot-certify') verdictOut.uncertified = true
-    // #174 requirement 4 (honest readout): on a certifying terminal, state exactly what was
-    // established — how many QUALIFYING full panels ran and whether findings surfaced since the last
-    // one were resolved by scoped verify (never implying a pristine fresh pass occurred).
-    if (terminal === 'clean' || terminal === 'clean-with-skips') {
-      verdictOut.certification = certificationSummary(records)
-    }
+      missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
+    // #212 uncertified flag (from the decider — set on a cannot-certify gate, even routing to fix).
+    if (decided.uncertified) verdictOut.uncertified = true
+    // #174 req 4 honest certification summary rides on a certifying terminal (from the decider).
+    if (decided.certification) verdictOut.certification = decided.certification
+    // #211 fix-context pointer (written by the folded decider on a continue) — never inlined findings.
+    if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
+    if (own(decided, 'worklistReason')) verdictOut.worklistReason = decided.worklistReason
     return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
@@ -1186,4 +1286,9 @@ const VERIFY_SCHEMA = { type: 'object', required: ['result'],
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA,
+  // #211 equivalence oracle — the in-memory decision helpers the deciders port, exported so
+  // showrunner_reviewloop_equivalence_smoke.js can compare the two over shared fixtures. The LIVE
+  // path no longer calls these; PR 3 deletes them once the decider path is the only path.
+  resumeRound, buildPreviousDimensionState, carryForwardDimension, confirmationReady, assembleRounds,
+  furtherConfirmationOwed, certificationSummary, buildFixContext, tallyTerminalInMemory, _clampReason }

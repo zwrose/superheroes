@@ -211,7 +211,7 @@ def load_records(path, dimensions):
 # terminal-record.json. summarize_record is idempotent, so pre-D3 full-bodied files load
 # (and re-persist) cleanly through the same path.
 _SKELETON_FIELDS = ("file", "line", "title", "severity", "taxonomy", "dimension",
-                    "classKey", "carried", "sourceRound")
+                    "classKey", "carried", "sourceRound", "synthesisUnverified")
 
 
 def _skeleton_finding(finding):
@@ -233,8 +233,11 @@ def _summarize_dimension(dim):
     if not isinstance(dim, dict):
         return {}
     findings = dim.get("findings") if isinstance(dim.get("findings"), list) else []
+    # `usage` is a small scalar object; the skeleton keeps it so a carried (skipped) dimension carries
+    # its prior round's usage forward and the telemetry stays complete (#211 — the loop reads the
+    # carried dim from the durable skeleton, not an in-memory copy).
     out = {k: dim[k] for k in ("dimension", "status", "confidence", "round", "subjects",
-                               "carriedFromRound", "escalated", "tier") if k in dim}
+                               "carriedFromRound", "escalated", "tier", "usage") if k in dim}
     out["findings"] = [_skeleton_finding(f) for f in findings]
     out["hasFindings"] = bool(findings) or bool(dim.get("hasFindings"))
     out["blockingCount"] = sum(1 for f in findings
@@ -675,7 +678,7 @@ def _stub_dimension(dim):
     findings = dim.get("findings") if isinstance(dim.get("findings"), list) else []
     blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") in BLOCKING]
     out = {k: dim[k] for k in ("dimension", "status", "confidence", "round", "subjects",
-                               "carriedFromRound", "escalated", "tier") if k in dim}
+                               "carriedFromRound", "escalated", "tier", "usage") if k in dim}
     out["findings"] = [_skeleton_finding(f) for f in blocking]
     out["hasFindings"] = bool(findings) or bool(dim.get("hasFindings"))
     out["blockingCount"] = len(blocking)

@@ -41,13 +41,24 @@ function base(dir) {
 }
 
 async function main() {
-  const realDecide = panelTally.decideTerminal
-  panelTally.decideTerminal = () => ({})
-  global.reviewerAgent = async () => cleanResult('x', 1)
-  let v = await reviewPanel({ ...base(freshDir()) })
-  assert.strictEqual(v.terminal, 'halted', 'unusable tally must fail closed to halted')
-  assert.strictEqual(v.recordMissing, true, 'unusable tally must flag recordMissing')
-  panelTally.decideTerminal = realDecide
+  let v
+  {
+    // #211: the terminal is owned by the tally-round DECIDER now, so an unusable tally = a mangled
+    // decider answer (not a monkeypatched JS twin). It must fail closed to halted + recordMissing.
+    const dir = freshDir()
+    const baseIo = io()
+    global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
+      if (String((args || [])[0]).includes('review_loop_plan.py') && (args || []).includes('tally-round')) {
+        return { ok: true, stdout: 'courier mangled the tally answer' }
+      }
+      return baseIo.runHelper(cmd, args)
+    } })
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => cleanResult(runDir, round, opts)
+    v = await reviewPanel({ ...base(dir) })
+    global.io = undefined
+    assert.strictEqual(v.terminal, 'halted', 'unusable tally decider answer must fail closed to halted')
+    assert.strictEqual(v.recordMissing, true, 'unusable tally must flag recordMissing')
+  }
 
   {
     const dir = freshDir()
@@ -261,8 +272,10 @@ async function main() {
     const baseIo = io()
     let loadCalls = 0
     let reviewerCalls = 0
+    // #211: the standalone entry read is now the review_setup_gather.py leaf (folding the resume
+    // DECISION + plan + coverage). A mangled gather answer parks round-memory-unreadable, one retry.
     global.io = Object.assign({}, baseIo, { runHelper: async (cmd, args) => {
-      if (String((args || [])[0]).includes('review_memory.py') && (args || []).includes('entry-bootstrap')) {
+      if (String((args || [])[0]).includes('review_setup_gather.py') && (args || []).includes('gather')) {
         loadCalls += 1
         return { ok: true, stdout: 'courier wrapped a non-json answer' }
       }
@@ -276,7 +289,7 @@ async function main() {
     global.io = oldIo
     assert.strictEqual(v.reason, 'round-memory-unreadable',
       'unreadable existing round memory parks by name instead of starting a fresh round')
-    assert.strictEqual(loadCalls, 2, 'round-memory load gets one retry before parking')
+    assert.strictEqual(loadCalls, 2, 'round-memory gather gets one retry before parking')
     assert.strictEqual(reviewerCalls, 0, 'unreadable existing memory must not burn a redundant panel')
   }
 
@@ -300,10 +313,13 @@ async function main() {
       return blockerResult(runDir, round, opts)
     }
     v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'], fixStep: async (ctx) => { captured = ctx; return { changedSubjects: ['Test'], coverageDecisions: [] } } })
-    assert.ok(captured.priorFindings.length > 0)
-    assert.ok(captured.classKeys.some((k) => k.includes('Test::coverage')))
-    assert.ok(captured.changedSubjects.includes('Test'))
-    assert.ok(captured.coverageDecisions.some((d) => d.id === 'RCD-resume'))
+    // #211: the fixer receives the worklist PATH; its content lives on disk (never inlined).
+    assert.ok(captured.worklistPath, 'the fixer receives the worklist path, not inlined findings')
+    const worklist = JSON.parse(fs.readFileSync(captured.worklistPath, 'utf8'))
+    assert.ok(worklist.findings.length > 0)
+    assert.ok(worklist.classKeys.some((k) => k.includes('Test::coverage')))
+    assert.ok(worklist.changedSubjects.includes('Test'))
+    assert.ok(worklist.coverageDecisions.some((d) => d.id === 'RCD-resume'))
   }
 
   {
@@ -449,12 +465,13 @@ async function main() {
       return cleanResult(runDir, round, opts)
     }
     v = await reviewPanel({ ...base(dir), reviewerSet: ['test-reviewer'], fixStep: async (ctx, verdict) => {
-      captured.push({ round: verdict.round, ctx })
+      // #211: generalizeRequired lives in the on-disk worklist the fixer reads, not the ctx pointer.
+      captured.push({ round: verdict.round, worklist: JSON.parse(fs.readFileSync(ctx.worklistPath, 'utf8')) })
       if (verdict.round === 1) return { changedSubjects: ['Test'], coverageDecisions: [] }
       return { changedSubjects: ['Test'], coverageDecisions: [{ id: 'RCD-repeat', classKey: 'Test::coverage::missing acceptance test', text: 'Repeated missing acceptance-test class is covered by the new integration fixture.' }] }
     } })
-    assert.deepStrictEqual(captured[0].ctx.generalizeRequired || [], [])
-    assert.ok((captured.find((x) => x.round === 2).ctx.generalizeRequired || []).some((d) => String(d.classKey).includes('Test::coverage')))
+    assert.deepStrictEqual(captured[0].worklist.generalizeRequired || [], [])
+    assert.ok((captured.find((x) => x.round === 2).worklist.generalizeRequired || []).some((d) => String(d.classKey).includes('Test::coverage')))
     assert.strictEqual(v.terminal, 'clean')
   }
 
