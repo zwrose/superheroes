@@ -492,17 +492,6 @@ def _terminal_telemetry(telemetry_path):
 _TERMINAL_STRIP = ("findings", "carriedFindings", "runId", "lease")
 
 
-def probe_records_path(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-        return {"ok": True, "exists": True, "state": "present", "contentHash": content_hash(text)}
-    except FileNotFoundError:
-        return {"ok": True, "exists": False, "state": "missing", "contentHash": content_hash("")}
-    except OSError as exc:
-        return {"ok": False, "exists": os.path.exists(path), "state": "unreadable", "reason": str(exc)}
-
-
 _TRANSPORT_FAILURE_REASONS = {
     "round-memory-unreadable",
     "round-memory-write-failed",
@@ -632,9 +621,12 @@ def _strip_records(result):
     return {k: v for k, v in result.items() if k != "records"}
 
 
-# 4000 chars/chunk (#191): each chunk leaf costs ~34k fixed context tokens, so leaf count —
-# not bytes — is the cost driver. Chunk answers ride the copy-faithful payload tier and the
-# payload ships opaque (reversed), so ~5.6KB answers are within reliable relay range.
+# 4000 chars/chunk: each chunk leaf costs ~34k fixed context tokens, so leaf count — not bytes —
+# is the cost driver. #211: chunk answers ship the slice as RAW TEXT (a readable JSON fragment),
+# not base64 — run-5 evidence (req_011CchVRELUYgEuSfkHS9xiY) showed the API safety layer REFUSE an
+# opaque base64-shaped blob as a model answer, and an earlier run showed a courier "helpfully"
+# decoding a b64 payload. Raw meaningful text is classifier-benign and has nothing to unwrap; the
+# chunkHash over the string exactly as shipped still fails closed on any retype.
 _READ_CHUNK_CHARS = 4000
 
 
@@ -643,77 +635,6 @@ def load_summary_result(path, dimensions, extras_path=None, sweep_stale=False):
         sweep_stale_staging(os.path.dirname(os.path.abspath(path)))
     result = load_records_state(path, dimensions)
     result["records"] = [summarize_record(r) for r in result.get("records") or []]
-    if extras_path:
-        try:
-            with open(extras_path, encoding="utf-8") as fh:
-                result["extras"] = json.load(fh)
-        except (OSError, ValueError):
-            result["extras"] = None
-    return result
-
-
-# The entry-bootstrap STUB (#193): the resume seed ships DECISIONS + the bounded minimum the loop's
-# prompts need, not record content. A summarize_record skeleton still keeps EVERY finding (blocking
-# and non-blocking, top-level AND per-dimension) — 8.8KB for two verbose rounds, over the shell's
-# receipt bound, so entry seeding paid a receipt + N chunk leaves (~34k fixed tokens apiece, #118
-# regression). The stub keeps only what the complete consumer map reads from PRIOR-run rounds:
-#   * the policy/confirmation/certification scalars (round, kind, confirmationPending,
-#     changedSubjects, per-dimension status/confidence/subjects/carriedFromRound/tier/hasFindings/
-#     blockingCount);
-#   * blocking-finding SKELETONS only (the circuit breaker, recurrence, and fix-context
-#     generalizeRequired ignore non-blocking findings entirely — _blocking() filters to
-#     {Critical, Important} and recurrent_classes() skips the rest);
-#   * the coverage-decision skeletons (id/classKey/challengedBy) the confirmation-marker check and
-#     the breaker's challenged-principle path read off the latest prior round.
-# Nothing consumes non-blocking prior-round finding bodies or titles, tokenUsage, or carriedFindings,
-# so they are dropped — a two-round bootstrap in this shape is ~1.5–3KB, ONE direct payload-tier
-# answer. summarize_record / _skeleton_finding are reused verbatim (no new finding shape), so stored
-# legacy classKeys ride through unclobbered exactly as on the durable persist side (#177).
-def _stub_dimension(dim):
-    """Per-dimension stub: _summarize_dimension with findings narrowed to blocking skeletons.
-    hasFindings is still computed from the ORIGINAL findings so the round policy's skip decision is
-    unchanged (a dimension that had only non-blocking findings still reads hasFindings=true)."""
-    if not isinstance(dim, dict):
-        return {}
-    findings = dim.get("findings") if isinstance(dim.get("findings"), list) else []
-    blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") in BLOCKING]
-    out = {k: dim[k] for k in ("dimension", "status", "confidence", "round", "subjects",
-                               "carriedFromRound", "escalated", "tier", "usage") if k in dim}
-    out["findings"] = [_skeleton_finding(f) for f in blocking]
-    out["hasFindings"] = bool(findings) or bool(dim.get("hasFindings"))
-    out["blockingCount"] = len(blocking)
-    return out
-
-
-def stub_record(record):
-    rec = record if isinstance(record, dict) else {}
-    findings = rec.get("findings") if isinstance(rec.get("findings"), list) else []
-    blocking = [f for f in findings if isinstance(f, dict) and f.get("severity") in BLOCKING]
-    return {
-        "schemaVersion": rec.get("schemaVersion"),
-        "round": rec.get("round"),
-        "kind": rec.get("kind"),
-        "confirmationPending": bool(rec.get("confirmationPending")),
-        "changedSubjects": rec.get("changedSubjects"),
-        "coverageDecisions": _skeleton_coverage_decisions(rec.get("coverageDecisions") or []),
-        "findings": [_skeleton_finding(f) for f in blocking],
-        "dimensions": {name: _stub_dimension(d)
-                       for name, d in (rec.get("dimensions") or {}).items()},
-    }
-
-
-def entry_bootstrap(path, dimensions, extras_path=None, sweep_stale=False):
-    """Compute the resume bootstrap: the file's contentHash (the CAS token the first persist
-    expects), per-round STUBS, and the folded last-extras. The shell derives the resume round
-    itself from the stubs (they carry `round`), so no resume-round scalar rides back — one
-    computation, one source of truth. The fail-closed states of load_records_state
-    (missing/unreadable/corrupt) ride through UNCHANGED so an unverifiable seed still parks
-    round-memory-unreadable instead of a silent partial seed."""
-    if sweep_stale:
-        sweep_stale_staging(os.path.dirname(os.path.abspath(path)))
-    result = load_records_state(path, dimensions)
-    records = result.get("records") or []
-    result["records"] = [stub_record(r) for r in records]
     if extras_path:
         try:
             with open(extras_path, encoding="utf-8") as fh:
@@ -781,13 +702,13 @@ def read_chunk(path, index, chunk_size=_READ_CHUNK_CHARS):
     if start > len(text):
         return {"ok": False, "reason": "chunk-out-of-range"}
     chunk = text[start:start + chunk_size]
-    b64 = base64.b64encode(chunk.encode("utf-8")).decode("ascii")
-    # The chunk ships REVERSED (#191): plain base64-of-JSON is decode-bait — a courier model
-    # recognizes it and "helpfully" returns the decoded content instead of the raw stdout,
-    # failing every hash check. A reversed string is semantically opaque, so the model has
-    # nothing to unwrap; the reader reverses it back before decoding. chunkHash covers the
-    # string exactly as shipped.
-    rb64 = b64[::-1]
+    # #211: the chunk ships as RAW TEXT — the on-disk slice verbatim, not base64. run-5 evidence
+    # (req_011CchVRELUYgEuSfkHS9xiY): the API safety layer REFUSES an opaque base64-shaped blob as a
+    # model answer ("appears to violate our Usage Policy"), and run wf_fd9b5edc-e80 showed a courier
+    # decoding a b64 payload and answering the content (decode-bait). A readable JSON fragment is
+    # classifier-benign and has nothing to unwrap. chunkHash covers the text exactly as shipped, so a
+    # courier that retypes or "fixes" the slice breaks the hash and the reader fails closed — the same
+    # guarantee as the reversed-base64 payload, with the bait and refusal classes gone.
     next_index = index + 1
     eof = start + chunk_size >= len(text)
     total = (len(text) + chunk_size - 1) // chunk_size if text else 1
@@ -797,8 +718,8 @@ def read_chunk(path, index, chunk_size=_READ_CHUNK_CHARS):
         "nextIndex": next_index,
         "totalChunks": total,
         "eof": eof,
-        "rb64": rb64,
-        "chunkHash": content_hash(rb64),
+        "text": chunk,
+        "chunkHash": content_hash(chunk),
         "contentHash": content_hash(text),
     }
 
@@ -886,19 +807,6 @@ def main(argv=None):
                          help="when the summary is larger than --receipt-threshold, write it here "
                               "and answer a small receipt for verified chunk reads")
     loads_p.add_argument("--receipt-threshold", type=int, default=0)
-    boot_p = sub.add_parser("entry-bootstrap")
-    boot_p.add_argument("--path", required=True)
-    boot_p.add_argument("--dimensions", required=True)
-    boot_p.add_argument("--extras-path",
-                        help="also read this small side file (last-extras.json) and answer it as "
-                             "'extras' — folds the loop's two entry reads into one leaf")
-    boot_p.add_argument("--sweep-stale-staging", action="store_true",
-                        help="unlink a dead run's transient staging artifacts before loading")
-    boot_p.add_argument("--out-path",
-                        help="when the bootstrap is larger than --receipt-threshold, write it here "
-                             "and answer a small receipt for verified chunk reads (pathological "
-                             "histories only; the bounded stub is a direct answer)")
-    boot_p.add_argument("--receipt-threshold", type=int, default=0)
     chunk_p = sub.add_parser("read-chunk")
     chunk_p.add_argument("--path", required=True)
     chunk_p.add_argument("--index", required=True, type=int)
@@ -959,8 +867,6 @@ def main(argv=None):
                         help="sha256 of --verdict-json exactly as sent — the transport self-check")
     term_p.add_argument("--run-id", required=True)
     term_p.add_argument("--lease")
-    probe_p = sub.add_parser("probe")
-    probe_p.add_argument("--path", required=True)
     hash_p = sub.add_parser("hash")
     hash_p.add_argument("--path", required=True)
     args = parser.parse_args(argv)
@@ -982,10 +888,6 @@ def main(argv=None):
                                          records_path=args.records_path,
                                          telemetry_path=args.telemetry_path,
                                          run_id=args.run_id, lease=args.lease)
-        print(json.dumps(result))
-        return 0 if result.get("ok") else 1
-    if args.cmd == "probe":
-        result = probe_records_path(args.path)
         print(json.dumps(result))
         return 0 if result.get("ok") else 1
     if args.cmd == "hash":
@@ -1063,14 +965,6 @@ def main(argv=None):
                                      extras_path=args.extras_path,
                                      sweep_stale=args.sweep_stale_staging)
         ok = _print_receipted_or_direct("load-summary", result,
-                                        out_path=args.out_path,
-                                        threshold=args.receipt_threshold)
-        return 0 if ok else 1
-    if args.cmd == "entry-bootstrap":
-        result = entry_bootstrap(args.path, dimensions,
-                                 extras_path=args.extras_path,
-                                 sweep_stale=args.sweep_stale_staging)
-        ok = _print_receipted_or_direct("entry-bootstrap", result,
                                         out_path=args.out_path,
                                         threshold=args.receipt_threshold)
         return 0 if ok else 1

@@ -176,7 +176,7 @@ function runHelperResponse(cmdline) {
       const p = args[args.indexOf('--path') + 1]
       return JSON.stringify({ ok: true, contentHash: sha256(files[p] != null ? files[p] : '') })
     }
-    if (args[0] === 'load-summary' || args[0] === 'entry-bootstrap') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
+    if (args[0] === 'load-summary') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
     if (args[0] === 'persist-skeleton') {
       // D3: the ONE verified round-record leaf — the inline skeleton must self-verify
       // (record-hash == sha256 of record-json) and must never carry evidence bodies.
