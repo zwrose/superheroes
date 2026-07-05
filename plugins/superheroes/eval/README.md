@@ -33,7 +33,7 @@ self-contained set: a unified diff, a frozen review profile, a `CLAUDE.md`, and 
 | --- | --- | --- |
 | `fixtures/web-handler/` | adds a request handler + its test | one in-scope seed per dimension (Security BOLA, Code hardcoded-error, Architecture premature-abstraction, Test claim/test-mismatch) + three traps (pre-existing context-line smell, intentional sibling import, theme-token contrast) |
 | `fixtures/refactor/`    | refactors existing service modules | the new Plan-5 rules: Architecture AcyclicDependencies (import cycle), Code cognitive-complexity, Security BFLA (missing function-level authz) + BOPLA (mass-assignment), Test mock-echo + three traps (size-only growth, clear-non-duplicative shape, framework-escaped input) |
-| `fixtures/failure-modes/` | adds credits/voucher/notify/cache/migration flows | **premortem-only, single-variant** — five Failure-Mode seeds, one per diff-mode class (`partial-failure`, `concurrency/race`, `dependency-failure`, `resource-exhaustion`, `migration-rollback`); multi-tenant profile; bar: `matched == total` |
+| `fixtures/failure-modes/` | adds credits/voucher/notify/cache/migration/risk-gate/queue flows | **premortem-only, single-variant** — seven Failure-Mode seeds, one per diff-mode class (`partial-failure`, `concurrency/race`, `dependency-failure`, `resource-exhaustion`, `migration-rollback`, `fail-direction`, `transport-contract`); multi-tenant profile; bar: `matched == total` |
 | `fixtures/failure-modes-bait/` | adds guarded sync/backup/archive flows | **premortem-only, single-variant** — zero seeds, three whole-flow traps (`profile-excluded-race`, `retry-wrapped`, `framework-transaction`); single-user profile; bar: `traps_flagged == 0` |
 
 `expected.json` schema (both fixtures):
@@ -157,7 +157,8 @@ For each emitted findings file, match against that fixture's `expected.json`:
    - **Function-scoped taxonomies** (`cognitive-complexity`, `mock-echo`,
      `AcyclicDependencies`, `premature-abstraction`, `BFLA`, plus the Failure-Mode
      whole-flow classes `concurrency/race`, `partial-failure`, `dependency-failure`,
-     `resource-exhaustion`, `migration-rollback`) — a finding matches if its cited
+     `resource-exhaustion`, `migration-rollback`, `fail-direction`,
+     `transport-contract`) — a finding matches if its cited
      line falls **anywhere within the seeded function/symbol's line span** in
      `diff.txt`, since reviewers legitimately cite the declaration, the offending
      branch, or the assertion. Do NOT use the ±2 line window for these.
@@ -217,8 +218,9 @@ Everything in §Sources-under-test, §Procedure, and §Gate above stays anchored
 to the historical four-agent baseline as-is; this section is additive. The
 Failure-Mode whole-flow taxonomy classes (`concurrency/race`,
 `partial-failure`, `dependency-failure`, `resource-exhaustion`,
-`migration-rollback`) are function-scoped (±15) in `score.py`; only
-`detectability` and `assumption-violation` stay line-scoped (±2). Bait trap
+`migration-rollback`, `fail-direction`, `transport-contract`) are
+function-scoped (±15) in `score.py`; only `detectability` and
+`assumption-violation` stay line-scoped (±2). Bait trap
 `whyNotFlagged` reasons must carry their scope token (substring detection) and
 trap `lineHints` must be unique line texts (first-occurrence-wins resolution).
 Liveness smokes in `eval/tests/test_score.py` assert every seed and trap in
@@ -265,7 +267,8 @@ seed/trap to a concrete line. Line-scoped taxonomies match a finding within an
 **exact ±2** lines. For the **function-scoped** taxonomies (`cognitive-complexity`,
 `mock-echo`, `AcyclicDependencies`, `premature-abstraction`, `BFLA`, plus the
 Failure-Mode whole-flow classes `concurrency/race`, `partial-failure`,
-`dependency-failure`, `resource-exhaustion`, `migration-rollback`) — where exact
+`dependency-failure`, `resource-exhaustion`, `migration-rollback`,
+`fail-direction`, `transport-contract`) — where exact
 span extraction from a diff is fuzzy — the scorer uses the README's documented
 generous rule: a finding matches if it is within **±15 lines (K=15)**
 of the seed's resolved line **OR** carries the same `taxonomy` (anywhere in the

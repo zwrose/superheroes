@@ -90,3 +90,40 @@ new file mode 100644
 +  }
 +  await db.accounts.updateMany({}, { $unset: { balance: 1 } });
 +}
+diff --git a/src/services/risk-gate.ts b/src/services/risk-gate.ts
+new file mode 100644
+--- /dev/null
++++ b/src/services/risk-gate.ts
+@@ -0,0 +1,14 @@
++import { fetchRiskScore } from "./risk-client";
++
++const RISK_BLOCK_THRESHOLD = 80;
++
++// Safety gate: may this high-value transfer proceed?
++// CLAUDE.md — safety gates fail CLOSED: an absent/unknown signal must BLOCK,
++// never default to allow.
++export async function isTransferAllowed(transfer) {
++  const score = await fetchRiskScore(transfer);
++  if (score === undefined) {
++    return true;
++  }
++  return score < RISK_BLOCK_THRESHOLD;
++}
+diff --git a/src/workers/transfer-consumer.ts b/src/workers/transfer-consumer.ts
+new file mode 100644
+--- /dev/null
++++ b/src/workers/transfer-consumer.ts
+@@ -0,0 +1,13 @@
++import { db } from "../db/client";
++
++// Consumes transfer jobs off the queue. The producer JSON-serializes each
++// job; this side re-parses it. CLAUDE.md — queue payloads are validated and
++// bounded, and a malformed/partial message fails closed (never applied).
++export async function onTransferMessage(raw) {
++  const job = JSON.parse(raw);
++  await db.accounts.update(
++    { id: job.toId },
++    { $inc: { balance: job.amount } },
++  );
++  return { applied: true };
++}
