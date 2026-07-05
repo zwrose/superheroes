@@ -15,9 +15,10 @@ the `plan` skill owns the **how**.
 Discovery is the **single front door**, and it **routes** (CONVENTIONS §3.4): it always
 produces the showrunner's input artifact, and the route decides which — **full** discovery
 writes the **`spec`** (this document's default flow), **quick** discovery writes a **`tasks`**
-doc directly for a genuine chore (the reference flow below). Make the routing call **up front**,
-right after your first look at the item (next section); everything after `## Checklist` is the
-**full** route.
+doc directly for a genuine chore (the reference flow below). The routing call is made **at the
+framing brief** (step 5), not up front — the skill opens in gather + frame mode and decides the
+route once the *what* is clear (next section). The `## Checklist` below is the **full** route;
+**quick** branches off at step 5 to the reference flow.
 
 The audience is a product-minded owner who may not be technical. Speak their
 language. Translate every non-functional concern into a plain-language outcome.
@@ -34,11 +35,17 @@ self-approved — you may *record the owner's* explicit approval (step 8), but n
 approve on your own behalf.
 </HARD-GATE>
 
-## Choose the route (full or quick)
+## Route: full or quick — decided at the framing brief
 
-After that first look at the item — the initial context-gathering + scope check the full-route
-checklist also opens with (step 1) — **assess the item and recommend a route**, then let the
-owner sign off. This is part of the normal discovery flow, not a separate gate:
+Discovery **routes**, but not up front. The skill opens in **gather + frame** mode: initial
+context-gathering + scope check (step 1), then clarifying dialogue **proportional to the item**
+(steps 2–4). The route is decided at **one moment — the framing brief (step 5)** — as early as
+the *what* is clear. For a genuine chore that frame is often the first or second exchange (so
+quick loses no speed); for real requirements work it is where step 5 sits today, after the
+dialogue. There is no early binary and no "defer" special case — one rule, one decision point.
+
+**How to call the route** — you recommend, the owner signs off (folded into the step-5 brief, not
+a separate exchange), and the owner always sees and approves the route **by name**:
 
 - **Default to `full`.** Recommend `full` for anything that is not a genuine chore — anything
   with real requirements to elicit, unhappy paths worth mapping, owner-visible behavior to
@@ -50,16 +57,13 @@ owner sign off. This is part of the normal discovery flow, not a separate gate:
   showrunner still runs the full review-code panel, the verify gate, and the back-half
   (CONVENTIONS §3.4). Quick does **not** mean "skip the thinking" — you still author real
   tasks with clarifying questions (below); it means the *spec* would be ceremony.
-- **Discuss when the call isn't obvious.** If size/clarity is borderline, put the choice to the
-  owner in plain language (what each route means for them), with your recommendation. **The
-  owner signs off on the route.**
 - **Record the routing rationale — in both modes.** Whichever route is chosen, note the route
   and a one-line reason in the discovery hand-off (e.g. "route: quick — chore: rename the
   `foo` flag repo-wide, no behavior change"), so the record documents *why* this route.
 
-Then branch:
+**What each route runs** — the branch happens **after** the framing brief (step 5):
 
-- **`full`** → continue with `## Checklist` below (steps 1–8) — the unchanged full flow.
+- **`full`** → the rest of `## Checklist` below — author + review the `spec` (steps 6–8).
 - **`quick`** → follow
   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-discovery/reference/quick-route.md`
   (task authoring with clarifying questions → the single-dispatch alignment probe → the owner's
@@ -74,7 +78,7 @@ Create a TodoWrite item for each step and complete them in order:
 2. **Research check** → research only if it helps (and the owner consents to spend)
 3. **Requirements dialogue** (one question at a time; EARS phrasing; run the coverage checklist)
 4. **UI/UX** when relevant (hand the owner a Claude Design prompt)
-5. **Confirm the framing → owner approves the *what*** ← HARD GATE
+5. **Confirm the framing → owner approves the *what* + route** ← HARD GATE (the single routing moment)
 6. **Author the spec** via the `writing-specs` skill
 7. **Review-spec** (automated gate; fix findings before the owner spends time)
 8. **Owner review & final approval** ← terminal gate; then ready for Plan
@@ -210,20 +214,29 @@ the spec instead.
 comparison **on graphical clients only** — it does **not** render in a terminal, so
 never rely on it; always have a plain-text description as the fallback.
 
-### 5. Confirm the framing → owner approves the *what* (HARD GATE)
+### 5. Confirm the framing → owner approves the *what* + route (HARD GATE)
 
-Present a compact **decision brief** the owner can digest in under a minute — not a
-replay of every requirement (that is the spec, which they review at step 8):
+This brief is **the single routing moment** — the full/quick call is made here, not up
+front (see *Route: full or quick* above). Present a compact **decision brief** the owner
+can digest in under a minute — not a replay of every requirement (that is the spec, which
+they review at step 8):
 - **One line each:** what this is, who it's for, and the `size` you're assigning.
 - **Load-bearing decisions** — the handful of calls that shape the work: the
   resolutions you reached on the consequential questions, plus any default you chose
   on the owner's behalf. One line each.
 - **Still open** — anything unresolved or assumed that the owner should rule on now.
+- **The route** — one line: `full` or `quick`, with a one-line rationale (criteria in
+  *Route: full or quick* above). If you're recommending `quick`, say plainly that quick is
+  a **spec-less** chore route, **not** a skip-the-thinking one — real tasks with clarifying
+  questions still get authored.
 
-Ask: *"Does this framing look right? Anything to change before I write it up?"*
-**Do not proceed past this gate until the owner approves the framing.** Revise and
-re-present as needed. The full, requirement-by-requirement review happens **once**,
-on the authored spec (step 8) — not twice.
+Ask, **folding the route sign-off into the framing question**: *"Does this framing look
+right — and I'd run this as **&lt;full/quick&gt;** (&lt;one-line reason&gt;)? Anything to
+change before I write it up?"* **Do not proceed past this gate until the owner approves the
+framing and the route.** Revise and re-present as needed. The full, requirement-by-requirement
+review happens **once**, on the authored spec (step 8) — not twice. Then **branch on the
+approved route:** `full` → step 6 (author the spec); `quick` → the quick-route reference
+(linked from *Route: full or quick* above), and steps 6–8 do not run.
 
 Decide two things here **yourself** — never make the owner pick them:
 - **Title / slug** — choose a concise, accurate work-item title from the approved
@@ -314,6 +327,7 @@ automated review ran** — never claim a review that didn't happen:
 | --- | --- |
 | "This is too simple to need a spec" | A genuine chore can be spec-less — route `quick` — but "simple" is never license to skip the thinking: you still author real tasks and run the alignment probe. Anything with real requirements is `full`. |
 | "It looks small — route quick to save time" | A plausible-small ask often hides requirements. Default `full`; recommend `quick` only for a genuine chore, and the **owner signs off** on the route. |
+| "I can tell it's quick from the title — route now" | Routing happens at the framing brief (step 5), not up front. For a real chore that brief is an exchange or two away, so guessing early saves nothing — and a title routinely hides requirements. |
 | "Quick discovery means skip the review too" | Spec-less ≠ review-less. The showrunner still runs the full review-code panel, the verify gate, and the back-half (CONVENTIONS §3.4). |
 | "I'll just use brainstorming" | In a superheroes project, Discovery is this skill. Produce a `spec`. |
 | "Let me note the tech approach" | The *how* is the `plan`. Keep the spec to the *what*. |
