@@ -33,7 +33,7 @@ self-contained set: a unified diff, a frozen review profile, a `CLAUDE.md`, and 
 | --- | --- | --- |
 | `fixtures/web-handler/` | adds a request handler + its test | one in-scope seed per dimension (Security BOLA, Code hardcoded-error, Architecture premature-abstraction, Test claim/test-mismatch) + three traps (pre-existing context-line smell, intentional sibling import, theme-token contrast) |
 | `fixtures/refactor/`    | refactors existing service modules | the new Plan-5 rules: Architecture AcyclicDependencies (import cycle), Code cognitive-complexity, Security BFLA (missing function-level authz) + BOPLA (mass-assignment), Test mock-echo + three traps (size-only growth, clear-non-duplicative shape, framework-escaped input) |
-| `fixtures/failure-modes/` | adds credits/voucher/notify/cache/migration flows | **premortem-only, single-variant** — five Failure-Mode seeds, one per diff-mode class (`partial-failure`, `concurrency/race`, `dependency-failure`, `resource-exhaustion`, `migration-rollback`); multi-tenant profile; bar: `matched == total` |
+| `fixtures/failure-modes/` | adds credits/voucher/notify/cache/migration/risk-gate/queue flows | **premortem-only, single-variant** — seven Failure-Mode seeds, one per diff-mode class (`partial-failure`, `concurrency/race`, `dependency-failure`, `resource-exhaustion`, `migration-rollback`, `fail-direction`, `transport-contract`); multi-tenant profile; bar: `matched == total` |
 | `fixtures/failure-modes-bait/` | adds guarded sync/backup/archive flows | **premortem-only, single-variant** — zero seeds, three whole-flow traps (`profile-excluded-race`, `retry-wrapped`, `framework-transaction`); single-user profile; bar: `traps_flagged == 0` |
 
 `expected.json` schema (both fixtures):
