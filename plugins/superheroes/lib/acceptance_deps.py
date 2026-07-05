@@ -323,7 +323,14 @@ def real_materialize(fixture_dir, root, reserved_stamp=None, lease_acquired=Fals
         stamp_id = uuid.uuid4().hex
         stamp = acceptance_fixture.make_stamp(stamp_id)
         _write_lease(root, stamp)
-    stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, _harness_dir(root))
+    # Materialize into the mode-resolved definition-docs location — the ONLY place
+    # preflight's spec-approved probe and the spine's phase readers resolve work-items
+    # from. The harness dir is control-plane state (lease, records), not doc storage;
+    # a fixture materialized there is invisible to every consumer (live finding,
+    # 0.10.0 qualification).
+    import definition_doc
+    wi_dir = definition_doc.resolve_work_item_dir(stamp, root=root, cwd=root)
+    stamped = acceptance_fixture.materialize(stamp_id, fixture_dir, os.path.dirname(wi_dir))
     stamped["stamp"] = stamp
     return stamped
 
@@ -514,13 +521,23 @@ def real_reap(root, current_stamp):
             (cleaned if ok else left).append(name if ok else
                                              {"kind": kind, "name": name,
                                               "reason": "reap action failed"})
-        # also remove this invocation's own materialized store dir, if present.
+        # also remove this invocation's own materialized store dirs, if present:
+        # the legacy harness-dir location AND the mode-resolved docs location
+        # real_materialize now targets. Both paths end in the reserved stamp
+        # (parse_stamp-validated below), so this cannot touch a real work-item.
         stamp = current_stamp()
-        if stamp:
-            work_dir = os.path.join(_harness_dir(root), stamp)
-            if os.path.isdir(work_dir):
-                import shutil
-                shutil.rmtree(work_dir, ignore_errors=True)
+        if stamp and acceptance_fixture.parse_stamp(stamp):
+            import shutil
+            candidates = [os.path.join(_harness_dir(root), stamp)]
+            try:
+                import definition_doc
+                candidates.append(
+                    definition_doc.resolve_work_item_dir(stamp, root=root, cwd=root))
+            except Exception:
+                pass  # unresolvable mode -> nothing materialized there this run either
+            for work_dir in candidates:
+                if os.path.basename(work_dir) == stamp and os.path.isdir(work_dir):
+                    shutil.rmtree(work_dir, ignore_errors=True)
         return {"cleaned_up": cleaned, "left_behind": left}
     return _reap
 

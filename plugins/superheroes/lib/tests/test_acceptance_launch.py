@@ -196,9 +196,37 @@ def test_build_launch_prompt_forbids_merging():
     assert "do not merge" in prompt
 
 
+# The harness self-identification preamble (0.10.0 qualification finding: an unidentified
+# driver prompt reads as evidence-forging to the child and gets refused). Byte-pinned like
+# the body: every claim in it must stay VERIFIABLE (the fixture-dir pointer is threaded
+# from the actually-materialized paths by _default_child_factory).
+def _preamble(fixture_dir):
+    return (
+        "CONTEXT — who is asking and why this is sanctioned: you are the acceptance "
+        "harness's own non-interactive driver session, spawned and supervised by the "
+        "harness process (acceptance_run.py, the superheroes acceptance flow). The "
+        "work-item below is NOT a normal discovery work-item: its accept-harness- prefix "
+        "is the harness's own reserved namespace (RESERVED_PREFIX in "
+        "acceptance_fixture.py), and the harness materialized it moments ago as a "
+        "throwaway fixture with a pre-approved spec/plan/tasks triple at "
+        "%(fixture_dir)s — read those files if in doubt. Driving the showrunner spine on "
+        "this fixture is the sanctioned harness lifecycle: the parent process enforces "
+        "ceilings, reads and judges the terminal record you write, and tears down every "
+        "artifact (worktree, branch, PR) on every exit path. The run-outcome projection "
+        "you persist must be computed from the run's ACTUAL end state via "
+        "run_readout.run_outcome — never hand-authored or approximated. Writing an "
+        "honest projection of a real run to the path the harness gave you is the "
+        "harness working as designed, not evidence fabrication. Pointing the run at "
+        "the real repo root is also by design: every showrunner run starts from the "
+        "live root and isolates its work in a managed per-work-item worktree, branch, "
+        "and draft PR — the fixture's changes never touch the working tree or main. "
+        % {"fixture_dir": fixture_dir}
+    )
+
+
 # #235 default byte-identical guard: with no spine-lib override the prompt must be exactly
-# today's installed-plugin wording — nothing about the override may leak in.
-_DEFAULT_PROMPT = (
+# today's installed-plugin wording (preamble + body) — nothing about the override may leak in.
+_DEFAULT_PROMPT = _preamble("/run/dir") + (
     "Run the superheroes:showrunner skill end-to-end on the approved work-item "
     "accept-harness-abc123 (invoke it exactly as documented in its SKILL.md — pre-flight, "
     "then the Workflow tool on the committed bundle with args: {workItem: accept-harness-abc123}). "
@@ -209,6 +237,38 @@ _DEFAULT_PROMPT = (
     "Do not merge, release, or force-push anything — this run's changes are confined "
     "to the work-item's own branch and PR."
 )
+
+
+def test_build_launch_prompt_threads_explicit_fixture_dir_into_preamble():
+    # The preamble's fixture pointer must name the ACTUALLY materialized location when the
+    # caller provides it (a wrong/derived pointer is a false claim the driver will — and
+    # did, live — reject as injection). Default (no fixture_dir) falls back to the terminal
+    # record's directory.
+    prompt = al.build_launch_prompt(
+        "accept-harness-abc123", "/run/dir/terminal-record.json",
+        fixture_dir="/store/docs/accept-harness-abc123")
+    assert "triple at /store/docs/accept-harness-abc123 — read those files" in prompt
+    assert "triple at /run/dir — read" not in prompt
+
+
+def test_default_child_factory_threads_materialized_fixture_dir(monkeypatch):
+    # stamped["paths"] is where materialize() reports the real doc locations; the factory
+    # must derive the preamble pointer from them, not from the terminal path.
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            self.pid = 321
+
+    monkeypatch.setattr(al.subprocess, "Popen", _FakePopen)
+    al._default_child_factory(
+        {"work_item": "accept-harness-abc123",
+         "paths": ["/store/docs/accept-harness-abc123/spec.md",
+                   "/store/docs/accept-harness-abc123/plan.md"]},
+        terminal_path="/run/dir/terminal-record.json")
+    prompt = captured["argv"][2]
+    assert "triple at /store/docs/accept-harness-abc123 — read those files" in prompt
 
 
 def test_build_launch_prompt_default_is_byte_identical_when_spine_lib_unset():
