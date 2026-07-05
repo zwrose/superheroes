@@ -20,11 +20,11 @@ the breaker from `circuit_breaker.check_circuit_breaker`, the terminal from
 `panel_tally.decide_terminal`, the confirmation-bar economics from
 `review_round_policy.confirmation_followup` / `is_cross_cutting`, recurrence from
 `review_memory.recurrent_classes` — the same parity-locked twins the JS shell calls in memory
-today. These deciders are a faithful port of the shell's in-memory record consumers (the #211
-Phase-0 census: `resumeRound`, `buildPreviousDimensionState`, `carryForwardDimension`,
+today. These deciders were ported faithfully from the shell's old in-memory record consumers (the
+#211 Phase-0 census: `resumeRound`, `buildPreviousDimensionState`, `carryForwardDimension`,
 `confirmationReady`, `panelWindow`/`furtherConfirmationOwed`/`certificationSummary`,
 `assembleRounds`→breaker, `buildFixContext`), reading the record content from disk instead of an
-in-memory copy. The equivalence smoke pins decider ≡ shell over shared fixtures.
+in-memory copy. Those shell consumers are gone — the deciders are now the ONLY decision path.
 
 Three scalars ride DOWN from the shell as command args because they are *decisions the shell must
 compute at the moment the reviewer answers arrive*, not content:
@@ -44,12 +44,13 @@ Two folds keep the round to ONE new courier leaf (#118): plan-round optionally f
 coverage read (`--coverage-path`), and tally-round folds the fix-context compose (`--worklist-out-
 path`) so the fixer worklist is written to disk here and only its pointer rides back.
 
-Staging note: in this first stacked PR these deciders are DORMANT — the live shell still runs its
-own in-memory copies, so nothing here decides a real run yet and there is no production drift. The
-stacked PR-2 wires the shell to these deciders, deletes the in-memory record model, and lands the
-decider ≡ shell equivalence smoke (Phase 4a) — the drift guard that pins this port against the
-shell functions it replaces, where both paths coexist for the comparison. The unit tests here pin
-each decider's answer against expected values derived from the shell's logic in the meantime.
+These deciders are LIVE (#211 landed across three stacked PRs: deciders → shell cutover → this
+fallback-hardening + cleanup). The shell dispatches reviewers and persists their answers down, then
+asks the deciders "what now?" and receives small meaningful JSON — never findings. Their answers are
+pinned by the unit tests here (against expected values derived from the shell's logic), the
+parity fixtures, and the adversarial + scaling smokes. The transitional decider ≡ shell equivalence
+smoke that guarded the port while both paths coexisted was removed once the decider path became the
+only path.
 """
 import argparse
 import json

@@ -65,14 +65,13 @@ SHOWRUNNER_SMOKES = [
     # #141 fold 2: reviewPanel honors the preloaded review_setup_gather.py result (mkdir + deferred
     # seed + entry-bootstrap + coverage folded into ONE leaf); no preloaded -> unfolded fallback.
     "plugins/superheroes/lib/tests/showrunner_review_setup_gather_smoke.js",
-    # #211 Phase 4a — the DRIFT GUARD: the Python deciders are behavior-equivalent to the in-memory
-    # oracle (resume / schedule / carried / terminal / breaker / reason / gate / uncertified / cert)
-    # over shared on-disk fixtures. (Supersedes the #193 bootstrap-equivalence smoke — #211 retires
-    # the entry-bootstrap stub that still rode records up.)
-    "plugins/superheroes/lib/tests/showrunner_reviewloop_equivalence_smoke.js",
     # #211 Phase 4c — the ADVERSARIAL proof: mangling any >4KB courier answer never breaks the loop
     # (nothing that big crosses), and a mangled SMALL decider answer fails closed, never silently wrong.
     "plugins/superheroes/lib/tests/showrunner_reviewloop_adversarial_smoke.js",
+    # #211 PR 3 — the JS reassembler's regression net: force the receipt+chunk EMERGENCY FALLBACK and
+    # pin _readReceiptText's raw-text reassembly (happy multi-chunk) + both fail-closed guards (per-chunk
+    # chunkHash, final reassembly-hash backstop) -> a mangled chunk parks round-memory-unreadable.
+    "plugins/superheroes/lib/tests/showrunner_reviewloop_fallback_smoke.js",
     # #115 Task 13a: args-based front-half selector (globalThis flags + bundle ENTRY text assertion).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_argsel_smoke.js",
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).

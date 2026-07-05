@@ -58,7 +58,7 @@ function runHelperResponse(cmdline) {
       const p = args[args.indexOf('--path') + 1]
       return JSON.stringify({ ok: true, contentHash: sha256(files[p] != null ? files[p] : '') })
     }
-    if (args[0] === 'load-summary' || args[0] === 'entry-bootstrap') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
+    if (args[0] === 'load-summary') return JSON.stringify({ ok: true, records: [], contentHash: sha256(''), extras: null })
     if (args[0] === 'persist-skeleton') {
       const recordJson = args[args.indexOf('--record-json') + 1]
       if (sha256(recordJson) !== args[args.indexOf('--record-hash') + 1]) {
@@ -193,7 +193,7 @@ function shellResponse(cmd) {
     // write, round-memory load-summary). io.runHelper must locate the marker despite the trailing
     // fence; on the pre-fix bundle the end-anchored match misses -> status 1 -> the helper reads as
     // failed -> cannot-certify at review-plan.
-    if (/review_setup_gather\.py|review_loop_plan\.py|review_memory\.py' '(load-summary|entry-bootstrap)'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
+    if (/review_setup_gather\.py|review_loop_plan\.py|review_memory\.py' 'load-summary'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
       counters.fencedHelpers += 1
       return '```\n' + body + '\n```'
     }

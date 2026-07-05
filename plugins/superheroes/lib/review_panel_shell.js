@@ -10,29 +10,12 @@ const loopSynthesis = require('./loop_synthesis.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
-const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
-const _VERIFY_OK = new Set(['pass', 'skipped'])
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
-
-// #211 parity twin of review_loop_plan._clamp_reason: the breaker's recurring-finding detail joins
-// ALL recurring class keys (unbounded in finding count). The decider clamps it in its ANSWER; this
-// twin lets the equivalence oracle (checkCircuitBreaker, unclamped) compare against the clamped
-// decider verdict — and keeps any shell-side reason that folds the detail bounded.
-const _MAX_REASON = 480
-function _clampReason(text) {
-  const s = text === null || text === undefined ? '' : String(text)
-  // Count/slice by Unicode CODE POINTS (Array.from), matching Python's len(s)/s[:_MAX_REASON] — a
-  // UTF-16 .length/.slice would cut astral-plane text (emoji in a finding title) at a different
-  // boundary and break byte-parity with the review_loop_plan._clamp_reason twin.
-  const cps = Array.from(s)
-  if (cps.length <= _MAX_REASON) return s
-  return cps.slice(0, _MAX_REASON).join('').replace(/\s+$/, '') + ' …(truncated)'
-}
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
 // small meaningful JSON — never findings. Each reads the durable round-records.json from disk; the
@@ -95,73 +78,6 @@ function deferredSetPath(runDir) { return `${runDir}/deferred-set.json` }
 // (#211: the JS loadDeferredSet is gone — the tally decider reads deferred-set.json Python-side via
 // --deferred-path, fail-soft to {}. This retired the review loop's last prose-vulnerable JS read.)
 
-function resumeRound(records) {
-  let best = 0
-  for (const r of records) {
-    const n = r && Number(r.round)
-    if (Number.isFinite(n) && n > best) best = n
-  }
-  return best + 1
-}
-
-function assembleRounds(records, deferredSet) {
-  const skip = new Set(Object.keys(deferredSet || {}))
-  const out = []
-  for (const rec of records) {
-    if (!rec || typeof rec !== 'object') continue
-    const findings = (rec.findings || []).filter((f) => !skip.has(circuitBreaker.findingIdentity(f)))
-    out.push({
-      round: Number(rec.round),
-      findings,
-      dimensions: rec.dimensions,
-      coverageDecisions: rec.coverageDecisions,
-    })
-  }
-  out.sort((a, b) => a.round - b.round)
-  return out
-}
-
-function _breakerRoundDimensions(roundFindings) {
-  const dims = {}
-  for (const [name, result] of Object.entries(roundFindings || {})) {
-    if (!result || typeof result !== 'object') continue
-    dims[name] = { status: result.status || 'run' }
-  }
-  return dims
-}
-
-function buildPreviousDimensionState(records) {
-  const previous = {}
-  for (const rec of records || []) {
-    for (const [name, dim] of Object.entries((rec && rec.dimensions) || {})) previous[name] = dim
-  }
-  return previous
-}
-
-function carryForwardDimension(records, name, sched) {
-  for (let i = (records || []).length - 1; i >= 0; i -= 1) {
-    const dim = records[i].dimensions && records[i].dimensions[name]
-    if (dim) return Object.assign({}, dim, { status: 'skipped', carriedFromRound: sched.carriedFromRound })
-  }
-  return { status: 'skipped', findings: [], confidence: 'low', carriedFromRound: sched.carriedFromRound }
-}
-
-function buildFixContext(records, coverageDecisions) {
-  const priorFindings = []
-  const changedSubjects = []
-  for (const rec of records || []) {
-    priorFindings.push(...((rec && rec.findings) || []))
-    if (Array.isArray(rec && rec.changedSubjects)) changedSubjects.push(...rec.changedSubjects)
-  }
-  return {
-    priorFindings,
-    classKeys: priorFindings.map((f) => f.classKey || reviewMemory.classKey(f)),
-    generalizeRequired: reviewMemory.recurrentClasses(records, coverageDecisions),
-    changedSubjects: Array.from(new Set(changedSubjects)),
-    coverageDecisions: coverageDecisions || [],
-  }
-}
-
 function reviewerContext(context, coverageDecisions, receiptContext) {
   return Object.assign({}, context || {}, { coverageDecisions: coverageDecisions || [], receiptContext })
 }
@@ -184,151 +100,28 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
   return out
 }
 
-// #174 confirmation-bar economics helpers.
-// The NEW (non-carried) blocking severities a round surfaced.
-function surfacedBlockingSeverities(record) {
-  const findings = (record && Array.isArray(record.findings)) ? record.findings : []
-  return findings.filter((f) => f && BLOCKING.has(f.severity)).map((f) => f.severity)
-}
-// A confirmation counts as a qualifying FULL panel only when every dimension ran FRESH at
-// reviewer-deep with high confidence (the #167 invariant #174 preserves). A degraded attempt
-// (low-confidence / carried / non-deep dim — possible on a resumed prior-run record) neither
-// satisfies the panel obligation nor consumes the hard cap.
-function confirmationQualifies(record) {
-  const dims = (record && record.dimensions && typeof record.dimensions === 'object' && !Array.isArray(record.dimensions))
-    ? record.dimensions : null
-  if (!dims) return false
-  const names = Object.keys(dims)
-  if (!names.length) return false
-  return names.every((n) => {
-    const d = dims[n] || {}
-    return d.status === 'run' && d.confidence === 'high' && d.tier === 'reviewer-deep'
-  })
-}
-// Union of rework (changedSubjects) across a set of records. Any missing/non-array changed surface
-// is unknown → null → treated as cross-cutting by the twin (fail toward one more panel).
-function reworkAcross(records) {
-  const out = []
-  for (const r of records) {
-    const cs = r && r.changedSubjects
-    if (!Array.isArray(cs)) return null
-    out.push(...cs)
-  }
-  return out
-}
-// Is a FURTHER full confirmation panel still owed? The follow-up decision is computed over
-// EVERYTHING SINCE THE LAST QUALIFYING PANEL — the panel itself plus every later round — because
-// findings surfaced and rework applied by post-confirmation scoped rounds land on THOSE rounds'
-// records, not the panel's. Before any qualifying panel has run, the mandatory first panel is
-// owed. A Critical still owed at the cap → park (certification withheld).
-function panelWindow(records) {
-  const all = records || []
-  const qualifying = all.filter((r) => r && r.kind === 'confirmation' && confirmationQualifies(r))
-  if (!qualifying.length) return { qualifying, since: [] }
-  const lastRound = Number(qualifying[qualifying.length - 1].round) || 0
-  const since = all.filter((r) => r && (Number(r.round) || 0) >= lastRound)
-  return { qualifying, since }
-}
-function furtherConfirmationOwed(records) {
-  const { qualifying, since } = panelWindow(records)
-  if (!qualifying.length) return { owed: true, park: false, panels: 0 }
-  const surfaced = since.flatMap(surfacedBlockingSeverities)
-  const followup = roundPolicy.confirmationFollowup(
-    surfaced, qualifying.length, roundPolicy.isCrossCutting(reworkAcross(since)))
-  return { owed: followup.rearm, park: followup.park, panels: qualifying.length, reason: followup.reason }
-}
-// The honest certification summary (#174 req 4): how many QUALIFYING full panels ran and whether
-// any blocking finding surfaced since the last one (resolved by scoped verify — not a pristine pass).
-function certificationSummary(records) {
-  const { qualifying, since } = panelWindow(records)
-  return { fullPanels: qualifying.length,
-    lastPanelSurfacedResolved: since.some((r) => surfacedBlockingSeverities(r).length > 0) }
-}
-
-function confirmationReady(records, round, justMarked) {
-  if (justMarked) return false
-  const marked = (records || []).filter((r) => r && r.confirmationPending)
-  if (!marked.length) return false
-  // #174: once a full confirmation has run, only RE-ENTER another when the economics demand it
-  // (a Critical surfaced, or cross-cutting rework, under the cap). Otherwise the confirmation
-  // obligation is satisfied and no further full panel runs — the terminal guard certifies.
-  if (!furtherConfirmationOwed(records).owed) return false
-  const markedRound = Math.max(...marked.map((r) => Number(r.round) || 0))
-  const hasIntermediateAfterMarker = (records || []).some((r) => Number(r.round) > markedRound)
-  if (!hasIntermediateAfterMarker) return true
-  return round > markedRound + 1
-}
-
-// entry-bootstrap (#193) is the read seam for a resume: it ships DECISIONS + the bounded minimum,
-// not record content. Each prior-run round comes back as a STUB — the policy/confirmation/
-// certification scalars plus BLOCKING-finding skeletons only (the breaker, recurrence, round policy,
-// and fix-context generalizeRequired never read non-blocking prior-round findings), so a two-round
-// resume is one direct payload-tier answer instead of a receipt + N ~34k-token chunk leaves (the
-// #118 courier-collapse bar). In-memory `records` are therefore a documented HYBRID: prior-run rounds
-// are stubs, this-run rounds stay full (mergeRoundRecords keeps the richer live record). Once the
-// bootstrap is big enough to be courier-fragile (pathological history), the helper writes it
-// Python-side and returns only a receipt; the shell reads base64 chunks and verifies each chunk plus
-// the reconstructed content hash before parsing (the #191 fallback transport).
+// #211: the entry read (gatherReviewSetup) rides DECISIONS, so its answer is normally a small direct
+// blob. The receipt+chunk transport survives as the EMERGENCY FALLBACK only — an answer that
+// unexpectedly outgrows the receipt bound (e.g. a coverage-decision list that has grown large): the
+// helper writes the blob to disk Python-side and answers a small receipt, and the shell reassembles it
+// via read-chunk. Each chunk ships as RAW TEXT (a readable JSON fragment), not base64 — run-5 evidence
+// showed the API safety layer REFUSES an opaque base64-shaped blob as a model answer, and an earlier
+// run showed a courier decoding a b64 payload (decode-bait). The reader verifies each chunk's
+// chunkHash (over the text exactly as shipped) plus the reconstructed content hash before parsing, so
+// any retype still fails closed.
 const _SUMMARY_RECEIPT_BOUND = 4000
 const _READ_CHUNK_CHARS = 4000
-
-function _b64Bytes(b64) {
-  const clean = String(b64 || '').replace(/[\r\n\t ]/g, '')
-  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-  const out = []
-  for (let i = 0; i < clean.length; i += 4) {
-    const c0 = A.indexOf(clean[i]); const c1 = A.indexOf(clean[i + 1])
-    const c2 = clean[i + 2] === '=' ? -1 : A.indexOf(clean[i + 2])
-    const c3 = clean[i + 3] === '=' ? -1 : A.indexOf(clean[i + 3])
-    if (c0 < 0 || c1 < 0 || (c2 < 0 && clean[i + 2] !== '=') || (c3 < 0 && clean[i + 3] !== '=')) throw new Error('bad base64')
-    out.push((c0 << 2) | (c1 >> 4))
-    if (c2 >= 0) out.push(((c1 & 15) << 4) | (c2 >> 2))
-    if (c3 >= 0) out.push(((c2 & 3) << 6) | c3)
-  }
-  return out
-}
-
-function _utf8FromBytes(bytes) {
-  let out = ''
-  for (let i = 0; i < bytes.length;) {
-    const b0 = bytes[i++]
-    if (b0 < 0x80) { out += String.fromCharCode(b0); continue }
-    if ((b0 & 0xe0) === 0xc0) {
-      const b1 = bytes[i++] || 0
-      out += String.fromCharCode(((b0 & 31) << 6) | (b1 & 63))
-      continue
-    }
-    if ((b0 & 0xf0) === 0xe0) {
-      const b1 = bytes[i++] || 0; const b2 = bytes[i++] || 0
-      out += String.fromCharCode(((b0 & 15) << 12) | ((b1 & 63) << 6) | (b2 & 63))
-      continue
-    }
-    const b1 = bytes[i++] || 0; const b2 = bytes[i++] || 0; const b3 = bytes[i++] || 0
-    let cp = ((b0 & 7) << 18) | ((b1 & 63) << 12) | ((b2 & 63) << 6) | (b3 & 63)
-    cp -= 0x10000
-    out += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023))
-  }
-  return out
-}
-
-function _decodeBase64Utf8(b64) {
-  if (typeof Buffer !== 'undefined') return Buffer.from(String(b64 || ''), 'base64').toString('utf8')
-  return _utf8FromBytes(_b64Bytes(b64))
-}
 
 function _jsonFromStdout(out) {
   try { return JSON.parse((out && out.stdout) || '') } catch (_) { return null }
 }
 
-// The chunk payload rides REVERSED (`rb64`, #191): plain base64-of-JSON is decode-bait — a
-// live courier model recognizes it and answers with the DECODED content instead of the raw
-// stdout, failing every hash check (run wf_fd9b5edc-e80: all chunk attempts transformed this
-// way). Reversing makes the payload semantically opaque; reverse back before decoding.
-// b64 is ASCII, so a naive character reverse is byte-safe.
-function _unreverse(rb64) {
-  return String(rb64 || '').split('').reverse().join('')
-}
-
+// #211: each chunk ships as RAW TEXT (`text`, the on-disk slice verbatim), not a reversed-base64
+// blob. run-5 evidence showed the API safety layer refuses an opaque base64-shaped answer, and an
+// earlier run showed a courier decoding a b64 payload (decode-bait) — a readable JSON fragment has
+// nothing to unwrap and pattern-matches as benign. The chunkHash covers the text exactly as shipped,
+// so a courier that retypes or "fixes" the slice breaks the hash and the read fails closed, and the
+// reconstructed-content-hash check at the end still guards the full reassembly.
 async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) {
   if (!receipt || receipt.receipt !== expectedReceipt || !receipt.path || !receipt.contentHash) return { ok: false, reason: corruptReason }
   const chunkSize = receipt.chunkSize || _READ_CHUNK_CHARS
@@ -343,11 +136,11 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
       parsed = _jsonFromStdout(out)
       if (!parsed || !parsed.ok || parsed.index !== index) { parsed = null; continue }
       if (parsed.contentHash !== receipt.contentHash) { parsed = null; continue }
-      if (parsed.chunkHash !== ioApi.contentHash(parsed.rb64 || '')) { parsed = null; continue }
+      if (typeof parsed.text !== 'string' || parsed.chunkHash !== ioApi.contentHash(parsed.text)) { parsed = null; continue }
       break
     }
     if (!parsed) return { ok: false, reason: corruptReason }
-    try { text += _decodeBase64Utf8(_unreverse(parsed.rb64)) } catch (_) { return { ok: false, reason: corruptReason } }
+    text += parsed.text
     if (parsed.eof) break
     index = Number(parsed.nextIndex)
     if (!Number.isFinite(index)) return { ok: false, reason: corruptReason }
@@ -356,53 +149,9 @@ async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) 
   return { ok: true, text }
 }
 
-// ORPHANED by the #211 cutover: loadRoundRecords / _loadRoundRecordsOnce / probeRoundRecords are the
-// old standalone entry-read path (records up). The shell now enters via gatherReviewSetup (decisions
-// up), so nothing calls these. They are NOT the equivalence oracle (that is the pure decision helpers
-// exported at the bottom). They ride the receipt+chunk read machinery (_readReceiptText, still live
-// for the gather) that PR 3 reworks (rb64 → raw text slices); PR 3 removes this trio with it.
-async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'entry-bootstrap', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging', '--out-path', ioApi.join(runDir, 'round-summary.json'), '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)], { payload: true })
-  let parsed = _jsonFromStdout(out)
-  if (parsed && parsed.receipt === 'entry-bootstrap') {
-    const read = await _readReceiptText(ioApi, parsed, 'entry-bootstrap', 'round-memory-helper-failed')
-    if (!read.ok) return read
-    try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
-  }
-  if (parsed && typeof parsed === 'object') return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
-  return { ok: false, reason: 'round-memory-helper-failed' }
-}
-
-async function probeRoundRecords(runDir, ioApi) {
-  const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
-  try {
-    const parsed = JSON.parse((out && out.stdout) || '')
-    if (parsed && typeof parsed === 'object') return parsed
-  } catch (_) { /* fall through */ }
-  return { ok: false, exists: true, state: 'unreadable', reason: 'round-memory-probe-failed' }
-}
-
-async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const first = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
-  if (first.ok) return first
-  const second = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
-  if (second.ok) return second
-  const probed = await probeRoundRecords(runDir, ioApi)
-  if (probed && probed.ok && probed.exists === false) {
-    return { ok: true, state: 'missing', records: [], contentHash: ioApi.contentHash(''), extras: null }
-  }
-  return {
-    ok: false,
-    state: 'unreadable',
-    reason: 'round-memory-unreadable',
-    records: [],
-    contentHash: (probed && probed.contentHash) || first.contentHash || second.contentHash,
-  }
-}
-
-// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — a superset of
-// the entry-bootstrap stub that seeds a resume: the durable form keeps non-blocking findings, the
-// resume seed drops them), persisted in ONE verified CAS leaf for the typical
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — evidence
+// bodies and receipts stripped, finding identity/class/severity kept), persisted in ONE verified
+// CAS leaf for the typical
 // round: the skeleton rides the courier args inline, self-verified by --record-hash =
 // sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
 // corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
@@ -1092,60 +841,6 @@ function verifyResultFromPayload(verifyCommand, payload, opts) {
   return classified === 'pass' && !opts.allowPass ? null : classified
 }
 
-// #211 equivalence ORACLE (retained callable; the LIVE path uses the tally-round decider). The OLD
-// in-memory terminal computation — breaker + decideTerminal + #174 confirmation economics + honest
-// #212 reason + certification — over an in-memory `records` array (the current round read from the
-// record on disk, exactly like the decider's `_record_for_round`). review_loop_plan.tally_round_decider
-// is a faithful Python PORT of this; showrunner_reviewloop_equivalence_smoke.js compares the two over
-// shared fixtures. Kept in sync with the decider — BOTH clamp the breaker detail via _clampReason /
-// _clamp_reason so an N-recurring-class halt never re-creates the #211 scaled payload.
-function tallyTerminalInMemory({ records = [], round, roster, maxRounds, gate, confidence,
-  presentBlocking = 0, deferredSet = {}, fixStatus = 'completed', verifyResult = null,
-  enterConfirmation = false, uncertifiedReason = null, missing = [] }) {
-  const safeMissing = Array.isArray(missing) ? missing : []
-  const current = (records || []).find((r) => r && r.round === round) || {}
-  const skip = new Set(Object.keys(deferredSet || {}))
-  const currentFindings = (current.findings || []).filter((f) => f && typeof f === 'object')
-  // #211 parity: the current round's breaker + present-deferred use the synthesis-VERIFIED set
-  // (drop `synthesisUnverified`); prior rounds + recurrence keep the full record (see decider).
-  const verifiedCurrent = currentFindings.filter((f) => !f.synthesisUnverified)
-  const pdef = panelTally.presentDeferred(verifiedCurrent, deferredSet || {})
-  const prior = assembleRounds(records, deferredSet || {}).filter((r) => r.round !== round)
-  const priorRecords = (records || []).filter((r) => r && r.round !== round)
-  const coverageDecisions = current.coverageDecisions || []
-  const thisRound = {
-    round,
-    findings: verifiedCurrent.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
-    dimensions: _breakerRoundDimensions(current.dimensions),
-    coverageDecisions,
-    generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions),
-  }
-  const brk = circuitBreaker.checkCircuitBreaker(prior.concat([thisRound]), maxRounds)
-  const breakerHalt = !!brk.halt
-  let { terminal, reason } = panelTally.decideTerminal(gate, presentBlocking, pdef, fixStatus, round, maxRounds, breakerHalt)
-  if (terminal === 'halted' && breakerHalt && brk.detail) reason = _clampReason(brk.detail)
-  if ((terminal === 'clean' || terminal === 'clean-with-skips') && verifyResult !== null && !_VERIFY_OK.has(verifyResult)) {
-    terminal = 'halted'
-    reason = verifyResult === 'timeout' ? 'verify command timed out — cannot certify clean' : 'verify command failed — cannot certify clean'
-  }
-  if (terminal === 'cannot-certify') {
-    if (uncertifiedReason) reason = uncertifiedReason
-    else if (safeMissing.length) reason = 'coverage incomplete — missing review angle(s): ' + safeMissing.join(', ')
-  }
-  const markedPending = (records || []).some((r) => r && r.confirmationPending)
-  if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
-    const owe = furtherConfirmationOwed(records)
-    if (owe.park) { terminal = 'halted'; reason = owe.reason || 'Critical surfaced at the confirmation-panel cap — certification withheld' }
-    else if (owe.owed) { terminal = 'continue'; reason = 'awaiting final confirmation round' }
-  }
-  const out = { ok: true, schemaVersion: SCHEMA_VERSION, terminal, reason, gate, confidence, round,
-    missing: safeMissing, presentBlocking, presentDeferred: pdef,
-    breaker: { halt: breakerHalt, reason: brk.reason, detail: _clampReason(brk.detail) } }
-  if (gate === 'cannot-certify') out.uncertified = true
-  if (terminal === 'clean' || terminal === 'clean-with-skips') out.certification = certificationSummary(records)
-  return out
-}
-
 // The LIVE tally: compute the answer-time facts from the round's own reviewer answers, ride the
 // scalars the durable skeleton can't hold DOWN to the tally-round decider (which owns the terminal
 // from disk + writes the fix worklist on a continue), and assemble the verdict — this round's
@@ -1274,9 +969,4 @@ const VERIFY_SCHEMA = { type: 'object', required: ['result'],
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA,
-  // #211 equivalence oracle — the in-memory decision helpers the deciders port, exported so
-  // showrunner_reviewloop_equivalence_smoke.js can compare the two over shared fixtures. The LIVE
-  // path no longer calls these; PR 3 deletes them once the decider path is the only path.
-  resumeRound, buildPreviousDimensionState, carryForwardDimension, confirmationReady, assembleRounds,
-  furtherConfirmationOwed, certificationSummary, buildFixContext, tallyTerminalInMemory, _clampReason }
+module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
