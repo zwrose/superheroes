@@ -2,12 +2,12 @@
 the premortem-reviewer's taxonomy table (the human-authored source of truth) and
 the eval scorer's matching sets.
 
-The seven Failure-Mode class names are duplicated verbatim across the agent file,
-``eval/score.py``, ``eval/README.md`` (twice), and the failure-modes fixture. A
-rename in the agent table would silently desync ``score.py``'s verbatim taxonomy
-matching (the function-scoped ±15 window keys on these exact strings), so this
-test pins the relationship the way ``test_dispatch_tables.py`` pins the dispatch
-tables:
+The Failure-Mode class names are duplicated verbatim across the agent file,
+``eval/score.py``, ``eval/README.md`` (twice), and — for the classes with seeds —
+the failure-modes fixture. A rename in the agent table would silently desync
+``score.py``'s verbatim taxonomy matching (the function-scoped ±15 window keys on
+these exact strings), so this test pins the relationship the way
+``test_dispatch_tables.py`` pins the dispatch tables:
 
 - The agent's WHOLE-FLOW classes are exactly ``score.py``'s ``FUNCTION_SCOPED``
   additions (``FUNCTION_SCOPED`` minus its five pre-Failure-Mode members).
