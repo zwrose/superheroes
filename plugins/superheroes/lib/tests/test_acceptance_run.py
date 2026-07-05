@@ -69,6 +69,28 @@ def test_spine_provenance_seam_stamps_record_and_report():
     assert "cafef00d" in r["report"]
 
 
+def test_spine_provenance_resolved_once_record_and_report_agree():
+    # premortem #235: the seam re-hashes the bundle on every call, so resolving it twice
+    # (once for the report, once for the record) could record a hash that disagrees with
+    # the report's. invoke must resolve it ONCE and thread the same value to both.
+    calls = {"n": 0}
+
+    def _counting_seam():
+        calls["n"] += 1
+        return {"lib_path": "/repo/lib", "bundle_sha256": "hash-%d" % calls["n"],
+                "version": "0.11.0"}
+
+    d = _deps(spine_provenance=_counting_seam)
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    rec = d["_state"]["records_written"][0]
+    # exactly one resolution across the whole invocation...
+    assert calls["n"] == 1
+    # ...so the record's hash and the report's hash are the SAME single read.
+    assert rec["spine_provenance"]["bundle_sha256"] == "hash-1"
+    assert "hash-1" in r["report"]
+
+
 def test_no_spine_provenance_seam_leaves_record_and_report_unchanged():
     # Default (installed-plugin) path: no seam -> no spine_provenance key, no report section.
     d = _deps()

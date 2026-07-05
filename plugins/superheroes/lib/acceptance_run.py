@@ -179,7 +179,7 @@ def invoke(deps):
                     record_path = _write_record_only(
                         deps, "fail", reason, None, [], False,
                         {"cleaned_up": [], "left_behind": []}, spend_partial=True,
-                        writer=writer)
+                        writer=writer, spine_provenance=prov)
                 except Exception:
                     record_path = None
             return {
@@ -202,7 +202,7 @@ def invoke(deps):
                 None, [{"stamp": recorded_state.get("stamp"), "verdict": "fail"}],
                 False, dead_run_teardown, spend_partial=True,
                 run_stamp=recorded_state.get("stamp"),
-                writer=deps.get("write_orphan_record"))
+                writer=deps.get("write_orphan_record"), spine_provenance=prov)
 
         # 2. Materialize the stamped throwaway fixture work-item.
         stamped = deps["materialize"]()
@@ -214,7 +214,7 @@ def invoke(deps):
             reason = "preflight refused the fixture: %s" % pf.get("reason", "prerequisite not met")
             teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
             record_path = _finalize(deps, "fail", reason, None, [], False, teardown,
-                                    run_stamp=stamp)
+                                    run_stamp=stamp, spine_provenance=prov)
             return {
                 "verdict": "fail",
                 "report": _report("fail", reason, record_path, teardown,
@@ -296,6 +296,7 @@ def invoke(deps):
             phases=(outcome.get("phases") if isinstance(outcome, dict) else []) or [],
             run_stamp=stamp,
             release_lease=not unsafe_kill,
+            spine_provenance=prov,
         )
 
         # 10. Render the single verdict report.
@@ -330,7 +331,7 @@ def invoke(deps):
         try:
             record_path = _finalize(deps, "fail", reason, None, attempts,
                                     len(attempts) > 1, teardown, run_stamp=stamp,
-                                    release_lease=not unsafe_kill)
+                                    release_lease=not unsafe_kill, spine_provenance=prov)
         except Exception:
             record_path = None
         return {
@@ -390,7 +391,7 @@ def _discovery_teardown(deps):
 
 def _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
                     spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
-                    run_stamp=None):
+                    run_stamp=None, spine_provenance=None):
     record = {
         "verdict": verdict,
         "reason": reason,
@@ -412,15 +413,18 @@ def _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
     # only on a `--spine-lib` pre-release-gate run; omitted on the default installed-plugin
     # path). Kept OPTIONAL rather than a REQUIRED_KEY so the default path's record shape is
     # unchanged and every other write path (refusal/orphan) need not synthesize a value.
-    provenance = _spine_provenance(deps)
-    if provenance:
-        record["spine_provenance"] = provenance
+    # `spine_provenance` is resolved ONCE by `invoke` (before launch) and threaded in, so the
+    # record's bundle hash is the same single read the report shows — never a second re-hash
+    # of the (possibly since-mutated) bundle at finalize time, which could otherwise diverge
+    # from the report's hash on a long run or null out after the bundle moved (premortem #235).
+    if spine_provenance:
+        record["spine_provenance"] = spine_provenance
     return record
 
 
 def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
               spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
-              run_stamp=None, release_lease=True):
+              run_stamp=None, release_lease=True, spine_provenance=None):
     """Write the single record, then release the lease ONLY after a durable write.
 
     If `write_record` raises, the lease is NOT released (held so the UFR-8 backstop stays
@@ -428,7 +432,8 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
     """
     record = _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
                              spend_partial=spend_partial, elapsed_sec=elapsed_sec,
-                             pr_link=pr_link, phases=phases, run_stamp=run_stamp)
+                             pr_link=pr_link, phases=phases, run_stamp=run_stamp,
+                             spine_provenance=spine_provenance)
     record_path = deps["write_record"](record)
     # Only after the record is durably written do we release the lease.
     if release_lease:
@@ -438,11 +443,11 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
 
 def _write_record_only(deps, verdict, reason, spend, attempts, retried, teardown,
                        spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
-                       run_stamp=None, writer=None):
+                       run_stamp=None, writer=None, spine_provenance=None):
     return (writer or deps["write_record"])(_record_payload(
         deps, verdict, reason, spend, attempts, retried, teardown,
         spend_partial=spend_partial, elapsed_sec=elapsed_sec, pr_link=pr_link,
-        phases=phases, run_stamp=run_stamp))
+        phases=phases, run_stamp=run_stamp, spine_provenance=spine_provenance))
 
 
 def _cli(argv, env, stdout, stderr, deps_builder=None):
