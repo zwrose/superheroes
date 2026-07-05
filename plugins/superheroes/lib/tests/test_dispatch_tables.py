@@ -11,7 +11,12 @@ sync with the bundled agents and the rubric's dimension list.
   silently change it.
 - Every dimension label used in a table row appears backticked in the rubric's
   Dimensions declaration.
+- The reviewer roster re-typed in code (showrunner.js REVIEW_CODE_REVIEWERS /
+  DOC_REVIEWERS, code_loop_plan/spec_loop_plan DIMENSIONS) matches the same
+  agents/ home — a CONVENTIONS §11 single-source-of-truth drift guard, fail-closed
+  so a renamed literal cannot pass vacuously.
 """
+import ast
 import os
 import re
 
@@ -44,6 +49,48 @@ def _agent_slugs():
 
 def _table_rows(rel):
     return ROW_RE.findall(_read(rel))
+
+
+def _js_const_str_list(rel, name):
+    """Fail-closed read of `const NAME = [ ... ]` from a JS source file.
+
+    CONVENTIONS §11 (single source of truth): a hand-maintained copy of a
+    cross-boundary fact is only safe if its drift test *fails closed* — parsing
+    nothing must raise, never return an empty list that makes the downstream
+    equality assertion vacuously pass. So this asserts exactly one match and a
+    non-empty string list before returning.
+    """
+    text = _read(rel)
+    matches = re.findall(r"^const\s+%s\s*=\s*(\[[^\]]+\])" % re.escape(name), text, re.M)
+    assert len(matches) == 1, (
+        "%s: expected exactly one `const %s = [...]` literal, found %d"
+        % (rel, name, len(matches)))
+    value = ast.literal_eval(matches[0])
+    assert isinstance(value, list) and value and all(
+        isinstance(x, str) and x for x in value), (
+        "%s: `%s` must be a non-empty list of strings" % (rel, name))
+    return value
+
+
+def test_code_reviewer_rosters_match_bundled_agents():
+    """CONVENTIONS §11: the reviewer roster is a cross-boundary fact re-typed as a
+    hand-maintained copy in JS (`showrunner.js` REVIEW_CODE_REVIEWERS / DOC_REVIEWERS)
+    and Python (`code_loop_plan.DIMENSIONS`, `spec_loop_plan.DIMENSIONS`). The
+    authoritative home is the set of `agents/*-reviewer` files; each copy must equal
+    it, so adding/removing/renaming a reviewer breaks CI in every copy-holder rather
+    than letting them silently diverge (the PR #205 class). The generated
+    `showrunner.bundle.js` copy is guarded separately by test_bundle_drift.
+    """
+    home = _agent_slugs()
+
+    js = os.path.join("lib", "showrunner.js")
+    assert set(_js_const_str_list(js, "REVIEW_CODE_REVIEWERS")) == home
+    assert set(_js_const_str_list(js, "DOC_REVIEWERS")) == home
+
+    import code_loop_plan
+    import spec_loop_plan
+    assert set(code_loop_plan.DIMENSIONS) == home
+    assert set(spec_loop_plan.DIMENSIONS) == home
 
 
 def _rubric_dimensions():
