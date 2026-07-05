@@ -44,6 +44,15 @@ function _sq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // back verbatim as an `ok:false` failure only AFTER execution is proven via __SR_EXIT (#218). The
 // failure branch must echo __SR_EXIT before exit — wrapMarkedCommand's trailing marker never runs
 // after `exit 0`, and without an in-branch marker a genuine missing libRoot looks like a lazy parrot.
+//
+// Residual fabricability (#218): the __SR_EXIT guard proves a marker-SHAPED answer, not that Bash
+// ran. This compose now embeds both the failure payload AND `echo __SR_EXIT:0` in the prompt, so a
+// courier that SIMULATES the failure branch (payload + marker, no execution) would still pass the
+// guard. Do NOT "harden" this with proof-of-execution (nonce/hash/timestamp) — the Workflow sandbox
+// has no crypto, wall-clock, or RNG primitives, so the JS side cannot verify a computed proof; that
+// is why #218 chose the marker protocol. The guard rejects the observed did-not-run shapes (bare
+// payload with no marker; echoed command with literal __SR_EXIT:$?), and runCourierMarked*'s 2×3
+// retry-then-default-dispatch chain bounds the residual simulation class.
 const MISSING_MARKER = '__SR_LIBROOT_MISSING__'
 function libRootProbe() {
   if (!isAbsoluteLibRoot()) return ''
