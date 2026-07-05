@@ -219,7 +219,7 @@ def invoke(deps):
                 pre_retry_teardown = _teardown(deps, stamp)
                 if pre_retry_teardown.get("left_behind"):
                     pre_retry_cleanup_failed = True
-                    teardown = pre_retry_teardown
+                    teardown = _merge_teardown(dead_run_teardown, pre_retry_teardown)
                     verdict = {
                         "verdict": "fail",
                         "reason": (

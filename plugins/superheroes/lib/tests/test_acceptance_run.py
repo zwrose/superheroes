@@ -317,13 +317,21 @@ def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
 
     reap_calls = []
 
+    def _discover_artifacts(stamp):
+        if stamp is None:
+            return [{"kind": "branch", "name": "wi-accept-harness-leftover"}]
+        return [{"kind": "branch", "name": "accept-harness-s1-a"}]
+
     def _reap(planned):
         reap_calls.append(planned)
+        if any(a.get("name") == "wi-accept-harness-leftover" for a in planned.get("reap") or []):
+            return {"cleaned_up": ["wi-accept-harness-leftover"], "left_behind": []}
         # The pre-retry reap fails to remove the branch -> left_behind is non-empty.
-        return {"cleaned_up": [], "left_behind": ["b-s1"]}
+        return {"cleaned_up": [], "left_behind": ["accept-harness-s1-a"]}
 
     d = _deps(
         launcher=_launcher, run_outcome=_run_outcome, reap=_reap,
+        discover_artifacts=_discover_artifacts,
         gh_reader=lambda: {"pr_exists": True, "pr_ready_for_review": True, "checks_green": True,
                            "live_checks_green": True, "live_pr": "https://x/pr/1",
                            "unreadable": [], "failure_kind": "host-unreachable"},
@@ -336,14 +344,16 @@ def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
     assert "cleanup" in r["report"].lower() or "left" in r["report"].lower()
     # exactly one launch — no second attempt was spun up alongside the surviving artifact.
     assert [l["attempt"] for l in launches] == [1]
-    # exactly one reap call (the pre-retry teardown) — no duplicate second reap.
-    assert len(reap_calls) == 1
+    # exactly two reap calls: the pre-launch discovery sweep, then the pre-retry teardown;
+    # no duplicate final reap runs after the current-stamp cleanup failed.
+    assert len(reap_calls) == 2
     # exactly one record, naming only the single attempt, not retried.
     assert len(d["_state"]["records_written"]) == 1
     rec = d["_state"]["records_written"][0]
     assert rec["retried"] is False
     assert len(rec["attempts"]) == 1
-    assert rec["left_behind"] == ["b-s1"]
+    assert rec["cleaned_up"] == ["wi-accept-harness-leftover"]
+    assert rec["left_behind"] == ["accept-harness-s1-a"]
 
 
 def test_freeform_failure_reason_alone_does_not_trigger_environmental_retry():

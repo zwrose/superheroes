@@ -517,6 +517,8 @@ def _phase_from_event(event):
         return payload.get("phase")
     if event.get("type") == "phase_cost":
         return payload.get("phase")
+    if event.get("type") == "run_completed":
+        return "ship"
     return None
 
 

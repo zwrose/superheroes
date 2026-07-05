@@ -153,6 +153,38 @@ def test_cli_bad_ceilings_config_returns_argparse_status_without_raising(tmp_pat
     assert code == 2
 
 
+def test_cli_threads_valid_ceilings_config_to_the_real_builder(tmp_path):
+    config = tmp_path / "ceilings.json"
+    config.write_text('{"elapsed_sec": 9, "spend": 456}\n', encoding="utf-8")
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root, ceilings=None):
+        calls.append({"fixture": fixture, "root": root, "ceilings": ceilings})
+        return real_build(fixture, root, ceilings=ceilings)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted before any live launch",
+                "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli([
+            "--fixture", FIXTURE, "--root", ROOT,
+            "--ceilings-config", str(config),
+        ], env, io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+
+    assert code == 1
+    assert calls[0]["ceilings"] == {"elapsed_sec": 9.0, "spend": 456.0}
+
+
 def test_cli_drives_a_real_invocation_via_an_injected_deps_builder():
     """With a fake (but complete) deps bundle injected, `_cli` must actually call
     `acceptance_run.invoke` — not merely parse args and refuse — and surface its

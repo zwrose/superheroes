@@ -152,7 +152,7 @@ def test_real_run_outcome_derives_phases_from_durable_journal_not_terminal_json(
     events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
     journal.append(events, "phase_record", payload={"phase": "plan"}, root=str(repo))
     journal.append(events, "phase_record", payload={"phase": "review-plan"}, root=str(repo))
-    journal.append(events, "phase_cost", payload={"phase": "ship", "tokens": {"output": 1, "measured": True}}, root=str(repo))
+    journal.append(events, "run_completed", detail="done", root=str(repo))
     terminal = tmp_path / "terminal-record.json"
     terminal.write_text(json.dumps({
         "status": "ready",
