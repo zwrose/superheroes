@@ -61,6 +61,13 @@ repo root: `ROOT=$(git rev-parse --show-toplevel)`. The `export` matters: step 1
    python3 "$LIB/acceptance_run.py" --fixture "$LIB/../eval/fixtures/acceptance" --root "$ROOT"
    ```
 
+   Optional owner ceilings are supported when a run needs a tighter or looser harness budget:
+   pass `--ceilings-config /path/to/ceilings.json` where the JSON object may contain
+   `elapsed_sec` and/or `spend`, or pass `--ceiling-elapsed-sec <seconds>` /
+   `--ceiling-spend <measured-output-tokens>` directly. Unset or partial values fall back to
+   the built-in defaults: 1800 elapsed seconds and 5,000,000 measured output tokens. The
+   `spend` ceiling is measured output tokens, not dollars.
+
 4. **Render the single verdict report.** Print the orchestrator's one plain-language report — the
    pass/fail verdict, the reason, where the result record lives, and what was cleaned up or left
    behind — and stop. **Never instruct merging**; the run mutates no real state and the verdict is

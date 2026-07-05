@@ -138,6 +138,18 @@ def test_kill_confirmed_dead_only_when_group_empty():
     assert len(child.signals) >= 2  # SIGTERM then SIGKILL escalation
 
 
+def test_kill_not_confirmed_surfaces_explicit_unsafe_outcome(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(al.time, "sleep", lambda sec: sleeps.append(sec))
+    child = FakeChild(exits_after=999, group_empty_after=10_000)
+    res = al.run("wi", CEIL, child_factory=lambda: child,
+                 clock=FakeClock([0, 101, 101, 101, 101]), spend_sampler=lambda: (0.1, True),
+                 engine_pref_reader=lambda: {"all": "claude"})
+    assert res["outcome"] == "kill-unconfirmed"
+    assert res["teardown_safe"] is False
+    assert sleeps
+
+
 def test_real_child_group_empty_probes_whole_group_not_just_leader():
     # UFR-2 regression guard: `_RealChild.group_empty()` must probe the WHOLE process
     # group, not just the leader. A leader that exits quickly while a subprocess it

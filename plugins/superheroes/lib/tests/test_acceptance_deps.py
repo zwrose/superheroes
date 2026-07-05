@@ -19,10 +19,15 @@ import socket
 import sys
 import tempfile
 import shutil
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_deps as deps
+import acceptance_result
+import acceptance_retry
 import hostinfo
+import control_plane
+import journal
 
 
 # --- _lease_liveness -------------------------------------------------------------------
@@ -85,6 +90,25 @@ def test_liveness_unconfirmable_on_malformed_pid(monkeypatch):
     assert deps._lease_liveness(lease) == "unconfirmable"
 
 
+def test_quarantined_lease_is_unconfirmable(tmp_path):
+    root = str(tmp_path)
+    deps.real_quarantine_lease(root)("accept-harness-unsafe")
+
+    lease = deps._read_lease(root)
+
+    assert lease["stamp"] == "accept-harness-unsafe"
+    assert lease["reason"] == "kill-unconfirmed"
+    assert deps._lease_liveness(lease) == "unconfirmable"
+
+
+def test_record_belongs_to_stamp_does_not_accept_unstamped_refusal_record():
+    assert deps._record_belongs_to_stamp({"attempts": []}, "old-run") is False
+    assert deps._record_belongs_to_stamp({"run_stamp": "old-run", "attempts": []},
+                                         "old-run") is True
+    assert deps._record_belongs_to_stamp({"attempts": [{"stamp": "old-run"}]},
+                                         "old-run") is True
+
+
 # --- real_run_outcome --------------------------------------------------------------------
 
 
@@ -121,6 +145,28 @@ def test_real_run_outcome_reads_the_actual_run_readout_projection_shape():
         assert out["readout_claimed_pr"] == "https://github.com/o/r/pull/9"
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_real_run_outcome_derives_phases_from_durable_journal_not_terminal_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
+    journal.append(events, "phase_record", payload={"phase": "plan"}, root=str(repo))
+    journal.append(events, "phase_record", payload={"phase": "review-plan"}, root=str(repo))
+    journal.append(events, "run_completed", detail="done", root=str(repo))
+    terminal = tmp_path / "terminal-record.json"
+    terminal.write_text(json.dumps({
+        "status": "ready",
+        "phase": "ship",
+        "reason": "merge-ready",
+        "prUrl": "https://github.com/o/r/pull/9",
+        "checks": "green",
+        "phasesTraversed": ["made-up-by-the-child"],
+    }), encoding="utf-8")
+
+    out = deps.real_run_outcome(str(repo), lambda: "accept-harness-abc")(str(terminal))
+
+    assert out["phases"] == ["plan", "review-plan", "ship"]
 
 
 def test_real_run_outcome_no_required_checks_is_not_claimed_green():
@@ -227,6 +273,272 @@ def test_real_gh_reader_missing_work_item_is_unreadable():
     read = deps.real_gh_reader("root", {})
     result = read()
     assert result["unreadable"] == ["pr_exists"]
+
+
+def test_real_gh_reader_classifies_host_unreachable_from_required_read_probe(monkeypatch):
+    import gh_preflight
+
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            return 1, "", "network down"
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    monkeypatch.setattr(gh_preflight, "probe", lambda root: {"ok": False})
+
+    def fake_decide(probe, required="write"):
+        assert required == "read"
+        return (False, "indeterminate", "retry")
+
+    monkeypatch.setattr(gh_preflight, "decide", fake_decide)
+
+    result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
+
+    assert result["unreadable"] == ["pr_exists"]
+    assert result["failure_kind"] == "host-unreachable"
+
+
+def test_real_gh_reader_classifies_infra_check_runner_error(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            return 0, json.dumps([
+                {"number": 1, "url": "https://x/pr/1", "isDraft": False,
+                 "headRefName": "superheroes/accept-harness-abc-def456",
+                 "statusCheckRollup": [{"conclusion": "STARTUP_FAILURE"}]},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
+    assert result["failure_kind"] == "check-runner-errored-before-running"
+
+
+def test_check_failure_kind_covers_all_runner_infra_shapes():
+    for rollup in (
+        [{"conclusion": "STARTUP_FAILURE"}],
+        [{"status": "ERROR"}],
+        [{"state": "ERROR"}],
+    ):
+        assert deps._check_failure_kind(rollup) == "check-runner-errored-before-running"
+
+
+def test_check_failure_kind_keeps_behavioral_red_checks_unclassified():
+    assert deps._check_failure_kind([{"conclusion": "FAILURE"}]) is None
+    assert deps._check_failure_kind([{"conclusion": "CANCELLED"}]) is None
+    assert deps._check_failure_kind([{"conclusion": "TIMED_OUT"}]) is None
+
+
+def test_timed_out_check_does_not_trigger_environmental_retry():
+    kind = deps._check_failure_kind([{"conclusion": "TIMED_OUT"}])
+
+    retry = acceptance_retry.classify({
+        "kind": kind,
+        "unreadable": False,
+        "attempt": 1,
+    })
+
+    assert kind is None
+    assert retry["retry"] is False
+
+
+def test_real_gh_reader_keeps_behavioral_red_check_non_retryable(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            return 0, json.dumps([
+                {"number": 1, "url": "https://x/pr/1", "isDraft": False,
+                 "headRefName": "superheroes/accept-harness-abc-def456",
+                 "statusCheckRollup": [{"conclusion": "FAILURE"}]},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
+    assert result["checks_green"] is False
+    assert result["failure_kind"] is None
+
+
+def test_real_write_refusal_record_uses_sidecar_not_canonical_record(tmp_path):
+    root = str(tmp_path)
+    record = {
+        "verdict": "fail",
+        "reason": "refused",
+        "pr_link": "",
+        "phases": [],
+        "spend": None,
+        "spend_partial": True,
+        "elapsed_sec": 0.0,
+        "launched_at": "2026-07-02T00:00:00Z",
+        "terminated_at": "2026-07-02T00:00:00Z",
+        "retried": False,
+        "attempts": [],
+        "cleaned_up": [],
+        "left_behind": [],
+    }
+
+    path = deps.real_write_refusal_record(root)(record)
+
+    assert "/refusals/" in path
+    assert acceptance_result.read_record(deps._record_dir(root)) is None
+    assert acceptance_result.read_record(os.path.dirname(path))["reason"] == "refused"
+
+
+def test_real_preflight_combines_fixture_drift_and_showrunner_preflight(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {"ok": True, "reason": "fixture ok"})
+    monkeypatch.setattr(preflight, "probe", lambda work_item, root: {"gh": {"ok": False}})
+    monkeypatch.setattr(preflight, "decide", lambda probes, work_item: {
+        "ok": False,
+        "blocking": [{"check": "github-access", "status": "fail",
+                      "remediation": "verify GitHub is reachable and retry"}],
+    })
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is False
+    assert "github-access" in result["reason"]
+
+
+def test_real_preflight_refuses_when_config_does_not_resolve(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {"ok": True, "reason": "fixture ok"})
+    monkeypatch.setattr(preflight, "probe",
+                        lambda work_item, root: {"gh": {"ok": True}, "config_resolves": False})
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is False
+    assert "config-resolves" in result["reason"]
+
+
+def test_real_preflight_returns_fixture_drift_without_running_live_probe(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {
+                            "ok": False, "reason": "fixture drift"})
+    monkeypatch.setattr(preflight, "probe",
+                        lambda work_item, root: (_ for _ in ()).throw(
+                            AssertionError("live probe should not run after fixture drift")))
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result == {"ok": False, "reason": "fixture drift"}
+
+
+def test_real_preflight_accepts_when_fixture_and_live_probes_pass(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {"ok": True, "reason": "fixture ok"})
+    monkeypatch.setattr(preflight, "probe",
+                        lambda work_item, root: {"gh": {"ok": True}, "config_resolves": True})
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is True
+
+
+def test_real_preflight_fails_closed_when_phase_source_unreadable(monkeypatch, tmp_path):
+    import acceptance_phases
+
+    monkeypatch.setattr(acceptance_phases, "read_pipeline_phases",
+                        lambda: (_ for _ in ()).throw(RuntimeError("missing PHASES")))
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is False
+    assert "pipeline phase source drift" in result["reason"]
+
+
+def test_real_launcher_threads_owner_configured_ceilings(monkeypatch):
+    captured = {}
+
+    def fake_run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
+                 budget_consumed=None, attempt=1):
+        captured["ceilings"] = ceilings
+        return {"outcome": "exited", "terminal_location": "/t.json",
+                "spend_partial": False, "spend": None, "elapsed_sec": 0.0}
+
+    monkeypatch.setattr(deps.acceptance_launch, "run", fake_run)
+    launch = deps.real_launcher("root", ceilings={"elapsed_sec": 7.0})
+    launch({"stamp": "s1", "work_item": "accept-harness-abc"})
+
+    assert captured["ceilings"]["elapsed_sec"] == 7.0
+    assert captured["ceilings"]["spend"] == 5_000_000.0
+
+
+def test_real_spend_sampler_reads_measured_token_telemetry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
+    journal.append(events, "phase_cost", payload={
+        "phase": "workhorse",
+        "dispatches": {"total": 1, "byModel": {}},
+        "tokens": {"output": 123, "measured": True},
+    }, root=str(repo))
+
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert readable is True
+    assert spend == 123.0
+
+
+def test_real_spend_sampler_no_phase_cost_events_is_unreadable(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert spend is None
+    assert readable is False
+
+
+def test_real_spend_sampler_unmeasured_summary_is_unreadable(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
+    journal.append(events, "phase_cost", payload={
+        "phase": "workhorse",
+        "dispatches": {"total": 1, "byModel": {}},
+        "tokens": {"output": 123, "measured": True},
+    }, root=str(repo))
+    monkeypatch.setattr(deps.cost_report, "summarize",
+                        lambda events: {"measured": False, "outputTokens": 123})
+
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert spend is None
+    assert readable is False
+
+    monkeypatch.setattr(deps.cost_report, "summarize",
+                        lambda events: {"measured": True, "outputTokens": None})
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert spend is None
+    assert readable is False
 
 
 # --- real_discover_artifacts: real showrunner branch/PR naming ------------------------

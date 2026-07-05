@@ -29,15 +29,14 @@ import uuid
 
 import acceptance_fixture
 import acceptance_launch
+import acceptance_ceiling
+import acceptance_phases
 import acceptance_result
 import control_plane
+import cost_report
 import hostinfo
-
-# The pipeline's current phase list. Mirrors the committed fixture's declared
-# `expected_phases` (plan.md/tasks.md `expected_phases:`); `acceptance_fixture.drift_check`
-# is the one thing that notices when this and the fixture's declaration diverge, so a
-# stale value here is caught (UFR-7) rather than silently miscomputing the FR-3 verdict.
-PIPELINE_PHASES = ["plan", "tasks", "build", "review", "ship"]
+import journal
+import preflight
 
 _LEASE_TTL = 1800  # seconds; mirrors file_lock.DEFAULT_TTL / ref_lock.DEFAULT_TTL
 _HARNESS_NS = "acceptance"  # sub-namespace under the per-checkout control-plane store
@@ -166,9 +165,21 @@ def real_reclaim_probe(root, reserved_stamp=None):
     lease = _read_lease(root)
     if lease is None:
         return {"in_flight": False, "stamp": None, "has_record": False}, "dead"
-    has_record = acceptance_result.read_record(_record_dir(root)) is not None
+    has_record = _record_belongs_to_stamp(
+        acceptance_result.read_record(_record_dir(root)), lease.get("stamp"))
     liveness = _lease_liveness(lease)
     return {"in_flight": True, "stamp": lease.get("stamp"), "has_record": has_record}, liveness
+
+
+def _record_belongs_to_stamp(record, stamp):
+    if not isinstance(record, dict) or not stamp:
+        return False
+    if record.get("run_stamp") == stamp:
+        return True
+    for attempt in record.get("attempts") or []:
+        if isinstance(attempt, dict) and attempt.get("stamp") == stamp:
+            return True
+    return False
 
 
 def real_release_lease(root):
@@ -177,6 +188,27 @@ def real_release_lease(root):
         os.remove(_lease_path(root))
     except OSError:
         pass
+
+
+def real_quarantine_lease(root):
+    """Mark the lease unconfirmable after a child process group could not be killed safely."""
+    def _quarantine(stamp):
+        path = _lease_path(root)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "stamp": stamp,
+            "pid": "unconfirmed-child",
+            "host": socket.gethostname(),
+            "bootId": hostinfo.boot_id(),
+            "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "ttl": _LEASE_TTL,
+            "reason": "kill-unconfirmed",
+        }
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, path)
+    return _quarantine
 
 
 # --- materialize / preflight -----------------------------------------------------------
@@ -217,10 +249,40 @@ def real_preflight_ok(fixture_dir, root):
     """`deps["preflight_ok"]`: the drift check (UFR-7) — a missing/drifted fixture refuses
     before anything launches. `work_item` is accepted for interface parity with the
     injected-test seam but the check runs entirely against the committed fixture dir."""
-    def _check(_work_item):
+    def _check(work_item):
         target_exists = os.path.isfile(os.path.join(fixture_dir, "target.txt"))
-        return acceptance_fixture.drift_check(fixture_dir, PIPELINE_PHASES, target_exists)
+        try:
+            phases = acceptance_phases.read_pipeline_phases()
+        except RuntimeError as exc:
+            return {"ok": False, "reason": "pipeline phase source drift: %s" % exc}
+        drift = acceptance_fixture.drift_check(fixture_dir, phases, target_exists)
+        if not drift.get("ok"):
+            return drift
+        live = _acceptance_live_preflight(work_item, root)
+        if not live.get("ok"):
+            return live
+        return {"ok": True, "reason": "no drift: phases match, target exists, and live preflight passed"}
     return _check
+
+
+def _acceptance_live_preflight(work_item, root):
+    """Reuse the showrunner preflight probes for the live-only launch blockers this harness needs.
+
+    The committed fixture lives in the harness namespace, not necessarily in the owner's definition-doc
+    location, so the acceptance front door only consumes the production probes that are independent of
+    that fixture location: GitHub reachability/access and calibration/config readability.
+    """
+    try:
+        probes = preflight.probe(work_item, root)
+    except Exception as exc:
+        return {"ok": False, "reason": "live preflight could not run: %s" % exc}
+    gh = probes.get("gh") if isinstance(probes, dict) else None
+    if not isinstance(gh, dict) or gh.get("ok") is not True:
+        return {"ok": False, "reason": "github-access preflight failed: %s" %
+                ((gh or {}).get("remediation") or "verify GitHub is reachable and retry")}
+    if probes.get("config_resolves") is not True:
+        return {"ok": False, "reason": "config-resolves preflight failed: run superheroes:configure and retry"}
+    return {"ok": True, "reason": "live preflight passed"}
 
 
 # --- git/gh discovery + reads -----------------------------------------------------------
@@ -387,7 +449,8 @@ def real_gh_reader(root, stamped):
     def _read():
         work_item = stamped.get("work_item") if isinstance(stamped, dict) else None
         result = {"pr_exists": False, "pr_ready_for_review": False, "checks_green": False,
-                  "live_checks_green": False, "live_pr": "", "unreadable": []}
+                  "live_checks_green": False, "live_pr": "", "unreadable": [],
+                  "failure_kind": None}
         if not work_item:
             result["unreadable"] = ["pr_exists"]
             return result
@@ -397,11 +460,13 @@ def real_gh_reader(root, stamped):
             cwd=root)
         if rc != 0 or not out.strip():
             result["unreadable"] = ["pr_exists"]
+            result["failure_kind"] = _host_failure_kind(root)
             return result
         try:
             prs = json.loads(out)
         except ValueError:
             result["unreadable"] = ["pr_exists"]
+            result["failure_kind"] = _host_failure_kind(root)
             return result
         prefixes = ("superheroes/%s-" % work_item, "wi-%s" % work_item)
         matches = [pr for pr in prs if (pr.get("headRefName") or "").startswith(prefixes)]
@@ -412,6 +477,7 @@ def real_gh_reader(root, stamped):
         result["pr_ready_for_review"] = pr.get("isDraft") is False
         result["live_pr"] = pr.get("url") or ""
         rollup = pr.get("statusCheckRollup") or []
+        result["failure_kind"] = _check_failure_kind(rollup)
         green = bool(rollup) and all(
             (c.get("conclusion") or "").upper() == "SUCCESS" for c in rollup)
         result["checks_green"] = green
@@ -420,7 +486,59 @@ def real_gh_reader(root, stamped):
     return _read
 
 
-def real_run_outcome(root):
+def _host_failure_kind(root):
+    try:
+        import gh_preflight
+        probe = gh_preflight.probe(root)
+        ok, cause, _remediation = gh_preflight.decide(probe, required="read")
+        if ok is False and cause == "indeterminate":
+            return "host-unreachable"
+    except Exception:
+        return None
+    return None
+
+
+def _check_failure_kind(rollup):
+    for check in rollup or []:
+        if not isinstance(check, dict):
+            continue
+        conclusion = str(check.get("conclusion") or "").upper()
+        status = str(check.get("status") or check.get("state") or "").upper()
+        if conclusion == "STARTUP_FAILURE" or status == "ERROR":
+            return "check-runner-errored-before-running"
+    return None
+
+
+def _phase_from_event(event):
+    if not isinstance(event, dict):
+        return None
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    if event.get("type") == "phase_record":
+        return payload.get("phase")
+    if event.get("type") == "phase_cost":
+        return payload.get("phase")
+    if event.get("type") == "run_completed":
+        return "ship"
+    return None
+
+
+def _phases_from_journal(root, work_item):
+    if not work_item:
+        return []
+    try:
+        allowed = set(acceptance_phases.read_pipeline_phases())
+        events = journal.read_events(control_plane.paths(root, work_item)["events"])
+    except Exception:
+        return []
+    phases = []
+    for event in events:
+        phase = _phase_from_event(event)
+        if phase in allowed and phase not in phases:
+            phases.append(phase)
+    return phases
+
+
+def real_run_outcome(root, work_item=None):
     """`deps["run_outcome"]`: read the showrunner's terminal record + project the readout
     facts `acceptance_verdict.decide` needs. Missing/unreadable -> a `parked`-shaped
     outcome so the verdict fails naming the unreadable facts rather than crashing.
@@ -448,9 +566,11 @@ def real_run_outcome(root):
             return default
         pr_url = record.get("prUrl") or ""
         checks = record.get("checks")
+        current_work_item = work_item() if callable(work_item) else work_item
+        durable_phases = _phases_from_journal(root, current_work_item) if current_work_item else None
         return {
             "terminal": record.get("status") or "parked",
-            "phases": record.get("phasesTraversed") or [],
+            "phases": durable_phases if durable_phases is not None else (record.get("phasesTraversed") or []),
             "readout_pr_link": pr_url,
             "readout_claimed_checks_green": (checks == "green") if checks is not None else None,
             "readout_claimed_pr": pr_url,
@@ -460,19 +580,35 @@ def real_run_outcome(root):
 
 
 def real_expected_phases():
-    return lambda: list(PIPELINE_PHASES)
+    return lambda: acceptance_phases.read_pipeline_phases()
 
 
 def real_clock_now():
     return lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def real_launcher(root):
+def real_spend_sampler(root, work_item):
+    def _sample():
+        current_work_item = work_item() if callable(work_item) else work_item
+        if not current_work_item:
+            return (None, False)
+        try:
+            events = journal.read_events(control_plane.paths(root, current_work_item)["events"])
+            summary = cost_report.summarize(events)
+        except Exception:
+            return (None, False)
+        tokens = summary.get("outputTokens")
+        if summary.get("measured") and tokens is not None:
+            return (float(tokens), True)
+        return (None, False)
+    return _sample
+
+
+def real_launcher(root, ceilings=None):
     """`deps["launcher"]`: `acceptance_launch.run` with its production real defaults
     (spawns `claude -p <prompt>` — the non-interactive CLI form — as a process-group
     leader, driving superheroes:showrunner on the stamped work-item)."""
     def _launch(stamped, budget_consumed=None, attempt=1):
-        from acceptance_ceiling import DEFAULT_CEILINGS
         terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
                                      "terminal-record.json")
 
@@ -480,8 +616,9 @@ def real_launcher(root):
             return acceptance_launch._default_child_factory(stamped, terminal_path=terminal_path)
 
         return acceptance_launch.run(
-            stamped, DEFAULT_CEILINGS, _child_factory, acceptance_launch._REAL_CLOCK,
-            acceptance_launch._default_spend_sampler,
+            stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,
+            acceptance_launch._REAL_CLOCK,
+            real_spend_sampler(root, lambda: stamped.get("work_item")),
             lambda: acceptance_launch._default_engine_pref_reader(root, root),
             budget_consumed=budget_consumed, attempt=attempt,
         )
@@ -494,10 +631,25 @@ def real_write_record(root):
     return _write
 
 
+def real_write_refusal_record(root):
+    def _write(record):
+        dest = os.path.join(_harness_dir(root), "refusals", uuid.uuid4().hex)
+        return acceptance_result.write_record(record, dest)
+    return _write
+
+
+def real_write_orphan_record(root):
+    def _write(record):
+        stamp = record.get("run_stamp") if isinstance(record, dict) else None
+        dest = os.path.join(_harness_dir(root), "orphans", stamp or uuid.uuid4().hex)
+        return acceptance_result.write_record(record, dest)
+    return _write
+
+
 # --- assembly --------------------------------------------------------------------------
 
 
-def build(fixture_dir, root):
+def build(fixture_dir, root, ceilings=None):
     """Assemble the full real `deps` dict `acceptance_run.invoke` expects.
 
     Every seam here is a real primitive (control-plane store, git/gh subprocess reads,
@@ -546,13 +698,16 @@ def build(fixture_dir, root):
         "reclaim_probe": reclaim_probe,
         "materialize": materialize,
         "preflight_ok": real_preflight_ok(fixture_dir, root),
-        "launcher": real_launcher(root),
-        "run_outcome": real_run_outcome(root),
+        "launcher": real_launcher(root, ceilings=ceilings),
+        "run_outcome": real_run_outcome(root, lambda: (state["stamped"] or {}).get("work_item")),
         "gh_reader": gh_reader,
         "expected_phases": real_expected_phases(),
         "discover_artifacts": discover_artifacts,
         "reap": real_reap(root, current_stamp),
         "write_record": real_write_record(root),
+        "write_refusal_record": real_write_refusal_record(root),
+        "write_orphan_record": real_write_orphan_record(root),
+        "quarantine_lease": real_quarantine_lease(root),
         "release_lease": lambda: real_release_lease(root),
         "clock_now": real_clock_now(),
     }

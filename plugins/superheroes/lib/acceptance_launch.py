@@ -28,9 +28,10 @@ showrunner itself does not persist one, so without this explicit instruction the
 have no terminal record to judge no matter how the child was invoked.
 
 Return contract (every path):
-  {"outcome": "exited"|"killed",
+  {"outcome": "exited"|"killed"|"kill-unconfirmed",
    "ceiling": None|"elapsed"|"spend",
    "terminal_location": str|None,
+   "teardown_safe": bool,          # present on kill paths
    "spend_partial": bool,
    "spend": float|None,          # final sampled spend; None if unreadable throughout
    "elapsed_sec": float}         # final computed elapsed
@@ -39,9 +40,10 @@ The launcher ALWAYS surfaces the final `spend` + `elapsed_sec` so the orchestrat
 real source for the FR-5-required record fields (Task 7's `write_record` rejects a record
 missing either). `spend` is `None` when spend was unreadable for the whole run.
 
-Teardown-readiness gate (UFR-2): on a kill it only stops signaling once `group_empty()`
-reports no surviving group member; the escalation is bounded so a stuck group cannot hang
-the watch forever.
+Teardown-readiness gate (UFR-2): on a kill it only reports `killed` once `group_empty()`
+confirms no surviving group member. If the bounded escalation ends without confirmation,
+it reports `kill-unconfirmed` and `teardown_safe: false` so cleanup does not start while a
+child may still be mutating artifacts.
 """
 
 import os
@@ -55,6 +57,7 @@ import acceptance_ceiling
 # this many times, polling between, until `group_empty()` confirms it is gone. Bounded so
 # an un-reapable group can never hang the watch indefinitely.
 _MAX_KILL_ESCALATIONS = 50
+_KILL_CONFIRM_INTERVAL_SEC = 0.05
 
 # Poll cadence for the real-default watch loop (seconds). Injected clocks in tests never
 # reach this sleep because their fakes exit/breach deterministically per tick.
@@ -117,11 +120,12 @@ def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_read
         })
 
         if decision.get("action") == "kill":
-            _hard_kill_group(child)
+            confirmed = _hard_kill_group(child)
             return {
-                "outcome": "killed",
+                "outcome": "killed" if confirmed else "kill-unconfirmed",
                 "ceiling": decision.get("ceiling"),
                 "terminal_location": None,
+                "teardown_safe": confirmed,
                 "spend_partial": spend_partial,
                 "spend": last_spend,
                 "elapsed_sec": last_elapsed,
@@ -160,11 +164,13 @@ def _hard_kill_group(child):
     child.killpg(signal.SIGTERM)
     for _ in range(_MAX_KILL_ESCALATIONS):
         if child.group_empty():
-            return
+            return True
         child.killpg(signal.SIGKILL)
         child.poll()
         if child.group_empty():
-            return
+            return True
+        time.sleep(_KILL_CONFIRM_INTERVAL_SEC)
+    return False
 
 
 # --- Real defaults (production spawn path; the tests drive only injected fakes) -------
@@ -270,15 +276,6 @@ def _default_child_factory(stamped, terminal_path=None):
         env=env,
     )
     return _RealChild(proc, terminal_path)
-
-
-def _default_spend_sampler():
-    """Real spend sampler placeholder: spend unreadable until wired to the cost source.
-
-    Returns `(None, False)` so the watch governs on elapsed alone (fail-closed on the
-    readable ceiling) until a live spend source is injected.
-    """
-    return (None, False)
 
 
 def _default_engine_pref_reader(cwd=None, root=None):

@@ -3,6 +3,8 @@ import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_verdict as v
 
+# These phase names are arbitrary self-consistent verdict-logic inputs; the real
+# pipeline phase list is read from showrunner.js via acceptance_phases.
 PASS = dict(
     terminal="ready", pr_exists=True, pr_ready_for_review=True, checks_green=True,
     phases_traversed=["plan", "tasks", "build", "review", "ship"],

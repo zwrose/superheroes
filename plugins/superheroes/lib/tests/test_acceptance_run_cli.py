@@ -106,9 +106,84 @@ def test_default_deps_builder_is_the_real_wiring_not_a_stub():
     # not a stub that returns an incomplete/placeholder bundle.
     required_seams = {"reclaim_probe", "materialize", "preflight_ok", "launcher",
                       "run_outcome", "gh_reader", "expected_phases", "discover_artifacts",
-                      "reap", "write_record", "release_lease", "clock_now"}
+                      "reap", "write_record", "write_refusal_record", "write_orphan_record",
+                      "quarantine_lease", "release_lease", "clock_now"}
     assert required_seams <= set(captured_deps["deps"].keys())
     assert all(callable(captured_deps["deps"][k]) for k in required_seams)
+
+
+def test_cli_threads_ceiling_overrides_to_the_real_builder():
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root, ceilings=None):
+        calls.append({"fixture": fixture, "root": root, "ceilings": ceilings})
+        return real_build(fixture, root, ceilings=ceilings)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted before any live launch",
+                "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli([
+            "--fixture", FIXTURE, "--root", ROOT,
+            "--ceiling-elapsed-sec", "7",
+            "--ceiling-spend", "123",
+        ], env, io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+
+    assert code == 1
+    assert calls[0]["ceilings"] == {"elapsed_sec": 7.0, "spend": 123.0}
+
+
+def test_cli_bad_ceilings_config_returns_argparse_status_without_raising(tmp_path):
+    env = dict(os.environ)
+    env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+    code = run._cli([
+        "--fixture", FIXTURE, "--root", ROOT,
+        "--ceilings-config", str(tmp_path / "missing.json"),
+    ], env, io.StringIO(), io.StringIO(), deps_builder=lambda fixture, root: {})
+
+    assert code == 2
+
+
+def test_cli_threads_valid_ceilings_config_to_the_real_builder(tmp_path):
+    config = tmp_path / "ceilings.json"
+    config.write_text('{"elapsed_sec": 9, "spend": 456}\n', encoding="utf-8")
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root, ceilings=None):
+        calls.append({"fixture": fixture, "root": root, "ceilings": ceilings})
+        return real_build(fixture, root, ceilings=ceilings)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted before any live launch",
+                "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli([
+            "--fixture", FIXTURE, "--root", ROOT,
+            "--ceilings-config", str(config),
+        ], env, io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+
+    assert code == 1
+    assert calls[0]["ceilings"] == {"elapsed_sec": 9.0, "spend": 456.0}
 
 
 def test_cli_drives_a_real_invocation_via_an_injected_deps_builder():

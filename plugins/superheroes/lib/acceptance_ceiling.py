@@ -1,10 +1,11 @@
 """Ceiling decider for the acceptance harness (FR-8 / FR-9 / UFR-2).
 
 Pure `decide(state)` over a plain dict: judges whether a live run has breached its
-elapsed-time or spend ceiling and must be hard-killed, or may continue. Fail-CLOSED on
-the readable ceiling — when spend is unreadable the run governs on elapsed alone and NEVER
-kills on spend (an unreadable spend sample can never justify a kill, and can never mask an
-elapsed breach).
+elapsed-time or spend ceiling and must be hard-killed, or may continue. The spend unit is
+measured output tokens, not dollars; the built-in default is 5,000,000 output tokens.
+Fail-CLOSED on the readable ceiling — when spend is unreadable the run governs on elapsed
+alone and NEVER kills on spend (an unreadable spend sample can never justify a kill, and
+can never mask an elapsed breach).
 
 The breach test is **invocation-scoped**: it compares the running invocation's fresh
 `elapsed_sec` / `spend_sampled` PLUS the `budget_consumed` a prior attempt already burned
@@ -20,8 +21,25 @@ layer and is injected as `state`). Never raises.
 """
 
 # Conservative built-in defaults applied when the owner configured no ceilings (FR-8):
-# 30 minutes wall-clock, $5 spend.
-DEFAULT_CEILINGS = {"elapsed_sec": 1800.0, "spend": 5.0}
+# 30 minutes wall-clock, 5M measured output tokens.
+DEFAULT_CEILINGS = {"elapsed_sec": 1800.0, "spend": 5_000_000.0}
+
+
+def _positive_number(value, default):
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    return default
+
+
+def normalize_ceilings(ceilings=None):
+    """Merge a partial owner ceiling dict with defaults. Never raises."""
+    src = ceilings if isinstance(ceilings, dict) else {}
+    return {
+        "elapsed_sec": _positive_number(src.get("elapsed_sec"), DEFAULT_CEILINGS["elapsed_sec"]),
+        "spend": _positive_number(src.get("spend"), DEFAULT_CEILINGS["spend"]),
+    }
 
 
 def decide(state):
@@ -37,7 +55,7 @@ def decide(state):
     if not isinstance(state, dict):
         state = {}
 
-    ceilings = state.get("ceilings") or DEFAULT_CEILINGS
+    ceilings = normalize_ceilings(state.get("ceilings"))
     ceiling_elapsed = ceilings.get("elapsed_sec")
     ceiling_spend = ceilings.get("spend")
 

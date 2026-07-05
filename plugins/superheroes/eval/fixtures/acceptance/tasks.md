@@ -10,9 +10,14 @@ status: approved
 gates: {review: passed}
 expected_phases:
   - plan
+  - review-plan
   - tasks
-  - build
-  - review
+  - review-tasks
+  - workhorse
+  - review-code
+  - draft-PR
+  - test-pilot
+  - mark-ready
   - ship
 producedBy: "the-architect@0.4.0"
 created: "2026-07-02"

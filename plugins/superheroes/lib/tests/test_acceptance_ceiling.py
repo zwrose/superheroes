@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_ceiling as c
 
 C = {"elapsed_sec": 1800.0, "spend": 5.0}
+EXPECTED_DEFAULT_SPEND = 5_000_000.0
 BASE = dict(ceilings=C, attempt=1, budget_consumed={"elapsed_sec": 0.0, "spend": 0.0})
 
 
@@ -51,3 +52,19 @@ def test_retry_breach_is_invocation_scoped_not_fresh_ceiling():
     s = c.decide(dict(ceilings=C, attempt=2, elapsed_sec=10.0, spend_sampled=1.0,
                       spend_readable=True, budget_consumed={"elapsed_sec": 0.0, "spend": 4.5}))
     assert s["action"] == "kill" and s["ceiling"] == "spend"   # 4.5+1.0 > 5.0
+
+
+def test_partial_owner_ceilings_merge_with_defaults_and_never_raise():
+    assert c.DEFAULT_CEILINGS["spend"] == EXPECTED_DEFAULT_SPEND
+    assert c.normalize_ceilings({"elapsed_sec": "bad", "spend": False}) == c.DEFAULT_CEILINGS
+    assert c.normalize_ceilings(["not", "a", "dict"]) == c.DEFAULT_CEILINGS
+    r = c.decide({
+        "ceilings": {"elapsed_sec": 10.0},
+        "elapsed_sec": 1.0,
+        "spend_sampled": 0.5,
+        "spend_readable": True,
+        "budget_consumed": {"elapsed_sec": 0.0, "spend": 0.0},
+    })
+    assert r["action"] == "continue"
+    assert r["remaining"]["elapsed_sec"] == 10.0
+    assert r["remaining"]["spend"] == EXPECTED_DEFAULT_SPEND
