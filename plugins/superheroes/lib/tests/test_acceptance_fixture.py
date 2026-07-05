@@ -2,6 +2,7 @@
 import os, sys, tempfile, shutil
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_fixture as af
+import acceptance_deps as deps
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "..", "..", "eval", "fixtures", "acceptance")
 
@@ -41,6 +42,14 @@ def test_drift_check_passes_when_phases_match_and_target_exists():
     phases = af.expected_phases(FIXTURE)
     res = af.drift_check(FIXTURE, pipeline_phases=phases, target_exists=True)
     assert res["ok"] is True
+
+
+def test_fixture_expected_phases_match_showrunner_source_of_truth():
+    phases = deps.real_expected_phases()()
+    assert af.expected_phases(FIXTURE) == phases
+    assert "review-plan" in phases
+    assert "workhorse" in phases
+    assert "review" not in phases
 
 
 def test_drift_check_fails_on_phase_list_drift():

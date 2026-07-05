@@ -9,8 +9,9 @@ proven without a live run (DoD); only Task 13's single live run touches a real s
 
 Lifecycle (fail-CLOSED everywhere — an internal error yields a fail verdict, never a pass):
 
-  1. `reclaim_probe()` → `acceptance_reclaim.decide`. On `refuse`, return a fail verdict +
-     report naming the in-flight / unconfirmable prior run, creating NOTHING. On `reclaim`,
+  1. `reclaim_probe()` → `acceptance_reclaim.decide`. On `refuse`, write this invocation's
+     fail record and report naming the in-flight / unconfirmable prior run, without releasing
+     the other holder's lease. On `reclaim`,
      run the record-less discovery cleanup and (when the dead run left no record) write its
      orphan failed record before proceeding.
   2. `materialize()` the stamped throwaway fixture work-item.
@@ -27,7 +28,8 @@ Lifecycle (fail-CLOSED everywhere — an internal error yields a fail verdict, n
      (`budget_consumed`) so it enforces the invocation's REMAINING budget, never a fresh
      ceiling. Both attempts fold into the single record (`retried: True`, `attempts: [..]`).
   7. `acceptance_cleanup.plan(discover_artifacts(stamp), run_stamp=stamp)` → `reap` — teardown
-     runs on EVERY exit path (ready, parked, or internal error).
+     runs on EVERY safe exit path (ready, parked, confirmed killed, or internal error). An
+     unconfirmed process kill skips artifact cleanup and records the surviving risk instead.
   8. `write_record` — exactly one record per invocation, built from the verdict + the
      launcher's `spend` / `elapsed_sec` (aggregated across attempts when retried).
   9. `release_lease` — ONLY after the record is durably written. If `write_record` raised,
@@ -38,6 +40,7 @@ Teardown (steps 7) always runs, even when an internal seam raised: the except pa
 through the same cleanup → fail-verdict-naming-the-error → record write → report.
 """
 import os
+import json
 
 import acceptance_reclaim
 import acceptance_verdict
@@ -63,14 +66,16 @@ def nesting_refusal(env):
     return {"refuse": False, "reason": "top-level invocation; safe to proceed"}
 
 
-def _report(verdict, reason, record_path, teardown, spend_partial=False):
+def _report(verdict, reason, record_path, teardown, spend_partial=False,
+            unwritten_record_note=None):
     """Render the single plain-language verdict report via the tested FR-6 renderer
     (`acceptance_result.render_report`) so the Markdown/partial-spend output owners see
     is the same one the module's own tests pin — not a second, drifted format."""
     result = {
         "verdict": verdict,
         "reason": reason,
-        "record_path": record_path if record_path else "NOT WRITTEN (lease held)",
+        "record_path": record_path if record_path else
+        (unwritten_record_note or "NOT WRITTEN (lease held)"),
         "cleaned_up": (teardown or {}).get("cleaned_up") or [],
         "left_behind": (teardown or {}).get("left_behind") or [],
         "spend_partial": bool(spend_partial),
@@ -82,15 +87,24 @@ def _run_one_attempt(deps, stamped, budget_consumed, attempt):
     """Launch one attempt and assemble its verdict facts. Returns (launch, outcome, verdict)."""
     launch = deps["launcher"](stamped, budget_consumed=budget_consumed, attempt=attempt)
 
-    if launch.get("outcome") == "killed":
+    if launch.get("outcome") in ("killed", "kill-unconfirmed"):
+        unsafe = launch.get("teardown_safe") is False or launch.get("outcome") == "kill-unconfirmed"
+        reason = "ceiling breached (%s) — run hard-killed" % launch.get("ceiling")
+        if unsafe:
+            reason += " but the process group was not confirmed dead; cleanup skipped"
         verdict = {
             "verdict": "fail",
-            "reason": "ceiling breached (%s) — run hard-killed" % launch.get("ceiling"),
+            "reason": reason,
         }
-        return launch, {"failure_kind": "ceiling-%s" % launch.get("ceiling")}, verdict
+        return launch, {"failure_kind": "ceiling-%s" % launch.get("ceiling"),
+                        "failure_unreadable": False, "phases": []}, verdict
 
     outcome = deps["run_outcome"](launch.get("terminal_location"))
     gh = deps["gh_reader"]()
+    outcome = dict(outcome or {})
+    structured_failure_kind = gh.get("failure_kind")
+    outcome["failure_kind"] = structured_failure_kind
+    outcome["failure_unreadable"] = bool((gh.get("unreadable") or []) and not structured_failure_kind)
     facts = {
         "terminal": outcome.get("terminal"),
         "phases_traversed": outcome.get("phases") or [],
@@ -132,26 +146,29 @@ def invoke(deps):
     attempts = []
 
     try:
-        # 1. Reclaim / refuse a prior in-flight run — create nothing on refuse.
+        # 1. Reclaim / refuse a prior in-flight run.
         recorded_state, liveness = deps["reclaim_probe"]()
         reclaim = acceptance_reclaim.decide(recorded_state, liveness)
         if reclaim["action"] == "refuse":
             reason = "a prior acceptance run is in flight (%s); refusing to start another" % liveness
+            record_path = None
+            try:
+                record_path = _write_record_only(
+                    deps, "fail", reason, None, [], False,
+                    {"cleaned_up": [], "left_behind": []}, spend_partial=True)
+            except Exception:
+                record_path = None
             return {
                 "verdict": "fail",
-                "report": _report("fail", reason, None, None),
-                "record_path": None,
+                "report": _report(
+                    "fail", reason, record_path, None, spend_partial=True,
+                    unwritten_record_note="NOT WRITTEN (prior run lease still held)"),
+                "record_path": record_path,
             }
-        dead_run_teardown = {"cleaned_up": [], "left_behind": []}
-        if reclaim["action"] == "reclaim":
-            # UFR-8: a confirmed-dead prior run's leftover branch/PR/work-item-dir artifacts
-            # must be reaped, not just its record backstopped. `run_stamp=None` puts
-            # `acceptance_cleanup.plan` in record-less discovery mode — ANY name that
-            # parses to a valid full stamp is reaped, independent of this invocation's own
-            # (not-yet-materialized) stamp. This must run before this invocation's own
-            # materialize/launch so the dead run's artifacts never linger alongside the
-            # fresh attempt's.
-            dead_run_teardown = _discovery_teardown(deps)
+        # UFR-8: sweep any leftover accepted-stamp artifacts before this invocation launches.
+        # This covers both a confirmed-dead lease holder and a lease-free checkout whose prior
+        # completed invocation wrote a record but failed to reap everything.
+        dead_run_teardown = _discovery_teardown(deps)
         if reclaim["action"] == "reclaim" and reclaim.get("write_orphan_record"):
             # The dead prior run left no record — write its orphan failed record before
             # proceeding, honestly reflecting what the discovery teardown above reaped.
@@ -197,7 +214,7 @@ def invoke(deps):
         if verdict["verdict"] == "fail":
             retry = acceptance_retry.classify({
                 "kind": outcome.get("failure_kind"),
-                "unreadable": False,
+                "unreadable": outcome.get("failure_unreadable"),
                 "attempt": attempt,
             })
             if retry.get("retry"):
@@ -234,7 +251,17 @@ def invoke(deps):
         # already torn down (as far as possible) and stamp is left in place only for record-
         # keeping, so we don't attempt a second reap of the same (already-attempted) artifacts.
         if not pre_retry_cleanup_failed:
-            teardown = _teardown(deps, stamp)
+            if launch.get("teardown_safe") is False:
+                teardown = {
+                    "cleaned_up": [],
+                    "left_behind": [{
+                        "kind": "process-group",
+                        "name": stamp,
+                        "reason": "kill not confirmed; cleanup skipped",
+                    }],
+                }
+            else:
+                teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
 
         # 8-9. Write the single record (both attempts), then release the lease. The
         # top-level spend/elapsed_sec are the INVOCATION total (module docstring line 32:
@@ -291,6 +318,16 @@ def _teardown(deps, stamp):
     return deps["reap"](planned)
 
 
+def _merge_teardown(*parts):
+    cleaned, left = [], []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        cleaned.extend(part.get("cleaned_up") or [])
+        left.extend(part.get("left_behind") or [])
+    return {"cleaned_up": cleaned, "left_behind": left}
+
+
 def _discovery_teardown(deps):
     """UFR-8: the record-less discovery cleanup for a reclaimed DEAD prior run.
 
@@ -303,6 +340,8 @@ def _discovery_teardown(deps):
     discovery call sites in this module.
     """
     planned = acceptance_cleanup.plan(deps["discover_artifacts"](None), run_stamp=None)
+    if not (planned.get("reap") or planned.get("leave_behind")):
+        return {"cleaned_up": [], "left_behind": []}
     return deps["reap"](planned)
 
 
@@ -334,6 +373,26 @@ def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
     return record_path
 
 
+def _write_record_only(deps, verdict, reason, spend, attempts, retried, teardown,
+                       spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None):
+    record = {
+        "verdict": verdict,
+        "reason": reason,
+        "pr_link": pr_link,
+        "phases": phases or [],
+        "spend": spend,
+        "spend_partial": bool(spend_partial),
+        "elapsed_sec": elapsed_sec if elapsed_sec is not None else 0.0,
+        "launched_at": deps["clock_now"](),
+        "terminated_at": deps["clock_now"](),
+        "retried": bool(retried),
+        "attempts": attempts,
+        "cleaned_up": (teardown or {}).get("cleaned_up") or [],
+        "left_behind": (teardown or {}).get("left_behind") or [],
+    }
+    return deps["write_record"](record)
+
+
 def _cli(argv, env, stdout, stderr, deps_builder=None):
     """The DoD live-run entrypoint the acceptance SKILL.md documents (Task 13).
 
@@ -361,6 +420,12 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
                         help="Path to the committed throwaway acceptance fixture.")
     parser.add_argument("--root", required=True,
                         help="Repo root the live showrunner runs against.")
+    parser.add_argument("--ceilings-config", default=None,
+                        help="Optional JSON file with acceptance ceilings: elapsed_sec and/or spend.")
+    parser.add_argument("--ceiling-elapsed-sec", type=float, default=None,
+                        help="Override the elapsed-time ceiling in seconds.")
+    parser.add_argument("--ceiling-spend", type=float, default=None,
+                        help="Override the measured output-token spend ceiling.")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -374,14 +439,39 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
         print(refusal["reason"], file=stderr)
         return 3
 
+    ceilings = _ceilings_from_args(args, parser)
+
     if deps_builder is None:
         import acceptance_deps
-        deps_builder = acceptance_deps.build
+        deps = (acceptance_deps.build(args.fixture, args.root, ceilings=ceilings)
+                if ceilings is not None else acceptance_deps.build(args.fixture, args.root))
+    else:
+        deps = deps_builder(args.fixture, args.root)
 
-    deps = deps_builder(args.fixture, args.root)
     result = invoke(deps)
     print(result["report"], file=stdout)
     return 0 if result["verdict"] == "pass" else 1
+
+
+def _ceilings_from_args(args, parser):
+    raw = {}
+    if args.ceilings_config:
+        try:
+            with open(args.ceilings_config, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+        except (OSError, ValueError) as exc:
+            parser.error("--ceilings-config is not readable JSON: %s" % exc)
+        if not isinstance(loaded, dict):
+            parser.error("--ceilings-config must contain a JSON object")
+        raw.update(loaded)
+    if args.ceiling_elapsed_sec is not None:
+        raw["elapsed_sec"] = args.ceiling_elapsed_sec
+    if args.ceiling_spend is not None:
+        raw["spend"] = args.ceiling_spend
+    if not raw:
+        return None
+    import acceptance_ceiling
+    return acceptance_ceiling.normalize_ceilings(raw)
 
 
 if __name__ == "__main__":

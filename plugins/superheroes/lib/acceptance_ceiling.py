@@ -20,8 +20,25 @@ layer and is injected as `state`). Never raises.
 """
 
 # Conservative built-in defaults applied when the owner configured no ceilings (FR-8):
-# 30 minutes wall-clock, $5 spend.
-DEFAULT_CEILINGS = {"elapsed_sec": 1800.0, "spend": 5.0}
+# 30 minutes wall-clock, 5M measured output tokens.
+DEFAULT_CEILINGS = {"elapsed_sec": 1800.0, "spend": 5_000_000.0}
+
+
+def _positive_number(value, default):
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    return default
+
+
+def normalize_ceilings(ceilings=None):
+    """Merge a partial owner ceiling dict with defaults. Never raises."""
+    src = ceilings if isinstance(ceilings, dict) else {}
+    return {
+        "elapsed_sec": _positive_number(src.get("elapsed_sec"), DEFAULT_CEILINGS["elapsed_sec"]),
+        "spend": _positive_number(src.get("spend"), DEFAULT_CEILINGS["spend"]),
+    }
 
 
 def decide(state):
@@ -37,7 +54,7 @@ def decide(state):
     if not isinstance(state, dict):
         state = {}
 
-    ceilings = state.get("ceilings") or DEFAULT_CEILINGS
+    ceilings = normalize_ceilings(state.get("ceilings"))
     ceiling_elapsed = ceilings.get("elapsed_sec")
     ceiling_spend = ceilings.get("spend")
 

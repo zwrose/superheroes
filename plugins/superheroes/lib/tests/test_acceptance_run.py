@@ -56,6 +56,42 @@ def test_confirmed_alive_prior_run_refuses_creating_nothing():
     assert calls == []   # nothing materialized/launched
 
 
+def test_confirmed_alive_prior_run_writes_refusal_record_without_releasing_other_lease():
+    d = _deps(reclaim_probe=lambda: ({"in_flight": True, "stamp": "old", "has_record": True},
+                                     "alive"))
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert r["record_path"] == "/rec.json"
+    assert len(d["_state"]["records_written"]) == 1
+    rec = d["_state"]["records_written"][0]
+    assert rec["verdict"] == "fail"
+    assert "prior acceptance run" in rec["reason"]
+    assert d["_state"]["lease_released"] is False
+
+
+def test_free_lease_still_runs_recordless_discovery_cleanup_before_new_run():
+    discover_calls = []
+    reap_calls = []
+
+    def discover_artifacts(stamp):
+        discover_calls.append(stamp)
+        if stamp is None:
+            return [{"kind": "branch", "name": "wi-accept-harness-leftover"}]
+        return [{"kind": "branch", "name": "b-s1"}]
+
+    def reap(planned):
+        reap_calls.append(planned)
+        return {"cleaned_up": [a["name"] for a in planned["reap"]], "left_behind": []}
+
+    d = _deps(discover_artifacts=discover_artifacts, reap=reap)
+    r = run.invoke(d)
+
+    assert r["verdict"] == "pass"
+    assert discover_calls[0] is None
+    rec = d["_state"]["records_written"][0]
+    assert "wi-accept-harness-leftover" in rec["cleaned_up"]
+
+
 def test_reclaimed_dead_run_reaps_its_own_leftover_artifacts_before_proceeding():
     # UFR-8: a confirmed-dead prior run's leftover branch/PR/work-item-dir artifacts must
     # be reaped via a record-less discovery cleanup (run_stamp=None), not just backstopped
@@ -99,14 +135,62 @@ def test_reclaimed_dead_run_reaps_its_own_leftover_artifacts_before_proceeding()
 
 
 def test_parked_terminal_is_fail_but_teardown_still_runs():
+    launches = []
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        launches.append(attempt)
+        return {"outcome": "exited", "terminal_location": "/t.json", "spend_partial": False,
+                "spend": 1.25, "elapsed_sec": 42.0}
     d = _deps(run_outcome=lambda loc: {"terminal": "parked", "phases": ["plan"],
                                        "readout_pr_link": "", "readout_claimed_checks_green": False,
-                                       "readout_claimed_pr": "", })
+                                       "readout_claimed_pr": "", },
+              launcher=_launcher)
     reaped = []
     d["reap"] = lambda planned: reaped.append(planned) or {"cleaned_up": ["b-s1"], "left_behind": []}
     r = run.invoke(d)
     assert r["verdict"] == "fail"
     assert reaped   # teardown still ran on the non-ready terminal (UFR-1)
+    assert launches == [1]
+
+
+def test_ceiling_kill_fails_tears_down_and_never_retries():
+    launches = []
+    d = _deps(
+        launcher=lambda stamped, budget_consumed=None, attempt=1: (
+            launches.append(attempt) or {
+                "outcome": "killed", "ceiling": "elapsed", "terminal_location": None,
+                "spend_partial": False, "spend": 0.25, "elapsed_sec": 99.0,
+            }),
+        run_outcome=lambda loc: (_ for _ in ()).throw(AssertionError("killed run has no terminal")),
+    )
+    reaped = []
+    d["reap"] = lambda planned: reaped.append(planned) or {"cleaned_up": ["b-s1"], "left_behind": []}
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert "ceiling breached" in r["report"]
+    assert launches == [1]
+    assert reaped
+    rec = d["_state"]["records_written"][0]
+    assert rec["retried"] is False
+    assert len(rec["attempts"]) == 1
+
+
+def test_unconfirmed_kill_skips_cleanup_because_process_group_may_still_be_alive():
+    d = _deps(
+        launcher=lambda stamped, budget_consumed=None, attempt=1: {
+            "outcome": "kill-unconfirmed", "ceiling": "elapsed", "terminal_location": None,
+            "spend_partial": False, "spend": 0.25, "elapsed_sec": 99.0,
+            "teardown_safe": False,
+        },
+        run_outcome=lambda loc: (_ for _ in ()).throw(AssertionError("unsafe kill has no terminal")),
+    )
+    reaped = []
+    d["reap"] = lambda planned: reaped.append(planned) or {"cleaned_up": ["b-s1"], "left_behind": []}
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert reaped == []
+    rec = d["_state"]["records_written"][0]
+    assert rec["left_behind"]
+    assert "cleanup skipped" in str(rec["left_behind"][0])
 
 
 def test_internal_harness_error_still_teardowns_and_fails_never_pass():
@@ -145,9 +229,9 @@ def test_environmental_retry_folds_two_attempts_into_one_record_sharing_budget()
     def _run_outcome(loc):
         if loc == "/t1.json":
             # a classifiably-environmental terminal (host-unreachable) -> retry.
-            return {"terminal": "host-unreachable", "phases": [], "readout_pr_link": "",
+            return {"terminal": "parked", "phases": [], "readout_pr_link": "",
                     "readout_claimed_checks_green": False, "readout_claimed_pr": "",
-                    "failure_kind": "host-unreachable"}
+                    "failure_kind": "freeform host unreachable text must not matter"}
         return {"terminal": "ready", "phases": ["plan", "tasks", "build", "review", "ship"],
                 "readout_pr_link": "https://x/pr/1", "readout_claimed_checks_green": True,
                 "readout_claimed_pr": "https://x/pr/1"}
@@ -155,6 +239,9 @@ def test_environmental_retry_folds_two_attempts_into_one_record_sharing_budget()
     stamps = iter(["s1", "s2"])
     d = _deps(
         launcher=_launcher, run_outcome=_run_outcome,
+        gh_reader=lambda: {"pr_exists": True, "pr_ready_for_review": True, "checks_green": True,
+                           "live_checks_green": True, "live_pr": "https://x/pr/1",
+                           "unreadable": [], "failure_kind": "host-unreachable"},
         materialize=lambda: (lambda s: {"work_item": "wi-%s" % s, "branch": "b-%s" % s,
                                         "pr_title": "PR %s" % s, "stamp": s})(next(stamps)),
     )
@@ -187,9 +274,9 @@ def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
                 "spend_partial": False, "spend": 1.0, "elapsed_sec": 300.0}
 
     def _run_outcome(loc):
-        return {"terminal": "host-unreachable", "phases": [], "readout_pr_link": "",
+        return {"terminal": "parked", "phases": [], "readout_pr_link": "",
                 "readout_claimed_checks_green": False, "readout_claimed_pr": "",
-                "failure_kind": "host-unreachable"}
+                "failure_kind": "freeform host unreachable text must not matter"}
 
     reap_calls = []
 
@@ -200,6 +287,9 @@ def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
 
     d = _deps(
         launcher=_launcher, run_outcome=_run_outcome, reap=_reap,
+        gh_reader=lambda: {"pr_exists": True, "pr_ready_for_review": True, "checks_green": True,
+                           "live_checks_green": True, "live_pr": "https://x/pr/1",
+                           "unreadable": [], "failure_kind": "host-unreachable"},
         materialize=lambda: {"work_item": "wi-s1", "branch": "b-s1", "pr_title": "PR s1",
                              "stamp": "s1"},
     )
@@ -217,3 +307,23 @@ def test_pre_retry_cleanup_failure_aborts_the_retry_no_second_attempt():
     assert rec["retried"] is False
     assert len(rec["attempts"]) == 1
     assert rec["left_behind"] == ["b-s1"]
+
+
+def test_freeform_failure_reason_alone_does_not_trigger_environmental_retry():
+    launches = []
+
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        launches.append(attempt)
+        return {"outcome": "exited", "terminal_location": "/t1.json",
+                "spend_partial": False, "spend": 1.0, "elapsed_sec": 300.0}
+
+    d = _deps(
+        launcher=_launcher,
+        run_outcome=lambda loc: {"terminal": "parked", "phases": [], "readout_pr_link": "",
+                                 "readout_claimed_checks_green": False,
+                                 "readout_claimed_pr": "",
+                                 "failure_kind": "host-unreachable"},
+    )
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert launches == [1]

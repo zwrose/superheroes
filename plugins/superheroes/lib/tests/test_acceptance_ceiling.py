@@ -51,3 +51,16 @@ def test_retry_breach_is_invocation_scoped_not_fresh_ceiling():
     s = c.decide(dict(ceilings=C, attempt=2, elapsed_sec=10.0, spend_sampled=1.0,
                       spend_readable=True, budget_consumed={"elapsed_sec": 0.0, "spend": 4.5}))
     assert s["action"] == "kill" and s["ceiling"] == "spend"   # 4.5+1.0 > 5.0
+
+
+def test_partial_owner_ceilings_merge_with_defaults_and_never_raise():
+    r = c.decide({
+        "ceilings": {"elapsed_sec": 10.0},
+        "elapsed_sec": 1.0,
+        "spend_sampled": 0.5,
+        "spend_readable": True,
+        "budget_consumed": {"elapsed_sec": 0.0, "spend": 0.0},
+    })
+    assert r["action"] == "continue"
+    assert r["remaining"]["elapsed_sec"] == 10.0
+    assert r["remaining"]["spend"] == c.DEFAULT_CEILINGS["spend"]

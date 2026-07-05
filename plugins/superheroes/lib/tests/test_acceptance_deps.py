@@ -19,10 +19,13 @@ import socket
 import sys
 import tempfile
 import shutil
+import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_deps as deps
 import hostinfo
+import control_plane
+import journal
 
 
 # --- _lease_liveness -------------------------------------------------------------------
@@ -121,6 +124,28 @@ def test_real_run_outcome_reads_the_actual_run_readout_projection_shape():
         assert out["readout_claimed_pr"] == "https://github.com/o/r/pull/9"
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_real_run_outcome_derives_phases_from_durable_journal_not_terminal_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
+    journal.append(events, "phase_record", payload={"phase": "plan"}, root=str(repo))
+    journal.append(events, "phase_record", payload={"phase": "review-plan"}, root=str(repo))
+    journal.append(events, "phase_cost", payload={"phase": "ship", "tokens": {"output": 1, "measured": True}}, root=str(repo))
+    terminal = tmp_path / "terminal-record.json"
+    terminal.write_text(json.dumps({
+        "status": "ready",
+        "phase": "ship",
+        "reason": "merge-ready",
+        "prUrl": "https://github.com/o/r/pull/9",
+        "checks": "green",
+        "phasesTraversed": ["made-up-by-the-child"],
+    }), encoding="utf-8")
+
+    out = deps.real_run_outcome(str(repo), lambda: "accept-harness-abc")(str(terminal))
+
+    assert out["phases"] == ["plan", "review-plan", "ship"]
 
 
 def test_real_run_outcome_no_required_checks_is_not_claimed_green():
@@ -227,6 +252,76 @@ def test_real_gh_reader_missing_work_item_is_unreadable():
     read = deps.real_gh_reader("root", {})
     result = read()
     assert result["unreadable"] == ["pr_exists"]
+
+
+def test_real_gh_reader_classifies_infra_check_runner_error(monkeypatch):
+    def fake_run(args, cwd, timeout=15):
+        if args[:3] == ["gh", "pr", "list"]:
+            return 0, json.dumps([
+                {"number": 1, "url": "https://x/pr/1", "isDraft": False,
+                 "headRefName": "superheroes/accept-harness-abc-def456",
+                 "statusCheckRollup": [{"conclusion": "STARTUP_FAILURE"}]},
+            ]), ""
+        return 1, "", ""
+
+    monkeypatch.setattr(deps, "_run", fake_run)
+    result = deps.real_gh_reader("root", {"work_item": "accept-harness-abc"})()
+    assert result["failure_kind"] == "check-runner-errored-before-running"
+
+
+def test_real_preflight_combines_fixture_drift_and_showrunner_preflight(monkeypatch, tmp_path):
+    import acceptance_fixture
+    import preflight
+
+    monkeypatch.setattr(acceptance_fixture, "drift_check",
+                        lambda fixture, phases, target_exists: {"ok": True, "reason": "fixture ok"})
+    monkeypatch.setattr(preflight, "probe", lambda work_item, root: {"gh": {"ok": False}})
+    monkeypatch.setattr(preflight, "decide", lambda probes, work_item: {
+        "ok": False,
+        "blocking": [{"check": "github-access", "status": "fail",
+                      "remediation": "verify GitHub is reachable and retry"}],
+    })
+    fixture = tmp_path / "fixture"
+    fixture.mkdir()
+    (fixture / "target.txt").write_text("x\n", encoding="utf-8")
+
+    result = deps.real_preflight_ok(str(fixture), "root")("accept-harness-abc")
+
+    assert result["ok"] is False
+    assert "github-access" in result["reason"]
+
+
+def test_real_launcher_threads_owner_configured_ceilings(monkeypatch):
+    captured = {}
+
+    def fake_run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
+                 budget_consumed=None, attempt=1):
+        captured["ceilings"] = ceilings
+        return {"outcome": "exited", "terminal_location": "/t.json",
+                "spend_partial": False, "spend": None, "elapsed_sec": 0.0}
+
+    monkeypatch.setattr(deps.acceptance_launch, "run", fake_run)
+    launch = deps.real_launcher("root", ceilings={"elapsed_sec": 7.0})
+    launch({"stamp": "s1", "work_item": "accept-harness-abc"})
+
+    assert captured["ceilings"]["elapsed_sec"] == 7.0
+    assert captured["ceilings"]["spend"] == deps.acceptance_ceiling.DEFAULT_CEILINGS["spend"]
+
+
+def test_real_spend_sampler_reads_measured_token_telemetry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    events = control_plane.paths(str(repo), "accept-harness-abc")["events"]
+    journal.append(events, "phase_cost", payload={
+        "phase": "workhorse",
+        "dispatches": {"total": 1, "byModel": {}},
+        "tokens": {"output": 123, "measured": True},
+    }, root=str(repo))
+
+    spend, readable = deps.real_spend_sampler(str(repo), lambda: "accept-harness-abc")()
+
+    assert readable is True
+    assert spend == 123.0
 
 
 # --- real_discover_artifacts: real showrunner branch/PR naming ------------------------
