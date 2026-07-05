@@ -84,7 +84,14 @@ const bp = require('../build_phase.js')
   global.agent = agentWith({ onBuild: (p) => { fallbackPrompt = p } })
   r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
   assert.strictEqual(r.parked, false, 'the fallback path still completes')
-  assert.ok(fallbackPrompt.includes('docs/superheroes/wi/tasks.md'), '#222: an unplanted doc dir falls back to the in-repo default tasks.md path')
+  // Discriminating check: `Task 1 in docs/…` is only true for the RELATIVE in-repo default — an
+  // absolute path would render `Task 1 in /Users/…`. (`OUT` ends in `docs/superheroes/wi`, so a bare
+  // `includes('docs/superheroes/wi/tasks.md')` would also pass for the out-of-repo path and could not
+  // tell the two apart.) Plus an explicit guard that the out-of-repo absolute path did not leak in.
+  assert.ok(fallbackPrompt.includes('Task 1 in docs/superheroes/wi/tasks.md'),
+    '#222: an unplanted doc dir falls back to the RELATIVE in-repo default tasks.md path (not an absolute path)')
+  assert.ok(!fallbackPrompt.includes(OUT),
+    '#222: the unplanted fallback must not carry the out-of-repo absolute path')
 
   console.log('ok: #222 workhorse build + per-task reviewer prompts carry the mode-aware tasks-doc pointer + guardrail; needs_context retry adds context')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })
