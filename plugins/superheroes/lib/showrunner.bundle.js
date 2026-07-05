@@ -570,6 +570,15 @@ function intersects(a, b) {
   return false
 }
 function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _roundRecordedFix(roundRec) {
+  // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
+  // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
+  // usually carries no fix — keeps the max-iterations detail honest instead of always claiming one.
+  const fix = roundRec && roundRec.fix
+  if (!fix || typeof fix !== 'object') return false
+  const fixes = fix.fixes
+  return Array.isArray(fixes) ? fixes.length > 0 : !!fixes
+}
 function _generalizeKeys(roundRec) {
   return new Set((roundRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
 }
@@ -594,8 +603,22 @@ function checkCircuitBreaker(rounds, maxRounds) {
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
   const latest = _blocking(rounds[n - 1])
   if (n >= maxRounds && latest.length > 0) {
+    // Honest halt detail (#212 class): name the ACTUAL round reached (n) alongside the cap — a resume
+    // can run past the cap, so n may exceed maxRounds — and only claim "fixes committed" when the final
+    // round actually recorded a fix. The cap-halt fires right after a review and before that round's
+    // fixer runs, so the latest round usually carries no fix; saying otherwise misreads a park that
+    // needs a fix-then-relaunch as one that only needs a re-review.
+    const tail = _roundRecordedFix(rounds[n - 1])
+      ? "the final round's fixes are committed but not yet re-reviewed"
+      : 'no fix was applied this round — the finding(s) remain unaddressed'
+    // Don't overstate how many REAL reviews ran: n counts every recorded round (the gate uses it),
+    // but a transport-failed / all-missing round inflates it. When fewer rounds were actually reviewed
+    // than recorded, say so (same honesty _reviewedRounds gives criteria 1-2).
+    let capNote = `cap ${maxRounds}`
+    const reviewedN = _reviewedRounds(rounds).length
+    if (reviewedN < n) capNote += `, ${reviewedN} reviewed`
     return { halt: true, reason: 'max-iterations',
-      detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
+      detail: `Reached round ${n} (${capNote}); the latest review still showed ${latest.length} blocking finding(s) (${tail}).` }
   }
   const reviewed = _reviewedRounds(rounds)
   const rn = reviewed.length
