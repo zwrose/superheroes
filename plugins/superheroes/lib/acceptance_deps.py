@@ -753,12 +753,36 @@ def real_gh_reader(root, stamped):
         result["live_pr"] = pr.get("url") or ""
         rollup = pr.get("statusCheckRollup") or []
         result["failure_kind"] = _check_failure_kind(rollup)
+        result["checks_pending"] = _rollup_pending(rollup)
+        result["checks_red"] = _rollup_red(rollup)
         green = bool(rollup) and all(
             (c.get("conclusion") or "").upper() == "SUCCESS" for c in rollup)
         result["checks_green"] = green
         result["live_checks_green"] = green
         return result
-    return _read
+
+    # Finding #14 (run 8, PR #263): the ready flip + DoD body edit trigger a FRESH CI
+    # run (ci.yml pull_request includes `edited`), so a single-shot read moments after
+    # ship's own settle sees conclusion:null on the new run and judges a healthy pass
+    # "checks are not green" — the #11 pending-as-red class, in the VERIFIER. Pending
+    # is WAIT, not FAIL: poll the same single-shot read (bounded, local process — no
+    # leaf ceiling applies) until nothing is pending, then judge. Exhausted budget
+    # falls through with pending checks still not-green (fail-closed, same reason).
+    # 1800s default: real target projects (weekly-eats, loupe) run CI well past 10
+    # minutes, and this is a LOCAL poll — no leaf/Bash ceiling forces a short budget
+    # (unlike the spine's 540s courier legs). ≥2x a 15-min run per the budget-headroom
+    # rule; the harness's own elapsed ceiling still bounds the whole attempt.
+    def _settled_read(timeout_sec=1800.0, interval_sec=20.0, _sleep=None, _clock=None):
+        sleep = _sleep or time.sleep
+        clock = _clock or time.monotonic
+        start = clock()
+        out = _read()
+        while (out.get("checks_pending") and not out.get("checks_red")
+               and (clock() - start) < timeout_sec):
+            sleep(interval_sec)
+            out = _read()
+        return out
+    return _settled_read
 
 
 def _host_failure_kind(root):
@@ -771,6 +795,35 @@ def _host_failure_kind(root):
     except Exception:
         return None
     return None
+
+
+def _rollup_pending(rollup):
+    """True when any check in the rollup has not COMPLETED (conclusion still null/empty
+    while queued or in progress). Distinct from red/green: pending means WAIT (#11).
+    The pending-state taxonomy is single-homed in ci_status.PENDING_STATES (§11)."""
+    import ci_status
+    for check in rollup or []:
+        if not isinstance(check, dict):
+            continue
+        conclusion = str(check.get("conclusion") or "").strip()
+        status = str(check.get("status") or check.get("state") or "").upper()
+        if not conclusion and status in ci_status.PENDING_STATES:
+            return True
+    return False
+
+
+def _rollup_red(rollup):
+    """True when any check has CONCLUDED non-pass (FAILURE/TIMED_OUT/CANCELLED/...).
+    A confirmed hard failure short-circuits the settle wait — the run's fate is sealed;
+    waiting out pending siblings only delays the honest red (review of finding #14).
+    NEUTRAL/SKIPPED are not red (mirrors ci_status's pass set)."""
+    for check in rollup or []:
+        if not isinstance(check, dict):
+            continue
+        conclusion = str(check.get("conclusion") or "").strip().upper()
+        if conclusion and conclusion not in ("SUCCESS", "NEUTRAL", "SKIPPED"):
+            return True
+    return False
 
 
 def _check_failure_kind(rollup):
