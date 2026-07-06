@@ -26,3 +26,22 @@ def test_run_outcome_is_the_machine_readable_projection():
     out = run_readout.run_outcome(STATE)
     assert out["status"] == "ready" and out["prUrl"].endswith("/pull/9")
     assert out["checks"] == "none" and out["phasesTraversed"] == STATE["phases"]
+
+
+import journal
+
+def test_assemble_enumerates_permission_denials(tmp_path):
+    ep = str(tmp_path / "events.jsonl")
+    journal.append(ep, "permission_denied", step="build:task-3", detail={"command": "python3 -c x"})
+    journal.append(ep, "step_completed", step="build:task-4")
+    journal.append(ep, "permission_denied", step="review:code-reviewer", detail={"check": "probe"})
+    ctx = run_readout.assemble({"events_path": ep})
+    denials = ctx["permissionDenials"]
+    assert len(denials) == 2
+    assert denials[0]["step"] == "build:task-3"
+    assert denials[1]["step"] == "review:code-reviewer"
+
+def test_assemble_no_denials_is_empty_list(tmp_path):
+    ep = str(tmp_path / "events.jsonl")           # absent/empty events -> empty list, never a skip
+    ctx = run_readout.assemble({"events_path": ep})
+    assert ctx["permissionDenials"] == []

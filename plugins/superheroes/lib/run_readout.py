@@ -7,6 +7,27 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import journal
+
+
+def _permission_denials(state):
+    """Enumerate (never decide) the run's timeout-denial events (UFR-3). Reads the run's
+    `events` path threaded onto `state` and maps each `permission_denied` journal event to
+    a readout entry naming the affected step. Fail-soft: a missing/unreadable path yields no
+    denials, never a raise (the enumeration must never break the readout)."""
+    events_path = state.get("events_path")
+    if not events_path:
+        return []
+    try:
+        events = journal.read_events(events_path)
+    except Exception:
+        return []
+    denials = []
+    for ev in events:
+        if isinstance(ev, dict) and ev.get("type") == "permission_denied":
+            denials.append({"step": ev.get("step"), "detail": ev.get("detail")})
+    return denials
+
 
 def assemble(state):
     """Map run-end state -> the build_readout context dict (FR-10 elements)."""
@@ -23,6 +44,7 @@ def assemble(state):
         "smoke": state.get("smoke") or [],
         "raw_ci_excerpt": state.get("raw_ci_excerpt"),
         "root": state.get("root"),
+        "permissionDenials": _permission_denials(state),
     }
 
 
