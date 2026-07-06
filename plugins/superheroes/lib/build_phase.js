@@ -435,6 +435,23 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   return nativeAgentCall()
 }
 
+// Task 11 (FR-1/UFR-6): the single-source builder/leaf dispatch prompt. Both the external-engine and
+// native-Claude legs dispatch the SAME string (byte-identical), and it carries the shared 15-minute
+// proceed-honestly contract (from showrunner.js — single source of truth, so the builder leaf and the
+// reviewer leaf agree on the timeout instruction). Lazy require of the constant avoids the load-time
+// cycle (build_phase's showrunner reference is already lazy); reading it at prompt-build time is safe.
+function buildLeafPrompt({ wt, branch, task }) {
+  const contract = require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+    + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
+    + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+    + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+    + `other trailer (e.g. Co-Authored-By). ${contract} Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+  )
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
@@ -444,22 +461,12 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
+    const _leafPrompt = buildLeafPrompt({ wt, branch, task })
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt:
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+      prompt: _leafPrompt,
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+        _leafPrompt,
         { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     if (worker.ok) {
@@ -695,6 +702,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

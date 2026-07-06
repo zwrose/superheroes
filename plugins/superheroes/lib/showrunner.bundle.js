@@ -4471,6 +4471,23 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   return nativeAgentCall()
 }
 
+// Task 11 (FR-1/UFR-6): the single-source builder/leaf dispatch prompt. Both the external-engine and
+// native-Claude legs dispatch the SAME string (byte-identical), and it carries the shared 15-minute
+// proceed-honestly contract (from showrunner.js — single source of truth, so the builder leaf and the
+// reviewer leaf agree on the timeout instruction). Lazy require of the constant avoids the load-time
+// cycle (build_phase's showrunner reference is already lazy); reading it at prompt-build time is safe.
+function buildLeafPrompt({ wt, branch, task }) {
+  const contract = require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
+    + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
+    + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
+    + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
+    + `other trailer (e.g. Co-Authored-By). ${contract} Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+  )
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
@@ -4480,22 +4497,12 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
+    const _leafPrompt = buildLeafPrompt({ wt, branch, task })
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt:
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+      prompt: _leafPrompt,
       nativeAgentCall: () => agent(
-        `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: write the test(s), `
-        + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
-        + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
-        + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-        + `other trailer (e.g. Co-Authored-By). Return JSON `
-        + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`,
+        _leafPrompt,
         { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     if (worker.ok) {
@@ -4731,6 +4738,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, LIB, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop
@@ -5372,6 +5380,25 @@ function normalizeFixResult(result, fixContext) {
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
+// Task 11 (FR-4) probe steering: an unattended leaf/reviewer that needs to *run* something to verify
+// its work must use the sanctioned throwaway-test-file-in-worktree + allowed test-run family (which the
+// enforcer's allowance layer auto-allows), NOT an improvised inline interpreter one-liner (which the
+// enforcer prompts on and — owner absent — stalls). One tight sentence: the allowance layer only
+// recognizes these shapes, so steering the probe here is what turns a would-be stall into an auto-allow.
+const PROBE_STEERING =
+  'To verify by running code, write a throwaway test file inside the build worktree and run it with the ' +
+  'project test-run family (e.g. pytest / the repo test command); do not improvise inline interpreter ' +
+  'one-liners (python3 -c / node -e) — those are not on the allowed probe path and will stall on a permission prompt.'
+
+// Task 11 (FR-1/UFR-6) 15-minute proceed contract: the enforcer stays synchronous, so the timeout bound
+// lives in the dispatched instruction. If an action awaits owner permission unanswered for 15 minutes,
+// the leaf proceeds without it and reports the denied action HONESTLY — never as done. The spine absorbs
+// the denial (a denied probe -> low-confidence; a denied substantive build step -> incomplete build
+// evidence that holds the PR a draft), so honest reporting is what makes the absorption correct.
+const TIMEOUT_PROCEED_CONTRACT =
+  'If any action awaits owner permission with no response for 15 minutes, proceed without it and report ' +
+  'the denied action honestly (never as done) — say exactly what you could not do so the run records it.'
+
 const FIX_RESULT_INSTRUCTION =
   'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Prefer changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode); file paths are accepted but the scheduler derives subjects from fixes+files+priorFindings. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
@@ -5465,7 +5492,8 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT}` +
+      `${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     // Task 10 (FR-2): thread the reviewer identity + the run's journal path so ensureReviewerShape can
     // tag a denied-probe permission_denied event to `review:<reviewer>`. eventsPath rides context when
     // the caller supplies it; absent, the denial degrades the dimension (low confidence) without a
@@ -5574,6 +5602,12 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 
 module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
 module.exports.ensureReviewerShape = ensureReviewerShape
+// Task 11: export the reviewer-leaf factory + the two shared contract blocks (single source of truth
+// for the FR-4 probe steering and the 15-min proceed contract; build_phase.js reuses the latter so the
+// builder leaf and reviewer leaf agree byte-for-byte on the timeout instruction).
+module.exports.reviewCodeLeaves = reviewCodeLeaves
+module.exports.PROBE_STEERING = PROBE_STEERING
+module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
 // Task 10 seam: the denial recorder is overridable for the smoke harness. Read/write it through the
 // mutable holder so an assignment (`sr._denialRecorder = fn`) actually rebinds what ensureReviewerShape
 // calls.

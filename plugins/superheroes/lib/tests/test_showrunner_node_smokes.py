@@ -37,6 +37,9 @@ SHOWRUNNER_SMOKES = [
     # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
     # ceiling), with the denial recorded to the journal.
     "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
+    # Task 11 (FR-1/FR-4/UFR-6): reviewer + builder/leaf prompts embed the FR-4 probe steering
+    # (throwaway-test-file family, no inline interpreter probes) + the 15-min proceed-honestly contract.
+    "plugins/superheroes/lib/tests/showrunner_permission_contract_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_readout_fencing_smoke.js",
