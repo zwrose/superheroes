@@ -10,11 +10,16 @@ current run (FR-8). Every code path is fail-safe *toward prompting* (UFR-2): any
 non-match, or missing data falls through, never toward allowing.
 
 Task 1 scope: `worktree_confined` — the realpath strict-descendant + interpreter check.
+Task 2 scope: `_store_dir` / `_provenance_ok` / `rules` — the config-keyed out-of-repo
+rules store and the provenance-checked read (FR-6 substrate, UFR-9).
 """
+import json
 import os
 import re
 
 import buildtree
+import control_plane
+import mode_registry
 
 
 def _worktrees_root():
@@ -65,3 +70,52 @@ def worktree_confined(command, cwd):
         return bool(_INTERPRETER.search(command))
     except Exception:
         return False
+
+
+# --- Task 2: rules store paths + provenance-checked read (FR-6 substrate, UFR-9) ---
+
+
+def _store_dir(cwd, root=None):
+    """The out-of-repo permission store dir: `<store_root>/projects/<config_key>/permission/`.
+
+    Keyed on `mode_registry.config_key(cwd)` — the same common-dir key `registry.json`
+    uses — so a fresh build worktree resolves the same rules with no repo artifact. The
+    `root` override (tests / an explicit store base) shadows `control_plane.store_root()`.
+    """
+    base = root or control_plane.store_root()
+    return os.path.join(base, "projects", mode_registry.config_key(cwd), "permission")
+
+
+def _provenance_ok(entry):
+    """True iff `entry` carries a well-formed provenance stamp (UFR-9).
+
+    A valid stamp is a dict with a truthy `source` and a truthy `at` timestamp — the shape
+    the configure front door stamps (Task 9/13). Anything else (missing key, `None`,
+    non-dict, absent field) → False, so an untraceable or hand-edited rule falls back to
+    prompting, never to allowing.
+    """
+    prov = entry.get("provenance") if isinstance(entry, dict) else None
+    if not isinstance(prov, dict):
+        return False
+    return bool(prov.get("source")) and bool(prov.get("at"))
+
+
+def rules(cwd, root=None):
+    """The provenance-valid allow rules for `cwd`'s project.
+
+    Reads `<store_dir>/rules.json`; fail-safe (UFR-2): a missing / corrupt / non-dict store
+    yields `[]` (→ no allowance → prompt). Filters to entries whose provenance stamp is
+    present and well-formed (`_provenance_ok`), so an untraceable entry never allows.
+    """
+    try:
+        path = os.path.join(_store_dir(cwd, root), "rules.json")
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    entries = data.get("rules")
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if _provenance_ok(e)]
