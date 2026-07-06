@@ -16,6 +16,7 @@ function receiptFromPrompt(prompt) {
 
 function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q' } = {}) {
   let wtHeadCalls = 0
+  let cwdHeadCalls = 0
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
@@ -23,7 +24,13 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
       wtHeadCalls += 1
       return wtHeadCalls <= 1 ? 'head-1\n' : 'head-2\n'
     }
-    if (opts && opts.courier && prompt.includes('git rev-parse')) return 'head-1\n'
+    if (opts && opts.courier && prompt.includes('git rev-parse')) {
+      // finding #15 regression: successive cwd-head reads of the SAME commit relay as
+      // FULL then ABBREVIATED sha (a terse courier shortened stdout live, run a743e55a)
+      // — resolveHead+sameHead must not read that as 'cwd moved' and false-park.
+      cwdHeadCalls += 1
+      return cwdHeadCalls % 2 === 1 ? '760024368bc4ce1d00ecb26c699f1b56945d756c\n' : '7600243\n'
+    }
     if (label === 'resume') return '1'
     if (opts && opts.courier && prompt.includes('review_code_config.py')) {
       assert.ok(prompt.includes("cd '/tmp/build-worktree' &&"), 'config resolves in the explicit target worktree')

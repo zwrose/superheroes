@@ -8403,8 +8403,8 @@ async function reviewCodePhase(workItem, opts) {
   // — refuse to advance/stamp rather than certify (and ship) code the fixes never touched.
   if (targetWorktree && resolvedHead) {
     const cwdHeadAfter = await resolveHead(null, opts.ref || 'HEAD')
-    const cwdMoved = cwdHeadBefore && cwdHeadAfter && cwdHeadBefore !== cwdHeadAfter
-    const targetMoved = initialHead && finalHead && initialHead !== finalHead
+    const cwdMoved = cwdHeadBefore && cwdHeadAfter && !sameHead(cwdHeadBefore, cwdHeadAfter)
+    const targetMoved = initialHead && finalHead && !sameHead(initialHead, finalHead)
     if (cwdMoved && !targetMoved) {
       return { phaseResult: { confidence: 'low', assumptions: ['review-code fixes landed outside the target worktree (cwd HEAD advanced, target HEAD did not) — refusing to stamp coverage'] }, gate: 'changes-requested', terminal, head: finalHead, changed: false }
     }
@@ -8450,10 +8450,29 @@ async function resolveHead(worktree, ref) {
     : `git rev-parse ${shq(ref || 'HEAD')}`
   try {
     const out = await execText(cmd, 'resolve head')
-    return out || null
+    // Boundary normalization (finding #15, run a743e55a): a terse courier ABBREVIATED
+    // rev-parse stdout to 7 chars in relay; the raw string then failed equality against
+    // a full-sha read of the SAME commit and the outside-worktree guard false-parked a
+    // clean run. Prefer the sha-shaped hex run (extracts the sha from fenced/prose
+    // answers too); fall back to the first token of the first non-empty line so
+    // non-hex refs still resolve. sameHead() below absorbs full-vs-abbreviated reads.
+    const raw = String(out || '').trim()
+    const m = raw.match(/\b[0-9a-f]{7,40}\b/)
+    if (m) return m[0]
+    const line = (raw.split('\n').find((l) => l.trim()) || '').trim()
+    return line ? line.split(/\s+/)[0] : null
   } catch (_) {
     return null
   }
+}
+
+// sameHead: prefix-tolerant head equality — two honest reads of one commit may differ
+// in LENGTH (full vs abbreviated relay, finding #15); a real move differs in CONTENT.
+// Null/empty never equals anything (fail-closed at the call sites).
+function sameHead(a, b) {
+  if (!a || !b) return false
+  const x = String(a), y = String(b)
+  return x.startsWith(y) || y.startsWith(x)
 }
 
 // the native "workhorse" build phase (#87) — implement the approved tasks doc task-by-task with a
