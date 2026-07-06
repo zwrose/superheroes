@@ -107,3 +107,52 @@ def test_rules_corrupt_store_is_empty_not_raise(monkeypatch, tmp_path):
     with open(os.path.join(d, "rules.json"), "w") as f:
         f.write("{ this is not json")
     assert pr.rules("/cwd", root=str(tmp_path)) == []   # UFR-2 fail-safe: corrupt -> empty -> prompt
+
+
+# --- Task 3: freeze_run_rules / frozen_rules / record_composed + lazy reap (FR-8, UFR-9) ---
+
+
+def test_freeze_snapshots_current_rules(monkeypatch, tmp_path):
+    _write_rules(str(tmp_path), "/cwd", [
+        {"family": "test-run", "pattern": "pytest", "provenance": {"source": "configure", "at": "2026-07-05T00:00:00Z"}},
+    ], monkeypatch)
+    pr.freeze_run_rules("RUN1", "/cwd", root=str(tmp_path))
+    frozen = pr.frozen_rules("RUN1", "/cwd", root=str(tmp_path))
+    assert [r["family"] for r in frozen["rules"]] == ["test-run"]
+    assert frozen["composed"] == []
+
+
+def test_frozen_read_ignores_live_edit(monkeypatch, tmp_path):
+    _write_rules(str(tmp_path), "/cwd", [
+        {"family": "test-run", "pattern": "pytest", "provenance": {"source": "configure", "at": "2026-07-05T00:00:00Z"}},
+    ], monkeypatch)
+    pr.freeze_run_rules("RUN2", "/cwd", root=str(tmp_path))
+    _write_rules(str(tmp_path), "/cwd", [
+        {"family": "test-run", "pattern": "pytest", "provenance": {"source": "configure", "at": "x"}},
+        {"family": "broad", "pattern": "gh pr merge", "provenance": {"source": "configure", "at": "y"}},  # mid-run edit
+    ], monkeypatch)
+    frozen = pr.frozen_rules("RUN2", "/cwd", root=str(tmp_path))
+    assert [r["family"] for r in frozen["rules"]] == ["test-run"]   # UFR-9: edit invisible to the run
+
+
+def test_record_composed_is_exact(monkeypatch, tmp_path):
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3", "/cwd", root=str(tmp_path))
+    pr.record_composed("RUN3", "gh pr create --draft --title X", "/cwd", root=str(tmp_path))
+    frozen = pr.frozen_rules("RUN3", "/cwd", root=str(tmp_path))
+    assert pr._hash("gh pr create --draft --title X") in frozen["composed"]
+    assert pr._hash("gh pr create --draft --title Y") not in frozen["composed"]
+
+
+def test_reap_deletes_stale_keeps_recent(monkeypatch, tmp_path):
+    import time
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    d = os.path.join(str(tmp_path), "projects", "KEY", "permission", "runs")
+    os.makedirs(d, exist_ok=True)
+    stale = os.path.join(d, "OLD.json"); open(stale, "w").write("{}")
+    old = time.time() - 40 * 86400
+    os.utime(stale, (old, old))
+    monkeypatch.setattr(pr, "_run_is_live", lambda rid, cwd, root: False)  # no live lease
+    pr.freeze_run_rules("NEW", "/cwd", root=str(tmp_path))
+    assert not os.path.exists(stale)                 # stale + no lease -> reaped
+    assert os.path.exists(os.path.join(d, "NEW.json"))

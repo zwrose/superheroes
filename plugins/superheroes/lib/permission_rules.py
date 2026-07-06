@@ -12,14 +12,20 @@ non-match, or missing data falls through, never toward allowing.
 Task 1 scope: `worktree_confined` — the realpath strict-descendant + interpreter check.
 Task 2 scope: `_store_dir` / `_provenance_ok` / `rules` — the config-keyed out-of-repo
 rules store and the provenance-checked read (FR-6 substrate, UFR-9).
+Task 3 scope: `freeze_run_rules` / `frozen_rules` / `record_composed` + lazy reap — the
+per-run frozen snapshot (a mid-run edit never reaches a running run, UFR-9), the byte-exact
+composed-command set (FR-8), and stale-run-file retention (30-day, no-live-lease reap).
 """
+import hashlib
 import json
 import os
 import re
+import time
 
 import buildtree
 import control_plane
 import mode_registry
+import ref_lock
 
 
 def _worktrees_root():
@@ -119,3 +125,116 @@ def rules(cwd, root=None):
     if not isinstance(entries, list):
         return []
     return [e for e in entries if _provenance_ok(e)]
+
+
+# --- Task 3: freeze_run_rules / frozen_rules / record_composed + lazy reap (FR-8, UFR-9) ---
+
+_REAP_MAX_AGE = 30 * 86400   # a stale run file with no live lease is reaped after 30 days
+
+
+def _hash(command):
+    """The byte-exact composed-command fingerprint (FR-8). Any single-char difference — or a
+    command composed by a different run — misses, because the enforcer allows a composed
+    command only when its hash byte-equals one frozen for the *current* run."""
+    return hashlib.sha256(command.encode("utf-8")).hexdigest()
+
+
+def _run_path(run_id, cwd, root):
+    return os.path.join(_store_dir(cwd, root), "runs", "%s.json" % run_id)
+
+
+def _run_is_live(run_id, cwd, root):
+    """True iff a fresh (`not ref_lock.is_stale`) lease exists whose `generation == run_id`.
+
+    A seam the reap test stubs. Fail-safe (UFR-2): any error — no store, unreadable ref,
+    absent/None lease — is treated as *not live*, so a run file is only ever reaped, never
+    kept alive, on the strength of a positively-read fresh matching lease. The permission
+    store `root` override does not relocate the real lease store, so lease reads always go
+    through the real control-plane store (a fresh worktree shares the common-dir key)."""
+    try:
+        store = control_plane.checkout_dir(cwd)
+        work_item = control_plane.get_current(cwd)
+        if not work_item:
+            return False
+        _sha, lease = ref_lock.read_lease(store, work_item)
+        if not isinstance(lease, dict):
+            return False
+        if ref_lock.is_stale(lease, ref_lock.DEFAULT_TTL):
+            return False
+        return lease.get("generation") == run_id
+    except Exception:
+        return False
+
+
+def _reap_stale(cwd, root):
+    """Delete every sibling `runs/*.json` that is NOT live AND older than 30 days.
+
+    Run-*start* reap only (crash-tolerant — a crashed run never leaks its file forever, and
+    a live/recent run's file is always kept). Guarded whole: a reap error must never fail a
+    freeze (UFR-2), so any exception is swallowed."""
+    try:
+        runs_dir = os.path.join(_store_dir(cwd, root), "runs")
+        cutoff = time.time() - _REAP_MAX_AGE
+        for name in os.listdir(runs_dir):
+            if not name.endswith(".json"):
+                continue
+            path = os.path.join(runs_dir, name)
+            try:
+                if os.path.getmtime(path) >= cutoff:
+                    continue                                 # recent -> keep
+                rid = name[:-len(".json")]
+                if _run_is_live(rid, cwd, root):
+                    continue                                 # live lease -> keep
+                os.remove(path)
+            except OSError:
+                continue                                     # one bad file never stops the sweep
+    except Exception:
+        return
+
+
+def freeze_run_rules(run_id, cwd, root=None):
+    """Snapshot the current provenance-valid `rules.json` into `runs/<run_id>.json`, then
+    lazily reap stale sibling run files.
+
+    The snapshot is the per-run frozen view a running run reads (UFR-9): a mid-run edit to
+    `rules.json` never reaches a run that already froze. The run file also carries the
+    per-run `composed` command-hash set (FR-8) and a `denials` list (Task 7 absorption).
+    Reap runs AFTER the write so a crash mid-freeze still leaves this run's own file intact."""
+    snapshot = {"rules": rules(cwd, root), "composed": [], "denials": []}
+    path = _run_path(run_id, cwd, root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    control_plane.atomic_write(path, json.dumps(snapshot))
+    _reap_stale(cwd, root)
+
+
+def frozen_rules(run_id, cwd, root=None):
+    """Read the per-run frozen snapshot for `run_id`. Fail-safe (UFR-2): a missing / corrupt /
+    non-dict run file yields the empty snapshot `{"rules": [], "composed": [], "denials": []}`
+    (→ no allowance → prompt), never a raise."""
+    empty = {"rules": [], "composed": [], "denials": []}
+    try:
+        with open(_run_path(run_id, cwd, root)) as f:
+            data = json.load(f)
+    except Exception:
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    return {
+        "rules": data.get("rules") if isinstance(data.get("rules"), list) else [],
+        "composed": data.get("composed") if isinstance(data.get("composed"), list) else [],
+        "denials": data.get("denials") if isinstance(data.get("denials"), list) else [],
+    }
+
+
+def record_composed(run_id, command, cwd, root=None):
+    """Append the byte-exact hash of a spine-composed `command` to `run_id`'s frozen file
+    (read-modify-write, idempotent — a repeat of the same command is a no-op). This is how
+    `evaluate`'s composed-exact allow set (FR-8) is populated for the run that composed the
+    command, and only that run."""
+    snapshot = frozen_rules(run_id, cwd, root)
+    h = _hash(command)
+    if h not in snapshot["composed"]:
+        snapshot["composed"].append(h)
+    path = _run_path(run_id, cwd, root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    control_plane.atomic_write(path, json.dumps(snapshot))
