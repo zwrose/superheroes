@@ -63,6 +63,11 @@ action that owns it, leaving the rest of the calibration untouched:
   never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
+- **View or edit the permission posture** (the auto-allow routine families that let an owner-absent
+  showrunner run finish without babysitting, below the owner-role floor) → follow
+  `reference/permission.md`. The full allow set is already on the view's **Permission posture**
+  section; edits go only through `permission_rules.set_rule` / `remove_rule` (the one sanctioned
+  change path, FR-9).
 - **Switch the storage mode** → the confirmed switch below.
 - **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
   `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing

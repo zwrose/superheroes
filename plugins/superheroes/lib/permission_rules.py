@@ -16,6 +16,7 @@ Task 3 scope: `freeze_run_rules` / `frozen_rules` / `record_composed` + lazy rea
 per-run frozen snapshot (a mid-run edit never reaches a running run, UFR-9), the byte-exact
 composed-command set (FR-8), and stale-run-file retention (30-day, no-live-lease reap).
 """
+import datetime
 import hashlib
 import json
 import os
@@ -287,3 +288,61 @@ def evaluate(command, cwd, run_id, root=None):
     except Exception:
         return ("fall", "allowance error (fail-safe)")
     return ("fall", "no matching allowance")
+
+
+# --- Task 13: configure front door — provenance-stamped rule CRUD (FR-9, UFR-9) ---
+
+
+def _utc_now():
+    """An ISO-8601 UTC timestamp for the provenance `at` stamp."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _read_rules_raw(cwd, root=None):
+    """Read the raw `rules.json` list WITHOUT the provenance filter — the CRUD read side.
+
+    `rules()` is the evaluate-time read that drops unstamped entries; the CRUD writers
+    instead round-trip whatever is on disk so a `remove_rule` still reaches an entry that
+    predates the stamp shape. Fail-safe: a missing / corrupt / non-dict store reads as `[]`."""
+    try:
+        path = os.path.join(_store_dir(cwd, root), "rules.json")
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    entries = data.get("rules")
+    return entries if isinstance(entries, list) else []
+
+
+def _write_rules_raw(cwd, entries, root=None):
+    """Atomic-write the `rules.json` list back to the config-keyed store."""
+    d = _store_dir(cwd, root)
+    os.makedirs(d, exist_ok=True)
+    control_plane.atomic_write(os.path.join(d, "rules.json"), json.dumps({"rules": entries}))
+
+
+def set_rule(cwd, rule, root=None):
+    """Add (or replace, by `family`) an allow rule, stamping the ONLY provenance
+    `_provenance_ok` accepts (`{"source": "configure", "at": <utc-now>}`).
+
+    This front-door stamp is what makes the rule visible to `evaluate` (UFR-9): a direct
+    hand-edit that omits it is filtered out at read time, so `configure` is the only
+    sanctioned change path (FR-9). Read-modify-write, atomic. A repeated `family` replaces
+    the prior entry rather than accumulating duplicates."""
+    stamped = dict(rule)
+    stamped["provenance"] = {"source": "configure", "at": _utc_now()}
+    family = stamped.get("family")
+    entries = [e for e in _read_rules_raw(cwd, root)
+               if not (isinstance(e, dict) and e.get("family") == family)]
+    entries.append(stamped)
+    _write_rules_raw(cwd, entries, root)
+
+
+def remove_rule(cwd, family, root=None):
+    """Drop every rule whose `family` matches. Read-modify-write, atomic; a no-op when the
+    family is absent."""
+    entries = [e for e in _read_rules_raw(cwd, root)
+               if not (isinstance(e, dict) and e.get("family") == family)]
+    _write_rules_raw(cwd, entries, root)

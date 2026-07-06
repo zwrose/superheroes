@@ -195,3 +195,24 @@ def test_evaluate_no_match_falls_through(monkeypatch, tmp_path):
 def test_evaluate_any_error_falls_through(monkeypatch, tmp_path):
     monkeypatch.setattr(pr, "frozen_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     assert pr.evaluate("python3 -m pytest", "/cwd", "R", root=str(tmp_path))[0] == "fall"  # UFR-2
+
+
+# --- Task 13: configure front door — set_rule / remove_rule provenance-stamped CRUD (FR-9, UFR-9) ---
+
+
+def test_set_rule_stamps_provenance(monkeypatch, tmp_path):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    pr.set_rule("/cwd", {"family": "test-run", "pattern": r"\bpytest\b"}, root=str(tmp_path))
+    got = pr.rules("/cwd", root=str(tmp_path))
+    assert got[0]["family"] == "test-run"
+    assert got[0]["provenance"]["source"] == "configure"   # front-door stamp -> evaluate honors it
+
+
+def test_remove_rule(monkeypatch, tmp_path):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    pr.set_rule("/cwd", {"family": "a", "pattern": "x"}, root=str(tmp_path))
+    pr.set_rule("/cwd", {"family": "b", "pattern": "y"}, root=str(tmp_path))
+    pr.remove_rule("/cwd", "a", root=str(tmp_path))
+    assert [r["family"] for r in pr.rules("/cwd", root=str(tmp_path))] == ["b"]
