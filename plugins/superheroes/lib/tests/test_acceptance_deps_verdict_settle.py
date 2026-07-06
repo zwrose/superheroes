@@ -109,5 +109,8 @@ def test_neutral_skipped_are_not_red_via_classify():
 
 
 def test_pending_taxonomy_is_single_homed():
+    # classify() is the single home for the pending vocabulary (finding #18): the verifier
+    # reaches it via _normalize_rollup + classify, never a forked list.
     import ci_status
-    assert "IN_PROGRESS" in ci_status.PENDING_STATES and "QUEUED" in ci_status.PENDING_STATES
+    assert "in_progress" in ci_status._PENDING and "queued" in ci_status._PENDING
+    assert _cls([{"name": "x", "conclusion": None, "status": "IN_PROGRESS"}]) == "pending"

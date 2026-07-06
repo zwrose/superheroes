@@ -7,10 +7,10 @@ run parked. Pending means WAIT, red means FIX — neither ever certifies green).
 """
 
 _PASS = {"pass", "success", "skipping", "skipped", "neutral"}
+# The pending vocabulary is single-homed here: classify() is its sole consumer, and the
+# harness verifier reaches it by normalizing its rollup and calling classify() (finding #18),
+# never by forking a second pending-state list (CONVENTIONS §11).
 _PENDING = {"pending", "queued", "in_progress", "expected", "waiting", "requested"}
-# Canonical cross-boundary export (CONVENTIONS §11): acceptance_deps._rollup_pending
-# consumes this — never fork a second pending-state list.
-PENDING_STATES = frozenset(x.upper() for x in _PENDING)
 
 
 def _bucket(item):
