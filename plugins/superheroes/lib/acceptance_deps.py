@@ -886,11 +886,22 @@ def real_run_outcome(root, work_item=None, spine_lib=None):
                    "failure_kind": "no-terminal-record"}
         if not terminal_location or not os.path.isfile(terminal_location):
             return default
+        # Integrity of a release-gating input (security review PR #266): never follow a
+        # symlink at the handoff path (a redirect could feed a planted record into the
+        # verdict). islink + a regular-file check before the read; parse, then best-effort
+        # unlink so the transient handoff does not linger in the temp dir (Finding 2).
+        if os.path.islink(terminal_location):
+            return dict(default, failure_kind="terminal-record-symlink-rejected")
         try:
             with open(terminal_location, encoding="utf-8") as fh:
                 record = json.load(fh)
         except (OSError, ValueError):
             return default
+        finally:
+            try:
+                os.unlink(terminal_location)
+            except OSError:
+                pass
         if not isinstance(record, dict):
             return default
         pr_url = record.get("prUrl") or ""
@@ -948,9 +959,17 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
         # is a transient handoff, not control-plane state, so it lives in a NON-sensitive
         # temp dir: the child writes it with the ordinary Write tool, no guard, no
         # evasion prose. Keyed by stamp so concurrent stamps never collide.
-        terminal_path = os.path.join(
-            tempfile.gettempdir(), "superheroes-acceptance",
-            stamped.get("stamp", "") or "unstamped", "terminal-record.json")
+        # The random stamp is itself the unguessable per-run token; the parent mints the
+        # dir 0700 so a hostile local process on a shared /tmp cannot pre-plant or redirect
+        # the handoff (security review PR #266). Read-back additionally rejects a symlink.
+        _term_dir = os.path.join(tempfile.gettempdir(), "superheroes-acceptance",
+                                 stamped.get("stamp", "") or "unstamped")
+        try:
+            os.makedirs(_term_dir, mode=0o700, exist_ok=True)
+            os.chmod(_term_dir, 0o700)
+        except OSError:
+            pass
+        terminal_path = os.path.join(_term_dir, "terminal-record.json")
         norm = acceptance_ceiling.normalize_ceilings(ceilings)
         # 2x the harness elapsed ceiling: far above any supervised run (the watch loop
         # kills at 1x), but a hard independent bound on an ORPHAN's lifetime if the

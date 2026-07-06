@@ -169,6 +169,27 @@ def test_real_run_outcome_derives_phases_from_durable_journal_not_terminal_json(
     assert out["phases"] == ["plan", "review-plan", "ship"]
 
 
+def test_real_run_outcome_rejects_symlink_handoff(tmp_path):
+    # Security review PR #266: a symlink at the handoff path could redirect a planted
+    # record into the release-gating verdict — reject it, never follow it.
+    real = tmp_path / "planted.json"
+    real.write_text(json.dumps({"status": "ready", "checks": "green"}), encoding="utf-8")
+    link = tmp_path / "terminal-record.json"
+    os.symlink(real, link)
+    out = deps.real_run_outcome(str(tmp_path), lambda: None)(str(link))
+    assert out["terminal"] == "parked"
+    assert out["failure_kind"] == "terminal-record-symlink-rejected"
+
+
+def test_real_run_outcome_unlinks_handoff_after_read(tmp_path):
+    # Finding #2: the transient handoff must not linger after the parent reads it.
+    rec = tmp_path / "terminal-record.json"
+    rec.write_text(json.dumps({"status": "ready", "checks": "green"}), encoding="utf-8")
+    out = deps.real_run_outcome(str(tmp_path), lambda: None)(str(rec))
+    assert out["terminal"] == "ready"
+    assert not rec.exists()
+
+
 def test_real_run_outcome_no_required_checks_is_not_claimed_green():
     d = tempfile.mkdtemp()
     try:
