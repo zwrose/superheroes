@@ -40,6 +40,10 @@ SHOWRUNNER_SMOKES = [
     # Task 11 (FR-1/FR-4/UFR-6): reviewer + builder/leaf prompts embed the FR-4 probe steering
     # (throwaway-test-file family, no inline interpreter probes) + the 15-min proceed-honestly contract.
     "plugins/superheroes/lib/tests/showrunner_permission_contract_smoke.js",
+    # Task 12 (FR-8/UFR-9 wiring): the spine freezes the rules ONCE at run start (run_id = reconcile
+    # generation) and records each composed leaf command against that run_id, via the Python
+    # permission_rules seams; both seams are fail-open (UFR-2).
+    "plugins/superheroes/lib/tests/showrunner_permission_freeze_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_readout_fencing_smoke.js",

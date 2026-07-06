@@ -462,6 +462,13 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     const _leafPrompt = buildLeafPrompt({ wt, branch, task })
+    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
+    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
+    // prompt — and only within the run that composed it. Shelled through the showrunner permission
+    // seam (byte-exact hashing lives Python-side, matching evaluate()'s composed-exact check). Lazy
+    // require avoids the load-time cycle (build_phase's showrunner reference is already lazy); the
+    // seam is itself fail-open (UFR-2), so a record error never derails the build.
+    try { require('./showrunner.js')._recordComposed(generation, _leafPrompt) } catch (_e) { /* fail-open */ }
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt: _leafPrompt,

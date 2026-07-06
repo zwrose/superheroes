@@ -98,6 +98,10 @@ function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(lab
 // the observed as-built count; the breakdown comments map every leaf to its matrix row so a
 // future courier added to a phase fails here and has to justify itself against the matrix.
 const PHASE_BUDGETS = {
+  // Task 12 (FR-8/UFR-9): the run-start rules freeze — ONE 'io' bookkeeping leaf that snapshots the
+  // provenance-valid rules for this run (permission_rules.freeze_run_rules via the io() runHelper
+  // shim). Grouped under its own phase so it never inflates the sanctioned two-leaf startup stretch.
+  'permission-freeze': 1,
   // read world-snapshot (exec) + read startup state — the FR-1 two-leaf exception. Was 3 before
   // #118 conformance (engine_pref_load.py rode its own exec leaf).
   startup: 2,
@@ -116,8 +120,10 @@ const PHASE_BUDGETS = {
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round mkdir +
   // (load-summary+extras, coverage read, run verify, persist-skeleton, deferred read,
-  // telemetry write) + stamp build coverage + prov exec + save phase progress. Was 24 pre-D3.
-  workhorse: 19,
+  // telemetry write) + stamp build coverage + prov exec + save phase progress. Was 24 pre-D3, 19
+  // pre-Task-12. Task 12 (FR-8): +1 per built task — the record_composed 'io' leaf that freezes the
+  // spine-composed leaf command into this run's composed-exact allow set (1 task in this canned run).
+  workhorse: 20,
   // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + fold 2
   // (#141) pre-round SETUP GATHER (1 — run-dir mkdir + load-summary + coverage, folded Python-side;
   // the round-1 deferred tally reuses it, no extra leaf) + one panel round (run verify,

@@ -4498,6 +4498,13 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     const _leafPrompt = buildLeafPrompt({ wt, branch, task })
+    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
+    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
+    // prompt — and only within the run that composed it. Shelled through the showrunner permission
+    // seam (byte-exact hashing lives Python-side, matching evaluate()'s composed-exact check). Lazy
+    // require avoids the load-time cycle (build_phase's showrunner reference is already lazy); the
+    // seam is itself fail-open (UFR-2), so a record error never derails the build.
+    try { require('./showrunner.js')._recordComposed(generation, _leafPrompt) } catch (_e) { /* fail-open */ }
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt: _leafPrompt,
@@ -5429,6 +5436,42 @@ function _defaultDenialRecorder(reviewer, eventsPath) {
 // `let` exported by value would be a copy the caller could not rebind.
 const _denialSeam = { record: _defaultDenialRecorder }
 
+// Task 12 (FR-8, UFR-9 wiring): the spine's two permission_rules seams, run through the SAME io()
+// runHelper Python shim the denial recorder uses (works under node's fs-backed defaultIo AND under the
+// Workflow bundle's leaf-bash io — never a bare child_process/process reference the bundle guard bans).
+// The byte-exact hashing lives in Python (permission_rules._hash), so the JS side NEVER re-implements
+// it — it shells freeze_run_rules / record_composed so a recorded command's hash byte-equals evaluate()'s
+// composed-exact check. Both are best-effort + fail-open (UFR-2): a freeze/record error is swallowed and
+// the run proceeds (the allowance simply won't fire for that command → the existing prompt path).
+//
+// The lib dir goes on sys.path with the SAME repo-relative path the denial recorder uses (helpers run
+// from the repo/worktree root — the sanctioned runHelper contract; no __dirname in the bundle sandbox).
+function _permHelper(call, args) {
+  const script =
+    'import sys; sys.path.insert(0, "plugins/superheroes/lib"); import permission_rules; ' +
+    call
+  try {
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
+}
+// freeze_run_rules(run_id, cwd): snapshot the current provenance-valid rules for THIS run (a mid-run
+// edit is invisible to a run that already froze — UFR-9) + init the empty composed set + lazy-reap.
+function _defaultFreezeRunRules(runId, cwd) {
+  if (runId == null) return   // no active run -> nothing to freeze (FR-3: allowance inert)
+  _permHelper('permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2])',
+    [runId, cwd || procCwd()])
+}
+// record_composed(run_id, command): register a spine-composed leaf command in this run's frozen file so
+// evaluate() allows the leaf to run it byte-for-byte (FR-8), and only within the run that composed it.
+function _defaultRecordComposed(runId, command) {
+  if (runId == null || typeof command !== 'string' || !command) return
+  _permHelper('permission_rules.record_composed(sys.argv[1], sys.argv[2], sys.argv[3])',
+    [runId, command, procCwd()])
+}
+// Mutable holders so both seams are overridable (the smoke harness swaps in observers).
+const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
+
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -5614,6 +5657,17 @@ module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
 Object.defineProperty(module.exports, '_denialRecorder', {
   get() { return _denialSeam.record },
   set(fn) { _denialSeam.record = fn },
+})
+// Task 12 seams: overridable through mutable holders so an assignment (`sr._freezeRunRules = fn`,
+// `sr._recordComposed = fn`) rebinds what showrunner()/build_phase call. build_phase.js reaches
+// _recordComposed through this export (lazy require) so the smoke's override is honored there too.
+Object.defineProperty(module.exports, '_freezeRunRules', {
+  get() { return _permissionSeam.freeze },
+  set(fn) { _permissionSeam.freeze = fn },
+})
+Object.defineProperty(module.exports, '_recordComposed', {
+  get() { return _permissionSeam.recordComposed },
+  set(fn) { _permissionSeam.recordComposed = fn },
 })
 
 // The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
@@ -6394,6 +6448,16 @@ async function showrunner({ workItem }) {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
+  // Task 12 (FR-8, UFR-9): the moment the run's lease generation (the run_id) is known — reconcile
+  // has acquired/reconciled it — freeze the current provenance-valid rules ONCE for THIS run and init
+  // its empty composed-command set. A mid-run edit to rules.json is thereafter invisible to this run
+  // (UFR-9); the freeze also lazily reaps stale sibling run files. Fail-open (UFR-2): a freeze error
+  // is swallowed inside the seam and the run proceeds (allowance simply won't fire → prompt path).
+  // Grouped under its OWN 'permission-freeze' progress phase (NOT 'startup') so it never inflates
+  // the deliberately-two-leaf startup stretch (#118 budget): a single run-start bookkeeping leaf.
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
+  _permissionSeam.freeze(r.generation, procCwd())
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   // UFR-1: refuse to run if the spec hasn't been approved.
   const startupFacts = await readStartupState(workItem)
   const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
