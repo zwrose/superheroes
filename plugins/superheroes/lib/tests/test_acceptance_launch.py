@@ -545,12 +545,23 @@ def test_reap_group_by_pgid_already_empty_confirms_dead():
     pgid = _spawn_orphan_group()
     os.killpg(pgid, 9)
     deadline = time.monotonic() + 5
+    gone = False
     while time.monotonic() < deadline:
         try:
             os.killpg(pgid, 0)
         except ProcessLookupError:
+            gone = True
             break
+        except PermissionError:
+            # macOS: killpg(pgid, 0) on a killed-but-not-yet-reaped (zombie) group raises
+            # EPERM, not ESRCH — keep polling until init reaps it and ESRCH appears.
+            pass
         time.sleep(0.02)
+    if not gone:
+        import pytest
+        pytest.skip("platform never reported the killed group empty within the deadline "
+                    "(zombie-group killpg semantics); the unsignalable-group test covers "
+                    "the fail-closed branch deterministically")
     assert al.reap_group_by_pgid(pgid) is True
 
 
