@@ -87,3 +87,28 @@ def test_cli_emit_and_apply(tmp_path, capsys):
     assert pr.main(["apply", "--root", str(tmp_path), "--mode", "local"]) == 0
     applied = json.loads(capsys.readouterr().out)
     assert applied["ok"] and applied["added"] > 0
+
+
+def test_headless_tier_is_superset_with_floor_bounded_verbs():
+    scoped = pr.generate("/proj", "/wt", "/cache/")
+    headless = pr.generate_headless("/proj", "/wt", "/cache/")
+    assert set(scoped) <= set(headless)
+    assert "Bash(python3 *)" in headless and "Bash(git *)" in headless
+    # Never the gated-verb surface as a bare grant (enforcer floor is the backstop,
+    # but the tier itself must not name owner-authority verbs).
+    assert not any("merge" in r or "release" in r or "push" in r for r in headless)
+    assert headless == sorted(headless)
+
+
+def test_apply_headless_tier_writes_verb_rules(tmp_path):
+    out = pr.apply(str(tmp_path), "local", worktrees_root="/wt", cache_base="/cache/",
+                   tier="headless")
+    assert out["ok"]
+    import json as _json
+    data = _json.loads(open(out["path"]).read())
+    assert "Bash(git *)" in data["autoMode"]["allow"]
+    # scoped tier remains the default and stays tight
+    scoped_only = pr.apply(str(tmp_path / "other"), "local", worktrees_root="/wt",
+                           cache_base="/cache/")
+    data2 = _json.loads(open(_json.loads(_json.dumps(scoped_only))["path"]).read())
+    assert "Bash(git *)" not in data2["permissions"]["allow"]
