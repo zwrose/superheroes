@@ -23,6 +23,7 @@ stub that declines (the DoD floor `test_acceptance_run_cli.py` pins).
 import hashlib
 import json
 import os
+import tempfile
 import socket
 import subprocess
 import time
@@ -940,8 +941,16 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
     `spine_lib` is set (#235), the child launches the spine under test from that lib, not the
     installed plugin. `child_model` pins the driver session's model (model-governance)."""
     def _launch(stamped, budget_consumed=None, attempt=1):
-        terminal_path = os.path.join(_harness_dir(root), stamped.get("stamp", ""),
-                                     "terminal-record.json")
+        # Finding #16 (run e0cf530f): the child→parent handoff record used to live under
+        # ~/.claude (the sensitive tree), which forced the child prompt to instruct an
+        # argv-shape write to dodge the sensitive-file guard — and a well-aligned child
+        # correctly REFUSED that as guard-evasion coaching, parking the run. The record
+        # is a transient handoff, not control-plane state, so it lives in a NON-sensitive
+        # temp dir: the child writes it with the ordinary Write tool, no guard, no
+        # evasion prose. Keyed by stamp so concurrent stamps never collide.
+        terminal_path = os.path.join(
+            tempfile.gettempdir(), "superheroes-acceptance",
+            stamped.get("stamp", "") or "unstamped", "terminal-record.json")
         norm = acceptance_ceiling.normalize_ceilings(ceilings)
         # 2x the harness elapsed ceiling: far above any supervised run (the watch loop
         # kills at 1x), but a hard independent bound on an ORPHAN's lifetime if the

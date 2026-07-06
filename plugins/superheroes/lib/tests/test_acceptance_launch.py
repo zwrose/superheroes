@@ -234,15 +234,27 @@ _DEFAULT_PROMPT = _preamble(None) + (
     "run-outcome projection via plugins/superheroes/lib/run_readout.py's "
     "run_outcome(state) function over the run's end state, and write that projection "
     "as JSON to this exact path, creating parent directories as needed: /run/dir/terminal-record.json "
-    "— write it via a Bash python one-liner that takes the path as an ARGUMENT "
-    "(python3 -c 'import os,sys,json; os.makedirs(os.path.dirname(sys.argv[1]), "
-    "exist_ok=True); open(sys.argv[1],\"w\").write(sys.stdin.read())' <path> with the "
-    "JSON on stdin), NEVER the Write/Edit tools and never a shell mkdir naming the "
-    "path: the runtime's sensitive-file guard denies direct file-tool and literal-"
-    "path shell writes under ~/.claude regardless of permission rules (finding #13). "
+    "(a transient temp-dir handoff file the harness reads after you exit; the "
+    "ordinary Write tool is fine). "
     "Do not merge, release, or force-push anything — this run's changes are confined "
     "to the work-item's own branch and PR."
 )
+
+
+def test_launch_prompt_carries_no_guard_evasion_coaching():
+    # Finding #16 (run e0cf530f): a child correctly REFUSED a prompt that instructed a
+    # write technique *because* it evades the sensitive-file guard. The prompt must never
+    # coach guard evasion — no "sensitive-file guard", no "NEVER the Write tool", no
+    # argv-because-it-dodges framing.
+    for prompt in (
+        al.build_launch_prompt("wi", "/tmp/x/terminal-record.json"),
+        al.build_launch_prompt("wi", "/tmp/x/terminal-record.json",
+                               spine_lib="/lib", root="/root"),
+    ):
+        low = prompt.lower()
+        assert "sensitive-file guard" not in low
+        assert "never the write" not in low
+        assert "regardless of permission rules" not in low
 
 
 def test_build_launch_prompt_threads_explicit_fixture_dir_into_preamble():
