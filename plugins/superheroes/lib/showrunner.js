@@ -2718,6 +2718,13 @@ async function shipPhase(workItem, pr, generation) {
   const integrated = !!ready.integrated
   let ciChecks = ready.checks
   const MAX_CI_PASSES = 6
+  // Consecutive settle-leaf budget: each leaf waits ≤540s (the bash_timeout hook floors the
+  // Bash tool at 600000ms, so ONE leaf can never outwait a long CI run), and real target
+  // projects (weekly-eats, loupe) have CI well past 10 minutes. 4 rounds ≈ 36 min of total
+  // patience (≥2x a 15-min run). The counter resets whenever checks actually settle or a
+  // fix is pushed (a new CI run deserves fresh patience); MAX_CI_PASSES still bounds the loop.
+  const MAX_SETTLE_ROUNDS = 4
+  let settleRounds = 0
   for (let pass = 0; pass < MAX_CI_PASSES; pass += 1) {
     const parsed = parseCiChecks(ciChecks)
     if (parsed.error) {
@@ -2747,6 +2754,7 @@ async function shipPhase(workItem, pr, generation) {
       // not FIX. One bounded courier leaf does the whole wait (deterministic, journaled);
       // its budget (540s) sits under the Bash tool ceiling the bash_timeout hook floors
       // to 600000ms, so the CLI's own honest budget-exhausted return is always reachable.
+      settleRounds += 1
       let settled = null
       try {
         settled = await courier.runCourierJson(
@@ -2759,11 +2767,16 @@ async function shipPhase(workItem, pr, generation) {
       }
       if (!settled || settled.settled !== true) {
         if (settled && settled.checks && !Array.isArray(settled.checks) && settled.checks !== null) { ciChecks = settled.checks; continue }
+        if (settleRounds < MAX_SETTLE_ROUNDS && settled && Array.isArray(settled.checks)) {
+          ciChecks = settled.checks   // long CI run — another bounded round, budget above
+          continue
+        }
         const stillPending = (settled && Array.isArray(settled.checks))
           ? ciStatusTwin.classify(settled.checks).pending
           : (ciRes.pending || [])
         return park(workItem, pr, `CI checks still pending after the settle wait (${stillPending.join(', ')}) — confirm checks and re-run`)
       }
+      settleRounds = 0
       ciChecks = settled.checks
       continue
     }
@@ -2801,6 +2814,7 @@ async function shipPhase(workItem, pr, generation) {
       if (!pushed || !pushed.pushed || pushed.read_back === false) {
         return park(workItem, pr, `could not push the CI fix (${(pushed && pushed.reason) || 'unknown'}) — park, no false ready`)
       }
+      settleRounds = 0   // fresh CI run after the fix push — fresh settle patience
       ciChecks = pushed.checks
       continue
     }
