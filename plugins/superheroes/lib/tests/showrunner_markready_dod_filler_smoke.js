@@ -21,6 +21,15 @@ function run(plan) {
       if (out === 'transport') throw new Error('courier transport failure')
       return [{ ok: true, stdout: JSON.stringify(out) }]
     }
+    if (label === 'resolve review target') {
+      return [{ ok: true, stdout: JSON.stringify({ ok: true, worktree: '/wt-dod', expectedHead: 'h0' }) }]
+    }
+    if (label === 'wait for CI to settle') {
+      assert.ok(String(_prompt).includes('ci_settle_cli.py'), 'pre-propose settle runs the settle CLI')
+      assert.ok(String(_prompt).includes('--timeout-sec 540'), 'settle budget pinned under the Bash floor')
+      assert.ok(String(_prompt).includes("--worktree '/wt-dod'"), 'settle reads checks from the BUILD worktree — from the checkout root the stale guard short-circuits without waiting (PR #261 review)')
+      return [{ ok: true, stdout: JSON.stringify({ settled: true, waited_sec: 0.0, checks: [] }) }]
+    }
     if (label === 'fill-dod') {
       assert.ok(String(_prompt).includes('#77'), 'proposal prompt carries the PR number')
       assert.ok(String(_prompt).includes('OMIT it'), 'proposal prompt carries the honesty contract')
@@ -48,7 +57,9 @@ function run(plan) {
   let out = await sr.markReadyPhase('wi-dod')
   assert.strictEqual(out.phaseResult.confidence, 'high')
   assert.deepStrictEqual(out.sideEffect, { ready: true })
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'splice DoD dispositions', 'mark PR ready'])
+  assert.deepStrictEqual(labels, ['mark PR ready', 'resolve review target', 'wait for CI to settle', 'fill-dod', 'splice DoD dispositions', 'mark PR ready'])
+  // finding #12: the settle leg precedes the proposal so the "green CI" bullet is
+  // evidenceable — pending checks parked a fresh fast run at this gate (run fdfad511).
 
   // splice rejects everything -> no re-decide, the original DoD park reason survives.
   ;({ sr, labels } = run({
@@ -59,19 +70,19 @@ function run(plan) {
   out = await sr.markReadyPhase('wi-dod')
   assert.strictEqual(out.phaseResult.confidence, 'low')
   assert.ok(out.phaseResult.assumptions[0].includes('DoD gate'), 'park keeps the gate reason')
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'splice DoD dispositions'])
+  assert.deepStrictEqual(labels, ['mark PR ready', 'resolve review target', 'wait for CI to settle', 'fill-dod', 'splice DoD dispositions'])
 
   // proposal returns no rows -> no splice, no re-decide.
   ;({ sr, labels } = run({ gateSeq: [DOD_PARK], propose: { ok: true, rows: [] }, splice: { ok: true } }))
   out = await sr.markReadyPhase('wi-dod')
   assert.strictEqual(out.phaseResult.confidence, 'low')
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'])
+  assert.deepStrictEqual(labels, ['mark PR ready', 'resolve review target', 'wait for CI to settle', 'fill-dod'])
 
   // proposal leaf crash -> original park stands.
   ;({ sr, labels } = run({ gateSeq: [DOD_PARK], propose: 'crash', splice: { ok: true } }))
   out = await sr.markReadyPhase('wi-dod')
   assert.strictEqual(out.phaseResult.confidence, 'low')
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'])
+  assert.deepStrictEqual(labels, ['mark PR ready', 'resolve review target', 'wait for CI to settle', 'fill-dod'])
 
   // non-dod park never dispatches the fill leg.
   ;({ sr, labels } = run({ gateSeq: [{ ok: false, read_back: false, reason: 'PR isDraft unreadable — not flipping blind' }], propose: { ok: true, rows: [] }, splice: { ok: true } }))
@@ -87,7 +98,7 @@ function run(plan) {
   }))
   out = await sr.markReadyPhase('wi-dod')
   assert.strictEqual(out.phaseResult.confidence, 'high', 'stringified rows are coerced, not dropped')
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'splice DoD dispositions', 'mark PR ready'])
+  assert.deepStrictEqual(labels, ['mark PR ready', 'resolve review target', 'wait for CI to settle', 'fill-dod', 'splice DoD dispositions', 'mark PR ready'])
 
   // stringified ok:'false' is FALSE (a truthy-string trap) -> no splice, park stands.
   ;({ sr, labels } = run({
@@ -97,7 +108,7 @@ function run(plan) {
   }))
   out = await sr.markReadyPhase('wi-dod')
   assert.strictEqual(out.phaseResult.confidence, 'low')
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'], "ok:'false' never splices")
+  assert.deepStrictEqual(labels, ['mark PR ready', 'resolve review target', 'wait for CI to settle', 'fill-dod'], "ok:'false' never splices")
 
   // transport failure on the re-decide keeps the specific DoD park reason (not the generic).
   ;({ sr, labels } = run({
