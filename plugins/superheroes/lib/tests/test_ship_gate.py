@@ -124,3 +124,44 @@ def test_write_build_aborts_on_garbled_not_clobber(tmp_path):
     with pytest.raises(ship_gate.ProvenanceError):
         ship_gate.write_build(str(p), engine="subagent-driven-development", head=HEAD)
     assert p.read_text() == "{garbled"  # unchanged — never clobbered
+
+
+# --- Task 8: a denied substantive build step is incomplete evidence -> gate (UFR-6/UFR-8) ---
+
+def _clean_review(head):
+    return {"action": ship_gate._TERMINAL}
+
+
+def test_denied_build_step_gates_even_with_build_present():
+    prov = {"build": {"engine": "claude", "head": "abc"},
+            "review": {"covers": "abc"},
+            "buildDenials": [{"step": "task-3", "command": "python3 -c x"}]}
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc")
+    assert out["action"] == "gate"
+    assert "incomplete" in out["reason"] or "denied" in out["reason"]
+
+
+def test_clean_build_still_proceeds():
+    prov = {"build": {"engine": "claude", "head": "abc"}, "review": {"covers": "abc"}}
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc")
+    assert out["action"] == "proceed"
+
+
+def test_record_build_denial_appends_not_clobber(tmp_path):
+    p = str(tmp_path / "provenance.json")
+    ship_gate.write_build(p, engine="subagent-driven-development", head=HEAD)
+    ship_gate.record_build_denial(p, step="task-3", command="python3 -c x")
+    ship_gate.record_build_denial(p, step="task-4", command="node -e y")
+    prov = ship_gate.read_provenance(p)
+    assert prov["build"]["head"] == HEAD  # build evidence preserved
+    denials = prov["buildDenials"]
+    assert [d["step"] for d in denials] == ["task-3", "task-4"]
+    assert denials[0]["command"] == "python3 -c x"
+
+
+def test_record_build_denial_aborts_on_garbled_not_clobber(tmp_path):
+    p = tmp_path / "provenance.json"
+    p.write_text("{garbled")
+    with pytest.raises(ship_gate.ProvenanceError):
+        ship_gate.record_build_denial(str(p), step="task-3", command="python3 -c x")
+    assert p.read_text() == "{garbled"  # unchanged — never clobbered

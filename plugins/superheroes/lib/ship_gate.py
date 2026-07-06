@@ -49,6 +49,18 @@ def write_build(path, *, engine, head):
     return prov
 
 
+def record_build_denial(path, *, step, command):
+    """Record that a substantive build sub-step was denied by the 15-min timeout.
+
+    Read-modify-write: append to the `buildDenials` list (never clobber a sibling key or a
+    prior denial). A denial marks the build evidence incomplete/tainted so `decide` GATEs
+    (UFR-6/UFR-8) — the PR is held a draft even though the build step nominally "ran"."""
+    prov = read_provenance(path)
+    prov.setdefault("buildDenials", []).append({"step": step, "command": command})
+    control_plane.atomic_write(path, json.dumps(prov))
+    return prov
+
+
 def set_review_covers(path, head):
     """Record the HEAD review-code's clean exit covered (read-modify-write; never clobbers)."""
     prov = read_provenance(path)
@@ -70,6 +82,14 @@ def decide(provenance, review_result, head):
         return {"action": "gate",
                 "reason": "build provenance absent — subagent-driven-development did not run "
                           "(build bypassed)"}
+    # 1b. Denied build evidence (UFR-6 / UFR-8): a substantive build sub-step denied by the
+    # 15-min timeout means the build step "ran" but its evidence is incomplete/tainted. GATE
+    # so the PR stays a draft (reused draft-hold path via mark_ready_action / revert-draft).
+    denials = provenance.get("buildDenials") if isinstance(provenance, dict) else None
+    if denials:
+        return {"action": "gate",
+                "reason": "build evidence incomplete — a substantive build step was denied "
+                          "by the 15-min timeout (%d step(s))" % len(denials)}
     # 2. Review evidence (FR-1 / FR-2 / UFR-1 / UFR-3), reason keyed by action.
     action = review_result.get("action") if isinstance(review_result, dict) else None
     if action != _TERMINAL:
