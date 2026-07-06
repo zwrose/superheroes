@@ -64,6 +64,17 @@ def _record_dir(root):
     return _harness_dir(root)
 
 
+def _terminal_record_base():
+    """Shared base dir for the child->parent terminal-record handoff (finding #16),
+    `<tmp>/superheroes-acceptance/`. Per-stamp subdirs live directly under this base
+    (basename == the full stamp), so `real_discover_artifacts` can list this same base
+    alongside the harness/docs dir_bases and pick up a stranded handoff dir (from a run
+    that died before the launcher cleaned it up) as an ordinary `store-dir` artifact —
+    otherwise it would never be discovered or reaped (architecture review, PR #266
+    follow-up)."""
+    return os.path.join(tempfile.gettempdir(), "superheroes-acceptance")
+
+
 # --- reclaim / lease -----------------------------------------------------------------
 
 
@@ -547,13 +558,17 @@ def real_discover_artifacts(root):
     """
     def _discover(_stamp):
         artifacts = []
-        # Fixture DIRECTORY artifacts (both the legacy harness-dir location and the
-        # docs-resolved location real_materialize targets). Full paths as names: the
-        # stamp parses out of the basename for plan()'s routing, and reap gets the
-        # exact path to remove. Without this class, a run that dies between
+        # Fixture DIRECTORY artifacts: the legacy harness-dir location, the
+        # docs-resolved location real_materialize targets, AND the terminal-record
+        # handoff base (`_terminal_record_base`, finding #16/#266) the launcher writes
+        # its per-stamp handoff dir under — without that last base, a run that dies
+        # before the launcher's own cleanup strands a `0700` dir under `/tmp` that
+        # discovery would never see (this finding). Full paths as names: the stamp
+        # parses out of the basename for plan()'s routing, and reap gets the exact
+        # path to remove. Without the docs-dir base, a run that dies between
         # materialize and reap strands a pre-approved phantom work-item in the REAL
         # docs dir forever (premortem finding, PR #244).
-        dir_bases = [_harness_dir(root)]
+        dir_bases = [_harness_dir(root), _terminal_record_base()]
         try:
             import definition_doc
             probe = acceptance_fixture.make_stamp("0")
@@ -962,8 +977,7 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
         # The random stamp is itself the unguessable per-run token; the parent mints the
         # dir 0700 so a hostile local process on a shared /tmp cannot pre-plant or redirect
         # the handoff (security review PR #266). Read-back additionally rejects a symlink.
-        _term_dir = os.path.join(tempfile.gettempdir(), "superheroes-acceptance",
-                                 stamped.get("stamp", "") or "unstamped")
+        _term_dir = os.path.join(_terminal_record_base(), stamped.get("stamp", "") or "unstamped")
         try:
             os.makedirs(_term_dir, mode=0o700, exist_ok=True)
             os.chmod(_term_dir, 0o700)

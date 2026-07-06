@@ -237,6 +237,43 @@ def test_discover_lists_stranded_fixture_dirs_from_both_locations(monkeypatch):
         shutil.rmtree(fixture_dir, ignore_errors=True)
 
 
+def test_discover_lists_stranded_terminal_record_dir(monkeypatch):
+    """Architecture review (finding #16 follow-up): the launcher's child->parent
+    terminal-record handoff (finding #16/PR #266) lives under
+    `<tmp>/superheroes-acceptance/<stamp>/`, a base `real_discover_artifacts` never
+    listed — a run that dies before the launcher's own cleanup would strand that dir
+    forever, unreaped. Discovery must list `_terminal_record_base()` alongside the
+    harness/docs dir_bases so a stranded handoff dir is found and reaped like any other
+    stamped fixture dir."""
+    tmp_store = tempfile.mkdtemp()
+    tmp_root = tempfile.mkdtemp()
+    tmp_tempdir = tempfile.mkdtemp()
+    try:
+        _isolated_root(monkeypatch, tmp_store)
+        monkeypatch.setattr(deps.tempfile, "gettempdir", lambda: tmp_tempdir)
+        stamp = "accept-harness-feed0099"
+        stranded = os.path.join(tmp_tempdir, "superheroes-acceptance", stamp)
+        os.makedirs(stranded, mode=0o700)
+        with open(os.path.join(stranded, "terminal-record.json"), "w", encoding="utf-8") as fh:
+            fh.write("{}\n")
+        monkeypatch.setattr(deps, "_run", lambda argv, cwd=None: (0, "", ""))
+        discover = deps.real_discover_artifacts(tmp_root)
+        arts = discover(None)
+        dir_names = [a["name"] for a in arts if a["kind"] == "store-dir"]
+        assert stranded in dir_names
+        import acceptance_cleanup
+        planned = acceptance_cleanup.plan(arts, run_stamp=None)
+        assert {"kind": "store-dir", "name": stranded} in planned["reap"]
+        reap = deps.real_reap(tmp_root, lambda: None)
+        result = reap(planned)
+        assert stranded in result["cleaned_up"]
+        assert not os.path.isdir(stranded), "reap left the stranded terminal-record dir behind"
+    finally:
+        shutil.rmtree(tmp_store, ignore_errors=True)
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        shutil.rmtree(tmp_tempdir, ignore_errors=True)
+
+
 def test_reap_store_dir_failure_is_left_behind_not_silently_dropped(monkeypatch):
     """Review fix (PR #244 premortem, detectability): a failed fixture-dir removal must
     land in left_behind — never report a teardown that did not happen."""
