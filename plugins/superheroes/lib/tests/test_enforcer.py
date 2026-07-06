@@ -604,3 +604,24 @@ def test_unconditional_surfaces_still_deny_before_allowance(monkeypatch):
     assert enforcer.classify_command(": workhorse-enforcer-canary")[0] == "deny"
 
 
+# --- Task 6: hook threads cwd + run_id; selfcheck asserts the invariant (UFR-1) ---
+
+
+def test_hook_passes_cwd_and_run_id(monkeypatch):
+    seen = {}
+
+    def fake_classify(command, host="codex", in_scope=True, cwd=None, run_id=None):
+        seen.update(cwd=cwd, run_id=run_id)
+        return ("allow", "")
+
+    monkeypatch.setattr(enforcer, "classify_command", fake_classify)
+    monkeypatch.setattr(enforcer, "_active_run_id", lambda cwd: "RUN9")
+    payload = '{"tool_name":"Bash","tool_input":{"command":"python3 -m pytest"},"cwd":"/w"}'
+    enforcer.hook(payload, host="claude")
+    assert seen["cwd"] == "/w" and seen["run_id"] == "RUN9"
+
+
+def test_selfcheck_matrix_holds_with_allowance(monkeypatch):
+    assert enforcer.selfcheck() == 0   # the added assertions pass on a correct build
+
+
