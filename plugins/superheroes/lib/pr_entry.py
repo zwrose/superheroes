@@ -266,7 +266,14 @@ def main(argv=None):
                                   "reason": "DoD gate: PR body unreadable — fail closed"})); sys.exit(0)
             _dod = dod_gate.decide(_dod_bullets, _body or "", spec_present=_spec_present)
             if _dod["verdict"] == "park":
-                print(json.dumps({"ok": False, "read_back": False,
+                # "gate"/"pr" are machine fields for the bundle's mark-ready leg: the
+                # disposition-FILLER leaf (issue #228's "build/ship legs fill it" — found
+                # missing live in the 0.10.0 qualification) dispatches only when gate ==
+                # "dod", then this decider re-decides over the filled table. Matching on
+                # the reason STRING in JS would copy dod_gate's wording across the
+                # boundary (CONVENTIONS §11); this field is the single contract instead.
+                print(json.dumps({"ok": False, "read_back": False, "gate": "dod",
+                                  "pr": pr.get("number"),
                                   "reason": "DoD gate: %s" % _dod["reason"]})); sys.exit(0)
             n = str(pr["number"])
 

@@ -8557,17 +8557,62 @@ async function draftPRPhase(workItem) {
   return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
 }
 
-// mark-ready: one folded courier leaf returning {ok, read_back, reason?}.
-async function markReadyPhase(workItem) {
-  let out = null
+// fill-dod: the "build/ship legs fill it" leg from issue #228's own design — the draft-PR
+// step seeds the disposition table skeleton, and THIS model leaf fills it from the run's
+// real evidence before the gate decides. Found missing live in the 0.10.0 qualification:
+// with no filler leg, every spec carrying Definition-of-done bullets parked at mark-ready
+// unconditionally. Honesty contract: the leaf may mark a row done ONLY with a concrete
+// evidence pointer, deferred ONLY with an already-filed issue; a row it cannot evidence
+// stays blank so the (unchanged, fail-closed) gate parks with the same honest reason.
+async function fillDodDispositions(workItem, prNumber) {
   try {
-    out = await courier.runCourierJson(
-      'mark PR ready',
-      `python3 ${libPath('pr_entry.py')} --step mark-ready --work-item ${shq(workItem)}`,
-      { require: ['ok', 'read_back'], retryRealFailure: false },
-    )
+    return await agent(
+      `You are the DoD disposition-filler leg for work-item ${workItem} (issue #228). ` +
+      `The draft PR #${prNumber} carries a "DoD dispositions" table seeded from the spec's ` +
+      `Definition-of-done section, one row per bullet, dispositions blank. Fill it from REAL ` +
+      `run evidence, then stop.\n` +
+      `Steps:\n` +
+      `1. Spec: run python3 ${libPath('definition_doc.py')} path --work-item ${shq(workItem)} ` +
+      `--doc spec --root . and read the Definition-of-done bullets from that file.\n` +
+      `2. PR body: gh pr view ${shq(String(prNumber))} --json body.\n` +
+      `3. Evidence, per bullet — use only what actually exists: the PR diff ` +
+      `(gh pr diff ${shq(String(prNumber))}), the test-pilot status record (test-pilot-status.json ` +
+      `under the control-plane store for this work-item), the build/final-review records ` +
+      `(python3 ${libPath('build_state_cli.py')} gather --work-item ${shq(workItem)} --branch <the PR head branch>), ` +
+      `and CI check state.\n` +
+      `4. For each row: mark done + a concrete evidence pointer (command output, record path, ` +
+      `diff line), or deferred + an ALREADY-FILED issue number + one-line reason. NEVER invent ` +
+      `evidence or issue numbers; if a bullet has neither, LEAVE THE ROW BLANK. Edit ONLY the ` +
+      `disposition/evidence cells — the marker line and bullet text must stay byte-identical ` +
+      `(the gate matches rows by bullet text).\n` +
+      `5. Update the body: gh pr edit ${shq(String(prNumber))} --body-file <tempfile with the full updated body>.\n` +
+      `Return ONLY JSON {"ok": true, "filled": <n>, "blank": <n>} (ok=false with "reason" if you ` +
+      `could not read the spec or PR).`,
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
   } catch (_e) {
-    out = null   // courier transport failure — park, never crash the run
+    return null   // filler failure -> the gate re-run below is skipped; the original park stands
+  }
+}
+
+// mark-ready: gate courier leaf; on a DoD-table park (gate === 'dod', pr_entry's machine
+// field — never the reason string, CONVENTIONS §11), dispatch exactly ONE filler leg and
+// re-decide once. DoD-less runs (quick route, dispositions already filled) pay no extra leaf.
+async function markReadyPhase(workItem) {
+  const gate = async () => {
+    try {
+      return await courier.runCourierJson(
+        'mark PR ready',
+        `python3 ${libPath('pr_entry.py')} --step mark-ready --work-item ${shq(workItem)}`,
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
+    } catch (_e) {
+      return null   // courier transport failure — park, never crash the run
+    }
+  }
+  let out = await gate()
+  if (out && !out.ok && out.gate === 'dod' && out.pr != null) {
+    const filled = await fillDodDispositions(workItem, out.pr)
+    if (filled && filled.ok) out = await gate()
   }
   if (!out || !out.ok || !out.read_back) {
     return { phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'mark-ready gated'] }, sideEffect: null }
