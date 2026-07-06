@@ -114,11 +114,7 @@ async function __sh(cmd, opts) {
   // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
   // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
   var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
-  // COURIER_CONTEXT (courier_exec, single source of truth): honest-intent framing — the runtime
-  // safety classifier read base64 payloads + the no-narration rule as concealment (4/145 dispatches
-  // blocked, 2026-07-06 evidence run); stating the fidelity rationale in-prompt removes the
-  // hidden-intent signature while keeping the machine contract identical.
-  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command.' + __require('courier_exec').COURIER_CONTEXT + '\n\n' + __sc(cmd)
+  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd)
   // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
   // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
   // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both
@@ -2389,22 +2385,6 @@ function rootedCommand(command) {
   return "cd '" + root.replace(/'/g, "'\\''") + "' && " + command
 }
 
-// COURIER_CONTEXT: honest-intent framing appended to every courier lead (2026-07-06 evidence run:
-// the runtime safety classifier blocked 4/145 courier dispatches as "oversight evasion" — it read
-// the opaque base64 payloads plus the terse no-narration instruction as obfuscated + hidden-intent.
-// Both exist for FIDELITY, not concealment: base64 survives an LLM relay byte-exact, and narration
-// corrupts the caller's machine parse. Saying so, in the prompt, is the fix: the transport becomes
-// MORE transparent to oversight, and the false-positive signature — instructed-to-be-hidden — is
-// gone. The context rides INSIDE the lead paragraph: targetCommandPrompt requires the command to
-// follow the FIRST blank line, so it must not introduce one.)
-const COURIER_CONTEXT =
-  ' Context, so your instructions read as what they are: you are a courier leaf of the superheroes ' +
-  'showrunner, a user-authorized automated build pipeline; this dispatch and your answer are ' +
-  'journaled for the user to review, and nothing here is hidden from oversight. The stdout-only ' +
-  'rule exists because the orchestrator machine-parses your answer (narration or fencing corrupts ' +
-  'the parse), and any base64 content in the command is encoded solely so the payload survives ' +
-  'transit byte-exact — never to conceal it. Return only stdout:'
-
 // promptFor: the courier command prompt. opts.strict adds an explicit no-improvising clause for
 // state-changing single-command leaves (e.g. the lease release — live 2026-07-02 the park-path
 // release courier freestyled unscripted Bash and manually released the lease). The lead ALWAYS
@@ -2414,8 +2394,8 @@ function promptFor(command, opts) {
   const lead = (opts && opts.strict)
     ? 'Run exactly this command and return ONLY stdout, unchanged. Run ONLY this single command — ' +
       'do not run any other command, do not test, verify, explore, or re-run it, just execute the ' +
-      'one command below and return its stdout verbatim.' + COURIER_CONTEXT
-    : 'Run exactly this command and return ONLY stdout, unchanged.' + COURIER_CONTEXT
+      'one command below and return its stdout verbatim:'
+    : 'Run exactly this command and return ONLY stdout, unchanged:'
   return lead + '\n\n' + rootedCommand(command)
 }
 
@@ -2530,7 +2510,7 @@ function helperResult(s) {
 
 function markedPromptFor(command) {
   return 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
-    'Do not echo, fence, summarize, or describe the command.' + COURIER_CONTEXT + '\n\n' + rootedCommand(command)
+    'Do not echo, fence, summarize, or describe the command:\n\n' + rootedCommand(command)
 }
 
 function wrapMarkedCommand(command) {
@@ -2663,7 +2643,6 @@ async function runCourierBatchJson(label, commands, opts) {
 }
 
 module.exports = {
-  COURIER_CONTEXT,
   CourierTransportError,
   badCourierAnswer,
   extractJson,
