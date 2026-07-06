@@ -76,9 +76,9 @@ function exec(commands, label) {
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
 // `label` is the cosmetic display purpose (defaults to 'exec'); dumb-pipe routing rides the courier's
 // `courier: true` marker, so a descriptive label never loosens the cheapest-model pinning.
-async function execJson(cmd, label) {
+async function execJson(cmd, label, opts) {
   try {
-    return await courier.runCourierJson(label || 'exec', cmd)
+    return await courier.runCourierJson(label || 'exec', cmd, opts)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -155,18 +155,25 @@ function reconcileState(taskList, state) {
 
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
-  // UFR-1: refuse unless the tasks gate is passed. Read via `read-gate --json` ({"review": "..."})
-  // so the answer rides the fence-tolerant JSON leg (extractJson): the plain-string mode parked a
-  // live run when the courier fenced its verbatim answer (```\npassed\n```) — run 9, wf_b69571d9.
-  // Same consumption shape as showrunner.js readGate. null -> park (fail closed on exec-fail).
+  // UFR-1: refuse unless the tasks gate is passed. Read via `read-gate --json` ({"review": "..."}
+  // — produced by definition_doc.py; showrunner.js readGate is the other JS consumer of the field)
+  // so a FENCED-but-correct courier answer parses: the plain-string mode byte-compared a fenced
+  // 'passed' and false-parked (run 9, wf_b69571d9). Extraction is STRICT — the whole answer must
+  // BE the JSON, bare or in one fence (extractJsonStrict); the permissive extractJson brace-slice
+  // would let an answer that merely QUOTES {"review":"passed"} in prose OPEN the gate, and this
+  // gate must only ever fail closed. NOTE this is deliberately STRICTER than showrunner.js
+  // readGate's bare JSON.parse-or-'unreadable' (which guards a skip decision, not a build).
   const gateOut = await execJson(
     `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}" --json`,
     'read gate',
+    { extract: 'strict' },
   )
   if (gateOut == null) return park('could not read the tasks gate — failing closed')
   const gate = (gateOut && typeof gateOut.review === 'string') ? gateOut.review : null
   if (gate == null) return park('could not read the tasks gate — failing closed')
-  if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
+  // Clamp the untrusted courier-provided value at this sink: the reason flows into journal
+  // entries, readouts, and PR comments downstream.
+  if (gate !== 'passed') return park(`tasks gate not passed (${String(gate).slice(0, 80)}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
     `python3 ${libPath('build_entry.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,

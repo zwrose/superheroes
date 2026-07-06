@@ -215,7 +215,12 @@ function shellResponse(cmd) {
   }
   if (cmd.includes('definition_doc.py read-gate')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
-    return JSON.stringify({ review: gateStore[doc] || 'pending' })
+    const body = JSON.stringify({ review: gateStore[doc] || 'pending' })
+    // FENCE the build-phase read's answer (bare `--doc tasks` — the run-9 wf_b69571d9
+    // misbehavior): the whole-answer single fence must still parse under the gate read's strict
+    // extraction and the run must still reach ready. The front-half readGate (shq-quoted --doc)
+    // stays bare — its exec leg does a bare JSON.parse and fencing it is not this PR's scope.
+    return /--doc tasks /.test(cmd) ? '```json\n' + body + '\n```' : body
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
   if (cmd.includes('phase_progress_entry.py')) {

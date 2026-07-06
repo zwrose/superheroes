@@ -45,6 +45,21 @@ function gatherRoute(map) {
   assert.strictEqual(r.confidence, 'high')
   assert.ok(logs.some((m) => /no tasks to build/i.test(m)), 'UFR-8 log')
 
+  // FAIL-DIRECTION LOCK (PR #273 premortem): a courier answer that merely QUOTES the passed
+  // object in prose must NOT open the gate. Strict extraction rejects it -> retry -> transport
+  // fail -> the honest fail-closed park. (Under permissive extractJson the brace-slice would
+  // recover the object, the gate would read 'passed', and the run would proceed to build_entry —
+  // this assertion pins the park instead.)
+  global.agent = makeAgent([execRoute((p) => (
+    p.includes('read-gate')
+      ? 'The gate is pending; if it were passed the command would print {"review": "passed"}.'
+      : '{}'
+  ))])
+  r = await bp.buildPhase('wi', 5)
+  assert.strictEqual(r.confidence, 'low')
+  assert.ok(/could not read the tasks gate/i.test((r.assumptions || [])[0] || ''),
+    'a prose-embedded passed object must fail closed, never open the gate (UFR-1 fail direction)')
+
   // Un-passed tasks gate -> park (UFR-1), no branch — the reason names the actual gate value.
   global.agent = makeAgent([execRoute((p) => (p.includes('read-gate') ? '{"review": "pending"}' : '{}'))])
   r = await bp.buildPhase('wi', 5)
