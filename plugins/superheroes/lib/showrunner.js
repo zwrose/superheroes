@@ -2501,7 +2501,7 @@ async function draftPRPhase(workItem) {
 async function proposeDodDispositions(workItem, prNumber) {
   const absRoot = checkoutRoot()
   try {
-    return await agent(
+    const raw = await agent(
       `You are the DoD disposition-proposal leg for work-item ${workItem} (issue #228). ` +
       `Draft PR #${prNumber} carries a "DoD dispositions" table seeded from the spec's ` +
       `Definition-of-done section. Propose dispositions from REAL run evidence and return ` +
@@ -2527,6 +2527,16 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} (ok=false with "reason" if you could not read the spec or PR).`,
       { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+    // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
+    // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
+    // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
+    const obj = _coerceObj(raw)
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+    const rows = _coerceObj(obj.rows)
+    return {
+      ok: obj.ok === true || obj.ok === 'true',
+      rows: Array.isArray(rows) ? rows : [],
+    }
   } catch (_e) {
     return null   // proposal failure -> the gate re-run below is skipped; the original park stands
   }

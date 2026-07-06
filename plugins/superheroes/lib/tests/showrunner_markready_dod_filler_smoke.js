@@ -78,6 +78,27 @@ function run(plan) {
   out = await sr.markReadyPhase('wi-plain')
   assert.deepStrictEqual(labels, ['mark PR ready'])
 
+  // stringified leaf payload (ok:'true', rows:'[...]') still splices — boundary coercion
+  // (#115 class; observed live in proof run wf_a9654118: the leaf stringified both fields).
+  ;({ sr, labels } = run({
+    gateSeq: [DOD_PARK, { ok: true, read_back: true }],
+    propose: { ok: 'true', rows: JSON.stringify([{ bullet: 'bullet X', disposition: 'done', detail: 'evidence' }]) },
+    splice: { ok: true, filled: 1, rejected: [] },
+  }))
+  out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'high', 'stringified rows are coerced, not dropped')
+  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'splice DoD dispositions', 'mark PR ready'])
+
+  // stringified ok:'false' is FALSE (a truthy-string trap) -> no splice, park stands.
+  ;({ sr, labels } = run({
+    gateSeq: [DOD_PARK],
+    propose: { ok: 'false', rows: JSON.stringify([{ bullet: 'bullet X', disposition: 'done', detail: 'evidence' }]) },
+    splice: { ok: true },
+  }))
+  out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'low')
+  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'], "ok:'false' never splices")
+
   // transport failure on the re-decide keeps the specific DoD park reason (not the generic).
   ;({ sr, labels } = run({
     gateSeq: [DOD_PARK, 'transport'],
@@ -88,5 +109,5 @@ function run(plan) {
   assert.strictEqual(out.phaseResult.confidence, 'low')
   assert.ok(out.phaseResult.assumptions[0].includes('DoD gate'), 're-decide transport failure preserves the DoD reason')
 
-  console.log('ok: dod propose->splice->re-decide (happy, reject, empty, crash, non-dod, retry-transport)')
+  console.log('ok: dod propose->splice->re-decide (happy, reject, empty, crash, non-dod, stringified, ok-false-string, retry-transport)')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })
