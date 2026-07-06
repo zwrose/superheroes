@@ -301,20 +301,21 @@ function shellResponse(cmd) {
   // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] opaque base64 stage-write (stdout to
   // /dev/null) && the fenced_json.py helper, all one leaf. Decode the payload into the in-memory FS
   // FIRST so the helper's --payload-hash check sees the real staged bytes, then answer the helper.
-  const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
+  const cw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?$/)
   if (cw) {
-    files[JSON.parse(cw[2])] = Buffer.from(cw[3], 'base64').toString('utf8')
-    const out = runHelperResponse(cw[1])
+    files[cw[1]] = Buffer.from(cw[2], 'base64').toString('utf8')
+    const out = runHelperResponse(cw[3])
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
   // The OPAQUE write transport: base64 payload in a python heredoc, decoded byte-exact.
-  const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
-  if (bw) { files[JSON.parse(bw[1])] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
+  if (bw) { files[bw[1]] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
   // Legacy cat-heredoc write (pre-opaque bundles): body+'\n' lands on disk — model that
   // faithfully; the staged-hash checks tolerate exactly the one transport-appended newline.
   const w = cmd.match(/cat > '([^']+)' <<'__SR_EOF__'\n([\s\S]*)\n__SR_EOF__$/)
   if (w) { files[w[1]] = w[2] + '\n'; return '' }
   if (cmd.startsWith('mkdir -p')) return ''
+  if (/^python3 -c '[^']*os\.makedirs[^']*' '[^']*'$/.test(cmd)) return ''   // argv-shape mkdirp
   const r = cmd.match(/^cat '([^']+)'/)
   if (r) return files[r[1]] != null ? files[r[1]] : ''
   if (cmd.includes("'python3'")) {

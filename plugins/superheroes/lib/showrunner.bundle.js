@@ -17,6 +17,8 @@ function __leafLabel(p, fallback) {
   var m = p.match(/([\w-]+\.py)(?:\s+([a-z][\w-]*))?/)
   if (m) return m[2] ? m[1] + ' ' + m[2] : m[1]
   if (p.indexOf('cat > ') >= 0) return 'io:write'
+  if (p.indexOf('base64.b64decode') >= 0) return 'io:write'   // argv-shape writer (finding #13)
+  if (p.indexOf('os.makedirs') >= 0 && p.indexOf('b64decode') < 0) return 'io:mkdir'
   if (p.indexOf('mkdir -p') >= 0) return 'io:mkdir'
   if (p.indexOf('cat ') >= 0) return 'io:read'
   return fallback || 'lib'
