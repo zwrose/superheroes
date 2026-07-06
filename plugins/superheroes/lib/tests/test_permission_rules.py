@@ -12,7 +12,8 @@ def test_generate_shapes_are_project_scoped():
     assert "Bash(cd '/proj' && python3 *)" in rules
     assert "Bash(cd '/wt/'*)" in rules            # separator-anchored: '/wt-evil' never matches
     assert "Bash(python3 /cache/*)" in rules
-    assert "Bash(python3 - <<'__SR_EOF__'*)" in rules
+    assert "Bash(python3 -c 'import os,sys*)" in rules   # finding-#13 argv writer
+    assert "Bash(python3 - <<'__SR_EOF__'*)" in rules     # old-bundle compat only
     # No blanket verb grants: every rule is rooted, marker-anchored, or path-prefixed.
     assert not any(r in ("Bash(python3 *)", "Bash(rm *)", "Bash(git *)") for r in rules)
     assert rules == sorted(rules)

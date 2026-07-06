@@ -25,8 +25,9 @@ runs 2026-07-06, journal wf_4341ae7b + child sessions 028b4143/3dd3c3ed):
   - rooted compounds keep their `cd '<root>' && ` scoping in ONE full-compound
     rule (Claude Code splits compounds on && for per-atom matching, but a rule
     may also match the full compound string);
-  - the io-seam write anchors on the spine's own heredoc marker __SR_EOF__ —
-    distinctive, so the rule authorizes ONLY the spine's write protocol;
+  - the io-seam write anchors on its writer-script prefix (python3 -c 'import os,sys...'
+    — the finding-#13 argv transport); the __SR_EOF__ heredoc rule remains for cached
+    pre-argv bundles only;
   - un-rooted variants cover normal (non-eval) runs where __SR_ROOT is unset;
   - the plugin-cache prefix is version-agnostic (covers upgrades without regen).
 
@@ -75,6 +76,11 @@ def generate(root, worktrees_root=None, cache_base=None):
         # Un-rooted normal-run shapes (__SR_ROOT unset): lib CLIs from the plugin
         # cache (any version), the spine's own heredoc write protocol, io tmp ops.
         "Bash(python3 %s*)" % cache,
+        # The io-seam's CURRENT write shape: python3 -c '<writer>' <path> <b64> — the
+        # writer script starts 'import os,sys' (finding #13 argv transport).
+        "Bash(python3 -c 'import os,sys*)",
+        # Old-bundle compat ONLY: pre-argv cached bundles (<= 0.10.x heredoc transport)
+        # still emit the __SR_EOF__ heredoc write; drop once no cached bundle predates it.
         "Bash(python3 - <<'__SR_EOF__'*)",
         "Bash(mkdir -p /tmp/showrunner-*)",
         "Bash(cat /tmp/showrunner-*)",

@@ -163,24 +163,26 @@ function shellResponse(cmd) {
   // is composed Python-side via compose-terminal, and the content-mangle regression moved to that
   // self-verified inline path (see the compose-terminal handler in runHelperResponse). Any remaining
   // fenced write decodes honestly, then answers the helper.
-  const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
+  // argv shape (finding #13): python3 -c '<writer>' '<path>' '<b64>' >/dev/null && helper
+  const cw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?$/)
   if (cw) {
-    const helper = cw[1]
-    const staged = JSON.parse(cw[2])
-    files[staged] = Buffer.from(cw[3], 'base64').toString('utf8')
+    const helper = cw[3]
+    const staged = cw[1]
+    files[staged] = Buffer.from(cw[2], 'base64').toString('utf8')
     const out = runHelperResponse(helper)
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
   // The OPAQUE write transport (base64 python heredoc) — for the remaining standalone io.writeFile
   // leaves (test-pilot artifacts, last-extras). The write's answer is a conversational ack (mode 2).
-  const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
   if (bw) {
-    const target = JSON.parse(bw[1])
+    const target = bw[1]
     files[target] = Buffer.from(bw[2], 'base64').toString('utf8')
     counters.chattyAcks += 1
     return CHATTY_ACK   // (2) the write's answer is conversational, never the command's stdout
   }
   if (cmd.startsWith('mkdir -p')) return ''
+  if (/^python3 -c '[^']*os\.makedirs[^']*' '[^']*'$/.test(cmd)) return ''   // argv-shape mkdirp
   const r = cmd.match(/^cat '([^']+)'/)
   if (r) {
     if (files[r[1]] == null) { counters.proseReads += 1; return PROSE }   // (1)
