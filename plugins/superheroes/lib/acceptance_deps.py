@@ -767,7 +767,11 @@ def real_gh_reader(root, stamped):
     # is WAIT, not FAIL: poll the same single-shot read (bounded, local process — no
     # leaf ceiling applies) until nothing is pending, then judge. Exhausted budget
     # falls through with pending checks still not-green (fail-closed, same reason).
-    def _settled_read(timeout_sec=600.0, interval_sec=20.0, _sleep=None, _clock=None):
+    # 1800s default: real target projects (weekly-eats, loupe) run CI well past 10
+    # minutes, and this is a LOCAL poll — no leaf/Bash ceiling forces a short budget
+    # (unlike the spine's 540s courier legs). ≥2x a 15-min run per the budget-headroom
+    # rule; the harness's own elapsed ceiling still bounds the whole attempt.
+    def _settled_read(timeout_sec=1800.0, interval_sec=20.0, _sleep=None, _clock=None):
         sleep = _sleep or time.sleep
         clock = _clock or time.monotonic
         start = clock()
