@@ -60,6 +60,19 @@ def test_mark_ready_parks_with_bullet_named_when_unaddressed(monkeypatch, capsys
     assert "Reshape" in out["reason"]
 
 
+def test_mark_ready_dod_park_carries_machine_gate_field(monkeypatch, capsys):
+    # The bundle's filler leg (issue #228 "build/ship legs fill it", 0.10.0 qualification)
+    # keys on gate == "dod" + the pr number — machine fields, never the reason string
+    # (CONVENTIONS §11: dod_gate owns the wording; this field is the cross-boundary contract).
+    import dod_gate as _dg
+    body = _dg.seed_table_stub([B_LIVE, B_RESHAPE]) if hasattr(_dg, "seed_table_stub") else (
+        _dg.TABLE_MARKER + "\n\n| Bullet | Disposition | Evidence / issue |\n|---|---|---|\n"
+        + "".join("| %s |  |  |\n" % _dg.cellsafe(b) for b in (B_LIVE, B_RESHAPE)))
+    out = _drive_mark_ready(monkeypatch, capsys, spec=SPEC, body=body)  # blank rows -> dod park
+    assert out["ok"] is False and out.get("gate") == "dod"
+    assert out.get("pr") == 7
+
+
 def test_mark_ready_parks_when_no_table(monkeypatch, capsys):
     out = _drive_mark_ready(monkeypatch, capsys, spec=SPEC, body="a body with no disposition table")
     assert out["ok"] is False and "DoD gate" in out["reason"]

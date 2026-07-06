@@ -1,1 +1,1 @@
-{"input": [[[null]]], "expected": {"status": "red", "failing": ["unknown"]}}
+{"input": [[[null]]], "expected": {"status": "red", "failing": ["unknown"], "pending": []}}

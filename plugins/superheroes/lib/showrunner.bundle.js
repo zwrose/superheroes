@@ -1089,25 +1089,33 @@ module.exports = { planRound, isCrossCutting, confirmationFollowup, MAX_CONFIRMA
 // ===== ci_status.js =====
 __modules["ci_status"] = function (module, exports, require) {
 // plugins/superheroes/lib/ci_status.js
+// Parity twin of ci_status.py — green / red / pending / none. Pending is its own status
+// (0.10.0 qualification finding: pending-as-red made the ship loop dispatch a CI fixer at
+// checks that were merely running). Pending means WAIT, red means FIX, neither is green.
 const _PASS = new Set(['pass', 'success', 'skipping', 'skipped', 'neutral'])
+const _PENDING = new Set(['pending', 'queued', 'in_progress', 'expected', 'waiting', 'requested'])
 function _bucket(item) {
   if (!item || typeof item !== 'object') return 'unknown'
   return String(item.bucket || item.state || item.conclusion || 'unknown').toLowerCase()
 }
 function classify(checks) {
-  if (!Array.isArray(checks) || checks.length === 0) return { status: 'none', failing: [] }
+  if (!Array.isArray(checks) || checks.length === 0) return { status: 'none', failing: [], pending: [] }
   const failing = []
+  const pending = []
   let sawGating = false
   for (const item of checks) {
     const b = _bucket(item)
     const name = (item && typeof item === 'object') ? item.name : null
     if (b === 'skipping' || b === 'skipped' || b === 'neutral') continue
     sawGating = true
-    if (!_PASS.has(b)) failing.push(name || 'unknown')
+    if (_PASS.has(b)) continue
+    if (_PENDING.has(b)) pending.push(name || 'unknown')
+    else failing.push(name || 'unknown')
   }
-  if (failing.length) return { status: 'red', failing }
-  if (!sawGating) return { status: 'none', failing: [] }
-  return { status: 'green', failing: [] }
+  if (failing.length) return { status: 'red', failing, pending }
+  if (pending.length) return { status: 'pending', failing: [], pending }
+  if (!sawGating) return { status: 'none', failing: [], pending: [] }
+  return { status: 'green', failing: [], pending: [] }
 }
 module.exports = { classify }
 
@@ -8196,7 +8204,7 @@ async function runPhases(workItem, fromStep, deps) {
     } else if (phase === 'test-pilot') {
       phaseResult = await (deps.testPilot || defaultTestPilotPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'mark-ready') {
-      const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+      const r = await (deps.markReady || markReadyPhase)(workItem, deps.generation); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
       const doc = phase === 'review-plan' ? 'plan' : 'tasks'
       const r = await deps.reviewDoc(doc, workItem); phaseResult = r.phaseResult; gate = r.gate; persist = r.persist || null
@@ -8557,17 +8565,101 @@ async function draftPRPhase(workItem) {
   return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
 }
 
-// mark-ready: one folded courier leaf returning {ok, read_back, reason?}.
-async function markReadyPhase(workItem) {
-  let out = null
+// fill-dod: the "build/ship legs fill it" leg from issue #228's own design — the draft-PR
+// step seeds the disposition table skeleton; a MODEL leaf PROPOSES dispositions from the
+// run's real evidence, and the deterministic splice CLI (dod_fill_cli.py) holds the pen
+// (PR #251 review: a model rewriting the full body at a certification boundary risked
+// truncating the stubbed-seams disclosure, clobbering concurrent edits, and fabricating
+// evidence — the CLI touches only matching table cells, mechanically verifies deferred
+// issues resolve and path-shaped evidence exists, and read-back-confirms the write).
+// Honesty contract unchanged: a row the model cannot evidence is omitted, stays blank,
+// and the (unchanged, fail-closed) gate parks with the same honest reason.
+async function proposeDodDispositions(workItem, prNumber) {
+  const absRoot = checkoutRoot()
   try {
-    out = await courier.runCourierJson(
-      'mark PR ready',
-      `python3 ${libPath('pr_entry.py')} --step mark-ready --work-item ${shq(workItem)}`,
-      { require: ['ok', 'read_back'], retryRealFailure: false },
-    )
+    const raw = await agent(
+      `You are the DoD disposition-proposal leg for work-item ${workItem} (issue #228). ` +
+      `Draft PR #${prNumber} carries a "DoD dispositions" table seeded from the spec's ` +
+      `Definition-of-done section. Propose dispositions from REAL run evidence and return ` +
+      `them as JSON — you do NOT edit the PR yourself; a deterministic splice tool applies ` +
+      `your rows and mechanically verifies them.\n` +
+      `Work from the repo root at ${absRoot} (run every command from there).\n` +
+      `Steps:\n` +
+      `1. Spec: run python3 ${libPath('definition_doc.py')} path --work-item ${shq(workItem)} ` +
+      `--doc spec --root ${shq(absRoot)} and read the Definition-of-done bullets from that file.\n` +
+      `2. Current table: gh pr view ${shq(String(prNumber))} --json body.\n` +
+      `3. Evidence, per bullet — use only what actually exists: the PR diff ` +
+      `(gh pr diff ${shq(String(prNumber))}), the head branch (gh pr view ${shq(String(prNumber))} --json headRefName), ` +
+      `the build/final-review records (python3 ${libPath('build_state_cli.py')} gather ` +
+      `--work-item ${shq(workItem)} --branch <that headRefName>), the test-pilot status record ` +
+      `(test-pilot-status.json under the control-plane store for this work-item), and CI check state.\n` +
+      `4. For each bullet you can HONESTLY disposition: "done" needs a concrete evidence ` +
+      `pointer (command output, record path, diff line); "deferred" needs an ALREADY-FILED ` +
+      `issue number (#NNN) plus a one-line reason. NEVER invent evidence or issue numbers — ` +
+      `deferred issues are mechanically resolved against GitHub and path-shaped evidence is ` +
+      `existence-checked, so a fabricated row is rejected and the gate parks. If a bullet has ` +
+      `no real evidence, OMIT it (the row stays blank and the gate parks honestly).\n` +
+      `Return ONLY JSON {"ok": true, "rows": [{"bullet": "<bullet text exactly as it appears ` +
+      `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
+      `#NNN + reason>"}]} (ok=false with "reason" if you could not read the spec or PR).`,
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+    // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
+    // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
+    // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
+    const obj = _coerceObj(raw)
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+    const rows = _coerceObj(obj.rows)
+    return {
+      ok: obj.ok === true || obj.ok === 'true',
+      rows: Array.isArray(rows) ? rows : [],
+    }
   } catch (_e) {
-    out = null   // courier transport failure — park, never crash the run
+    return null   // proposal failure -> the gate re-run below is skipped; the original park stands
+  }
+}
+
+// mark-ready: gate courier leaf; on a DoD-table park (gate === 'dod', pr_entry's machine
+// field — never the reason string, CONVENTIONS §11): fence the lease (UFR-4 — the splice
+// is a PR-mutating boundary), ONE proposal leaf, ONE deterministic splice, ONE gate
+// re-decide. DoD-less runs (quick route, dispositions already filled) pay no extra leaf.
+async function markReadyPhase(workItem, generation) {
+  const gate = async () => {
+    try {
+      return await courier.runCourierJson(
+        'mark PR ready',
+        `python3 ${libPath('pr_entry.py')} --step mark-ready --work-item ${shq(workItem)}`,
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
+    } catch (_e) {
+      return null   // courier transport failure — park, never crash the run
+    }
+  }
+  let out = await gate()
+  if (out && !out.ok && out.gate === 'dod' && out.pr != null) {
+    const proposed = await proposeDodDispositions(workItem, out.pr)
+    if (proposed && proposed.ok && Array.isArray(proposed.rows) && proposed.rows.length) {
+      // UFR-4: the splice mutates the PR — fence the lease generation first, park on loss.
+      const fenced = generation == null ? true : await shipFenceOrPark(workItem, generation, checkoutRoot())
+      if (!fenced) {
+        return { phaseResult: { confidence: 'low', assumptions: ['lease lost before the DoD disposition splice — park (UFR-4)'] }, sideEffect: null }
+      }
+      let spliced = null
+      try {
+        const rowsPath = joinPath(io().tmpdir(), `showrunner-${workItem}-dod-rows.json`)
+        await io().writeFile(rowsPath, JSON.stringify(proposed.rows))
+        spliced = await courier.runCourierJson(
+          'splice DoD dispositions',
+          `python3 ${libPath('dod_fill_cli.py')} --pr ${shq(String(out.pr))} --rows ${shq(rowsPath)} --root .`,
+          { require: ['ok'], retryRealFailure: false },
+        )
+      } catch (_e) {
+        spliced = null   // splice transport failure -> original honest park stands
+      }
+      if (spliced && spliced.ok) {
+        const retry = await gate()
+        out = retry || out   // a transport failure on the re-decide keeps the specific DoD park reason
+      }
+    }
   }
   if (!out || !out.ok || !out.read_back) {
     return { phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'mark-ready gated'] }, sideEffect: null }
@@ -8702,6 +8794,15 @@ async function shipPhase(workItem, pr, generation) {
   const integrated = !!ready.integrated
   let ciChecks = ready.checks
   const MAX_CI_PASSES = 6
+  // Consecutive settle-leaf budget: each leaf waits ≤540s (the bash_timeout hook floors the
+  // Bash tool at 600000ms, so ONE leaf can never outwait a long CI run), and real target
+  // projects (weekly-eats, loupe) have CI well past 10 minutes. 4 rounds ≈ 36 min of total
+  // patience (≥2x a 15-min run) — per consecutive streak, and only fully grantable while
+  // MAX_CI_PASSES budget remains (fix rounds spend from the same pass budget). The counter
+  // resets whenever checks actually settle or a fix is pushed (a new CI run deserves fresh
+  // patience); MAX_CI_PASSES still bounds the loop.
+  const MAX_SETTLE_ROUNDS = 4
+  let settleRounds = 0
   for (let pass = 0; pass < MAX_CI_PASSES; pass += 1) {
     const parsed = parseCiChecks(ciChecks)
     if (parsed.error) {
@@ -8722,6 +8823,40 @@ async function shipPhase(workItem, pr, generation) {
     }
     if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
+    }
+    if (ciRes.status === 'pending') {
+      // The live-run settle-poll deferred from #120 (0.10.0 qualification finding: pending
+      // classified as red dispatched a CI fixer at checks that were merely running). CI
+      // re-runs are near-deterministic on spec-driven runs because the DoD fill leg edits
+      // the PR body and ci.yml's pull_request types include `edited` — pending is WAIT,
+      // not FIX. One bounded courier leaf does the whole wait (deterministic, journaled);
+      // its budget (540s) sits under the Bash tool ceiling the bash_timeout hook floors
+      // to 600000ms, so the CLI's own honest budget-exhausted return is always reachable.
+      settleRounds += 1
+      let settled = null
+      try {
+        settled = await courier.runCourierJson(
+          'wait for CI to settle',
+          `python3 ${libPath('ci_settle_cli.py')} --work-item ${shq(workItem)}${worktree ? ` --worktree ${shq(worktree)}` : ''} --timeout-sec 540`,
+          { require: ['settled'], retryRealFailure: false },
+        )
+      } catch (_e) {
+        return park(workItem, pr, 'CI status could not be read while waiting for checks to settle')
+      }
+      if (!settled || settled.settled !== true) {
+        if (settled && settled.checks && !Array.isArray(settled.checks) && settled.checks !== null) { ciChecks = settled.checks; continue }
+        if (settleRounds < MAX_SETTLE_ROUNDS && settled && Array.isArray(settled.checks)) {
+          ciChecks = settled.checks   // long CI run — another bounded round, budget above
+          continue
+        }
+        const stillPending = (settled && Array.isArray(settled.checks))
+          ? ciStatusTwin.classify(settled.checks).pending
+          : (ciRes.pending || [])
+        return park(workItem, pr, `CI checks still pending after the settle wait (${stillPending.join(', ')}) — confirm checks and re-run`)
+      }
+      settleRounds = 0
+      ciChecks = settled.checks
+      continue
     }
     let decided = null
     try {
@@ -8757,6 +8892,7 @@ async function shipPhase(workItem, pr, generation) {
       if (!pushed || !pushed.pushed || pushed.read_back === false) {
         return park(workItem, pr, `could not push the CI fix (${(pushed && pushed.reason) || 'unknown'}) — park, no false ready`)
       }
+      settleRounds = 0   // fresh CI run after the fix push — fresh settle patience
       ciChecks = pushed.checks
       continue
     }

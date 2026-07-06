@@ -81,6 +81,8 @@ SHOWRUNNER_SMOKES = [
     # #115 Task 16: draft-PR twin-boundary (adopt/create/gate via exec world-read + prAction twin).
     "plugins/superheroes/lib/tests/showrunner_draftpr_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ready_pr_readback_smoke.js",
+    # #228 mark-ready DoD filler leg: dod-park -> one filler -> one re-decide (0.10.0 qualification).
+    "plugins/superheroes/lib/tests/showrunner_markready_dod_filler_smoke.js",
     # #115 Task 17: startup overrides read + unconditional cheapest dumb-pipe pin (bundle wrapper).
     "plugins/superheroes/lib/tests/showrunner_task17_smoke.js",
     # #38 Task 12: reviewCodeLeaves engine branch (reviewer/synthesis read-only on reviewer engine,
@@ -128,6 +130,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
     # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).
     "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
+    # #120-deferred settle-poll: pending CI waits (bounded), never dispatches the fixer (0.10.0 qualification).
+    "plugins/superheroes/lib/tests/showrunner_ship_settle_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
     # #120: native ship-phase structured hand-back (FR-6/FR-7, scrubbed, best-effort delivery).
     "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",

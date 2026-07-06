@@ -1,0 +1,1 @@
+{"input": [[{"name": "validate", "bucket": "pending"}, {"name": "lint", "bucket": "pass"}]], "expected": {"status": "pending", "failing": [], "pending": ["validate"]}}
