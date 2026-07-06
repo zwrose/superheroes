@@ -19,7 +19,7 @@ import readout   # the band scrub seam
 EVENT_TYPES = {
     "run_started", "step_entered", "step_completed", "notify", "gate", "error",
     "resumed", "lease_acquired", "lease_reclaimed", "ci_fix_attempt", "parked",
-    "run_completed", "phase_record", "external_dispatch",
+    "run_completed", "phase_record", "external_dispatch", "permission_denied",
 }
 
 

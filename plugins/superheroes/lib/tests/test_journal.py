@@ -171,6 +171,22 @@ def test_journal_entry_cli_writes_external_dispatch_type(tmp_path, monkeypatch):
     assert evs[-1]["payload"]["engine"] == "codex"
 
 
+def test_permission_denied_is_a_valid_event_type(tmp_path):
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "permission_denied", step="build:task-3", detail={"command": "python3 -c x"})
+    lines = open(p).read().splitlines()
+    assert any('"type": "permission_denied"' in l for l in lines)
+
+
+def test_unknown_event_type_still_parks(tmp_path):
+    p = str(tmp_path / "events.jsonl")
+    try:
+        journal.append(p, "not_a_real_type")
+        assert False, "expected DurableWriteError"
+    except journal.DurableWriteError:
+        pass
+
+
 def test_journal_entry_cli_defaults_to_phase_record(tmp_path, monkeypatch):
     # Back-compat: NO --event-type -> phase_record (the existing behavior is byte-preserved).
     import json as _json
