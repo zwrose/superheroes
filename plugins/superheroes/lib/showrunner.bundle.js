@@ -5084,17 +5084,6 @@ async function execJson(cmd, label) {
   }
 }
 
-// Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
-// Retry once on an empty stdout; returns the trimmed string, or null after the retry.
-async function execText(cmd, label) {
-  try {
-    return (await courier.runCourierText(label || 'exec', cmd)).trim()
-  } catch (e) {
-    if (e instanceof courier.CourierTransportError) return null
-    throw e
-  }
-}
-
 // build_progress.reconcile via the module (NOT a destructured load-time binding) so reconcileState
 // calls THROUGH the module export — keeps the twin the single source AND makes it spy-able in smokes
 // (a testability improvement; the FR-4a entry-once property is re-asserted by spying reconcile).
@@ -5165,13 +5154,16 @@ function reconcileState(taskList, state) {
 
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
-  // UFR-1: refuse unless the tasks gate is passed. read-gate prints a PLAIN STRING (e.g. 'passed'),
-  // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
-  // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
-  const gate = await execText(
-    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+  // UFR-1: refuse unless the tasks gate is passed. Read via `read-gate --json` ({"review": "..."})
+  // so the answer rides the fence-tolerant JSON leg (extractJson): the plain-string mode parked a
+  // live run when the courier fenced its verbatim answer (```\npassed\n```) — run 9, wf_b69571d9.
+  // Same consumption shape as showrunner.js readGate. null -> park (fail closed on exec-fail).
+  const gateOut = await execJson(
+    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}" --json`,
     'read gate',
   )
+  if (gateOut == null) return park('could not read the tasks gate — failing closed')
+  const gate = (gateOut && typeof gateOut.review === 'string') ? gateOut.review : null
   if (gate == null) return park('could not read the tasks gate — failing closed')
   if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.

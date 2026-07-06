@@ -6,7 +6,7 @@ require('./_smoke_checkout_root.js')
 // #115 increment A: the IO leaves (read-gate, build_entry, task_list, gather, fence, journal,
 // record-reviewed, record-final-review, prov_entry, verify_command, minor_rollup) are ported to
 // exec(raw)+in-process-parse — they all route through the single 'exec' label, returning the exec
-// array shape [{index,ok,stdout}] with stdout a JSON STRING (read-gate is a PLAIN STRING). The stub
+// array shape [{index,ok,stdout}] with stdout a JSON STRING (read-gate rides --json too). The stub
 // inspects the exec PROMPT (which lists "N. <command>") to choose the stdout. model_tier is now an
 // in-process twin (no leaf) — its routes are gone.
 //
@@ -78,7 +78,7 @@ function execStub(map) {
 // standardLeaf: the stdout for the non-gather IO leaves common to a clean build (fence/journal/
 // record-reviewed/minor-rollup/record-final-review/verify_command/prov). prov can be made to fail.
 function standardLeaf(p, { provOk = true } = {}) {
-  if (p.includes('read-gate')) return 'passed'
+  if (p.includes('read-gate')) return '{"review": "passed"}'
   if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
   if (p.includes('fence_cli.py')) return JSON.stringify({ ok: true })
   if (p.includes('journal_entry.py')) return JSON.stringify({ ok: true })

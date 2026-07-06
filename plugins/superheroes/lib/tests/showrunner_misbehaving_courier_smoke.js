@@ -46,6 +46,9 @@ const CHATTY_ACK = 'Done! I successfully wrote the file as requested.'
 
 const files = Object.create(null)
 const usableCalls = Object.create(null)
+// Stateful mini gate store (see stretch_budget smoke): pending until the chained set-gate flips
+// it — read-gate rides --json on BOTH the front-half and build_phase reads post run-9 fix.
+const gateStore = { plan: 'pending', tasks: 'pending' }
 const counters = { proseReads: 0, chattyAcks: 0, sabotagedWrites: 0, mangledAnswers: 0,
                    fencedHelpers: 0, releaseImprovised: 0, releaseCalls: 0 }
 
@@ -211,7 +214,8 @@ function shellResponse(cmd) {
     return JSON.stringify({ usable: usableCalls[doc] > 1, recorded: 'x', expected: 'x', missing_sections: [], placeholder: false })
   }
   if (cmd.includes('definition_doc.py read-gate')) {
-    return cmd.includes('--json') ? JSON.stringify({ review: 'pending' }) : 'passed'
+    const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
+    return JSON.stringify({ review: gateStore[doc] || 'pending' })
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
   if (cmd.includes('phase_progress_entry.py')) {
@@ -255,6 +259,9 @@ const COURIER_JSON = {
     if (/set-gate/.test(prompt) && !/--expected-hash 'current'/.test(prompt)) {
       throw new Error('set-gate rode a runtime-computed hash — courier-read text entered a fence')
     }
+    // Chained set-gate flips the mini gate store (see gateStore comment above).
+    const sg = String(prompt).match(/set-gate --doc '?(plan|tasks)'?[\s\S]*?--review '?([a-z-]+)'?/)
+    if (sg) gateStore[sg[1]] = sg[2]
     return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
   },
   'save round state': () => JSON.stringify({ ok: true }),

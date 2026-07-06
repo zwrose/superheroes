@@ -83,7 +83,7 @@ function verifyGateStub(cmd, result = 'pass') {
 // controls the UFR-4 engine_authz.py test-dispatch preflight verdict; `authzCalls` counts it (cached
 // per run -> must fire exactly once even across multiple dispatches in the same process instance).
 function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = {}) {
-  if (p.includes('read-gate')) return 'passed'
+  if (p.includes('read-gate')) return '{"review": "passed"}'
   if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
   if (p.includes('engine_authz.py test-dispatch')) {
     if (authzCalls) authzCalls.n += 1

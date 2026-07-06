@@ -58,9 +58,13 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     // substring. The 'resolve review target' gather embeds build_entry.py + review_code_config.py in
     // its python -c script, so a p.includes('build_entry.py') check would mis-handle it (returning the
     // build-setup shape and failing its require:['ok']); label matching avoids that class of collision.
-    // buildPhase's 'read gate' leaf (execText) wants plain 'passed'; the front-half readGate (execJson,
-    // --json) parses 'passed' as non-JSON and falls back to 'unreadable', as it did under bare 'exec'.
-    if (label === 'read gate') return [{ index: 0, ok: true, stdout: 'passed' }]
+    // Both gate reads ride --json now (run-9 fenced-answer fix): buildPhase's UFR-1 entry read wants
+    // {"review":"passed"} to build; the front-half readGate shares the label. The build read's --doc
+    // is BARE (`--doc tasks`), the front-half's is shq-quoted (`--doc 'plan'`) — route the front-half
+    // to 'unreadable'-equivalent (non-JSON) to preserve this smoke's pre-fix front-half behavior.
+    if (label === 'read gate') {
+      return [{ index: 0, ok: true, stdout: /--doc tasks /.test(p) ? '{"review": "passed"}' : 'passed' }]
+    }
     if (label === 'prepare build') return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
     if (label === 'read tasks') return [{ index: 0, ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
     if (label === 'fence lease') return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
