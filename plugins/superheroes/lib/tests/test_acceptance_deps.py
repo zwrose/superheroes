@@ -169,6 +169,27 @@ def test_real_run_outcome_derives_phases_from_durable_journal_not_terminal_json(
     assert out["phases"] == ["plan", "review-plan", "ship"]
 
 
+def test_real_run_outcome_rejects_symlink_handoff(tmp_path):
+    # Security review PR #266: a symlink at the handoff path could redirect a planted
+    # record into the release-gating verdict — reject it, never follow it.
+    real = tmp_path / "planted.json"
+    real.write_text(json.dumps({"status": "ready", "checks": "green"}), encoding="utf-8")
+    link = tmp_path / "terminal-record.json"
+    os.symlink(real, link)
+    out = deps.real_run_outcome(str(tmp_path), lambda: None)(str(link))
+    assert out["terminal"] == "parked"
+    assert out["failure_kind"] == "terminal-record-symlink-rejected"
+
+
+def test_real_run_outcome_unlinks_handoff_after_read(tmp_path):
+    # Finding #2: the transient handoff must not linger after the parent reads it.
+    rec = tmp_path / "terminal-record.json"
+    rec.write_text(json.dumps({"status": "ready", "checks": "green"}), encoding="utf-8")
+    out = deps.real_run_outcome(str(tmp_path), lambda: None)(str(rec))
+    assert out["terminal"] == "ready"
+    assert not rec.exists()
+
+
 def test_real_run_outcome_no_required_checks_is_not_claimed_green():
     d = tempfile.mkdtemp()
     try:
@@ -488,6 +509,34 @@ def test_real_launcher_threads_owner_configured_ceilings(monkeypatch):
 
     assert captured["ceilings"]["elapsed_sec"] == 7.0
     assert captured["ceilings"]["spend"] == 5_000_000.0
+
+
+def test_real_launcher_terminal_path_is_non_sensitive(monkeypatch):
+    # Finding #16: the child→parent handoff record must NOT live under ~/.claude (the
+    # sensitive tree) — that forced the guard-evasion prompt a child correctly refused.
+    import tempfile
+    captured = {}
+
+    def fake_factory(stamped, terminal_path=None, **kw):
+        captured["terminal_path"] = terminal_path
+        class _C:
+            def terminal_location(self):
+                return terminal_path
+        return _C()
+
+    def fake_run(stamped, ceilings, child_factory, *a, **kw):
+        child_factory()   # trigger the factory so terminal_path is built
+        return {"outcome": "exited", "terminal_location": captured["terminal_path"],
+                "spend_partial": False, "spend": None, "elapsed_sec": 0.0}
+
+    monkeypatch.setattr(deps.acceptance_launch, "_default_child_factory", fake_factory)
+    monkeypatch.setattr(deps.acceptance_launch, "_set_live_child", lambda c: None)
+    monkeypatch.setattr(deps.acceptance_launch, "run", fake_run)
+    deps.real_launcher("/repo/root")({"stamp": "s9", "work_item": "accept-harness-z"})
+
+    tp = captured["terminal_path"]
+    assert tp.startswith(tempfile.gettempdir())
+    assert ".claude" not in tp and "s9" in tp and tp.endswith("terminal-record.json")
 
 
 def test_real_spend_sampler_reads_measured_token_telemetry(tmp_path):
