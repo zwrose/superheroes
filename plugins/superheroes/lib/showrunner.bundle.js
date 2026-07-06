@@ -8636,6 +8636,21 @@ async function markReadyPhase(workItem, generation) {
   }
   let out = await gate()
   if (out && !out.ok && out.gate === 'dod' && out.pr != null) {
+    // Settle CI BEFORE the proposal leaf (finding #12, run fdfad511: the fixture's
+    // "green CI" DoD bullet is undissposable while the draft PR's checks are still
+    // running — a fast spine reaches this gate ~2 min after opening the PR, the leaf
+    // honestly omits the bullet, and the run parks on a race, not a defect). Pending
+    // is WAIT, not FIX (#11); the settle CLI returns immediately when nothing is
+    // pending, so the common case costs one instant leaf. Best-effort: a settle
+    // transport failure or exhausted budget falls through to the proposal — the leaf
+    // then evidences what it can and the gate stays honest.
+    try {
+      await courier.runCourierJson(
+        'wait for CI to settle',
+        `python3 ${libPath('ci_settle_cli.py')} --work-item ${shq(workItem)} --timeout-sec 540`,
+        { require: ['settled'], retryRealFailure: false },
+      )
+    } catch (_e) { /* best-effort wait — the propose leaf re-reads check state itself */ }
     const proposed = await proposeDodDispositions(workItem, out.pr)
     if (proposed && proposed.ok && Array.isArray(proposed.rows) && proposed.rows.length) {
       // UFR-4: the splice mutates the PR — fence the lease generation first, park on loss.
