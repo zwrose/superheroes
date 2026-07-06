@@ -41,12 +41,14 @@ through the same cleanup → fail-verdict-naming-the-error → record write → 
 """
 import os
 import json
+import signal
 
 import acceptance_reclaim
 import acceptance_verdict
 import acceptance_cleanup
 import acceptance_retry
 import acceptance_result
+import acceptance_launch
 
 
 def nesting_refusal(env):
@@ -64,6 +66,119 @@ def nesting_refusal(env):
             "reason": "refusing to nest: already inside a showrunner/acceptance run",
         }
     return {"refuse": False, "reason": "top-level invocation; safe to proceed"}
+
+
+class _SignalTermination(Exception):
+    """Raised in the main thread by the harness's SIGTERM/SIGINT handler so an in-flight run
+    unwinds through `invoke`'s teardown/record path instead of the process dying with the
+    child group orphaned (issue #245).
+
+    Before #245 no signal handler existed anywhere in the harness stack: a SIGTERM to the
+    harness process (observed live during the 0.10.0 qualification) exited WITHOUT killing the
+    child group or running teardown. Carries the live child handle captured AT signal-delivery
+    time (while the launcher's watch loop is still on the stack and the live-child slot is
+    populated), so the except path can hard-kill the group even after the launcher has unwound.
+    """
+
+    def __init__(self, signum, child=None):
+        super().__init__("terminated by signal %s" % signum)
+        self.signum = signum
+        self.child = child
+
+
+def _termination_handler(signum, frame):
+    """SIGTERM/SIGINT handler: capture the live child, DISARM further termination signals so a
+    second signal can't re-enter teardown mid-kill (kill-unconfirmed double-report guard), then
+    raise `_SignalTermination` so the main thread unwinds through `invoke`'s except path — which
+    runs the EXISTING hard-kill + teardown + record machinery. Deliberately minimal: the actual
+    reap happens on the main stack in the except path, not inside this async handler."""
+    child = acceptance_launch.current_live_child()
+    # Disarm: while teardown runs, ignore further SIGTERM/SIGINT so the bounded kill completes
+    # and records exactly once. Bounded work (escalation ~seconds, reaps have subprocess
+    # timeouts) makes ignoring the operator's second signal an acceptable tradeoff for a clean,
+    # single teardown/record over a second ungraceful death.
+    try:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except (ValueError, OSError):
+        pass
+    raise _SignalTermination(signum, child)
+
+
+def _install_termination_handlers():
+    """Install the SIGTERM/SIGINT handlers routing through `invoke`'s teardown path; return a
+    zero-arg `restore()` that puts the previous handlers back. No-op (returns a no-op restore)
+    when not on the main thread, where `signal.signal` is unavailable — the launcher's finite
+    bg-wait ceiling (PR #244) remains the backstop there."""
+    try:
+        prev_term = signal.signal(signal.SIGTERM, _termination_handler)
+        prev_int = signal.signal(signal.SIGINT, _termination_handler)
+    except (ValueError, OSError):
+        return lambda: None
+
+    def restore():
+        try:
+            signal.signal(signal.SIGTERM, prev_term)
+            signal.signal(signal.SIGINT, prev_int)
+        except (ValueError, OSError):
+            pass
+
+    return restore
+
+
+def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
+                         orphan_record_path, prior_unsafe=False):
+    """Route a caught `_SignalTermination` through the EXISTING kill+teardown+record path
+    (issue #245): hard-kill the live child group FIRST (reusing `_hard_kill_group`), then apply
+    the same kill-unconfirmed quarantine semantics the ceiling-kill path uses today — an
+    unconfirmed group kill records `kill-unconfirmed`, SKIPS artifact cleanup, quarantines the
+    lease, and holds it; a confirmed-dead group tears down normally and releases the lease.
+
+    `prior_unsafe` (PR #246 review, premortem blocker): when the just-returned launcher already
+    reported an UNCONFIRMED kill, the live-child slot was cleared as `run()` unwound, so the
+    handler captured `child=None` and this call cannot re-confirm the group dead. Honoring the
+    prior unsafe verdict keeps the quarantine (skip cleanup, hold+quarantine the lease) — a
+    signal must never DOWNGRADE an unconfirmed kill into full deletion + lease release.
+
+    The single record's reason is the honest "terminated by signal". No parallel path is built:
+    the reap uses `acceptance_launch._hard_kill_group`, cleanup uses `_unsafe_kill_teardown` /
+    `_teardown`, and the record/lease go through `_finalize` — exactly as steps 7–9 do."""
+    confirmed = True
+    if child is not None:
+        confirmed = acceptance_launch._hard_kill_group(child)
+    unsafe_kill = (not confirmed) or prior_unsafe
+    reason = "terminated by signal"
+    if unsafe_kill:
+        reason += " but the process group was not confirmed dead; cleanup skipped"
+
+    try:
+        if unsafe_kill:
+            teardown = _unsafe_kill_teardown(dead_run_teardown, stamp)
+        else:
+            teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
+    except Exception as td_exc:
+        teardown = {"cleaned_up": [], "left_behind": [],
+                    "note": "teardown also failed: %s" % td_exc}
+
+    if unsafe_kill and callable(deps.get("quarantine_lease")):
+        try:
+            deps["quarantine_lease"](stamp)
+        except Exception:
+            pass
+
+    record_path = None
+    try:
+        record_path = _finalize(
+            deps, "fail", reason, None, attempts, len(attempts) > 1, teardown,
+            run_stamp=stamp, release_lease=not unsafe_kill, spine_provenance=prov)
+    except Exception:
+        record_path = None
+    return {
+        "verdict": "fail",
+        "report": _report("fail", reason, record_path, teardown,
+                          orphan_record_path=orphan_record_path, spine_provenance=prov),
+        "record_path": record_path,
+    }
 
 
 def _spine_provenance(deps):
@@ -165,6 +280,25 @@ def invoke(deps):
     # Resolve once up front so it is available on every exit path, including the except
     # branch below (the record itself picks it up independently via `_record_payload`).
     prov = _spine_provenance(deps)
+    # Signal-path state (issue #245 review). `unsafe`: the latest launch reported an
+    # UNCONFIRMED kill — a signal arriving after the launcher returned (live-child slot already
+    # cleared → handler captures child=None) must NOT downgrade that quarantine into deletion.
+    # `finalized`/`result`: this invocation already wrote its terminal record + handled the
+    # lease — a signal in the return-construction window must not re-teardown/re-write/re-release.
+    sig_state = {"unsafe": False, "finalized": False, "result": None}
+
+    def _mark_finalized():
+        # Fired by `_finalize` the instant the record is durably written, BEFORE the lease
+        # release — so a signal during release/report can never re-finalize (double record /
+        # double lease release).
+        sig_state["finalized"] = True
+
+    def _final(result):
+        # Stash the true result (and belt-and-braces mark finalized) so a signal landing in the
+        # return-construction window echoes it instead of re-running teardown/record.
+        sig_state["finalized"] = True
+        sig_state["result"] = result
+        return result
 
     try:
         # 1. Reclaim / refuse a prior in-flight run.
@@ -182,14 +316,17 @@ def invoke(deps):
                         writer=writer, spine_provenance=prov)
                 except Exception:
                     record_path = None
-            return {
+            # The refusal record is written and the OTHER holder's lease is intentionally held;
+            # a signal after this must not re-teardown/reclaim it, so mark finalized now.
+            sig_state["finalized"] = True
+            return _final({
                 "verdict": "fail",
                 "report": _report(
                     "fail", reason, record_path, None, spend_partial=True,
                     unwritten_record_note="NOT WRITTEN (prior run lease still held)",
                     spine_provenance=prov),
                 "record_path": record_path,
-            }
+            })
         # UFR-8: sweep any leftover accepted-stamp artifacts before this invocation launches.
         # This covers both a confirmed-dead lease holder and a lease-free checkout whose prior
         # completed invocation wrote a record but failed to reap everything.
@@ -214,19 +351,21 @@ def invoke(deps):
             reason = "preflight refused the fixture: %s" % pf.get("reason", "prerequisite not met")
             teardown = _merge_teardown(dead_run_teardown, _teardown(deps, stamp))
             record_path = _finalize(deps, "fail", reason, None, [], False, teardown,
-                                    run_stamp=stamp, spine_provenance=prov)
-            return {
+                                    run_stamp=stamp, spine_provenance=prov,
+                                    on_recorded=_mark_finalized)
+            return _final({
                 "verdict": "fail",
                 "report": _report("fail", reason, record_path, teardown,
                                   orphan_record_path=orphan_record_path,
                                   spine_provenance=prov),
                 "record_path": record_path,
-            }
+            })
 
         # 4-6. Launch attempt 1, judge, and retry once on a confidently-environmental failure.
         budget_consumed = {"elapsed_sec": 0.0, "spend": 0.0}
         attempt = 1
         launch, outcome, verdict = _run_one_attempt(deps, stamped, budget_consumed, attempt)
+        sig_state["unsafe"] = launch.get("teardown_safe") is False
         attempts.append(_attempt_record(stamp, launch, verdict))
 
         pre_retry_cleanup_failed = False
@@ -263,6 +402,7 @@ def invoke(deps):
                     attempt = 2
                     launch, outcome, verdict = _run_one_attempt(
                         deps, stamped, budget_consumed, attempt)
+                    sig_state["unsafe"] = launch.get("teardown_safe") is False
                     attempts.append(_attempt_record(stamp, launch, verdict))
 
         # 7. Teardown — runs on every exit path (ready, parked, killed). When the pre-retry
@@ -297,17 +437,41 @@ def invoke(deps):
             run_stamp=stamp,
             release_lease=not unsafe_kill,
             spine_provenance=prov,
+            on_recorded=_mark_finalized,
         )
 
         # 10. Render the single verdict report.
-        return {
+        return _final({
             "verdict": verdict["verdict"],
             "report": _report(verdict["verdict"], verdict["reason"], record_path, teardown,
                               spend_partial=launch.get("spend_partial"),
                               orphan_record_path=orphan_record_path,
                               spine_provenance=prov),
             "record_path": record_path,
-        }
+        })
+
+    except _SignalTermination as sig_exc:
+        # SIGTERM/SIGINT arrived (issue #245). Two guards, both from the PR #246 review:
+        # (a) if the invocation already finalized (record written, lease handled), a signal in
+        #     the return-construction window must NOT re-teardown / rewrite the record / re-release
+        #     the lease — echo the already-computed result.
+        if sig_state["finalized"]:
+            return sig_state["result"] or {
+                "verdict": "fail",
+                "report": "run terminated by signal after its record was already written",
+                "record_path": locals().get("record_path")}
+        # (b) hard-kill the live child group captured by the handler, then route through the SAME
+        #     kill+teardown+record machinery. `prior_unsafe` carries a just-returned UNCONFIRMED
+        #     kill so a signal in the post-launch window can never DOWNGRADE that quarantine into
+        #     full deletion + lease release (premortem blocker): treat it as unsafe even though
+        #     the handler captured child=None.
+        prior_unsafe = bool(sig_state["unsafe"]) or (
+            isinstance(locals().get("launch"), dict)
+            and locals()["launch"].get("teardown_safe") is False)
+        return _terminate_by_signal(
+            deps, sig_exc.child, stamp, attempts,
+            locals().get("dead_run_teardown"), prov, orphan_record_path,
+            prior_unsafe=prior_unsafe)
 
     except Exception as exc:
         # Fail-CLOSED: any internal error still teardowns and yields a fail naming the error.
@@ -424,17 +588,24 @@ def _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
 
 def _finalize(deps, verdict, reason, spend, attempts, retried, teardown,
               spend_partial=False, elapsed_sec=0.0, pr_link="", phases=None,
-              run_stamp=None, release_lease=True, spine_provenance=None):
+              run_stamp=None, release_lease=True, spine_provenance=None, on_recorded=None):
     """Write the single record, then release the lease ONLY after a durable write.
 
     If `write_record` raises, the lease is NOT released (held so the UFR-8 backstop stays
     armed) and the failure propagates to the caller as a fail. Returns the record path.
+
+    `on_recorded` (PR #246 review) fires RIGHT AFTER the record is durably written and BEFORE
+    the lease release, so `invoke` can mark itself finalized inside that gap — closing the
+    window where a signal arriving during `release_lease()` (or the subsequent report render)
+    would otherwise re-enter teardown and double-write the record / double-release the lease.
     """
     record = _record_payload(deps, verdict, reason, spend, attempts, retried, teardown,
                              spend_partial=spend_partial, elapsed_sec=elapsed_sec,
                              pr_link=pr_link, phases=phases, run_stamp=run_stamp,
                              spine_provenance=spine_provenance)
     record_path = deps["write_record"](record)
+    if callable(on_recorded):
+        on_recorded()
     # Only after the record is durably written do we release the lease.
     if release_lease:
         deps["release_lease"]()
@@ -526,7 +697,24 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
     else:
         deps = deps_builder(args.fixture, args.root)
 
-    result = invoke(deps)
+    # Install SIGTERM/SIGINT handlers so an ungraceful harness termination routes through
+    # invoke's kill+teardown+record path instead of exiting with the child group orphaned
+    # (issue #245). Restored unconditionally so the process's signal disposition is not left
+    # mutated (e.g. if invoke returns normally without a signal).
+    restore = _install_termination_handlers()
+    try:
+        result = invoke(deps)
+    except _SignalTermination:
+        # A signal that lands while invoke is already unwinding a DIFFERENT exception (its
+        # fail-closed teardown path) escapes invoke's own excepts — a raised exception is not
+        # caught by a sibling except of the same try. Catch it here so the CLI exits cleanly
+        # (fail) instead of dying with a traceback; the child, if any, stays bounded by the
+        # bg-wait ceiling + the lease-pgid reclaim backstop (PR #246 review).
+        result = {"verdict": "fail",
+                  "report": "acceptance run terminated by signal during teardown",
+                  "record_path": None}
+    finally:
+        restore()
     print(result["report"], file=stdout)
     return 0 if result["verdict"] == "pass" else 1
 

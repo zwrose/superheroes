@@ -83,6 +83,35 @@ DEFAULT_CHILD_MODEL = "sonnet"
 SHOWRUNNER_BUNDLE_NAME = "showrunner.bundle.js"
 SHOWRUNNER_JS_NAME = "showrunner.js"
 
+# The child handle run()'s watch loop is currently supervising, or None between runs.
+# Published so the harness's SIGTERM/SIGINT handler (acceptance_run) can reach the LIVE
+# group and hard-kill it before the process exits — an ungraceful harness death otherwise
+# re-parents the child group with no supervisor, and (until the finite bg-wait ceiling in
+# PR #244) it keeps running/spending unsupervised (issue #245). The harness is one-shot
+# (nesting is refused, UFR-5), so a single module-level slot is sufficient; run() sets it
+# at spawn and clears it on every exit path (including an exception unwinding the loop).
+_live_child = None
+
+
+def current_live_child():
+    """The child handle run()'s watch loop is currently supervising, or None.
+
+    The harness signal handler reads this at signal-delivery time — while run()'s loop is
+    still on the stack and the slot is populated — so it can reap the live group through the
+    shared escalation before unwinding into teardown. Returns None when no run is in flight."""
+    return _live_child
+
+
+def _set_live_child(child):
+    """Publish (or clear, with None) the live-child slot. `run()` owns the lifecycle (set at
+    spawn, cleared in its finally), but the real launcher's spawn wrapper also calls this ONE
+    beat earlier — right after Popen, before the pgid-persist file I/O — so a signal during that
+    (slower, syscall-heavy) window still reaches the live group instead of capturing None and
+    reaping a just-spawned orphan's future artifacts (issue #245 review). The residual Popen→
+    handle-construct gap is irreducible and stays bounded by the 2×-elapsed bg-wait ceiling."""
+    global _live_child
+    _live_child = child
+
 
 def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
         budget_consumed=None, attempt=1):
@@ -102,55 +131,65 @@ def run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_read
     spend_partial = _compute_spend_partial(engine_pref_reader)
 
     child = child_factory()
+    # Publish the live child so the harness signal handler can reach the group if a SIGTERM/
+    # SIGINT arrives mid-watch (issue #245). The real spawn wrapper already published it one
+    # beat earlier (before its pgid-persist I/O); this is the canonical set for every path
+    # (including injected-fake children in tests). Cleared in the finally on every exit —
+    # including an exception (e.g. the signal handler's) unwinding the loop; the handler has
+    # already captured the child by then, so clearing here cannot lose it.
+    _set_live_child(child)
     start = clock.now()
 
     last_spend = None
     last_elapsed = 0.0
 
-    while True:
-        status = child.poll()
-        if status is not None:
-            # Natural exit — the child finished on its own; report its terminal location.
-            return {
-                "outcome": "exited",
-                "ceiling": None,
-                "terminal_location": child.terminal_location(),
-                "spend_partial": spend_partial,
-                "spend": last_spend,
-                "elapsed_sec": last_elapsed,
-            }
+    try:
+        while True:
+            status = child.poll()
+            if status is not None:
+                # Natural exit — the child finished on its own; report its terminal location.
+                return {
+                    "outcome": "exited",
+                    "ceiling": None,
+                    "terminal_location": child.terminal_location(),
+                    "spend_partial": spend_partial,
+                    "spend": last_spend,
+                    "elapsed_sec": last_elapsed,
+                }
 
-        elapsed = clock.now() - start
-        spend, readable = spend_sampler()
-        last_elapsed = elapsed
-        if readable:
-            last_spend = spend
+            elapsed = clock.now() - start
+            spend, readable = spend_sampler()
+            last_elapsed = elapsed
+            if readable:
+                last_spend = spend
 
-        decision = acceptance_ceiling.decide({
-            "ceilings": ceilings,
-            "elapsed_sec": elapsed,
-            "spend_sampled": spend,
-            "spend_readable": readable,
-            "budget_consumed": budget_consumed,
-            "attempt": attempt,
-        })
+            decision = acceptance_ceiling.decide({
+                "ceilings": ceilings,
+                "elapsed_sec": elapsed,
+                "spend_sampled": spend,
+                "spend_readable": readable,
+                "budget_consumed": budget_consumed,
+                "attempt": attempt,
+            })
 
-        if decision.get("action") == "kill":
-            confirmed = _hard_kill_group(child)
-            return {
-                "outcome": "killed" if confirmed else "kill-unconfirmed",
-                "ceiling": decision.get("ceiling"),
-                "terminal_location": None,
-                "teardown_safe": confirmed,
-                "spend_partial": spend_partial,
-                "spend": last_spend,
-                "elapsed_sec": last_elapsed,
-            }
+            if decision.get("action") == "kill":
+                confirmed = _hard_kill_group(child)
+                return {
+                    "outcome": "killed" if confirmed else "kill-unconfirmed",
+                    "ceiling": decision.get("ceiling"),
+                    "terminal_location": None,
+                    "teardown_safe": confirmed,
+                    "spend_partial": spend_partial,
+                    "spend": last_spend,
+                    "elapsed_sec": last_elapsed,
+                }
 
-        # Continue watching. The real-default watch paces itself; injected clocks in tests
-        # drive the loop deterministically and never reach this sleep.
-        if clock is _REAL_CLOCK:
-            time.sleep(_POLL_INTERVAL_SEC)
+            # Continue watching. The real-default watch paces itself; injected clocks in tests
+            # drive the loop deterministically and never reach this sleep.
+            if clock is _REAL_CLOCK:
+                time.sleep(_POLL_INTERVAL_SEC)
+    finally:
+        _set_live_child(None)
 
 
 def _compute_spend_partial(engine_pref_reader):
@@ -189,6 +228,61 @@ def _hard_kill_group(child):
     return False
 
 
+class _PgidGroup:
+    """A minimal group handle over a bare pgid (no live Popen) so the SIGTERM→SIGKILL
+    escalation in `_hard_kill_group` can be REUSED to reap a RECORDED orphan group during
+    lease reclaim (issue #245) — not only a child this process itself spawned.
+
+    `poll()` is a no-op (there is no Popen of ours to reap); confirmation relies entirely on
+    `group_empty()` probing the pgid with signal 0. An unsignalable-but-present group
+    (PermissionError — e.g. the orphan is owned by another user) stays "not empty" so the
+    escalation fails closed to unconfirmed rather than declaring a false victory.
+
+    Caveat (documented, matches the issue's pgid+bootId design): within a single boot a
+    reaped leader's pgid can in principle be recycled to an unrelated group. bootId gates
+    this to the same boot only; the residual same-boot reuse window is bounded by the child's
+    2×-elapsed bg-wait ceiling (PR #244) and is the accepted tradeoff versus the alternative
+    — deleting the artifacts a genuinely-live orphan is still building on."""
+
+    def __init__(self, pgid):
+        self._pgid = int(pgid)
+
+    def poll(self):
+        return None
+
+    def killpg(self, sig):
+        try:
+            os.killpg(self._pgid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+    def group_empty(self):
+        try:
+            os.killpg(self._pgid, 0)
+        except ProcessLookupError:
+            return True
+        except (PermissionError, OSError):
+            # Present-but-unsignalable, or an unexpected killpg error (e.g. EINVAL on a
+            # malformed pgid): fail closed — "not empty" keeps the escalation honest and
+            # never declares a false victory. (Callers gate pgid <= 1 upstream; this is
+            # defense in depth so a stray value can never crash the reclaim probe.)
+            return False
+        else:
+            return False
+
+    def terminal_location(self):
+        return None
+
+
+def reap_group_by_pgid(pgid):
+    """Reap a bare process group by pgid via the SAME bounded SIGTERM→SIGKILL escalation the
+    live ceiling-kill path uses (`_hard_kill_group`). Returns True iff the group is confirmed
+    empty, False if it could not be confirmed dead. Used by the lease-reclaim orphan check
+    (acceptance_deps) so a reclaim after an ungraceful harness death signals a surviving
+    orphan group instead of proceeding into discovery teardown under a live orphan."""
+    return _hard_kill_group(_PgidGroup(pgid))
+
+
 # --- Real defaults (production spawn path; the tests drive only injected fakes) -------
 
 class _RealClock:
@@ -220,6 +314,13 @@ class _RealChild:
 
     def poll(self):
         return self._proc.poll()
+
+    def pgid(self):
+        """The captured process-group id (the leader pid at spawn). Persisted into the
+        lease at spawn time so a reclaim after an ungraceful harness death can probe/kill
+        the orphaned group rather than deleting the artifacts it is still building on
+        (issue #245)."""
+        return self._pgid
 
     def killpg(self, sig):
         try:
