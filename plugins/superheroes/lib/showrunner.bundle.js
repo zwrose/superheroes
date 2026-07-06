@@ -8797,8 +8797,10 @@ async function shipPhase(workItem, pr, generation) {
   // Consecutive settle-leaf budget: each leaf waits ≤540s (the bash_timeout hook floors the
   // Bash tool at 600000ms, so ONE leaf can never outwait a long CI run), and real target
   // projects (weekly-eats, loupe) have CI well past 10 minutes. 4 rounds ≈ 36 min of total
-  // patience (≥2x a 15-min run). The counter resets whenever checks actually settle or a
-  // fix is pushed (a new CI run deserves fresh patience); MAX_CI_PASSES still bounds the loop.
+  // patience (≥2x a 15-min run) — per consecutive streak, and only fully grantable while
+  // MAX_CI_PASSES budget remains (fix rounds spend from the same pass budget). The counter
+  // resets whenever checks actually settle or a fix is pushed (a new CI run deserves fresh
+  // patience); MAX_CI_PASSES still bounds the loop.
   const MAX_SETTLE_ROUNDS = 4
   let settleRounds = 0
   for (let pass = 0; pass < MAX_CI_PASSES; pass += 1) {
