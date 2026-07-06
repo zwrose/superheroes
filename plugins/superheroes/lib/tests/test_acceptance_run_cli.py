@@ -23,7 +23,10 @@
 #     materialize precedes 3. preflight), so these subprocess tests can drive the actual
 #     `__main__` entrypoint end-to-end without ever spawning `claude --headless`. Each
 #     subprocess also gets its own `SUPERHEROES_STORE_ROOT` (tmp_path) so it never
-#     touches this repo's real control-plane store;
+#     touches this repo's real control-plane store, AND its own throwaway `--root` git
+#     repo (`_tmp_git_root`) so `invoke`'s step-1 discovery sweep never touches THIS
+#     repo's git — the missing third isolation leg that let a live acceptance run's
+#     build branch get reaped mid-spine (0.10.0 qualification, run 8);
 #   - subprocess: the documented command never silently exits 0 with empty output, even
 #     on that internal failure;
 #   - subprocess: the execution-context marker (UFR-5) makes it refuse to nest — before
@@ -49,6 +52,27 @@ import acceptance_run as run          # noqa: E402
 import acceptance_deps                # noqa: E402
 
 
+def _tmp_git_root(tmp_path):
+    """A throwaway git repo to hand the subprocess as --root.
+
+    NEVER pass the real repo root here: `invoke`'s step-1 record-less discovery
+    teardown sweeps the --root repo's git for reserved-stamp artifacts BEFORE the
+    bogus fixture can fail, and (because the subprocess's store is tmp-pinned) it
+    sees no lease — so it force-reaps any live acceptance run's build branch and
+    worktree in the REAL repo. This killed live run 8 of the 0.10.0 qualification
+    mid-spine: the worktree-aware reap (PR #244, finding #8) made the previously
+    failing `branch -D` on a checked-out branch succeed, weaponizing this escape.
+    """
+    root = tmp_path / "cli-root-repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(root), check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false",
+                    "commit", "-q", "--allow-empty", "-m", "seed"],
+                   cwd=str(root), check=True)
+    return str(root)
+
+
 def _invoke_subprocess(tmp_path, env_extra=None, fixture=BOGUS_FIXTURE):
     env = dict(os.environ)
     # Never let a surrounding acceptance/showrunner context leak into the top-level cases.
@@ -58,7 +82,7 @@ def _invoke_subprocess(tmp_path, env_extra=None, fixture=BOGUS_FIXTURE):
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
-        [sys.executable, RUN_PY, "--fixture", fixture, "--root", ROOT],
+        [sys.executable, RUN_PY, "--fixture", fixture, "--root", _tmp_git_root(tmp_path)],
         capture_output=True,
         text=True,
         env=env,
