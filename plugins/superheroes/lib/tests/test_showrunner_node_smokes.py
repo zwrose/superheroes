@@ -34,6 +34,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js",
+    # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
+    # ceiling), with the denial recorded to the journal.
+    "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_readout_fencing_smoke.js",

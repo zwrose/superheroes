@@ -5375,6 +5375,33 @@ const REVIEWER_RESULT_INSTRUCTION =
 const FIX_RESULT_INSTRUCTION =
   'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Prefer changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode); file paths are accepted but the scheduler derives subjects from fixes+files+priorFindings. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
+// Task 10 (FR-2) journal seam: record a reviewer's denied verification probe as a `permission_denied`
+// event (step `review:<reviewer>`) via the Python journal.append, run through the io() runHelper seam so
+// the SAME call works under node (fs-backed defaultIo) and under the Workflow bundle (leaf-bash io from
+// the preamble) — never a bare node child-process/process reference, which the bundle guard bans. Best-effort
+// + fail-open: fired-and-not-awaited from the synchronous ensureReviewerShape and any error is swallowed,
+// so a recording failure NEVER derails the review (the low-confidence degradation is what protects the
+// gate; this journal entry is the readout's UFR-3 disclosure). Injectable so the smoke harness observes
+// it without shelling Python.
+function _defaultDenialRecorder(reviewer, eventsPath) {
+  if (!eventsPath) return
+  // Put the plugin lib dir on sys.path so `import journal` resolves regardless of the helper's cwd.
+  // Helpers run from the repo/worktree root (the sanctioned runHelper contract, e.g.
+  // review_panel_shell's `plugins/superheroes/lib/*.py` calls), so the lib dir is that repo-relative
+  // path — no __dirname (absent in the bundle sandbox).
+  const script =
+    'import sys; sys.path.insert(0, "plugins/superheroes/lib"); import journal; ' +
+    'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
+    'detail={"probe": "denied", "reviewer": sys.argv[2]})'
+  try {
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
+}
+// A mutable holder so the recorder is overridable (the smoke harness swaps in an observer) — a plain
+// `let` exported by value would be a copy the caller could not rebind.
+const _denialSeam = { record: _defaultDenialRecorder }
+
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -5383,6 +5410,18 @@ function ensureReviewerShape(out, opts = {}) {
   if (!out || !Array.isArray(out.findings)) return null
   if (out.confidence !== 'high' && out.confidence !== 'low') {
     out = Object.assign({}, out, { confidence: 'high' })
+  }
+  // FR-2: a reviewer whose verification probe was DENIED (the 15-min timeout fired on its improvised
+  // probe, recorded as a permission_denied for this reviewer) did NOT actually verify its dimension.
+  // Force confidence:low + receiptMissing so the existing deep-retry / degraded-dimension path (in
+  // review_panel_shell.dispatchReviewer) treats it exactly like an unverified reviewer — one deep retry,
+  // then a degraded (never re-cycled) dimension on the loop's existing single-retry ceiling. Record the
+  // denial to the journal (UFR-3 disclosure). This must precede the receipt-missing branch below so a
+  // denied probe never masquerades as a receipt-bearing high-confidence pass.
+  if (out.permissionDenied) {
+    _denialSeam.record(opts.reviewer, opts.eventsPath)
+    out = Object.assign({}, out, { confidence: 'low', receiptMissing: true, permissionDenied: true })
+    return _withRealUsage(out)
   }
   if (out.confidence === 'high' && !out.verificationReceipt) {
     if (opts.external) {
@@ -5427,6 +5466,11 @@ function reviewCodeLeaves(tiers, opts) {
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
       `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+    // Task 10 (FR-2): thread the reviewer identity + the run's journal path so ensureReviewerShape can
+    // tag a denied-probe permission_denied event to `review:<reviewer>`. eventsPath rides context when
+    // the caller supplies it; absent, the denial degrades the dimension (low confidence) without a
+    // journal line — the gate protection is intact either way (fail-open, UFR-2).
+    const shapeExtra = { reviewer, eventsPath: (context && context.eventsPath) || undefined }
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
     // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
@@ -5442,16 +5486,16 @@ function reviewCodeLeaves(tiers, opts) {
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
-          Object.assign({}, opts, { round, external: true, externalEngine: rEngine }))
+          Object.assign({}, opts, shapeExtra, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
       const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
       if (!out || !Array.isArray(out.findings)) return null
-      return ensureReviewerShape(out, Object.assign({}, opts, { round }))
+      return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
     }
     const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
     if (!out || !Array.isArray(out.findings)) return null
-    return ensureReviewerShape(out, Object.assign({}, opts, { round }))
+    return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
   }
 
   // Synthesis stays LOOP-OWNED (native Claude, tiers.synthesis) — never engine-routed. It is the
@@ -5529,6 +5573,14 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 }
 
 module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
+module.exports.ensureReviewerShape = ensureReviewerShape
+// Task 10 seam: the denial recorder is overridable for the smoke harness. Read/write it through the
+// mutable holder so an assignment (`sr._denialRecorder = fn`) actually rebinds what ensureReviewerShape
+// calls.
+Object.defineProperty(module.exports, '_denialRecorder', {
+  get() { return _denialSeam.record },
+  set(fn) { _denialSeam.record = fn },
+})
 
 // The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
 const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
