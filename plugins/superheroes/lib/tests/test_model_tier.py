@@ -110,3 +110,15 @@ def test_author_plan_malformed_override_falls_back_to_author_resolution():
 
 def test_roles_tuple_includes_split_roles():
     assert "author-plan" in MT.ROLES and "author" in MT.ROLES
+
+
+def test_pr_body_tier_resolves_to_sonnet():
+    import model_tier
+    assert model_tier.resolve_model("pr-body") == "sonnet"
+
+
+def test_pr_body_tier_override_wins():
+    import model_tier
+    assert model_tier.resolve_model("pr-body", {"pr-body": "opus"}) == "opus"
+    # null override -> inherit session model
+    assert model_tier.resolve_model("pr-body", {"pr-body": None}) is None

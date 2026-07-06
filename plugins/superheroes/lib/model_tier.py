@@ -28,6 +28,7 @@ DEFAULT_TIERS = {
     "synthesis": "opus",           # panel synthesis: the strongest tier (loop-owned)
     "fixer": "sonnet",             # default context = code-fixer (the mid-tier floor)
     "author": "opus",              # produce-plan / produce-tasks (front-half authoring, #88)
+    "pr-body": "sonnet",           # #219: compose the durable draft-PR body (what & why)
 }
 
 # Split roles: a role here has no tier of its own — absent an explicit override it resolves

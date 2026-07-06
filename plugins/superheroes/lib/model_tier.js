@@ -9,6 +9,7 @@ const DEFAULT_TIERS = {
   synthesis: 'opus',
   fixer: 'sonnet',
   author: 'opus',
+  'pr-body': 'sonnet',            // #219: compose the durable draft-PR body (what & why)
 }
 
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
