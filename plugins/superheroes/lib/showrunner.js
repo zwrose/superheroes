@@ -2262,7 +2262,7 @@ async function reviewCodePhase(workItem, opts) {
   // gather just read the head itself, re-reading the same value is a redundant leaf (matrix fold).
   if (resolvedHead && !resolvedViaGather) {
     const actual = await resolveHead(resolvedWorktree || null, opts.ref || 'HEAD')
-    if (!actual || actual !== resolvedHead) {
+    if (!actual || !sameHead(actual, resolvedHead)) {
       return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${resolvedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
     }
   }
@@ -2303,7 +2303,7 @@ async function reviewCodePhase(workItem, opts) {
       return {
         phaseResult: { confidence: 'low', assumptions: [`review-code readout failed: ${(readout && readout.reason) || 'unknown'}`] },
         gate: 'changes-requested', terminal, head: finalHead,
-        changed: !!(initialHead && finalHead && initialHead !== finalHead),
+        changed: !!(initialHead && finalHead && !sameHead(initialHead, finalHead)),
       }
     }
     // #212: name the terminal + the panel's honest reason on parkDetail so the workflow park reads
@@ -2311,7 +2311,7 @@ async function reviewCodePhase(workItem, opts) {
     // receipt after retry (receipt-missing — uncertifiable)" instead of the bare flatten. Empty
     // assumptions → phase_step routes this to park_changes_requested (not park_assumption).
     const parkDetail = `${terminal}: ${(verdict && verdict.reason) || 'review not certified'}`
-    return { phaseResult: { confidence: 'high', assumptions: [], parkDetail }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
+    return { phaseResult: { confidence: 'high', assumptions: [], parkDetail }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && !sameHead(initialHead, finalHead)) }
   }
   // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If
   // the CWD advanced while the target HEAD did not, the fixer's commits landed outside the shipped tree
@@ -2350,7 +2350,7 @@ async function reviewCodePhase(workItem, opts) {
     gate: 'passed',
     terminal,
     head: finalHead,
-    changed: !!(initialHead && finalHead && initialHead !== finalHead),
+    changed: !!(initialHead && finalHead && !sameHead(initialHead, finalHead)),
     reviewCoverageHead: terminal === 'clean' ? (finalHead || undefined) : undefined,
     verifyPassedHead: finalHead || undefined,
   }
@@ -2372,8 +2372,12 @@ async function resolveHead(worktree, ref) {
     // answers too); fall back to the first token of the first non-empty line so
     // non-hex refs still resolve. sameHead() below absorbs full-vs-abbreviated reads.
     const raw = String(out || '').trim()
-    const m = raw.match(/\b[0-9a-f]{7,40}\b/)
-    if (m) return m[0]
+    // Line-anchored: only a line that IS a hex token counts (review: first-hex-anywhere
+    // could manufacture a head from an error message's incidental hex — fail-open).
+    for (const l of raw.split('\n')) {
+      const t = l.trim().replace(/^`+|`+$/g, '')
+      if (/^[0-9a-f]{7,40}$/.test(t)) return t
+    }
     const line = (raw.split('\n').find((l) => l.trim()) || '').trim()
     return line ? line.split(/\s+/)[0] : null
   } catch (_) {
@@ -2387,6 +2391,10 @@ async function resolveHead(worktree, ref) {
 function sameHead(a, b) {
   if (!a || !b) return false
   const x = String(a), y = String(b)
+  if (x === y) return true
+  // Prefix tolerance is for sha ABBREVIATION only: require >=7 overlap (git's abbrev
+  // floor) so stray short fallback tokens never spuriously prefix-match (review nit).
+  if (Math.min(x.length, y.length) < 7) return false
   return x.startsWith(y) || y.startsWith(x)
 }
 

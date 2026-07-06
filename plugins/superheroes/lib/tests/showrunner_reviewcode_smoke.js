@@ -14,7 +14,7 @@ function receiptFromPrompt(prompt) {
   return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
 }
 
-function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q' } = {}) {
+function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q', consistentWtHead = false } = {}) {
   let wtHeadCalls = 0
   let cwdHeadCalls = 0
   return async (prompt, opts) => {
@@ -22,6 +22,7 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
     // #118: resolveHead + the config read ride the exec courier (raw stdout), not cmdRunner 'lib'
     if (opts && opts.courier && prompt.includes('git -C')) {
       wtHeadCalls += 1
+      if (consistentWtHead) return 'head-1\n'
       return wtHeadCalls <= 1 ? 'head-1\n' : 'head-2\n'
     }
     if (opts && opts.courier && prompt.includes('git rev-parse')) {
@@ -104,5 +105,25 @@ function reviewAgentStub({ verifyCommand = 'python3 -m pytest targeted-tests -q'
   assert.ok(promptLog.some((p) => p.includes('prov_entry.py') && p.includes('--head') && p.includes('head-2')),
     'review-code restamps the post-fix final head')
 
-  console.log('OK: panel verdict maps to gate (clean->passed, else->changes-requested)')
+  // finding #15 GUARD-LEG regression (review Important): a clean no-fix run — target
+  // head CONSISTENT (targetMoved false) — while the cwd reads relay full-then-
+  // abbreviated. Pre-fix raw !== read that as 'cwd moved' and false-parked with
+  // 'fixes landed outside the target worktree'; sameHead must keep it passed.
+  promptLog = []
+  const cleanStub = reviewAgentStub({ consistentWtHead: true })
+  global.agent = async (prompt, opts) => {
+    promptLog.push(prompt)
+    return cleanStub(prompt, opts)
+  }
+  const runDir3 = fs.mkdtempSync(require('path').join(require('os').tmpdir(), 'rc-smoke-3-'))
+  const cleanRun = await sr.reviewCodePhase('wi-targeted', {
+    worktree: '/tmp/build-worktree',
+    expectedHead: 'head-1',
+    runDir: runDir3,
+  })
+  assert.strictEqual(cleanRun.gate, 'passed', 'abbreviated cwd relay must not read as outside-worktree fixes')
+  assert.strictEqual(cleanRun.changed, false, 'consistent target head -> unchanged')
+  assert.ok(!JSON.stringify(cleanRun).includes('landed outside'), 'no false outside-worktree park')
+
+  console.log('OK: panel verdict maps to gate (clean->passed, else->changes-requested; abbreviated-relay guard leg clean)')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
