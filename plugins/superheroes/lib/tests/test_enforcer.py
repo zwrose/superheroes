@@ -561,3 +561,46 @@ def test_external_engine_own_feature_branch_push_is_allowed():
     assert enforcer.classify_command("cursor-agent -f -m composer", host="codex")[0] == "allow"
 
 
+# --- Task 5: allowance layer wired into the NON-GATED branch only (UFR-1/UFR-2) ---
+# enforcer's import inserts lib/ onto sys.path, so the sibling core is importable here.
+import permission_rules  # noqa: E402
+
+
+def test_owner_role_outcome_unchanged_with_rules_present(monkeypatch):
+    # A rule that would match a merge must never flip the floor's ask/deny — the allowance
+    # layer is NEVER consulted on the gated branch (it returns before the layer's call site).
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "should-not-be-consulted"))
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "ask"
+    assert enforcer.classify_command("gh pr merge 1", host="codex", in_scope=True)[0] == "deny"
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=False)[0] == "allow"
+
+
+def test_non_gated_command_allowed_when_rule_matches(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True)
+    assert decision == "allow"
+    # The allowance layer must actually be consulted — its reason surfaces (distinguishes an
+    # auto-allow from today's default-allow, which would otherwise mask an unwired layer).
+    assert "auto-allowed" in reason and "routine:test-run" in reason
+
+
+def test_non_gated_command_falls_through_to_default_allow(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate", lambda *a, **k: ("fall", "no match"))
+    # today's outcome is preserved (default allow)
+    assert enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True)[0] == "allow"
+
+
+def test_allowance_exception_falls_through(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    assert enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True)[0] == "allow"
+
+
+def test_unconditional_surfaces_still_deny_before_allowance(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "should-not-be-reached"))
+    assert enforcer.classify_command(": workhorse-enforcer-canary")[0] == "deny"
+
+

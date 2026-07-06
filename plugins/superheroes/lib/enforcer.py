@@ -33,6 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import allowance  # noqa: E402
 import escalation  # noqa: E402  (same-tree sibling core; no band_lib, no subprocess)
+import permission_rules  # noqa: E402  (pure below-the-floor allowance layer; non-gated branch only)
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Tool-name surfaces, HOST-AGNOSTIC: Claude names Bash / Edit|Write|MultiEdit; Codex names
@@ -208,7 +209,7 @@ def _in_superheroes_repo(cwd):
         return False
 
 
-def classify_command(command, host="codex", in_scope=True):
+def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None):
     """('allow'|'ask'|'deny', reason). Decision order:
 
       1. non-string                         → deny (fail-closed)
@@ -218,10 +219,19 @@ def classify_command(command, host="codex", in_scope=True):
            - outside a superheroes repo     → allow (not gated here)
            - in-scope, host honors `ask`    → ask  (live owner prompt)
            - in-scope, deny-only host       → deny (the hook runs the allowance overlay)
-      5. anything else                      → allow
+      5. non-gated (today = allow): consult the below-the-floor allowance layer
+         (permission_rules.evaluate). A matching owner-curated routine family / managed-
+         worktree-confined / composed-exact command turns a would-be prompt into `allow`;
+         anything else falls through to today's default allow.
+      6. default                            → allow
 
     `host`/`in_scope` affect ONLY the gated set. Default host=`codex` (deny-only) is the
-    fail-safe: only an explicit host that honors `ask` unlocks the prompt."""
+    fail-safe: only an explicit host that honors `ask` unlocks the prompt. `cwd`/`run_id`
+    thread the hook's context into the allowance layer; both default to `None` (no active
+    run → the layer's composed/freeze machinery is inert). The allowance layer is reached
+    ONLY here, on the non-gated branch: the canary/safety-write/owner-role arms all `return`
+    above it, so it can never widen the floor (UFR-1). Any allowance error is swallowed and
+    falls through to today's default allow (fail-safe toward the existing outcome, UFR-2)."""
     if not isinstance(command, str):
         return ("deny", "non-string command (fail-closed)")
     if _CANARY.search(command):
@@ -235,6 +245,14 @@ def classify_command(command, host="codex", in_scope=True):
         if host == "claude":
             return ("ask", "owner-authority action '%s' needs your live approval" % action)
         return ("deny", "owner-authority action '%s' needs the owner's live approval" % action)
+    # Non-gated branch (today: unconditional allow). Consult the allowance layer; it can only
+    # turn a would-be prompt into an allow, never flip an allow to a deny.
+    try:
+        verdict, why = permission_rules.evaluate(command, cwd, run_id)
+        if verdict == "allow":
+            return ("allow", "auto-allowed (%s)" % why)
+    except Exception:
+        pass
     return ("allow", "")
 
 
