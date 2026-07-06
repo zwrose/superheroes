@@ -196,6 +196,13 @@ def _read_ci(work_item):
         return {"decision": "none",
                 "reason": "no required checks gate this PR — confirm checks before merging",
                 "failing": []}
+    if status == "pending":
+        # Still not-green (fail-closed for every certification consumer of this decision),
+        # but say WHY honestly — these checks are running, not failing. The ship loop's
+        # settle-wait consumes the classifier's tri-state directly, not this decision.
+        return {"decision": "red",
+                "reason": "checks still running: %s" % ", ".join(res["pending"]),
+                "failing": []}
     return {"decision": "red",
             "reason": "checks not green: %s" % ", ".join(res["failing"]),
             "failing": res["failing"]}

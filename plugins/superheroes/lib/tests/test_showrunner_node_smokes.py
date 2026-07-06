@@ -130,6 +130,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_freshen_smoke.js",
     # #120: native ship-phase CI-fix stretch (fix loop, fixer dispatch, revert-to-draft, UFR-3/5/6).
     "plugins/superheroes/lib/tests/showrunner_ship_cifix_smoke.js",
+    # #120-deferred settle-poll: pending CI waits (bounded), never dispatches the fixer (0.10.0 qualification).
+    "plugins/superheroes/lib/tests/showrunner_ship_settle_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
     # #120: native ship-phase structured hand-back (FR-6/FR-7, scrubbed, best-effort delivery).
     "plugins/superheroes/lib/tests/showrunner_ship_handback_smoke.js",

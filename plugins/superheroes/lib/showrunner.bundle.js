@@ -1089,25 +1089,33 @@ module.exports = { planRound, isCrossCutting, confirmationFollowup, MAX_CONFIRMA
 // ===== ci_status.js =====
 __modules["ci_status"] = function (module, exports, require) {
 // plugins/superheroes/lib/ci_status.js
+// Parity twin of ci_status.py — green / red / pending / none. Pending is its own status
+// (0.10.0 qualification finding: pending-as-red made the ship loop dispatch a CI fixer at
+// checks that were merely running). Pending means WAIT, red means FIX, neither is green.
 const _PASS = new Set(['pass', 'success', 'skipping', 'skipped', 'neutral'])
+const _PENDING = new Set(['pending', 'queued', 'in_progress', 'expected', 'waiting', 'requested'])
 function _bucket(item) {
   if (!item || typeof item !== 'object') return 'unknown'
   return String(item.bucket || item.state || item.conclusion || 'unknown').toLowerCase()
 }
 function classify(checks) {
-  if (!Array.isArray(checks) || checks.length === 0) return { status: 'none', failing: [] }
+  if (!Array.isArray(checks) || checks.length === 0) return { status: 'none', failing: [], pending: [] }
   const failing = []
+  const pending = []
   let sawGating = false
   for (const item of checks) {
     const b = _bucket(item)
     const name = (item && typeof item === 'object') ? item.name : null
     if (b === 'skipping' || b === 'skipped' || b === 'neutral') continue
     sawGating = true
-    if (!_PASS.has(b)) failing.push(name || 'unknown')
+    if (_PASS.has(b)) continue
+    if (_PENDING.has(b)) pending.push(name || 'unknown')
+    else failing.push(name || 'unknown')
   }
-  if (failing.length) return { status: 'red', failing }
-  if (!sawGating) return { status: 'none', failing: [] }
-  return { status: 'green', failing: [] }
+  if (failing.length) return { status: 'red', failing, pending }
+  if (pending.length) return { status: 'pending', failing: [], pending }
+  if (!sawGating) return { status: 'none', failing: [], pending: [] }
+  return { status: 'green', failing: [], pending: [] }
 }
 module.exports = { classify }
 
@@ -8767,6 +8775,29 @@ async function shipPhase(workItem, pr, generation) {
     }
     if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
+    }
+    if (ciRes.status === 'pending') {
+      // The live-run settle-poll deferred from #120 (0.10.0 qualification finding: the
+      // ready flip re-triggers CI, so ship's first read races the fresh run; pending is
+      // WAIT, not FIX). One bounded courier leaf does the whole wait (deterministic,
+      // journaled); its final checks feed the next pass. Still-pending after the budget
+      // parks honestly — never a fixer at running checks, never a blind green.
+      let settled = null
+      try {
+        settled = await courier.runCourierJson(
+          'wait for CI to settle',
+          `python3 ${libPath('ci_settle_cli.py')} --work-item ${shq(workItem)}${worktree ? ` --worktree ${shq(worktree)}` : ''}`,
+          { require: ['settled'], retryRealFailure: false },
+        )
+      } catch (_e) {
+        return park(workItem, pr, 'CI status could not be read while waiting for checks to settle')
+      }
+      if (!settled || settled.settled !== true) {
+        if (settled && settled.checks && !Array.isArray(settled.checks)) { ciChecks = settled.checks; continue }
+        return park(workItem, pr, `CI checks still pending after the settle wait (${(ciRes.pending || []).join(', ')}) — confirm checks and re-run`)
+      }
+      ciChecks = settled.checks
+      continue
     }
     let decided = null
     try {

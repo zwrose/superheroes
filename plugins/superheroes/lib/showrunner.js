@@ -2700,6 +2700,29 @@ async function shipPhase(workItem, pr, generation) {
     if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
     }
+    if (ciRes.status === 'pending') {
+      // The live-run settle-poll deferred from #120 (0.10.0 qualification finding: the
+      // ready flip re-triggers CI, so ship's first read races the fresh run; pending is
+      // WAIT, not FIX). One bounded courier leaf does the whole wait (deterministic,
+      // journaled); its final checks feed the next pass. Still-pending after the budget
+      // parks honestly — never a fixer at running checks, never a blind green.
+      let settled = null
+      try {
+        settled = await courier.runCourierJson(
+          'wait for CI to settle',
+          `python3 ${libPath('ci_settle_cli.py')} --work-item ${shq(workItem)}${worktree ? ` --worktree ${shq(worktree)}` : ''}`,
+          { require: ['settled'], retryRealFailure: false },
+        )
+      } catch (_e) {
+        return park(workItem, pr, 'CI status could not be read while waiting for checks to settle')
+      }
+      if (!settled || settled.settled !== true) {
+        if (settled && settled.checks && !Array.isArray(settled.checks)) { ciChecks = settled.checks; continue }
+        return park(workItem, pr, `CI checks still pending after the settle wait (${(ciRes.pending || []).join(', ')}) — confirm checks and re-run`)
+      }
+      ciChecks = settled.checks
+      continue
+    }
     let decided = null
     try {
       decided = await prepareCiFix(workItem, ciRes.failing)
