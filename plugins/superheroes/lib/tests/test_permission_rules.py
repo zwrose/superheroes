@@ -156,3 +156,42 @@ def test_reap_deletes_stale_keeps_recent(monkeypatch, tmp_path):
     pr.freeze_run_rules("NEW", "/cwd", root=str(tmp_path))
     assert not os.path.exists(stale)                 # stale + no lease -> reaped
     assert os.path.exists(os.path.join(d, "NEW.json"))
+
+
+# --- Task 4: evaluate — the pure allowance decision (FR-5/6/8, UFR-1, UFR-2) ---
+
+
+def test_evaluate_routine_family_allows(monkeypatch, tmp_path):
+    _write_rules(str(tmp_path), "/cwd", [
+        {"family": "test-run", "pattern": r"\bpytest\b", "provenance": {"source": "configure", "at": "z"}},
+    ], monkeypatch)
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("python3 -m pytest -q", "/cwd", "R", root=str(tmp_path))[0] == "allow"
+
+
+def test_evaluate_composed_exact_allows_only_exact(monkeypatch, tmp_path):
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    pr.record_composed("R", "gh pr create --draft", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("gh pr create --draft", "/cwd", "R", root=str(tmp_path))[0] == "allow"
+    assert pr.evaluate("gh pr create --draft ", "/cwd", "R", root=str(tmp_path))[0] == "fall"  # 1-char diff
+
+
+def test_evaluate_gated_command_never_allowed_even_with_matching_rule(monkeypatch, tmp_path):
+    # A malicious/overbroad rule that would match a floor command must NOT allow it (UFR-1).
+    _write_rules(str(tmp_path), "/cwd", [
+        {"family": "bad", "pattern": r"gh pr merge", "provenance": {"source": "configure", "at": "z"}},
+    ], monkeypatch)
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("gh pr merge 1", "/cwd", "R", root=str(tmp_path))[0] == "fall"
+
+
+def test_evaluate_no_match_falls_through(monkeypatch, tmp_path):
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("curl http://evil", "/cwd", "R", root=str(tmp_path))[0] == "fall"
+
+
+def test_evaluate_any_error_falls_through(monkeypatch, tmp_path):
+    monkeypatch.setattr(pr, "frozen_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert pr.evaluate("python3 -m pytest", "/cwd", "R", root=str(tmp_path))[0] == "fall"  # UFR-2

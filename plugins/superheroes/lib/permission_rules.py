@@ -238,3 +238,52 @@ def record_composed(run_id, command, cwd, root=None):
     path = _run_path(run_id, cwd, root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     control_plane.atomic_write(path, json.dumps(snapshot))
+
+
+# --- Task 4: evaluate — the pure allowance decision (FR-5/6/8, UFR-1, UFR-2) ---
+
+
+def evaluate(command, cwd, run_id, root=None):
+    """The pure below-the-floor allowance decision. Returns ('allow', reason) iff a frozen
+    routine family matches (FR-6), the command byte-equals a spine-composed command frozen
+    for `run_id` (FR-8), or the command is confined to a real managed worktree (FR-5);
+    otherwise ('fall', reason) — the enforcer then leaves today's outcome (default allow)
+    untouched.
+
+    Every non-allow path returns 'fall', never a raise:
+    - a non-string command → ('fall', ...);
+    - a gated (owner-role) command is NEVER allowed, even if a rule would match it (UFR-1) —
+      a belt-and-suspenders re-check of `enforcer.gated_action`, since `evaluate` is only
+      called where the floor already resolved to the non-gated default allow;
+    - any error is caught and falls through toward prompting (UFR-2).
+
+    `enforcer` is imported lazily inside the function to avoid a module-level import cycle
+    (enforcer imports permission_rules for the Task-5 wiring)."""
+    if not isinstance(command, str):
+        return ("fall", "non-string")
+    # Defensive floor re-check (UFR-1): a gated command is the floor's to decide — never
+    # allowance-allow it, even against a matching rule. Reproduces only the gated/not-gated
+    # partition; sufficient because `evaluate` is called solely where the floor already
+    # resolved to the non-gated default allow.
+    try:
+        import enforcer
+        if enforcer.gated_action(command):
+            return ("fall", "gated command — floor owns it")
+    except Exception:
+        return ("fall", "allowance error (fail-safe)")
+    try:
+        frozen = frozen_rules(run_id, cwd, root)
+        # Composed-exact (FR-8): a command byte-frozen for THIS run.
+        if _hash(command) in frozen.get("composed", []):
+            return ("allow", "composed-exact")
+        # Routine family (FR-6): an owner-curated, provenance-valid pattern.
+        for rule in frozen.get("rules", []):
+            pattern = rule.get("pattern") if isinstance(rule, dict) else None
+            if pattern and re.search(pattern, command):
+                return ("allow", "routine:%s" % rule.get("family"))
+        # Worktree-confined (FR-5): an interpreter probe inside a real managed worktree.
+        if worktree_confined(command, cwd):
+            return ("allow", "worktree-confined")
+    except Exception:
+        return ("fall", "allowance error (fail-safe)")
+    return ("fall", "no matching allowance")
