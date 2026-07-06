@@ -248,6 +248,7 @@ def _run_one_attempt(deps, stamped, budget_consumed, attempt):
         "pr_exists": gh.get("pr_exists"),
         "pr_ready_for_review": gh.get("pr_ready_for_review"),
         "checks_green": gh.get("checks_green"),
+        "checks_pending": gh.get("checks_pending"),
         "live_checks_green": gh.get("live_checks_green"),
         "live_pr": gh.get("live_pr"),
         "unreadable": gh.get("unreadable") or [],

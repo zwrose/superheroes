@@ -47,6 +47,10 @@ def decide(facts):
     if not facts.get("pr_ready_for_review"):
         return _fail("PR is not ready-for-review")
     if not facts.get("checks_green"):
+        if facts.get("checks_pending"):
+            # honest-reason (#212/#11 class): a settle wait that ran out is NOT a red —
+            # never report a timed-out wait identically to a genuine CI failure.
+            return _fail("checks still pending after the settle wait — never confirmed green")
         return _fail("checks are not green")
 
     expected = set(facts.get("expected_phases") or [])

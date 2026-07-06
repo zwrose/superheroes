@@ -754,6 +754,7 @@ def real_gh_reader(root, stamped):
         rollup = pr.get("statusCheckRollup") or []
         result["failure_kind"] = _check_failure_kind(rollup)
         result["checks_pending"] = _rollup_pending(rollup)
+        result["checks_red"] = _rollup_red(rollup)
         green = bool(rollup) and all(
             (c.get("conclusion") or "").upper() == "SUCCESS" for c in rollup)
         result["checks_green"] = green
@@ -776,11 +777,11 @@ def real_gh_reader(root, stamped):
         clock = _clock or time.monotonic
         start = clock()
         out = _read()
-        while out.get("checks_pending") and (clock() - start) < timeout_sec:
+        while (out.get("checks_pending") and not out.get("checks_red")
+               and (clock() - start) < timeout_sec):
             sleep(interval_sec)
             out = _read()
         return out
-    _settled_read.single_shot = _read
     return _settled_read
 
 
@@ -798,13 +799,29 @@ def _host_failure_kind(root):
 
 def _rollup_pending(rollup):
     """True when any check in the rollup has not COMPLETED (conclusion still null/empty
-    while queued or in progress). Distinct from red/green: pending means WAIT (#11)."""
+    while queued or in progress). Distinct from red/green: pending means WAIT (#11).
+    The pending-state taxonomy is single-homed in ci_status.PENDING_STATES (§11)."""
+    import ci_status
     for check in rollup or []:
         if not isinstance(check, dict):
             continue
         conclusion = str(check.get("conclusion") or "").strip()
         status = str(check.get("status") or check.get("state") or "").upper()
-        if not conclusion and status in ("QUEUED", "IN_PROGRESS", "PENDING", "EXPECTED", "WAITING", "REQUESTED"):
+        if not conclusion and status in ci_status.PENDING_STATES:
+            return True
+    return False
+
+
+def _rollup_red(rollup):
+    """True when any check has CONCLUDED non-pass (FAILURE/TIMED_OUT/CANCELLED/...).
+    A confirmed hard failure short-circuits the settle wait — the run's fate is sealed;
+    waiting out pending siblings only delays the honest red (review of finding #14).
+    NEUTRAL/SKIPPED are not red (mirrors ci_status's pass set)."""
+    for check in rollup or []:
+        if not isinstance(check, dict):
+            continue
+        conclusion = str(check.get("conclusion") or "").strip().upper()
+        if conclusion and conclusion not in ("SUCCESS", "NEUTRAL", "SKIPPED"):
             return True
     return False
 

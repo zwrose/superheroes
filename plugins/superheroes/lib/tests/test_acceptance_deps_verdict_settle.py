@@ -60,3 +60,25 @@ def test_settled_read_red_never_waits(monkeypatch):
     out = reader(_sleep=lambda s: (_ for _ in ()).throw(AssertionError("slept on red")))
     assert out["checks_green"] is False and not out["checks_pending"]
     assert calls["n"] == 1
+
+
+def test_settled_read_red_plus_pending_short_circuits(monkeypatch):
+    # A confirmed FAILURE with a pending sibling must NOT wait out the budget —
+    # the fate is sealed; waiting only delays the honest red.
+    mixed = [{"conclusion": "FAILURE", "status": "COMPLETED"},
+             {"conclusion": None, "status": "IN_PROGRESS"}]
+    reader, calls = _reader_with_sequence(monkeypatch, [mixed])
+    out = reader(_sleep=lambda s: (_ for _ in ()).throw(AssertionError("waited on sealed red")))
+    assert out["checks_green"] is False and out["checks_red"] is True
+    assert calls["n"] == 1
+
+
+def test_rollup_red_pass_conclusions_are_not_red():
+    assert not ad._rollup_red([{"conclusion": "SUCCESS"}, {"conclusion": "NEUTRAL"},
+                               {"conclusion": "SKIPPED"}, {"conclusion": None}])
+    assert ad._rollup_red([{"conclusion": "TIMED_OUT"}])
+
+
+def test_pending_taxonomy_is_single_homed():
+    import ci_status
+    assert "IN_PROGRESS" in ci_status.PENDING_STATES and "QUEUED" in ci_status.PENDING_STATES
