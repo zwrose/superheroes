@@ -154,11 +154,7 @@ async function __sh(cmd, opts) {
   // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
   // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
   var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
-  // COURIER_CONTEXT (courier_exec, single source of truth): honest-intent framing — the runtime
-  // safety classifier read base64 payloads + the no-narration rule as concealment (4/145 dispatches
-  // blocked, 2026-07-06 evidence run); stating the fidelity rationale in-prompt removes the
-  // hidden-intent signature while keeping the machine contract identical.
-  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command.' + __require('courier_exec').COURIER_CONTEXT + '\\n\\n' + __sc(cmd)
+  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd)
   // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
   // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
   // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both
