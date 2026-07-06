@@ -8,13 +8,40 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_deps as ad
 
 
-def test_rollup_pending_states():
-    assert ad._rollup_pending([{"conclusion": None, "status": "IN_PROGRESS"}])
-    assert ad._rollup_pending([{"conclusion": "", "status": "QUEUED"}])
-    assert not ad._rollup_pending([{"conclusion": "SUCCESS", "status": "COMPLETED"}])
-    assert not ad._rollup_pending([{"conclusion": "FAILURE", "status": "COMPLETED"}])
-    assert not ad._rollup_pending([])          # no checks = not pending (fail-closed elsewhere)
-    assert not ad._rollup_pending([None, "x"])  # junk rows never read as pending
+import ci_status
+
+
+def _cls(rollup):
+    return ci_status.classify(ad._normalize_rollup(rollup))["status"]
+
+
+def test_normalize_rollup_effective_bucket_by_node_shape():
+    # CheckRun completed -> conclusion; CheckRun in-flight -> status; StatusContext -> state.
+    assert _cls([{"name": "v", "conclusion": "SUCCESS", "status": "COMPLETED"}]) == "green"
+    assert _cls([{"name": "v", "conclusion": None, "status": "IN_PROGRESS"}]) == "pending"
+    assert _cls([{"name": "v", "conclusion": "", "status": "QUEUED"}]) == "pending"
+    assert _cls([{"name": "v", "conclusion": "FAILURE", "status": "COMPLETED"}]) == "red"
+    assert _cls([]) == "none"
+    ad._normalize_rollup([None, "x"])  # junk rows never crash
+
+
+def test_finding_18_release_evidence_status_is_green():
+    # THE run-12 bug: release-evidence is a commit STATUS (StatusContext: state, no
+    # conclusion). Mixed with all-SUCCESS check-runs, the verdict must read GREEN — the
+    # old inline all-SUCCESS check saw conclusion=null and read not-green.
+    rollup = [
+        {"name": "validate", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"name": "evidence", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"name": "pr-title", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"context": "release-evidence", "state": "SUCCESS"},   # StatusContext, conclusion=null
+    ]
+    assert _cls(rollup) == "green"
+
+
+def test_finding_18_pending_status_context_waits():
+    rollup = [{"name": "validate", "conclusion": "SUCCESS", "status": "COMPLETED"},
+              {"context": "release-evidence", "state": "PENDING"}]
+    assert _cls(rollup) == "pending"
 
 
 def _reader_with_sequence(monkeypatch, rollups):
@@ -73,10 +100,12 @@ def test_settled_read_red_plus_pending_short_circuits(monkeypatch):
     assert calls["n"] == 1
 
 
-def test_rollup_red_pass_conclusions_are_not_red():
-    assert not ad._rollup_red([{"conclusion": "SUCCESS"}, {"conclusion": "NEUTRAL"},
-                               {"conclusion": "SKIPPED"}, {"conclusion": None}])
-    assert ad._rollup_red([{"conclusion": "TIMED_OUT"}])
+def test_neutral_skipped_are_not_red_via_classify():
+    # NEUTRAL/SKIPPED are pass-like (ci_status._PASS), a null-conclusion in-flight is pending,
+    # a hard failure is red — all through the single classify path now.
+    assert _cls([{"name": "a", "conclusion": "SUCCESS"}, {"name": "b", "conclusion": "NEUTRAL"},
+                 {"name": "c", "conclusion": "SKIPPED"}]) == "green"
+    assert _cls([{"name": "d", "conclusion": "TIMED_OUT"}]) == "red"
 
 
 def test_pending_taxonomy_is_single_homed():
