@@ -2403,7 +2403,7 @@ const COURIER_CONTEXT =
   'journaled for the user to review, and nothing here is hidden from oversight. The stdout-only ' +
   'rule exists because the orchestrator machine-parses your answer (narration or fencing corrupts ' +
   'the parse), and any base64 content in the command is encoded solely so the payload survives ' +
-  'transit byte-exact — never to conceal it:'
+  'transit byte-exact — never to conceal it. Return only stdout:'
 
 // promptFor: the courier command prompt. opts.strict adds an explicit no-improvising clause for
 // state-changing single-command leaves (e.g. the lease release — live 2026-07-02 the park-path
