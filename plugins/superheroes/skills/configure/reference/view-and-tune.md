@@ -98,7 +98,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `planAuthor`). Set a role back to `claude` (or clear it) to fall fully open. `planAuthor` routes ONLY
   the showrunner's plan-author leaf; tasks authoring always runs native.
 - **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/
-  author/author-plan) → show the effective map first, then write only the `## Model tiers` block in the
+  author/author-plan/pr-body) → show the effective map first, then write only the `## Model tiers` block in the
   resolved review-crew profile. This is an optional tune action: if the owner declines, change nothing.
   `author-plan` is a split role: unset, it resolves exactly as `author`; set (e.g. `author-plan: fable`,
   only on explicit owner ask) it moves plan authoring alone. Fable-via-Cursor plan authoring = both
