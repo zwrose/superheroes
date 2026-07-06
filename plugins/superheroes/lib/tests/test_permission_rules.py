@@ -107,8 +107,9 @@ def test_apply_headless_tier_writes_verb_rules(tmp_path):
     import json as _json
     data = _json.loads(open(out["path"]).read())
     assert "Bash(git *)" in data["autoMode"]["allow"]
-    # scoped tier remains the default and stays tight
+    # apply()'s parameter default is the scoped tier — a flipped default would
+    # silently widen every configure-offer write, so pin it directly.
     scoped_only = pr.apply(str(tmp_path / "other"), "local", worktrees_root="/wt",
                            cache_base="/cache/")
-    data2 = _json.loads(open(_json.loads(_json.dumps(scoped_only))["path"]).read())
+    data2 = _json.loads(open(scoped_only["path"]).read())
     assert "Bash(git *)" not in data2["permissions"]["allow"]
