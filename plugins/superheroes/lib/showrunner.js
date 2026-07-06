@@ -2548,11 +2548,22 @@ async function proposeDodDispositions(workItem, prNumber) {
       `pointer (command output, record path, diff line); "deferred" needs an ALREADY-FILED ` +
       `issue number (#NNN) plus a one-line reason. NEVER invent evidence or issue numbers — ` +
       `deferred issues are mechanically resolved against GitHub and path-shaped evidence is ` +
-      `existence-checked, so a fabricated row is rejected and the gate parks. If a bullet has ` +
-      `no real evidence, OMIT it (the row stays blank and the gate parks honestly).\n` +
+      `existence-checked, so a fabricated row is rejected and the gate parks.\n` +
+      `COMPLETENESS IS THE JOB: propose a row for EVERY Definition-of-done bullet. The table ` +
+      `has one row per bullet and the gate parks on ANY undisposed bullet, so one bullet you ` +
+      `skip fails the entire run — do NOT stop after the first bullet you evidence.\n` +
+      `Structural bullets — a line-count claim ("exactly one additional line", "N lines added"), ` +
+      `a scope claim ("no file other than X is modified", "only these paths change") — are ` +
+      `ALWAYS evidenceable from the diff: gh pr diff ${shq(String(prNumber))} shows every hunk, ` +
+      `and gh pr diff ${shq(String(prNumber))} --name-only lists every changed path. Read the ` +
+      `diff and cite the exact hunk / path list; NEVER drop a structural bullet as "no evidence" ` +
+      `without having actually run the diff. Omission is a LAST RESORT after you have genuinely ` +
+      `checked the diff and records and found no honest evidence — it parks the run, so treat a ` +
+      `dropped bullet as a failure, not a shortcut.\n` +
       `Return ONLY JSON {"ok": true, "rows": [{"bullet": "<bullet text exactly as it appears ` +
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
-      `#NNN + reason>"}]} (ok=false with "reason" if you could not read the spec or PR).`,
+      `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
+      `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
       { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —

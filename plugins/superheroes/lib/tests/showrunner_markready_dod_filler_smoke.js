@@ -34,6 +34,11 @@ function run(plan) {
       assert.ok(String(_prompt).includes('#77'), 'proposal prompt carries the PR number')
       assert.ok(String(_prompt).includes('OMIT it'), 'proposal prompt carries the honesty contract')
       assert.ok(!String(_prompt).includes('--root .'), 'proposal prompt commands are rooted (abs root, not cwd-relative)')
+      // finding #17: the leaf (already opus via the bundle's smart-leaf floor) must be told to
+      // evidence EVERY bullet, with structural bullets pointed at the diff — an opus leaf still
+      // omitted 2 of 3 evidenceable bullets on run 11.
+      assert.ok(String(_prompt).includes('EVERY Definition-of-done bullet'), 'proposal prompt demands completeness (one row per bullet)')
+      assert.ok(String(_prompt).includes('--name-only'), 'proposal prompt points structural bullets at gh pr diff --name-only')
       if (plan.propose === 'crash') throw new Error('leaf crashed')
       return plan.propose
     }
