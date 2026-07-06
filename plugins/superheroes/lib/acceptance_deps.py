@@ -754,10 +754,19 @@ def real_gh_reader(root, stamped):
         result["live_pr"] = pr.get("url") or ""
         rollup = pr.get("statusCheckRollup") or []
         result["failure_kind"] = _check_failure_kind(rollup)
-        result["checks_pending"] = _rollup_pending(rollup)
-        result["checks_red"] = _rollup_red(rollup)
-        green = bool(rollup) and all(
-            (c.get("conclusion") or "").upper() == "SUCCESS" for c in rollup)
+        # Finding #18 (run 12, PR #270): classify via the SAME single-homed ci_status the
+        # spine uses, over a normalized rollup — so the verifier and the spine can never
+        # again disagree about "green" (the #14/#18 class). The old inline all-SUCCESS
+        # check read `conclusion` per entry, which is null for a commit STATUS (StatusContext:
+        # release-evidence is a status, not a check-run), so a green release-evidence status
+        # dragged the verdict to "not green". _normalize_rollup maps each entry's effective
+        # state (conclusion for a completed check-run, status for an in-flight one, state for
+        # a StatusContext) into ci_status's vocabulary.
+        import ci_status
+        verdict = ci_status.classify(_normalize_rollup(rollup))
+        result["checks_pending"] = verdict["status"] == "pending"
+        result["checks_red"] = verdict["status"] == "red"
+        green = verdict["status"] == "green"
         result["checks_green"] = green
         result["live_checks_green"] = green
         return result
@@ -798,33 +807,27 @@ def _host_failure_kind(root):
     return None
 
 
-def _rollup_pending(rollup):
-    """True when any check in the rollup has not COMPLETED (conclusion still null/empty
-    while queued or in progress). Distinct from red/green: pending means WAIT (#11).
-    The pending-state taxonomy is single-homed in ci_status.PENDING_STATES (§11)."""
-    import ci_status
-    for check in rollup or []:
-        if not isinstance(check, dict):
+def _normalize_rollup(rollup):
+    """Map a GitHub statusCheckRollup (a MIX of CheckRun and StatusContext nodes) into the
+    {name, bucket} shape ci_status.classify consumes — the single home for green/red/pending
+    (CONVENTIONS §11). A CheckRun carries `status`+`conclusion`; a StatusContext (a commit
+    status like release-evidence) carries `state` and NO conclusion. Effective bucket, in
+    order: a non-empty `conclusion` (a COMPLETED check-run), else `state` (a StatusContext),
+    else `status` (an in-flight check-run: QUEUED/IN_PROGRESS -> pending). ci_status._bucket
+    lower-cases and maps these into its _PASS/_PENDING sets; anything else reads red (fail-
+    closed). Finding #18: the old inline all-SUCCESS check ignored `state`, so a green
+    release-evidence STATUS (conclusion=null) falsely read as not-green."""
+    out = []
+    for c in rollup or []:
+        if not isinstance(c, dict):
             continue
-        conclusion = str(check.get("conclusion") or "").strip()
-        status = str(check.get("status") or check.get("state") or "").upper()
-        if not conclusion and status in ci_status.PENDING_STATES:
-            return True
-    return False
-
-
-def _rollup_red(rollup):
-    """True when any check has CONCLUDED non-pass (FAILURE/TIMED_OUT/CANCELLED/...).
-    A confirmed hard failure short-circuits the settle wait — the run's fate is sealed;
-    waiting out pending siblings only delays the honest red (review of finding #14).
-    NEUTRAL/SKIPPED are not red (mirrors ci_status's pass set)."""
-    for check in rollup or []:
-        if not isinstance(check, dict):
-            continue
-        conclusion = str(check.get("conclusion") or "").strip().upper()
-        if conclusion and conclusion not in ("SUCCESS", "NEUTRAL", "SKIPPED"):
-            return True
-    return False
+        name = c.get("name") or c.get("context") or "unknown"
+        conclusion = str(c.get("conclusion") or "").strip()
+        state = str(c.get("state") or "").strip()
+        status = str(c.get("status") or "").strip()
+        bucket = conclusion or state or status or "unknown"
+        out.append({"name": name, "bucket": bucket.lower()})
+    return out
 
 
 def _check_failure_kind(rollup):
