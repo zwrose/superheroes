@@ -10,7 +10,7 @@ import permission_rules as pr
 def test_generate_shapes_are_project_scoped():
     rules = pr.generate("/proj", worktrees_root="/wt", cache_base="/cache/")
     assert "Bash(cd '/proj' && python3 *)" in rules
-    assert "Bash(cd '/wt'*)" in rules
+    assert "Bash(cd '/wt/'*)" in rules            # separator-anchored: '/wt-evil' never matches
     assert "Bash(python3 /cache/*)" in rules
     assert "Bash(python3 - <<'__SR_EOF__'*)" in rules
     # No blanket verb grants: every rule is rooted, marker-anchored, or path-prefixed.
@@ -28,6 +28,15 @@ def test_merge_adds_to_both_gates_and_preserves_unrelated_keys():
     assert merged["permissions"]["deny"] == ["Bash(rm -rf *)"]      # untouched
     assert merged["model"] == "opus"                                 # untouched
     assert all(r in merged["autoMode"]["allow"] for r in rules)      # classifier gate
+
+
+def test_merge_preserves_preexisting_automode_rules():
+    rules = pr.generate("/proj", "/wt", "/cache/")
+    existing = {"autoMode": {"allow": ["SomePriorRule"], "environment": ["x"]}}
+    merged, _ = pr.merge(existing, rules)
+    assert merged["autoMode"]["allow"][0] == "SomePriorRule"     # order preserved
+    assert all(r in merged["autoMode"]["allow"] for r in rules)
+    assert merged["autoMode"]["environment"] == ["x"]            # untouched
 
 
 def test_merge_is_idempotent():

@@ -71,7 +71,7 @@ def generate(root, worktrees_root=None, cache_base=None):
         # Managed build worktrees (git/build/test ops inside the spine's own trees;
         # the enforcer hooks still deny gated verbs — merge/release/force-push —
         # regardless of any allow rule, so breadth here stays floor-bounded).
-        "Bash(cd '%s'*)" % wt,
+        "Bash(cd '%s/'*)" % wt,
         # Un-rooted normal-run shapes (__SR_ROOT unset): lib CLIs from the plugin
         # cache (any version), the spine's own heredoc write protocol, io tmp ops.
         "Bash(python3 %s*)" % cache,
@@ -96,8 +96,6 @@ def merge(settings, rules):
             block["allow"] = existing + fresh
             out[key] = block
             added += len(fresh)
-        elif key not in out and existing:
-            out[key] = block
     return out, added
 
 
