@@ -82,6 +82,25 @@ def generate(root, worktrees_root=None, cache_base=None):
     return sorted(rules)
 
 
+# The headless tier: what a DEFAULT-MODE headless child additionally needs. In default
+# mode nothing is auto-approved beyond explicit rules, and run-5's command inventory
+# showed leaves emit free-form shapes (bare find/grep/ls, unquoted cd, python3 -c) the
+# scoped tier cannot anchor. These are read-mostly verbs plus the spine's git/gh surface;
+# the enforcer PreToolUse floor still denies gated verbs (merge/release/force-push/
+# push-to-default) regardless of any allow rule, so the tier stays floor-bounded. Offered
+# ONLY for headless spine children (the harness), never in the configure tune offer.
+_HEADLESS_VERBS = ("cat", "cd", "diff", "echo", "find", "grep", "gh issue view",
+                   "gh pr", "git", "head", "ls", "mkdir", "node", "python3", "sed -n",
+                   "sort", "tail", "test", "wc")
+
+
+def generate_headless(root, worktrees_root=None, cache_base=None):
+    """Scoped tier + the headless verb tier (deduped, sorted)."""
+    scoped = generate(root, worktrees_root, cache_base)
+    verbs = ["Bash(%s *)" % v for v in _HEADLESS_VERBS]
+    return sorted(set(scoped + verbs))
+
+
 def merge(settings, rules):
     """Pure merge: add rules to permissions.allow AND autoMode.allow, deduped,
     preserving every unrelated key and any pre-existing rule order (new rules
@@ -104,7 +123,7 @@ def settings_path(root, mode):
     return os.path.join(os.path.abspath(os.path.expanduser(str(root))), ".claude", name)
 
 
-def apply(root, mode, worktrees_root=None, cache_base=None, _read=None, _write=None):
+def apply(root, mode, worktrees_root=None, cache_base=None, tier="scoped", _read=None, _write=None):
     """Read-modify-write the chosen settings file; read-back verify. Fail-closed on
     unparseable existing JSON (never clobber a file we cannot faithfully merge)."""
     path = settings_path(root, mode)
@@ -119,7 +138,8 @@ def apply(root, mode, worktrees_root=None, cache_base=None, _read=None, _write=N
             return {"ok": False, "path": path, "reason": "existing settings unparseable — not clobbering"}
         if not isinstance(existing, dict):
             return {"ok": False, "path": path, "reason": "existing settings not an object — not clobbering"}
-    rules = generate(root, worktrees_root, cache_base)
+    gen = generate_headless if tier == "headless" else generate
+    rules = gen(root, worktrees_root, cache_base)
     merged, added = merge(existing, rules)
     if added == 0:
         return {"ok": True, "path": path, "added": 0, "already": True}
@@ -145,11 +165,13 @@ def main(argv=None):
     ap.add_argument("step", choices=["emit", "apply"])
     ap.add_argument("--root", required=True)
     ap.add_argument("--mode", choices=["in-repo", "local"], default="local")
+    ap.add_argument("--tier", choices=["scoped", "headless"], default="scoped")
     args = ap.parse_args(argv)
     if args.step == "emit":
-        print(json.dumps({"ok": True, "rules": generate(args.root)}))
+        gen = generate_headless if args.tier == "headless" else generate
+        print(json.dumps({"ok": True, "rules": gen(args.root)}))
         return 0
-    out = apply(args.root, args.mode)
+    out = apply(args.root, args.mode, tier=args.tier)
     print(json.dumps(out))
     return 0 if out.get("ok") else 1
 

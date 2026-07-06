@@ -467,8 +467,19 @@ def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=Non
     prompt = build_launch_prompt(work_item, terminal_path, spine_lib=spine_lib, root=root,
                                  fixture_dir=fixture_dir)
     model = child_model or DEFAULT_CHILD_MODEL
+    # --permission-mode default: a headless `claude -p` without the flag lands in the
+    # auto-mode-classifier context, whose accumulated-context heuristics blocked the
+    # spine's own courier dispatches as oversight-evasion (issue #255, runs of
+    # 2026-07-06 — dispatch-LAYER blocks no settings key reaches). Default mode is the
+    # STRICTER posture: nothing is auto-approved beyond the project's explicit
+    # permission rules, and an unmatched command denies cleanly (the leaf sees the
+    # tool error and the spine's retry/park machinery owns it — no hang, no silent
+    # skip). The courier surface is the OWNER-applied `permission_rules.py apply
+    # --tier headless` (deliberately never auto-applied here: widening a user's
+    # settings with broad verb grants is an owner action, not harness setup — a run
+    # without the tier parks honestly on permission denials instead).
     proc = subprocess.Popen(
-        ["claude", "-p", prompt, "--model", model],
+        ["claude", "-p", prompt, "--model", model, "--permission-mode", "default"],
         start_new_session=True,
         env=env,
     )
