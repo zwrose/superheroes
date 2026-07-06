@@ -167,7 +167,13 @@ def _emit_checks_payload(work_item, worktree):
         return {"error": "CI status could not be read"}
     raw = out.stdout.strip()
     if not raw:
-        return []
+        # gh prints a JSON array (possibly []) on every legitimate answer, including
+        # non-zero exits for failing/pending checks. Empty stdout + non-zero exit is a
+        # TRANSPORT failure (outage/auth/rate limit) — returning [] there classifies as
+        # "none" and certifies "merge-ready: no required checks ran" on a run whose
+        # checks are merely unreadable (review finding, false-green class; the settle
+        # poll multiplied this window from one read to dozens).
+        return [] if out.returncode == 0 else {"error": "CI status could not be read"}
     try:
         return json.loads(raw)
     except Exception:

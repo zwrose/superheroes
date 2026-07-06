@@ -19,6 +19,7 @@ function run(plan) {
     }
     if (label === 'wait for CI to settle') {
       assert.ok(_prompt.includes('ci_settle_cli.py'), 'settle leaf runs the settle CLI')
+      assert.ok(_prompt.includes('--timeout-sec 540'), 'settle budget is pinned under the 600s Bash leaf ceiling')
       return [{ ok: true, stdout: JSON.stringify(plan.settle) }]
     }
     if (label === 'prepare CI fix') {
@@ -55,6 +56,7 @@ function run(plan) {
   out = await sr.shipPhase('wi', { number: 7 }, 5)
   assert.strictEqual(out.outcome, 'parked', 'unsettled -> parked')
   assert.ok(/still pending after the settle wait/.test(out.reason), 'park names the settle wait')
+  assert.ok(out.reason.includes('validate'), 'park names the checks still pending AFTER the wait (fresh classification)')
   assert.ok(!labels.includes('fix-ci'), 'no fixer on an unsettled park')
 
   // pending -> settle resolves RED -> fixer path engages (fix -> green -> ready).

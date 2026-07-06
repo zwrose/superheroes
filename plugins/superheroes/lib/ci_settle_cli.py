@@ -37,8 +37,11 @@ def _read_checks_via_cli(work_item, worktree):
     if worktree:
         cmd.extend(["--worktree", worktree])
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
-        return json.loads((out.stdout or "").strip() or "null")
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        parsed = json.loads((out.stdout or "").strip() or "null")
+        # A crashed emit (empty stdout -> None) must read as an ERROR, not as data — a
+        # None slipping through would fabricate a "still pending" park narrative (#212 class).
+        return parsed if isinstance(parsed, (list, dict)) else {"error": "CI status could not be read"}
     except Exception:
         return {"error": "CI status could not be read"}
 
@@ -50,14 +53,37 @@ def settle(work_item, worktree, timeout_sec, interval_sec, *, _read=None, _sleep
     sleep = _sleep or time.sleep
     clock = _clock or time.monotonic
     start = clock()
+    saw_pending = False
     while True:
         checks = read()
         waited = clock() - start
         if not isinstance(checks, list):
             # {"error":...} / {"stale":...} — the ship loop owns these paths; stop polling.
             return {"settled": False, "waited_sec": round(waited, 1), "checks": checks}
-        if ci_status.classify(checks)["status"] != "pending":
+        status = ci_status.classify(checks)["status"]
+        if status != "pending":
+            # pending -> "none" means the checks LIST went empty mid-poll. A transient gh
+            # failure reads as exactly that (empty stdout -> []), and certifying it would
+            # hand back "merge-ready: no required checks ran" on a run whose checks were
+            # in flight moments ago (review finding, false-green class). One confirming
+            # re-read after a full interval: real checks-disappeared survives it, a blip
+            # does not.
+            if status == "none" and saw_pending and waited + interval_sec <= timeout_sec:
+                sleep(interval_sec)
+                confirm = read()
+                waited = clock() - start
+                if not isinstance(confirm, list):
+                    return {"settled": False, "waited_sec": round(waited, 1), "checks": confirm}
+                if ci_status.classify(confirm)["status"] == "pending":
+                    saw_pending = True
+                    checks = confirm
+                    if waited + interval_sec > timeout_sec:
+                        return {"settled": False, "waited_sec": round(waited, 1), "checks": checks}
+                    sleep(interval_sec)
+                    continue
+                return {"settled": True, "waited_sec": round(waited, 1), "checks": confirm}
             return {"settled": True, "waited_sec": round(waited, 1), "checks": checks}
+        saw_pending = True
         if waited + interval_sec > timeout_sec:
             return {"settled": False, "waited_sec": round(waited, 1), "checks": checks}
         sleep(interval_sec)
@@ -67,9 +93,10 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--work-item", required=True)
     ap.add_argument("--worktree", default=None)
-    ap.add_argument("--timeout-sec", type=float, default=900.0,
-                    help="total settle budget (default 15 min — CI on this repo runs ~2-3 min; "
-                         "the ship loop parks honestly when the budget ends still-pending)")
+    ap.add_argument("--timeout-sec", type=float, default=540.0,
+                    help="total settle budget (default 9 min — MUST stay under the Bash tool's "
+                         "600000ms leaf ceiling so the honest budget-exhausted return is always "
+                         "reachable; CI on this repo runs ~2-3 min)")
     ap.add_argument("--interval-sec", type=float, default=20.0)
     a = ap.parse_args(argv)
     print(json.dumps(settle(a.work_item, a.worktree, a.timeout_sec, a.interval_sec)))

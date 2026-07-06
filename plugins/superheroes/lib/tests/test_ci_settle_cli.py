@@ -58,3 +58,33 @@ def test_settled_red_is_settled_not_waited_out():
                                _read=_seq_reader([[{"name": "v", "bucket": "fail"}]]),
                                _sleep=sleep, _clock=clock)
     assert out["settled"] is True   # red IS a settled state — the ship loop's fixer owns it
+
+
+def test_pending_then_transient_none_is_confirmed_before_settling():
+    # A gh blip mid-poll reads as [] ("none"); certifying that would hand back
+    # "merge-ready: no required checks ran" on a run whose checks were in flight.
+    # The confirming re-read sees pending again -> the poll continues -> settles green.
+    clock, sleep = _fake_clock()
+    seq = [[{"name": "v", "bucket": "pending"}],   # pending observed
+           [],                                      # transient blip -> "none"
+           [{"name": "v", "bucket": "pending"}],    # confirm read: still pending
+           [{"name": "v", "bucket": "pass"}]]       # settles green
+    out = ci_settle_cli.settle("wi", None, 900, 20, _read=_seq_reader(seq),
+                               _sleep=sleep, _clock=clock)
+    assert out["settled"] is True
+    assert out["checks"] == [{"name": "v", "bucket": "pass"}]
+
+
+def test_pending_then_real_none_settles_after_confirmation():
+    clock, sleep = _fake_clock()
+    seq = [[{"name": "v", "bucket": "pending"}], [], []]
+    out = ci_settle_cli.settle("wi", None, 900, 20, _read=_seq_reader(seq),
+                               _sleep=sleep, _clock=clock)
+    assert out["settled"] is True and out["checks"] == []
+
+
+def test_none_without_prior_pending_needs_no_confirmation():
+    clock, sleep = _fake_clock()
+    out = ci_settle_cli.settle("wi", None, 900, 20, _read=_seq_reader([[]]),
+                               _sleep=sleep, _clock=clock)
+    assert out["settled"] is True and out["waited_sec"] == 0.0

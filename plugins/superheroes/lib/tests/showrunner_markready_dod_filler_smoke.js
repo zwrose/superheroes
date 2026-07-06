@@ -1,106 +1,92 @@
-// mark-ready DoD filler leg (issue #228 "build/ship legs fill it" — found missing live in
-// the 0.10.0 qualification): a gate park with the machine field gate === 'dod' dispatches
-// exactly ONE fill-dod model leaf and re-decides once; a park WITHOUT that field (or a
-// filler failure) never dispatches/loops; a clean gate never dispatches the filler at all.
+// mark-ready DoD fill leg (issue #228 "build/ship legs fill it"; PR #251 review batch:
+// the model PROPOSES rows, the deterministic splice CLI holds the pen). Scenarios:
+// dod-park -> propose -> splice -> re-decide -> ready; splice/proposal failure -> the
+// original honest park stands (no loop); non-dod park never dispatches anything; a
+// transport failure on the re-decide keeps the specific DoD park reason.
+require('./_smoke_checkout_root.js')
 const assert = require('assert')
 
-function freshShowrunner() {
-  delete require.cache[require.resolve('../showrunner.js')]
-  return require('../showrunner.js')
-}
+const DOD_PARK = { ok: false, read_back: false, gate: 'dod', pr: 77, reason: 'DoD gate: bullet X — no disposition (expected done or deferred)' }
 
-async function scenarioFilledAndFlipped() {
+function run(plan) {
   const labels = []
   let gateCalls = 0
   global.log = () => {}
   global.agent = async (_prompt, opts) => {
-    const label = opts && opts.label
+    const label = (opts && opts.label) || ''
     labels.push(label)
     if (label === 'mark PR ready') {
       gateCalls += 1
-      if (gateCalls === 1) {
-        return [{ ok: true, stdout: JSON.stringify({ ok: false, read_back: false, gate: 'dod', pr: 77, reason: 'DoD gate: bullet X — no disposition (expected done or deferred)' }) }]
-      }
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]
+      const out = plan.gateSeq[Math.min(gateCalls - 1, plan.gateSeq.length - 1)]
+      if (out === 'transport') throw new Error('courier transport failure')
+      return [{ ok: true, stdout: JSON.stringify(out) }]
     }
     if (label === 'fill-dod') {
-      assert.ok(String(_prompt).includes('#77'), 'filler prompt must carry the PR number')
-      assert.ok(String(_prompt).includes('LEAVE THE ROW BLANK'), 'filler prompt must carry the honesty contract')
-      return { ok: true, filled: 3, blank: 0 }
+      assert.ok(String(_prompt).includes('#77'), 'proposal prompt carries the PR number')
+      assert.ok(String(_prompt).includes('OMIT it'), 'proposal prompt carries the honesty contract')
+      assert.ok(!String(_prompt).includes('--root .'), 'proposal prompt commands are rooted (abs root, not cwd-relative)')
+      if (plan.propose === 'crash') throw new Error('leaf crashed')
+      return plan.propose
+    }
+    if (label === 'splice DoD dispositions') {
+      assert.ok(String(_prompt).includes('dod_fill_cli.py'), 'splice runs the deterministic CLI')
+      return [{ ok: true, stdout: JSON.stringify(plan.splice) }]
     }
     throw new Error(`unexpected label ${label || 'none'}`)
   }
-  const sr = freshShowrunner()
-  const out = await sr.markReadyPhase('wi-dod')
-  assert.strictEqual(out.phaseResult.confidence, 'high')
-  assert.deepStrictEqual(out.sideEffect, { ready: true })
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'mark PR ready'])
-  console.log('ok: dod park -> one filler leaf -> one re-decide -> ready')
-}
-
-async function scenarioStillBlankParks() {
-  const labels = []
-  global.log = () => {}
-  global.agent = async (_prompt, opts) => {
-    const label = opts && opts.label
-    labels.push(label)
-    if (label === 'mark PR ready') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: false, read_back: false, gate: 'dod', pr: 77, reason: 'DoD gate: bullet X — no disposition (expected done or deferred)' }) }]
-    }
-    if (label === 'fill-dod') return { ok: true, filled: 2, blank: 1 }
-    throw new Error(`unexpected label ${label || 'none'}`)
-  }
-  const sr = freshShowrunner()
-  const out = await sr.markReadyPhase('wi-dod')
-  // gate parked again on the still-blank row: exactly one filler, exactly two gate runs, honest park.
-  assert.strictEqual(out.phaseResult.confidence, 'low')
-  assert.strictEqual(out.sideEffect, null)
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'mark PR ready'])
-  assert.ok(out.phaseResult.assumptions[0].includes('DoD gate'), 'park keeps the gate reason')
-  console.log('ok: still-blank row -> single retry -> honest park (no loop)')
-}
-
-async function scenarioNonDodParkNoFiller() {
-  const labels = []
-  global.log = () => {}
-  global.agent = async (_prompt, opts) => {
-    const label = opts && opts.label
-    labels.push(label)
-    if (label === 'mark PR ready') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: false, read_back: false, reason: 'PR isDraft unreadable — not flipping blind' }) }]
-    }
-    throw new Error(`unexpected label ${label || 'none'}`)
-  }
-  const sr = freshShowrunner()
-  const out = await sr.markReadyPhase('wi-plain')
-  assert.strictEqual(out.phaseResult.confidence, 'low')
-  assert.deepStrictEqual(labels, ['mark PR ready'])
-  console.log('ok: non-dod park never dispatches the filler')
-}
-
-async function scenarioFillerFailureKeepsPark() {
-  const labels = []
-  global.log = () => {}
-  global.agent = async (_prompt, opts) => {
-    const label = opts && opts.label
-    labels.push(label)
-    if (label === 'mark PR ready') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: false, read_back: false, gate: 'dod', pr: 77, reason: 'DoD gate: bullet X — no disposition (expected done or deferred)' }) }]
-    }
-    if (label === 'fill-dod') throw new Error('filler leaf crashed')
-    throw new Error(`unexpected label ${label || 'none'}`)
-  }
-  const sr = freshShowrunner()
-  const out = await sr.markReadyPhase('wi-dod')
-  // filler crash -> no gate re-run, the original honest park stands.
-  assert.strictEqual(out.phaseResult.confidence, 'low')
-  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'])
-  console.log('ok: filler failure -> original park stands, no re-decide')
+  delete require.cache[require.resolve('../showrunner.js')]
+  return { sr: require('../showrunner.js'), labels }
 }
 
 ;(async () => {
-  await scenarioFilledAndFlipped()
-  await scenarioStillBlankParks()
-  await scenarioNonDodParkNoFiller()
-  await scenarioFillerFailureKeepsPark()
+  // happy path: park -> propose -> splice -> re-decide flips ready.
+  let { sr, labels } = run({
+    gateSeq: [DOD_PARK, { ok: true, read_back: true }],
+    propose: { ok: true, rows: [{ bullet: 'bullet X', disposition: 'done', detail: 'evidence' }] },
+    splice: { ok: true, filled: 1, rejected: [] },
+  })
+  let out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'high')
+  assert.deepStrictEqual(out.sideEffect, { ready: true })
+  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'splice DoD dispositions', 'mark PR ready'])
+
+  // splice rejects everything -> no re-decide, the original DoD park reason survives.
+  ;({ sr, labels } = run({
+    gateSeq: [DOD_PARK],
+    propose: { ok: true, rows: [{ bullet: 'bullet X', disposition: 'done', detail: 'fabricated' }] },
+    splice: { ok: false, filled: 0, rejected: [{ bullet: 'bullet X', reason: 'path-shaped evidence does not exist' }] },
+  }))
+  out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'low')
+  assert.ok(out.phaseResult.assumptions[0].includes('DoD gate'), 'park keeps the gate reason')
+  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod', 'splice DoD dispositions'])
+
+  // proposal returns no rows -> no splice, no re-decide.
+  ;({ sr, labels } = run({ gateSeq: [DOD_PARK], propose: { ok: true, rows: [] }, splice: { ok: true } }))
+  out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'low')
+  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'])
+
+  // proposal leaf crash -> original park stands.
+  ;({ sr, labels } = run({ gateSeq: [DOD_PARK], propose: 'crash', splice: { ok: true } }))
+  out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'low')
+  assert.deepStrictEqual(labels, ['mark PR ready', 'fill-dod'])
+
+  // non-dod park never dispatches the fill leg.
+  ;({ sr, labels } = run({ gateSeq: [{ ok: false, read_back: false, reason: 'PR isDraft unreadable — not flipping blind' }], propose: { ok: true, rows: [] }, splice: { ok: true } }))
+  out = await sr.markReadyPhase('wi-plain')
+  assert.deepStrictEqual(labels, ['mark PR ready'])
+
+  // transport failure on the re-decide keeps the specific DoD park reason (not the generic).
+  ;({ sr, labels } = run({
+    gateSeq: [DOD_PARK, 'transport'],
+    propose: { ok: true, rows: [{ bullet: 'bullet X', disposition: 'done', detail: 'evidence' }] },
+    splice: { ok: true, filled: 1, rejected: [] },
+  }))
+  out = await sr.markReadyPhase('wi-dod')
+  assert.strictEqual(out.phaseResult.confidence, 'low')
+  assert.ok(out.phaseResult.assumptions[0].includes('DoD gate'), 're-decide transport failure preserves the DoD reason')
+
+  console.log('ok: dod propose->splice->re-decide (happy, reject, empty, crash, non-dod, retry-transport)')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })

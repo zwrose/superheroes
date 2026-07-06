@@ -644,3 +644,22 @@ def test_deny_only_floor_holds_on_claude_host_without_allowance_path(monkeypatch
     assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "deny"
 
 
+
+
+def test_dod_filler_command_surface_stays_non_gated(monkeypatch):
+    """PR #251 regression pin: the mark-ready DoD fill leg's whole command surface must
+    stay OUT of the owner-authority gated set — on BOTH floors. A future gated-set
+    expansion (e.g. a broad `gh pr` pattern) would silently park every spec-driven
+    acceptance run at mark-ready, reintroducing the 0.10.0 mutual-deadlock class."""
+    surface = [
+        "gh pr edit 42 --body-file /tmp/x.md",
+        "gh pr view 42 --json body",
+        "gh pr diff 42",
+        "gh issue view 7 --json state",
+    ]
+    for cmd in surface:
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "allow", cmd
+    monkeypatch.setenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", "1")
+    for cmd in surface:
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "allow", (
+            "deny-only floor must not gate the fill leg: %s" % cmd)
