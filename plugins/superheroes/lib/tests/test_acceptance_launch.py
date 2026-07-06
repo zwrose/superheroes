@@ -274,6 +274,10 @@ def test_default_child_factory_threads_materialized_fixture_dir(monkeypatch):
         terminal_path="/run/dir/terminal-record.json")
     prompt = captured["argv"][2]
     assert "triple at /store/docs/accept-harness-abc123 — read those files" in prompt
+    # #255: the child must run in default mode — a flag-less headless claude -p lands in
+    # the auto-mode-classifier context that blocked courier dispatches as oversight-evasion.
+    argv = captured["argv"]
+    assert argv[argv.index("--permission-mode") + 1] == "default"
 
 
 def test_build_launch_prompt_default_is_byte_identical_when_spine_lib_unset():
