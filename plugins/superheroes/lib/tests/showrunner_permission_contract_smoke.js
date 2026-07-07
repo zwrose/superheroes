@@ -37,6 +37,9 @@ async function reviewerPromptEmbedsBothBlocks() {
     'reviewer prompt states the 15-minute bound')
   assert.ok(reviewerPrompt.includes('report the denied action'),
     'reviewer prompt requires honest reporting of the denied action')
+  // (c) FR-1 finality: a denied action is FINAL for the step — do not re-attempt it.
+  assert.ok(/FINAL for this step/.test(reviewerPrompt) && /do not re-attempt/.test(reviewerPrompt),
+    'reviewer prompt states the FR-1 finality clause (denied action is final, do not re-attempt)')
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +54,8 @@ function leafPromptEmbedsTimeoutContract() {
     'leaf prompt states the 15-minute bound')
   assert.ok(leafPrompt.includes('report the denied action'),
     'leaf prompt requires honest reporting of the denied action (never as done)')
+  assert.ok(/FINAL for this step/.test(leafPrompt) && /do not re-attempt/.test(leafPrompt),
+    'leaf prompt states the FR-1 finality clause (denied action is final, do not re-attempt)')
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +68,11 @@ function contractConstantsExported() {
   assert.ok(sr.PROBE_STEERING.includes('do not improvise inline'))
   assert.ok(sr.TIMEOUT_PROCEED_CONTRACT.includes('15 minutes'))
   assert.ok(sr.TIMEOUT_PROCEED_CONTRACT.includes('report the denied action'))
+  // FR-1 finality clause now lives in the shared constant (single source of truth).
+  assert.ok(sr.TIMEOUT_PROCEED_CONTRACT.includes('FINAL for this step'),
+    'TIMEOUT_PROCEED_CONTRACT states the denied action is final for the step')
+  assert.ok(/do not re-attempt it in any rewording/.test(sr.TIMEOUT_PROCEED_CONTRACT),
+    'TIMEOUT_PROCEED_CONTRACT forbids re-attempting the denied action in any rewording')
 }
 
 async function main() {

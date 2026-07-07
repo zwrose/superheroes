@@ -274,6 +274,10 @@ def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None
     try:
         verdict, why = permission_rules.evaluate(command, cwd, run_id)
         if verdict == "allow":
+            # #149 auditability NFR: record this auto-allowance in the run's own journal. Pure
+            # best-effort observability — fail-open, NEVER affects the decision or latency, and
+            # fires ONLY here (the allowance layer's allow), not on the default-allow fall-through.
+            _journal_allowance(command, cwd, run_id, why)
             return ("allow", "auto-allowed (%s)" % why)
     except Exception:
         pass
@@ -368,34 +372,57 @@ def _codex_gate_reason(command, action, cwd):
 
 
 def _active_run_id(cwd):
-    """The `run_id` of the currently-active run for `cwd`'s work-item, or None.
+    """The `run_id` of the currently-active run for `cwd`'s clone, or None.
 
-    "A run is active" is the existing `ref_lock` lease on the work-item's lock ref; its
-    `generation` field is the `run_id` the spine freezes/composes under. This threads that
-    signal into the allowance layer so the composed/freeze machinery is inert outside an
-    active run (FR-3) — an interactive session with no lease sees `run_id=None`.
+    "A run is active" is a fresh `ref_lock` lease on a work-item's lock ref; its `generation`
+    field is the `run_id` the spine freezes/composes under. This threads that signal into the
+    allowance layer so the composed/freeze machinery is inert outside an active run (FR-3) — an
+    interactive session with no lease sees `run_id=None`.
 
-    Fail-SAFE (UFR-2): any error — no store, no current work-item, an absent/None lease
-    (`read_lease` returns a `(blob_sha, lease_dict)` TUPLE; a missing ref or unreadable blob
-    yields a `None` lease), or a stale lease — resolves to None, never to a spurious run_id.
-    A None run_id only makes the layer MORE conservative (composed/freeze cannot fire), so
-    the fail-safe direction is always toward prompting. Deps are imported here (not at module
-    load) to keep the enforcer's hot classify path free of the control-plane import chain."""
+    Resolved via `permission_rules.resolve_active_lease` — the ONE shared lease-resolution path
+    (also behind `_active_work_item` and `permission_rules._run_is_live`), built on the #170
+    `ref_lock.active_work_items` seam that REPLACED the removed `control_plane.get_current` /
+    `current.json` pointer (the pre-#170 seam this branch was authored against; it no longer
+    resolves). Fail-SAFE (UFR-2): any error, no store, no live lease, or a stale lease → None,
+    never a spurious run_id — a None run_id only makes the layer MORE conservative
+    (composed/freeze cannot fire), so the fail-safe direction is always toward prompting."""
+    return permission_rules.resolve_active_lease(cwd)[1]
+
+
+def _active_work_item(cwd, run_id):
+    """The live work-item in this clone whose lease `generation == run_id` — the run the
+    allowance layer just fired for, so a journaled allowance lands in the RIGHT run's records.
+
+    Resolved via `permission_rules.resolve_active_lease` — the SAME shared lease-resolution
+    path `_active_run_id` uses (the #170 `ref_lock.active_work_items` seam), so the two can
+    never drift. Fail-SAFE (UFR-2): any error, no live lease, or no generation match → None."""
+    return permission_rules.resolve_active_lease(cwd, run_id)[0]
+
+
+def _journal_allowance(command, cwd, run_id, reason):
+    """Record an auto-allowance in the active run's own events.jsonl (#149 auditability NFR:
+    "every automatic allowance ... made during a run is visible in that run's records").
+
+    Best-effort OBSERVABILITY, NEVER gating: this append is wrapped whole so any error in path
+    resolution or the write is swallowed — the hook's decision and latency are untouched (no
+    retries). The raw command is NEVER written (it may embed tokens/secrets); only the first 16
+    hex of its sha256, hashed with the SAME `permission_rules._hash` the composed-command store
+    uses, so the two correlate. Fires ONLY for the allowance layer's allow — the caller does not
+    reach here on the default-allow fall-through, which must journal nothing."""
     try:
         import control_plane
-        import ref_lock
-        store = control_plane.checkout_dir(cwd)
-        work_item = control_plane.get_current(cwd)
+        import journal
+        work_item = _active_work_item(cwd, run_id)
         if not work_item:
-            return None
-        _sha, lease = ref_lock.read_lease(store, work_item)
-        if not isinstance(lease, dict):
-            return None
-        if ref_lock.is_stale(lease, ref_lock.DEFAULT_TTL):
-            return None
-        return lease.get("generation")
+            return
+        events = control_plane.paths(cwd, work_item)["events"]
+        journal.append(events, "allowance_fired", payload={
+            "reason": reason,
+            "command_sha256": permission_rules._hash(command)[:16],
+            "cwd": cwd or None,
+        })
     except Exception:
-        return None
+        return
 
 
 def hook(stdin_text, host="codex"):

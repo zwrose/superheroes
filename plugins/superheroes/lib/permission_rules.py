@@ -57,15 +57,17 @@ _INTERPRETER = re.compile(
 )
 
 
-def worktree_confined(command, cwd):
-    """True iff `cwd` realpaths to a STRICT descendant of the managed-worktree root AND
-    `command` is an interpreter invocation.
+def _cwd_in_managed_worktree(cwd):
+    """True iff `cwd` realpaths to a STRICT descendant of the managed-worktree root.
 
-    Strict descendant: the root itself is NOT confined (`real != root`); a `..` parent-hop
-    that resolves out of the root earns nothing; a symlink whose realpath lands under the
-    root IS confined (realpath resolves it); a name-prefix lookalike sibling
-    (`...-worktrees-evil`) is NOT a descendant. Fail-safe (UFR-2/UFR-5): a falsy/non-str
-    `cwd`, a `ValueError` from `commonpath` (different drives), or any other error → False.
+    The cwd-only confinement predicate, factored out of `worktree_confined` so the FR-6
+    worktree-vcs routine family can reuse the EXACT same strict-descendant realpath check
+    (never a duplicated, drift-prone copy). Strict descendant: the root itself is NOT confined
+    (`real != root`); a `..` parent-hop that resolves out of the root earns nothing; a symlink
+    whose realpath lands under the root IS confined (realpath resolves it); a name-prefix
+    lookalike sibling (`...-worktrees-evil`) is NOT a descendant. Fail-safe (UFR-2/UFR-5): a
+    falsy/non-str `cwd`, a `ValueError` from `commonpath` (different drives), or any other
+    error → False.
     """
     if not cwd or not isinstance(cwd, str):
         return False
@@ -74,6 +76,21 @@ def worktree_confined(command, cwd):
         root = _worktrees_root()
         if os.path.commonpath([real, root]) != root or real == root:
             return False
+        return True
+    except Exception:
+        return False
+
+
+def worktree_confined(command, cwd):
+    """True iff `cwd` is a real managed build worktree (`_cwd_in_managed_worktree`) AND
+    `command` is an interpreter invocation.
+
+    Fail-safe (UFR-2/UFR-5): a cwd that is not a strict descendant of the managed-worktree
+    root, or a non-str `command`, → False (never toward allowing).
+    """
+    if not _cwd_in_managed_worktree(cwd):
+        return False
+    try:
         return bool(_INTERPRETER.search(command))
     except Exception:
         return False
@@ -144,27 +161,59 @@ def _run_path(run_id, cwd, root):
     return os.path.join(_store_dir(cwd, root), "runs", "%s.json" % run_id)
 
 
-def _run_is_live(run_id, cwd, root):
-    """True iff a fresh (`not ref_lock.is_stale`) lease exists whose `generation == run_id`.
+def resolve_active_lease(cwd, run_id=None):
+    """Resolve the live (non-stale) work-item lease for `cwd`'s clone — the ONE shared
+    lease-resolution path behind `enforcer._active_run_id`, `enforcer._active_work_item`,
+    and `_run_is_live` (so they can never drift into three parallel lookups).
 
-    A seam the reap test stubs. Fail-safe (UFR-2): any error — no store, unreadable ref,
-    absent/None lease — is treated as *not live*, so a run file is only ever reaped, never
-    kept alive, on the strength of a positively-read fresh matching lease. The permission
-    store `root` override does not relocate the real lease store, so lease reads always go
-    through the real control-plane store (a fresh worktree shares the common-dir key)."""
+    Uses the #170 `ref_lock.active_work_items` seam — the honest "what is running in this
+    clone" signal that REPLACED the removed `control_plane.get_current` / `current.json`
+    pointer (the pre-#170 seam this branch was authored against, which no longer exists). The
+    lease store is ALWAYS the real per-clone control-plane checkout store
+    (`control_plane.checkout_dir`); a permission-store `root` override never relocates it, and
+    a fresh build worktree shares the same common-dir key.
+
+    Returns `(work_item, generation)`:
+      * `run_id is None` — the "what run is active here" query: the first (sorted, for
+        determinism) live work-item and its lease `generation`.
+      * `run_id` given — the "is THIS run live / which work-item is it" query: the live
+        work-item whose lease `generation` matches `run_id`, else `(None, None)`. Matched by
+        string value so an int fence-token `generation` and a string run-id (e.g. a
+        `runs/<id>.json` filename stem) name the same run.
+
+    Fail-SAFE (UFR-2): any error, no store, no live lease, an absent/None lease, or no
+    generation match → `(None, None)`. `active_work_items` already filters to non-stale leases,
+    so a stale/released lease resolves to `(None, None)` — never a spurious run id. A
+    `(None, None)`/None result only makes the allowance layer MORE conservative, so the
+    fail-safe direction is always toward prompting."""
     try:
         store = control_plane.checkout_dir(cwd)
-        work_item = control_plane.get_current(cwd)
-        if not work_item:
-            return False
-        _sha, lease = ref_lock.read_lease(store, work_item)
-        if not isinstance(lease, dict):
-            return False
-        if ref_lock.is_stale(lease, ref_lock.DEFAULT_TTL):
-            return False
-        return lease.get("generation") == run_id
+        for work_item in ref_lock.active_work_items(store):
+            _sha, lease = ref_lock.read_lease(store, work_item)
+            if not isinstance(lease, dict):
+                continue
+            generation = lease.get("generation")
+            if run_id is None:
+                return (work_item, generation)
+            if str(generation) == str(run_id):
+                return (work_item, generation)
     except Exception:
-        return False
+        return (None, None)
+    return (None, None)
+
+
+def _run_is_live(run_id, cwd, root):
+    """True iff a fresh (non-stale) lease exists whose `generation` matches `run_id`.
+
+    A seam the reap test stubs. Delegates to `resolve_active_lease` — the single shared
+    lease-resolution path (no drift with enforcer's `_active_run_id`/`_active_work_item`).
+    Fail-safe (UFR-2): resolve_active_lease returns `(None, None)` on any error / no store /
+    absent-or-stale lease, so a run file is only ever KEPT (not reaped) on the strength of a
+    positively-read fresh matching lease. The permission-store `root` override does NOT
+    relocate the real lease store (kept in the signature for the reap seam, but unused for
+    resolution) — resolve_active_lease always reads through the real control-plane checkout
+    store (a fresh worktree shares the common-dir key)."""
+    return resolve_active_lease(cwd, run_id)[0] is not None
 
 
 def _reap_stale(cwd, root):
@@ -199,9 +248,9 @@ def freeze_run_rules(run_id, cwd, root=None):
 
     The snapshot is the per-run frozen view a running run reads (UFR-9): a mid-run edit to
     `rules.json` never reaches a run that already froze. The run file also carries the
-    per-run `composed` command-hash set (FR-8) and a `denials` list (Task 7 absorption).
-    Reap runs AFTER the write so a crash mid-freeze still leaves this run's own file intact."""
-    snapshot = {"rules": rules(cwd, root), "composed": [], "denials": []}
+    per-run `composed` command-hash set (FR-8). Reap runs AFTER the write so a crash
+    mid-freeze still leaves this run's own file intact."""
+    snapshot = {"rules": rules(cwd, root), "composed": []}
     path = _run_path(run_id, cwd, root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     control_plane.atomic_write(path, json.dumps(snapshot))
@@ -210,9 +259,9 @@ def freeze_run_rules(run_id, cwd, root=None):
 
 def frozen_rules(run_id, cwd, root=None):
     """Read the per-run frozen snapshot for `run_id`. Fail-safe (UFR-2): a missing / corrupt /
-    non-dict run file yields the empty snapshot `{"rules": [], "composed": [], "denials": []}`
+    non-dict run file yields the empty snapshot `{"rules": [], "composed": []}`
     (→ no allowance → prompt), never a raise."""
-    empty = {"rules": [], "composed": [], "denials": []}
+    empty = {"rules": [], "composed": []}
     try:
         with open(_run_path(run_id, cwd, root)) as f:
             data = json.load(f)
@@ -223,7 +272,6 @@ def frozen_rules(run_id, cwd, root=None):
     return {
         "rules": data.get("rules") if isinstance(data.get("rules"), list) else [],
         "composed": data.get("composed") if isinstance(data.get("composed"), list) else [],
-        "denials": data.get("denials") if isinstance(data.get("denials"), list) else [],
     }
 
 
@@ -262,6 +310,13 @@ def evaluate(command, cwd, run_id, root=None):
     (enforcer imports permission_rules for the Task-5 wiring)."""
     if not isinstance(command, str):
         return ("fall", "non-string")
+    # FR-3: the layer is INERT with no active showrunner run. A falsy `run_id` (an interactive
+    # session with no live lease — enforcer._active_run_id yields None) leaves prompting
+    # UNCHANGED; every allowance arm (composed-exact, routine family, worktree-confined) is
+    # scoped to "a showrunner leaf" (FR-5). Bail before any arm so an interpreter command run
+    # from inside a managed build worktree is NOT auto-allowed when no run is active.
+    if not run_id:
+        return ("fall", "no active run (FR-3)")
     # Defensive floor re-check (UFR-1): a gated command is the floor's to decide — never
     # allowance-allow it, even against a matching rule. Reproduces only the gated/not-gated
     # partition; sufficient because `evaluate` is called solely where the floor already
@@ -281,7 +336,15 @@ def evaluate(command, cwd, run_id, root=None):
         for rule in frozen.get("rules", []):
             pattern = rule.get("pattern") if isinstance(rule, dict) else None
             if pattern and re.search(pattern, command):
-                return ("allow", "routine:%s" % rule.get("family"))
+                family = rule.get("family")
+                # FR-6: "version-control operations confined to managed build worktrees." The
+                # seeded worktree-vcs family is confined only by branch-ref regex, not by cwd;
+                # additionally require the command's cwd to be a real managed build worktree
+                # (the same strict-descendant realpath check `worktree_confined` uses, UFR-5).
+                # A worktree-vcs match from outside a managed worktree earns nothing → fall.
+                if family == "worktree-vcs" and not _cwd_in_managed_worktree(cwd):
+                    continue
+                return ("allow", "routine:%s" % family)
         # Worktree-confined (FR-5): an interpreter probe inside a real managed worktree.
         if worktree_confined(command, cwd):
             return ("allow", "worktree-confined")

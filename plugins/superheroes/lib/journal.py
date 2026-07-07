@@ -31,6 +31,12 @@ EVENT_TYPES = {
     # #149 permission posture: a bounded ask that timed out and degraded (UFR-3) — non-secret
     # structured payload, disclosed in the readout.
     "permission_denied",
+    # #149 auditability NFR ("every automatic allowance or timeout denial made during a run is
+    # visible in that run's records"): an AUTO-ALLOWANCE the below-the-floor allowance layer
+    # fired (denials already ride permission_denied). Structured non-secret `payload`
+    # ({reason, command_sha256, cwd}), written as-is — the command HASH (first 16 hex of
+    # sha256), never the raw command text (which may embed tokens/secrets).
+    "allowance_fired",
 }
 
 

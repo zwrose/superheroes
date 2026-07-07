@@ -64,10 +64,14 @@ def collect(cwd, root=None):
         permission = permission_rules.rules(cwd, root=root)  # read-only, provenance-valid only
     except Exception:
         permission = []
+    try:
+        permission_audit = permission_rules.audit(cwd, root=root)  # read-only FR-7 record
+    except Exception:
+        permission_audit = []
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
-            "permissionRules": permission}
+            "permissionRules": permission, "permissionAudit": permission_audit}
 
 
 def _health_line(counts):
@@ -121,6 +125,11 @@ def render(cwd, *, root=None):
         out.append("auto-allowed routine families (owner-curated, below the owner-role floor):")
         for rule in perm:
             out.append(f"- {rule.get('family') or '(unnamed)'}: {rule.get('pattern') or '(no pattern)'}")
+    audit = data.get("permissionAudit") or []
+    if audit:
+        out.append(f"Audit record: {len(audit)} observed command{'s' if len(audit) != 1 else ''}")
+    else:
+        out.append("Audit record: none (seed the routine families to write it)")
     out.append("")
     out.append("## Pinned patterns")
     out.append((data["patterns"] or "(none)").strip())

@@ -1787,6 +1787,10 @@ function _retryableReviewerIssue(out) {
 // Covers every retryable cause, not only receipts: `malformed` catches a schema-failing/off-task
 // answer (live precedent: a reviewer glitched onto an unrelated MCP connector and returned nonsense).
 function _retryReason(out) {
+  // FR-1/FR-2: a denied verification probe (permissionDenied) is degraded to receiptMissing by
+  // ensureReviewerShape, but its retry must NOT be told to "supply a receipt" — it must be told the
+  // denied probe is FINAL and to verify another way / return low. Surface it ahead of receipt-missing.
+  if (out && out.permissionDenied) return 'permission-denied'
   if (out && out.receiptMissing) return 'receipt-missing'
   if (out && out.receiptStale) return 'receipt-stale'
   if (!_validReviewerResult(out)) return 'malformed'
@@ -5393,7 +5397,10 @@ function _tasksDocPath(workItem) {
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
 // nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
 // appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
-function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+// `deniedNote` (FR-1 finality) carries forward the actions a prior attempt reported the permission
+// timeout denied — a re-dispatched fresh leaf is a re-attempt of the SAME step, so it must not retry the
+// denied action in any rewording. Appended AFTER retryNote so it rides every subsequent dispatch.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
     + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
@@ -5407,6 +5414,20 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
     + `to null — never fabricate a completed step you were denied. Return JSON `
     + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
     + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+
+// FR-1 finality memory: the action(s) a prior attempt of THIS step reported the permission timeout
+// denied are FINAL — a fresh re-dispatch of the same work is a re-attempt, not a distinct step, so the
+// worker must not re-enter the denied action in any rewording. One tight sentence naming each denied
+// action so the worker works around them and reports honestly instead of re-hitting the permission wait.
+function buildDeniedNote(deniedActions) {
+  if (!deniedActions || !deniedActions.length) return ''
+  return (
+    ` FINAL — the following action(s) were already denied by the permission timeout in this step and are `
+    + `FINAL; do NOT re-attempt them in any form or rewording — work around them and report honestly: `
+    + deniedActions.join('; ') + '.'
   )
 }
 
@@ -5434,13 +5455,18 @@ function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote }) {
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
+  // FR-1 finality: actions a prior attempt reported the permission timeout denied. Accumulated across
+  // attempts and threaded into EVERY subsequent dispatch so a fresh re-dispatched leaf never re-attempts
+  // the denied action (re-dispatching denied work under a new leaf is a re-attempt, not a distinct step).
+  const deniedActions = []
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
-    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
+    // FR-1: also thread any prior-attempt denied actions so the fresh leaf works around them, never re-tries them.
+    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '', buildDeniedNote(deniedActions))
     // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
     // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
     // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
@@ -5467,6 +5493,10 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
           'record build denial',
         )
       } catch (_e) { /* fail-open: never let a denial recording failure derail the build */ }
+      // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is
+      // told the action is FINAL and must not be re-attempted. A reported denial is never lost — it is
+      // both recorded durably (above) and carried into the next attempt's prompt.
+      deniedActions.push(String(worker.deniedAction))
     }
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
@@ -5752,6 +5782,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.buildDeniedNote = buildDeniedNote
 module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
@@ -6477,13 +6508,18 @@ const REVIEWER_DENIAL_FLAG =
 // evidence that holds the PR a draft), so honest reporting is what makes the absorption correct.
 const TIMEOUT_PROCEED_CONTRACT =
   'If any action awaits owner permission with no response for 15 minutes, proceed without it and report ' +
-  'the denied action honestly (never as done) — say exactly what you could not do so the run records it.'
+  'the denied action honestly (never as done) — say exactly what you could not do so the run records it. ' +
+  'A denied action is FINAL for this step: do not re-attempt it in any rewording or variation — report it and move on.'
 
 // #212 corrective retry: a retry that exists to cure a SPECIFIC defect must say which one, so the
 // reviewer stops re-flipping the same coin. Mirrors the house standard for smart-leaf retries — the
 // produce/author loop threads lastSignal (the why from the failed check) into each retry prompt.
 // null/unknown retryReason → no correction (e.g. a plain low→deep escalation with nothing to cure).
 function reviewerRetryCorrection(retryReason) {
+  if (retryReason === 'permission-denied') {
+    return ' RETRY: your previous verification probe was permission-DENIED by the 15-minute timeout — that denied probe is FINAL; do NOT re-attempt the same denied probe in any rewording. ' +
+      'Verify this dimension another way, or return confidence "low" and report honestly — do NOT fabricate a receipt for a probe you could not run.'
+  }
   if (retryReason === 'receipt-missing') {
     return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
       'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +

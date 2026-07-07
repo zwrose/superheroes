@@ -365,6 +365,10 @@ function _retryableReviewerIssue(out) {
 // Covers every retryable cause, not only receipts: `malformed` catches a schema-failing/off-task
 // answer (live precedent: a reviewer glitched onto an unrelated MCP connector and returned nonsense).
 function _retryReason(out) {
+  // FR-1/FR-2: a denied verification probe (permissionDenied) is degraded to receiptMissing by
+  // ensureReviewerShape, but its retry must NOT be told to "supply a receipt" — it must be told the
+  // denied probe is FINAL and to verify another way / return low. Surface it ahead of receipt-missing.
+  if (out && out.permissionDenied) return 'permission-denied'
   if (out && out.receiptMissing) return 'receipt-missing'
   if (out && out.receiptStale) return 'receipt-stale'
   if (!_validReviewerResult(out)) return 'malformed'

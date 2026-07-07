@@ -104,6 +104,7 @@ function installAgent(counter, denySecurity) {
         // The security-reviewer's probe is denied on EVERY dispatch (only when denySecurity).
         if (reviewer === 'security-reviewer') {
           counter.security += 1
+          if (counter.securityPrompts) counter.securityPrompts.push(prompt)
           return reviewerPayload(rd, round, denySecurity)
         }
         return reviewerPayload(rd, round, false)
@@ -125,12 +126,18 @@ async function integrationDeniedProbe() {
   // Denial leg: the security-reviewer's probe is denied on every dispatch.
   const recorded = []
   sr._denialRecorder = (reviewer) => { recorded.push(reviewer) }
-  const counter = { security: 0 }
+  const counter = { security: 0, securityPrompts: [] }
   installAgent(counter, true)
   try {
     const r = await sr.reviewCodePhase('wi-denied', { runDir: fresh(), resolveTarget: stubResolveTarget })
     // A degraded (never-verified) dimension cannot certify a clean pass -> the loop parks.
     assert.strictEqual(r.gate, 'changes-requested', 'a denied/degraded probe cannot certify -> park')
+    // FR-1/FR-2: the deep-retry of a permission-DENIED probe must be told the denied probe is FINAL —
+    // do not re-attempt the same denied probe (verify another way / return low), NOT the misleading
+    // "supply a receipt" correction. The retry (2nd) dispatch is the one carrying the correction.
+    assert.ok(counter.securityPrompts.length >= 2, 'the security probe was dispatched at least twice (base + deep retry)')
+    assert.ok(/do NOT re-attempt the same denied probe/.test(counter.securityPrompts[1]),
+      'the denied-probe deep-retry prompt tells the leaf the denied probe is FINAL — do not re-attempt it')
     // Single-retry ceiling: round 1 (baseline) schedules every dimension at tier 'reviewer-deep', so the
     // deep-tier arm fires — base (1) + exactly ONE deep retry (1) = 2 dispatches. The retry is ALSO
     // denied (still receiptMissing/low), so the dimension is reported degraded and NOT re-cycled: the

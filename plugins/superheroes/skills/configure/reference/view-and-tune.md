@@ -63,11 +63,12 @@ action that owns it, leaving the rest of the calibration untouched:
   never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
-- **View or edit the permission posture** (the auto-allow routine families that let an owner-absent
-  showrunner run finish without babysitting, below the owner-role floor) → follow
+- **View, seed, or edit the permission posture** (the auto-allow routine families that let an
+  owner-absent showrunner run finish without babysitting, below the owner-role floor) → follow
   `reference/permission.md`. The full allow set is already on the view's **Permission posture**
-  section; edits go only through `permission_rules.set_rule` / `remove_rule` (the one sanctioned
-  change path, FR-9).
+  section. When the posture is empty, that sub-init offers the batteries-included **seed** of the
+  four routine families (plus the FR-7 audit record) as the first path; individual edits go through
+  `permission_rules.set_rule` / `remove_rule` (the one sanctioned change path, FR-9).
 - **Write the review-discipline section into the project's `CLAUDE.md`** — offered ONLY when
   the storage mode is **in-repo** (out-of-repo mode exists to keep the repo free of superheroes
   traces; there the SessionStart bootstrap note is the sole carrier). Owner-gated like every

@@ -71,5 +71,38 @@ function execRoute(captures) {
   assert.strictEqual(r2.parked, false, 'a clean task completes')
   assert.strictEqual(cleanCalls.length, 0, 'no denial recorded for a clean task')
 
-  console.log('ok: build leaf deniedAction is instructed + recorded via prov_entry build-denial (UFR-6/UFR-8)')
+  // (4) FR-1 finality: a denial reported on a FAILING attempt (ok:false, needs_context) is remembered and
+  //     threaded into the RE-DISPATCH's prompt so the fresh leaf never re-attempts the denied action; the
+  //     reported denial is recorded once and never lost.
+  const finalityCalls = []
+  const implPrompts = []
+  let implCall = 0
+  global.agent = makeAgent([
+    execRoute(finalityCalls),
+    ['implement-task', (prompt) => {
+      implPrompts.push(prompt)
+      implCall += 1
+      // Attempt 1: the timeout denied a substantive step AND the leaf needs context (a re-dispatch).
+      if (implCall === 1) return { ok: false, signal: 'needs_context', evidence: { testFailed: false, testPassed: false }, deniedAction: 'run the DB migration' }
+      // Attempt 2 (the re-dispatch): completes, no new denial.
+      return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }
+    }],
+    ['task-reviewer:r', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '9' }) }]],
+    ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '9' }) }]],
+  ])
+  const r3 = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '9', '/tmp/wt', 1)
+  assert.strictEqual(r3.parked, false, 'the task completes on the retry after the first attempt was denied+needs_context')
+  assert.strictEqual(implPrompts.length, 2, 'two build dispatches: the denied first attempt, then the re-dispatch')
+  assert.ok(!implPrompts[0].includes('already denied by the permission timeout'),
+    'the FIRST dispatch carries NO denial memory (nothing denied yet)')
+  assert.ok(implPrompts[1].includes('already denied by the permission timeout'),
+    'the RE-DISPATCH carries the FR-1 denial memory (denied action is FINAL)')
+  assert.ok(implPrompts[1].includes('run the DB migration'),
+    'the denial memory names the specific denied action X, so the fresh leaf works around it')
+  assert.strictEqual(finalityCalls.length, 1,
+    'the reported denial is recorded EXACTLY once (per attempt that reported it) — never lost, never doubled')
+  assert.ok(finalityCalls[0].includes('run the DB migration'), 'the recorded build-denial names the denied action')
+
+  console.log('ok: build leaf deniedAction is instructed + recorded via prov_entry build-denial + FR-1 finality memory threads a denied action into the re-dispatch (UFR-6/UFR-8, FR-1)')
 })()

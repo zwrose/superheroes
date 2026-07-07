@@ -80,6 +80,28 @@ def test_render_permission_posture_empty_when_no_rules(tmp_path, monkeypatch):
     monkeypatch.setattr(mrmod, "config_key", lambda c: "EMPTYKEY")
     screen = cv.render(str(tmp_path), root=root)
     assert "Permission posture" in screen   # section present even with no rules, never a silent skip
+    assert "Audit record: none" in screen    # FR-7: no seed yet -> audit absent, surfaced not skipped
+
+
+def test_render_shows_permission_audit_count_after_seed(tmp_path, monkeypatch):
+    # FR-7: once the routine families are seeded, the view surfaces the audit record's count.
+    import permission_rules as pr
+    import mode_registry as mrmod
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": ""},
+                                        "confirmed", "2026-06-27", "2026-06-27"))
+    sc.atomic_write(os.path.join(cdir, "review-crew.md"), "<!-- review-crew: v1 -->\nscope\n")
+    monkeypatch.setattr(mrmod, "config_key", lambda c: "SEEDKEY")
+    pr.seed_default_rules(str(tmp_path), root=root)
+    expected = len(pr.audit(str(tmp_path), root=root))
+    screen = cv.render(str(tmp_path), root=root)
+    assert f"Audit record: {expected} observed command" in screen
 
 
 def test_render_shows_effective_model_tiers(tmp_path):

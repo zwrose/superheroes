@@ -273,13 +273,18 @@ const REVIEWER_DENIAL_FLAG =
 // evidence that holds the PR a draft), so honest reporting is what makes the absorption correct.
 const TIMEOUT_PROCEED_CONTRACT =
   'If any action awaits owner permission with no response for 15 minutes, proceed without it and report ' +
-  'the denied action honestly (never as done) — say exactly what you could not do so the run records it.'
+  'the denied action honestly (never as done) — say exactly what you could not do so the run records it. ' +
+  'A denied action is FINAL for this step: do not re-attempt it in any rewording or variation — report it and move on.'
 
 // #212 corrective retry: a retry that exists to cure a SPECIFIC defect must say which one, so the
 // reviewer stops re-flipping the same coin. Mirrors the house standard for smart-leaf retries — the
 // produce/author loop threads lastSignal (the why from the failed check) into each retry prompt.
 // null/unknown retryReason → no correction (e.g. a plain low→deep escalation with nothing to cure).
 function reviewerRetryCorrection(retryReason) {
+  if (retryReason === 'permission-denied') {
+    return ' RETRY: your previous verification probe was permission-DENIED by the 15-minute timeout — that denied probe is FINAL; do NOT re-attempt the same denied probe in any rewording. ' +
+      'Verify this dimension another way, or return confidence "low" and report honestly — do NOT fabricate a receipt for a probe you could not run.'
+  }
   if (retryReason === 'receipt-missing') {
     return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
       'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +

@@ -20,6 +20,42 @@ that would match a merge is refused at evaluate time (the enforcer re-checks the
 The full provenance-valid allow set is already shown on the combined view's **Permission posture**
 section (the `configure_view.render` screen). Reading it changes nothing.
 
+## Seed the routine families — the batteries-included first path (FR-6, FR-7)
+
+When the posture is **empty** (the view's Permission posture reads "no auto-allow rules") — or the
+owner asks to set the posture up — OFFER seeding the four routine families a full showrunner run
+exercises, rather than making the owner add them one at a time below. Owner-gated like every write:
+**show the family list first, seed only on the owner's explicit confirm.** The families:
+
+- **test-run** — the repo's test invocations (`pytest`, `python3 -m pytest`, the node smoke runner).
+- **validators** — the repo's three CI validators (`validate_marketplace` / `validate_hosts` / `validate_skills`).
+- **worktree-vcs** — version control confined to managed build worktrees (staging/read-only verbs plus a
+  non-force `superheroes/*` feature-branch push; `main`/force still fall to the floor).
+- **draft-pr** — draft-PR create + title/body/label edits + the draft→ready promotion (`--base` excluded).
+
+On the owner's explicit confirm, seed them (idempotent per family — a re-seed refreshes, never duplicates):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -c "
+import sys; sys.path.insert(0, '$ROOT_DIR/lib'); import permission_rules
+permission_rules.seed_default_rules('.')
+"
+```
+
+Seeding also writes the **FR-7 audit record** (`audit.json`, alongside `rules.json`) — the observed
+prompt-provoking commands and each one's disposition, the grounding for every seeded family (including
+the owner-role commands recorded as "keep prompting"). Each family stays **individually removable**
+afterward via `remove_rule` (below). View the audit record any time:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -c "
+import sys, json; sys.path.insert(0, '$ROOT_DIR/lib'); import permission_rules
+print(json.dumps(permission_rules.audit('.'), indent=2))
+"
+```
+
 ## Edit — the only sanctioned change path (FR-9, UFR-9)
 
 Every add/remove goes through `permission_rules`, which stamps the provenance

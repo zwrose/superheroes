@@ -728,3 +728,172 @@ def test_dod_filler_command_surface_stays_non_gated(monkeypatch):
     for cmd in surface:
         assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "allow", (
             "deny-only floor must not gate the fill leg: %s" % cmd)
+
+
+# --- #149 auditability NFR: auto-ALLOWANCES are journaled (best-effort, fail-open) ---
+# Denials already ride the journal's permission_denied event → the readout. Automatic
+# allowances (evaluate -> ('allow', <reason>)) were silent; these pin that each one now
+# leaves an allowance_fired line in the run's OWN events.jsonl, and that the emission is pure
+# observability — it can NEVER change the allow decision or let an error escape.
+
+
+def test_allowance_fired_is_journaled(tmp_path, monkeypatch):
+    # An auto-allowance leaves exactly one allowance_fired line carrying the reason + the
+    # first-16-hex command hash (the SAME hashing permission_rules._hash uses, so it correlates
+    # against the composed-command store) — and NEVER the raw command text.
+    import journal
+    import control_plane
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    cwd = str(tmp_path)
+    cmd = "python3 -m pytest"
+    decision, reason = enforcer.classify_command(cmd, host="claude", in_scope=True,
+                                                 cwd=cwd, run_id="RUN1")
+    assert decision == "allow" and "auto-allowed" in reason
+    events = control_plane.paths(cwd, "wi-x")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1
+    payload = fired[0]["payload"]
+    assert payload["reason"] == "routine:test-run"
+    assert payload["command_sha256"] == permission_rules._hash(cmd)[:16]
+    assert len(payload["command_sha256"]) == 16
+    assert payload["cwd"] == cwd
+    assert cmd not in open(events).read()      # the raw command is never written
+
+
+def test_default_allow_journals_nothing(tmp_path, monkeypatch):
+    # The default-allow fall-through (evaluate -> 'fall') must journal NOTHING — else every
+    # routine command in every session would spam the run's journal.
+    import journal
+    import control_plane
+    monkeypatch.setattr(permission_rules, "evaluate", lambda *a, **k: ("fall", "no match"))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    cwd = str(tmp_path)
+    assert enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                                     cwd=cwd, run_id="RUN1")[0] == "allow"
+    events = control_plane.paths(cwd, "wi-x")["events"]
+    assert journal.read_events(events) == []
+
+
+def test_allowance_journal_failure_never_affects_decision(tmp_path, monkeypatch):
+    # Fail-open: a journal.append that RAISES must not change the allow decision nor escape.
+    import journal
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "worktree-confined"))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    monkeypatch.setattr(journal, "append",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude",
+                                                 in_scope=True, cwd=str(tmp_path), run_id="RUN1")
+    assert decision == "allow" and "auto-allowed" in reason
+
+
+def test_hook_journals_allowance_via_active_run(tmp_path, monkeypatch, capsys):
+    # End-to-end through hook(): an active run (monkeypatched _active_run_id) + an auto-allowance
+    # leaves the allowance_fired record AND stays silent (allow == silent).
+    import journal
+    import control_plane
+    monkeypatch.setattr(enforcer, "_active_run_id", lambda c: "RUN1")
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "composed-exact"))
+    cwd = str(tmp_path)
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": "python3 build.py"}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""   # allow is silent
+    events = control_plane.paths(cwd, "wi-x")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1 and fired[0]["payload"]["reason"] == "composed-exact"
+
+
+# --- #149 REAL-SEAM integration: no monkeypatch of the lease-resolution chain ------------
+# The phantom `control_plane.get_current` (removed by #170) left `_active_run_id`/`_run_is_live`
+# DEAD in production while every existing test monkeypatched `_active_run_id`/`_run_is_live` or
+# passed run_id directly — so a nonexistent function passed the whole suite. These drive the
+# REAL `ref_lock` lease on disk (the conftest pins the store root under tmp_path) and let the
+# repaired `_active_run_id` resolve run_id INTERNALLY through hook(); nothing in the resolution
+# chain is stubbed.
+
+
+def _real_lease_cwd(tmp_path, monkeypatch, work_item):
+    """A real checkout dir + a real LIVE ref_lock lease for `work_item`, in the pinned
+    tmp store. Returns (cwd, generation). The lease store is the real control-plane
+    checkout store `resolve_active_lease`/`_active_run_id` read — no seam is patched."""
+    import control_plane
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    assert store is not None and store == control_plane.checkout_dir(cwd)
+    ok, generation, _ = ref_lock.acquire(store, work_item)
+    assert ok
+    return cwd, generation, store
+
+
+def test_active_run_id_resolves_live_lease_generation(tmp_path, monkeypatch):
+    # Direct pin: with a REAL live lease on disk, _active_run_id resolves its generation via
+    # the real active_work_items seam (NOT the dead control_plane.get_current). This is the
+    # exact assertion that would have caught the phantom-function escape.
+    cwd, generation, _store = _real_lease_cwd(tmp_path, monkeypatch, "wi-live")
+    assert enforcer._active_run_id(cwd) == generation
+
+
+def test_active_run_id_none_when_lease_stale(tmp_path, monkeypatch):
+    # Direct pin, fail-safe: a STALE lease (ancient acquiredAt + dead pid) is filtered by
+    # active_work_items, so _active_run_id resolves to None — never a spurious run_id.
+    import control_plane
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    ref_lock._force_lease(store, "wi-stale", {"pid": 999999, "host": ref_lock._host(),
+                          "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None,
+                          "generation": 7, "ttl": 1})
+    assert enforcer._active_run_id(cwd) is None
+
+
+def test_hook_allowance_fires_end_to_end_through_real_lease(tmp_path, monkeypatch, capsys):
+    # (a) THE load-bearing integration test. A real live lease + a frozen routine rule for that
+    # run's generation; hook() resolves run_id INTERNALLY via the real _active_run_id and the
+    # allowance fires end-to-end: allow (silent) AND one allowance_fired line in the resolved
+    # run's OWN journal (real _active_work_item). NOTHING in the resolution chain is stubbed.
+    import control_plane
+    import journal
+    cwd, generation, _store = _real_lease_cwd(tmp_path, monkeypatch, "wi-run")
+    # Seed a routine-family rule + freeze it for THIS run's generation, in the real store
+    # (default root == the pinned control_plane.store_root()).
+    permission_rules.set_rule(cwd, {"family": "test-run", "pattern": r"\bpytest\b"})
+    permission_rules.freeze_run_rules(generation, cwd)
+    cmd = "python3 -m pytest -q"
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": cmd}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""     # allowance allow == silent
+    events = control_plane.paths(cwd, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1, "the repaired seam must let the allowance fire+journal end-to-end"
+    assert fired[0]["payload"]["reason"].startswith("routine:")
+    assert fired[0]["payload"]["command_sha256"] == permission_rules._hash(cmd)[:16]
+
+
+def test_hook_falls_back_when_lease_released_no_allowance(tmp_path, monkeypatch, capsys):
+    # (b) With the SAME setup but the lease RELEASED (no live run), _active_run_id resolves to
+    # None, evaluate is inert (FR-3), and the very same command falls back to today's default
+    # allow with NO allowance_fired journaled — proving the allowance only fires on a real run.
+    import control_plane
+    import journal
+    import ref_lock
+    cwd, generation, store = _real_lease_cwd(tmp_path, monkeypatch, "wi-run")
+    permission_rules.set_rule(cwd, {"family": "test-run", "pattern": r"\bpytest\b"})
+    permission_rules.freeze_run_rules(generation, cwd)
+    assert ref_lock.release(store, "wi-run", generation) is True     # run ends -> lease gone
+    assert enforcer._active_run_id(cwd) is None                       # real seam sees no run
+    cmd = "python3 -m pytest -q"
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": cmd}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""          # still allow (default), silent
+    events = control_plane.paths(cwd, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert fired == [], "no active run -> allowance layer inert -> nothing journaled"

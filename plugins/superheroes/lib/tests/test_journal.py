@@ -193,6 +193,23 @@ def test_permission_denied_is_a_valid_event_type(tmp_path):
     assert any('"type": "permission_denied"' in l for l in lines)
 
 
+def test_allowance_fired_is_a_valid_event_type(tmp_path):
+    # #149 auditability NFR: an automatic ALLOWANCE (not just a denial) is recorded with a
+    # structured, non-secret payload written AS-IS — the command HASH, never the raw command
+    # text — so every auto-allowance is visible in the run's records.
+    p = str(tmp_path / "events.jsonl")
+    payload = {"reason": "routine:test-run", "command_sha256": "0123456789abcdef", "cwd": "/w"}
+    journal.append(p, "allowance_fired", payload=payload, root=str(tmp_path))
+    evs = journal.read_events(p)
+    assert evs[-1]["type"] == "allowance_fired"
+    assert evs[-1]["payload"] == payload      # written as-is (non-secret)
+
+
+def test_allowance_fired_is_a_known_event_type():
+    # An unknown type fails closed (DurableWriteError); allowance_fired must be registered.
+    assert "allowance_fired" in journal.EVENT_TYPES
+
+
 def test_unknown_event_type_still_parks(tmp_path):
     p = str(tmp_path / "events.jsonl")
     try:

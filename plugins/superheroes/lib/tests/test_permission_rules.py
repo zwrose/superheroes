@@ -197,6 +197,108 @@ def test_evaluate_any_error_falls_through(monkeypatch, tmp_path):
     assert pr.evaluate("python3 -m pytest", "/cwd", "R", root=str(tmp_path))[0] == "fall"  # UFR-2
 
 
+def test_evaluate_inert_without_active_run(monkeypatch, tmp_path):
+    # FR-3: with NO active run (run_id falsy), evaluate is fully inert — prompting is
+    # UNCHANGED. Build a command that WOULD be allowed by EVERY arm (a worktree-confined
+    # interpreter cwd, a matching frozen routine rule, AND a byte-exact composed entry), then
+    # assert run_id=None still falls through to the prompt.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    wt_root = tmp_path / ".superheroes-worktrees"
+    wt = wt_root / "abc"; wt.mkdir(parents=True)
+    monkeypatch.setattr(pr, "_worktrees_root", lambda: str(wt_root))
+    _write_rules(str(tmp_path), "/cwd", [
+        {"family": "test-run", "pattern": r"\bpytest\b", "provenance": {"source": "configure", "at": "z"}},
+    ], monkeypatch)
+    cmd = "python3 -m pytest -q"
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    pr.record_composed("R", cmd, "/cwd", root=str(tmp_path))
+    # sanity: WITH an active run + managed-worktree cwd, every arm would allow this command
+    assert pr.evaluate(cmd, str(wt), "R", root=str(tmp_path))[0] == "allow"
+    # FR-3: run_id=None -> inert -> fall, even though every arm would otherwise allow
+    assert pr.evaluate(cmd, str(wt), None, root=str(tmp_path))[0] == "fall"
+
+
+def test_evaluate_worktree_vcs_falls_from_repo_root_cwd(monkeypatch, tmp_path):
+    # FR-6: a worktree-vcs-family command run from a NON-worktree cwd (a repo root) earns
+    # nothing — the family is now cwd-confined to a real managed build worktree.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    wt_root = tmp_path / ".superheroes-worktrees"; wt_root.mkdir(parents=True)
+    monkeypatch.setattr(pr, "_worktrees_root", lambda: str(wt_root))
+    repo_root = tmp_path / "repo"; repo_root.mkdir()
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("git commit -m 'x'", str(repo_root), "R", root=str(tmp_path))[0] == "fall"
+
+
+def test_evaluate_worktree_vcs_falls_from_pathtrick_cwd(monkeypatch, tmp_path):
+    # FR-6/UFR-5: the same path-tricks the interpreter arm rejects apply to worktree-vcs — a
+    # name-prefix lookalike sibling of the worktrees root is NOT a descendant, and a `..`
+    # parent-hop that resolves out of the root earns nothing.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    wt_root = tmp_path / ".superheroes-worktrees"; wt_root.mkdir(parents=True)
+    outside = tmp_path / "evil"; outside.mkdir()
+    link = wt_root.parent / ".superheroes-worktrees-evil"   # lookalike, not a descendant
+    link.symlink_to(outside)
+    monkeypatch.setattr(pr, "_worktrees_root", lambda: str(wt_root))
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("git commit -m 'x'", str(link), "R", root=str(tmp_path))[0] == "fall"
+    escaped = os.path.join(str(wt_root), "wt", "..", "..")   # parent-hop OUT of the root
+    assert pr.evaluate("git status", escaped, "R", root=str(tmp_path))[0] == "fall"
+
+
+def test_evaluate_worktree_vcs_allows_from_genuine_managed_worktree(monkeypatch, tmp_path):
+    # FR-6 (existing behavior preserved): a genuine managed-worktree cwd + frozen rules + a
+    # live run -> allow.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    wt_root = tmp_path / ".superheroes-worktrees"
+    wt = wt_root / "abc123"; wt.mkdir(parents=True)
+    monkeypatch.setattr(pr, "_worktrees_root", lambda: str(wt_root))
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    assert pr.evaluate("git commit -m 'x'", str(wt), "R", root=str(tmp_path))[0] == "allow"
+
+
+def test_no_pending_request_state_is_ever_persisted(monkeypatch, tmp_path):
+    # Pins UFR-7 (an interruption mid-permission-wait resolves to DENIAL on resume, never
+    # allowance or more waiting) and UFR-4 (a late owner response is NOT applied
+    # retroactively). Both hold ONLY because the layer is STATELESS-BY-DESIGN: it persists no
+    # pending/waiting request record. An interrupted ask therefore leaves NOTHING to resume,
+    # and a late response has NOTHING to attach to. This walks the entire store the full
+    # lifecycle wrote and asserts no such pending-request structure exists anywhere.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    store = tmp_path / "store"
+    # Full store lifecycle: CRUD, seed, freeze, compose, and both evaluate verdicts.
+    pr.set_rule("/cwd", {"family": "test-run", "pattern": r"\bpytest\b"}, root=str(store))
+    pr.seed_default_rules("/cwd", root=str(store))                 # writes rules.json + audit.json
+    pr.freeze_run_rules("R", "/cwd", root=str(store))             # writes runs/R.json
+    pr.record_composed("R", "gh pr create --draft", "/cwd", root=str(store))
+    assert pr.evaluate("python3 -m pytest -q", "/cwd", "R", root=str(store))[0] == "allow"  # allow path
+    assert pr.evaluate("curl http://evil", "/cwd", "R", root=str(store))[0] == "fall"        # fall path
+    perm = os.path.join(str(store), "projects", "KEY", "permission")
+    # (1) EXACT file inventory — no stray pending/queue/request file was written.
+    inventory = set()
+    for dirpath, _dirs, files in os.walk(perm):
+        for f in files:
+            inventory.add(os.path.relpath(os.path.join(dirpath, f), perm))
+    assert inventory == {"rules.json", "audit.json", os.path.join("runs", "R.json")}, inventory
+    # (2) No file's bytes carry any pending/waiting/queued request vocabulary.
+    banned = ("pending", "waiting", "queued", "await", "resume")
+    for rel in inventory:
+        text = open(os.path.join(perm, rel)).read().lower()
+        for token in banned:
+            assert token not in text, "%s leaked pending-request state: %r" % (rel, token)
+    # (3) The run snapshot carries ONLY the expected keys — no request/denial/pending field.
+    with open(os.path.join(perm, "runs", "R.json")) as f:
+        snap = json.load(f)
+    assert set(snap.keys()) == {"rules", "composed"}, snap.keys()
+
+
 # --- Task 13: configure front door — set_rule / remove_rule provenance-stamped CRUD (FR-9, UFR-9) ---
 
 
@@ -248,16 +350,22 @@ def test_seed_routine_families_allow_their_commands(monkeypatch, tmp_path):
     # The seeded routine families must actually allow the routine commands they name.
     import mode_registry
     monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    # The worktree-vcs family is now cwd-confined (FR-6), so a VCS command only allows from a
+    # real managed build worktree. Point _worktrees_root at a managed root and run the git
+    # command from a worktree under it; the non-VCS families are cwd-agnostic ("/cwd" is fine).
+    wt_root = tmp_path / ".superheroes-worktrees"
+    wt = wt_root / "abc123"; wt.mkdir(parents=True)
+    monkeypatch.setattr(pr, "_worktrees_root", lambda: str(wt_root))
     pr.seed_default_rules("/cwd", root=str(tmp_path))
     pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
-    for cmd in [
-        "python3 -m pytest -q",
-        "python3 .github/scripts/validate_marketplace.py",
-        "git commit -m 'x'",
-        "gh pr create --draft --title X",
-        "gh pr ready 12",
+    for cmd, cwd in [
+        ("python3 -m pytest -q", "/cwd"),
+        ("python3 .github/scripts/validate_marketplace.py", "/cwd"),
+        ("git commit -m 'x'", str(wt)),                       # worktree-vcs: managed-worktree cwd
+        ("gh pr create --draft --title X", "/cwd"),
+        ("gh pr ready 12", "/cwd"),
     ]:
-        assert pr.evaluate(cmd, "/cwd", "R", root=str(tmp_path))[0] == "allow", cmd
+        assert pr.evaluate(cmd, cwd, "R", root=str(tmp_path))[0] == "allow", cmd
     # base-branch change is NOT in the draft-pr family — normal prompt path
     assert pr.evaluate("gh pr edit 12 --base develop", "/cwd", "R", root=str(tmp_path))[0] == "fall"
 
