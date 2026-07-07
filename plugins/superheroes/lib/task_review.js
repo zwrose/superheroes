@@ -7,16 +7,26 @@ const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 
 const REQUIRED_VERDICTS = ['spec_compliance', 'code_quality']
+// The ONLY severities that demote a finding to a non-blocking Minor: the rubric's non-blocking tiers
+// (Minor/Nit — SSOT §11, guarded by test_ssot_drift). Matched case-insensitively, and — crucially —
+// every OTHER value FAILS CLOSED to blocking (#276): a foreign scale (`blocker`/`high`/`medium`), an
+// unknown tier, a mis-cased `critical`, or a missing severity must never silently demote a blocker to
+// a Minor. Unknown severity means blocking, not non-blocking.
+const _NON_BLOCKING = new Set(['minor', 'nit'])
 // exit_skipped maps to PARK, never complete: a deliberately-left-unresolved blocker must park (UFR-4).
 // (The bespoke loop passes skippedBlocking=0 so loop_state never returns exit_skipped today; the
 // fail-closed mapping guards against a future contract change rather than fail open.)
 const _MAP = { review: 'review', exit_clean: 'complete', exit_skipped: 'park', halt: 'park' }
 
+function _isBlocking(severity) {
+  return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
+}
+
 function _partition(findings) {
   const blocking = []; const minors = []; const cannotVerify = []
   for (const f of findings || []) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
-    if (f && circuitBreaker.BLOCKING.has(f.severity)) blocking.push(f)
+    if (_isBlocking(f && f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }
@@ -36,6 +46,15 @@ function decide(verdicts, findings, rnd, maxRounds, history) {
   let reason = loopReason
   if (brk.halt) {
     reason = brk.detail !== undefined ? brk.detail : reason
+  }
+  // FR-5/FR-6: the two verdicts GATE — they are not merely required-to-be-present. A non-'pass'
+  // spec_compliance or code_quality can never complete, even with zero blocking findings, so a
+  // reviewer that reports the task non-compliant sends it back for a fix round (#276). Vocabulary-
+  // independent backstop: this holds even if a finding's severity drifts past _partition.
+  const failing = REQUIRED_VERDICTS.filter((k) => verdicts[k] !== 'pass')
+  if (mapped === 'complete' && failing.length) {
+    mapped = 'review'
+    reason = `verdict(s) ${failing.join(' + ')} are not 'pass' — the task is not compliant; a fix round is required before completion (FR-5/FR-6).`
   }
   // UFR-5: never complete while a cannot-verify item is unresolved — force a resolution round.
   if (mapped === 'complete' && cannotVerify.length) {

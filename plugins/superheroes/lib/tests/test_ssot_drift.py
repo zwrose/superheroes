@@ -193,6 +193,28 @@ def test_severity_vocabulary_is_single_sourced():
     assert len(enum) == 1, "showrunner.js: expected exactly one severity enum, found %d" % len(enum)
     assert ast.literal_eval(enum[0]) == tiers, "showrunner.js severity enum drift"
 
+    # #276: the per-task reviewer's schema enum + prompt must speak the SAME tier vocabulary — the
+    # live escape (2026-07-06) was the reviewer emitting a foreign scale (blocker/critical/high) the
+    # partition then demoted. Schema enum:
+    bp = _read(os.path.join("lib", "build_phase.js"))
+    bp_enum = re.findall(r"severity:\s*\{\s*enum:\s*(\[[^\]]+\])", bp)
+    assert len(bp_enum) == 1, "build_phase.js: expected exactly one severity enum, found %d" % len(bp_enum)
+    assert ast.literal_eval(bp_enum[0]) == tiers, "build_phase.js REVIEW_TASK_SCHEMA severity enum drift"
+    # Prompt shape hint names every tier (so a reviewer sees the allowed values, not just the schema).
+    for t in tiers:
+        assert re.search(r"\b%s\b" % re.escape(t), bp), (
+            "build_phase.js: per-task reviewer prompt/schema does not name severity tier %r" % t)
+
+    # #276: task_review's non-blocking set (the ONLY tiers that demote; everything else fails closed
+    # to blocking) must equal the rubric's non-blocking tiers, case-folded. Python home + JS twin.
+    import task_review
+    non_blocking_lc = {t.lower() for t in non_blocking}
+    assert {s.lower() for s in task_review._NON_BLOCKING} == non_blocking_lc, (
+        "task_review.py _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
+    trjs = _read(os.path.join("lib", "task_review.js"))
+    assert {s.lower() for s in _js_str_set(trjs, "_NON_BLOCKING", "task_review.js")} == non_blocking_lc, (
+        "task_review.js _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
+
 
 # --- Cluster 2: task-review required verdicts --------------------------------
 

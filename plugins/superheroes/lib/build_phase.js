@@ -591,7 +591,24 @@ const REVIEW_TASK_SCHEMA = {
         code_quality: { enum: ['pass', 'fail'] },
       },
     },
-    findings: { type: 'array' },
+    // #276: constrain finding items so structured-output validation corrects severity-vocabulary
+    // drift AT THE SOURCE. `severity` is the canonical rubric tier enum (SSOT §11, guarded by
+    // test_ssot_drift) — the live escape was reviewers emitting a foreign scale (`blocker`/`critical`
+    // /`high`) that the blocking partition then demoted to Minor. Required so every finding carries a
+    // gating severity; the task_review twin still fails closed on anything that slips past.
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['severity'],
+        properties: {
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          file: { type: 'string' },
+          title: { type: 'string' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
   },
 }
 
@@ -615,7 +632,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
     + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+    + `"findings":[{"severity":"Critical|Important|Minor|Nit","file","title","cannot_verify_from_diff"}]}. `
+    + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
