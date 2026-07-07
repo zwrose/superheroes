@@ -509,6 +509,56 @@ function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote, denie
   return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '', deniedNote || '')
 }
 
+// UFR-6/UFR-8 dual-carrier denial recording (premortem-001), extracted from buildOneTask's loop so
+// the loop body stays control flow. Returns a park result to return, or null (nothing denied / both
+// carriers rode). The denial is written to TWO independent carriers the ship gate (ship_gate.decide)
+// both consult; EITHER gates the PR to a draft, REGARDLESS of whether the leaf still reports ok:true:
+//   1. the run's journal `permission_denied` event (step `build:<id>`, detail = the denied action) —
+//      best-effort/fail-open but courier-RETRIED, written FIRST so it survives even if carrier 2 fails
+//      and the task then parks (a resume skips this already-committed leaf, so carrier 2 stays empty).
+//      ship_gate.journal_build_denials folds these `build:` events in as the second gate signal.
+//   2. the prov_entry build-denial provenance entry (ship_gate.record_build_denial) — fail-CLOSED
+//      (record-before-advance): a dropped courier (null) or durable-write failure (ok!==true) PARKs
+//      the task, never silently promoting a tainted build to a ready PR.
+// Ordering (journal first) narrows the loss window to a CORRELATED double failure: writing the durable
+// journal event before carrier 2's park closes any SINGLE-carrier failure. RESIDUAL (transport-
+// inherent, cannot be closed by ordering): if the courier drops/garbles BOTH writes in the same window,
+// both durable carriers stay empty — and because the resume forward-walk skips the already-committed
+// leaf, that denial is never re-earned. For exactly that double-drop, the fail-closed PARK REASON below
+// names the denied action, so the disclosure still reaches the resuming owner through the park channel
+// even when neither durable carrier landed.
+async function recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions) {
+  if (!(worker && worker.deniedAction)) return null
+  const denied = String(worker.deniedAction)
+  // Carrier 1 (journal) FIRST — best-effort + fail-open, courier-retried.
+  try {
+    await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type permission_denied --step ${shq('build:' + task.id)} `
+      + `--detail ${shq(denied)}`,
+      'journal build denial',
+    )
+  } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
+  // Carrier 2 (provenance) — fail-CLOSED. The park on a failed provenance write STAYS: even though
+  // carrier 1 may have ridden, parking here keeps record-before-advance honest for the provenance path.
+  const denialRec = await execJson(
+    `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
+    + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(denied)}`,
+    'record build denial',
+  )
+  if (!(denialRec && denialRec.ok === true)) {
+    // Name the denied action in the park reason: on a correlated double-drop this is the only surviving
+    // disclosure of the denial, and it reaches the resuming owner through the park channel.
+    return { parked: true,
+             reason: `build-denial record write failed for denied action '${denied}' `
+                     + `(record-before-advance) — park (UFR-6/UFR-8)` }
+  }
+  // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is told
+  // the action is FINAL and must not be re-attempted — carried into the next attempt's prompt.
+  deniedActions.push(denied)
+  return null
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
@@ -546,45 +596,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
         { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
     // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence.
-    // DUAL-CARRIER (premortem-001) — the denial is written to TWO independent carriers the ship gate
-    // (ship_gate.decide) both consult; EITHER gates the PR to a draft, REGARDLESS of whether the leaf
-    // still reports ok:true for the rest of the task:
-    //   1. the run's journal `permission_denied` event (step `build:<id>`, detail = the denied action)
-    //      — best-effort but courier-RETRIED, written FIRST so it survives even if carrier 2 fails and
-    //      the task then parks (a resume skips this already-committed leaf, so carrier 2 stays empty).
-    //      ship_gate.journal_build_denials folds these `build:` events in as the second gate signal.
-    //   2. the prov_entry build-denial provenance entry (ship_gate.record_build_denial) — fail-CLOSED
-    //      (record-before-advance): a dropped courier (null) or durable-write failure (ok!==true) PARKs
-    //      the task, never silently promoting a tainted build to a ready PR.
-    // Ordering (journal first) is what closes the resume hole: the durable journal event lands before the
-    // park can fire on carrier 2, so no denial is ever lost. The journal write is fail-open (a readout-
-    // disclosure write never derails the build, UFR-2) — but because the ship gate now reads it, it is
-    // also a genuine gate carrier, not merely readout dressing.
-    if (worker && worker.deniedAction) {
-      // Carrier 1 (journal) FIRST — best-effort + fail-open, courier-retried.
-      try {
-        await execJson(
-          `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
-          + `--event-type permission_denied --step ${shq('build:' + task.id)} `
-          + `--detail ${shq(String(worker.deniedAction))}`,
-          'journal build denial',
-        )
-      } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
-      // Carrier 2 (provenance) — fail-CLOSED. The park on a failed provenance write STAYS: even though
-      // carrier 1 already rode, parking here keeps record-before-advance honest for the provenance path.
-      const denialRec = await execJson(
-        `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
-        + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(String(worker.deniedAction))}`,
-        'record build denial',
-      )
-      if (!(denialRec && denialRec.ok === true)) {
-        return { parked: true, reason: 'build-denial record write failed (record-before-advance) — park (UFR-6/UFR-8)' }
-      }
-      // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is
-      // told the action is FINAL and must not be re-attempted. A reported denial is never lost — it is
-      // recorded on both carriers (above) and carried into the next attempt's prompt.
-      deniedActions.push(String(worker.deniedAction))
-    }
+    // Record it on both carriers (recordBuildDenialIfAny); a failed fail-closed carrier parks here.
+    const denialPark = await recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions)
+    if (denialPark) return denialPark
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).

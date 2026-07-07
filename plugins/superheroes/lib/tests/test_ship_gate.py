@@ -194,6 +194,27 @@ def test_both_carriers_empty_proceeds():
     assert out["action"] == "proceed"
 
 
+def test_same_denial_on_both_carriers_counts_once():
+    # code-001: the common case records ONE denied step on BOTH carriers. The gate reason must count
+    # DISTINCT steps (1), not carrier occurrences (2).
+    prov = {"build": {"engine": "claude", "head": "abc"}, "review": {"covers": "abc"},
+            "buildDenials": [{"step": "build:9", "command": "run the migration"}]}
+    jdenials = [{"step": "build:9", "command": "run the migration"}]
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc", journal_denials=jdenials)
+    assert out["action"] == "gate"
+    assert "(1 step(s))" in out["reason"]
+
+
+def test_distinct_denials_across_carriers_count_each():
+    # two genuinely different denied steps, one per carrier, count as 2 (dedupe is by step, not blanket).
+    prov = {"build": {"engine": "claude", "head": "abc"}, "review": {"covers": "abc"},
+            "buildDenials": [{"step": "build:9", "command": "run the migration"}]}
+    jdenials = [{"step": "build:12", "command": "seed the fixtures"}]
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc", journal_denials=jdenials)
+    assert out["action"] == "gate"
+    assert "(2 step(s))" in out["reason"]
+
+
 def test_journal_build_denials_filters_to_build_steps(tmp_path):
     import journal
     p = str(tmp_path / "events.jsonl")

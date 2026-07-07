@@ -137,6 +137,10 @@ function execRoute(captures, order) {
   const r4 = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '9', '/tmp/wt', 1)
   assert.strictEqual(r4.parked, true, 'a failed build-denial provenance write PARKS the task (fail-closed, record-before-advance)')
   assert.ok(/build-denial record write failed/.test(r4.reason), 'the park reason names the failed build-denial record write')
+  // premortem-001: on a correlated double-drop the park reason is the only surviving disclosure, so it
+  // must name the specific denied action (reaching the resuming owner through the park channel).
+  assert.ok(/could not run the migration script/.test(r4.reason),
+    'the park reason names the denied action so a double-carrier-drop denial still discloses through the park channel')
 
   console.log('ok: build leaf deniedAction is instructed + recorded via prov_entry build-denial (fail-CLOSED on a failed write) + journaled for the readout + FR-1 finality memory threads a denied action into the re-dispatch (UFR-6/UFR-8, UFR-3, FR-1)')
 })()

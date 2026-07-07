@@ -123,6 +123,20 @@ def read_events(events_path, *, want_torn_tail=False):
     return (evs, torn_tail) if want_torn_tail else evs
 
 
+def permission_denied_events(events_path):
+    """The parsed `permission_denied` journal events — the SINGLE reader of that literal type
+    (architecture-001). Fail-safe to `[]` on any read error (a denial carrier that could clear a
+    real denial on an I/O hiccup would be worse than useless). Callers each apply their own
+    secondary filter/shape: ship_gate.journal_build_denials keeps only `build:` steps as the gate
+    carrier; run_readout._permission_denials projects every one as a disclosure entry."""
+    try:
+        evs = read_events(events_path)
+    except Exception:
+        return []
+    return [ev for ev in evs
+            if isinstance(ev, dict) and ev.get("type") == "permission_denied"]
+
+
 def ci_attempts(events_path):
     """Replay the write-ahead ci_fix_attempt events. CONSERVATIVE TAIL (design §2/§9): a
     torn trailing line MIGHT be a ci_fix_attempt, so it counts as +1 (over-count,

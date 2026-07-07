@@ -18,15 +18,11 @@ def _permission_denials(state):
     events_path = state.get("events_path")
     if not events_path:
         return []
-    try:
-        events = journal.read_events(events_path)
-    except Exception:
-        return []
-    denials = []
-    for ev in events:
-        if isinstance(ev, dict) and ev.get("type") == "permission_denied":
-            denials.append({"step": ev.get("step"), "detail": ev.get("detail")})
-    return denials
+    # Single reader of the literal `permission_denied` type (architecture-001): the shared
+    # journal.permission_denied_events (fail-safe []) matches; this projects every one as a
+    # disclosure entry (its own shape — step + detail, no build:-step filter).
+    return [{"step": ev.get("step"), "detail": ev.get("detail")}
+            for ev in journal.permission_denied_events(events_path)]
 
 
 def _cost_summary(state):

@@ -77,16 +77,12 @@ def journal_build_denials(events_path):
     even when the provenance write itself fails and the task then parks — a resume that skips
     buildOneTask (its commit already exists) would otherwise drop the denial forever.
 
-    Fail-SAFE toward provenance-only: a journal read error (or absent file) swallows to `[]`, so
-    this carrier can only ever ADD denials to the provenance carrier, never clear one."""
-    try:
-        evs = journal.read_events(events_path)
-    except Exception:
-        return []
+    Fail-SAFE toward provenance-only: a journal read error (or absent file) swallows to `[]` (via
+    the shared reader), so this carrier can only ever ADD denials to the provenance carrier, never
+    clear one. The literal `permission_denied` type is read in ONE place — journal.permission_denied_events
+    (architecture-001) — with this call keeping only the `build:` steps as its secondary filter."""
     out = []
-    for ev in evs:
-        if not isinstance(ev, dict) or ev.get("type") != "permission_denied":
-            continue
+    for ev in journal.permission_denied_events(events_path):
         step = ev.get("step")
         if isinstance(step, str) and step.startswith("build:"):
             out.append({"step": step, "command": ev.get("detail")})
@@ -120,9 +116,13 @@ def decide(provenance, review_result, head, *, journal_denials=None):
     denials = provenance.get("buildDenials") if isinstance(provenance, dict) else None
     jdenials = journal_denials or []
     if denials or jdenials:
+        # code-001: the common case records the SAME denial on both carriers, so count DISTINCT denied
+        # steps (not carrier occurrences) — one denial on both carriers reads "(1 step(s))", not "(2)".
+        # The boolean gate above is unchanged (an `or`, never additive).
+        distinct = {d.get("step") for d in (denials or [])} | {d.get("step") for d in jdenials}
         return {"action": "gate",
                 "reason": "build evidence incomplete — a substantive build step was denied "
-                          "by the 15-min timeout (%d step(s))" % (len(denials or []) + len(jdenials))}
+                          "by the 15-min timeout (%d step(s))" % len(distinct)}
     # 2. Review evidence (FR-1 / FR-2 / UFR-1 / UFR-3), reason keyed by action.
     action = review_result.get("action") if isinstance(review_result, dict) else None
     if action != _TERMINAL:
