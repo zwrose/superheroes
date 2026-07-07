@@ -104,3 +104,34 @@ for (const line of [
 }
 
 console.log('OK: stripComments preserves template data, strips code comments/blanks, heuristic + desync guard hold')
+
+// ── Second-panel additions (#295 review r1, this repo's review-code run) ─────────────────────────
+// Line-continuation strings: an ESCAPED newline inside 'sq'/"dq" continues the string — continued
+// lines that look like comments are STRING DATA (the fail-direction Important all three code lenses
+// converged on; mutation-verified: pre-fix, the stray close-quote derails lexing and the case fails).
+{
+  const src = [
+    "const s = 'first \\",
+    '// continued string data, not a comment \\',
+    "still the string'",
+    '// real comment — stripped',
+    'after()',
+  ].join('\n')
+  const out = stripComments(src)
+  assert.ok(out.includes('// continued string data, not a comment'), 'sq line-continuation interior survives')
+  assert.ok(out.includes("still the string'"), 'sq string tail intact')
+  assert.ok(!out.includes('// real comment — stripped'), 'genuine comment after the continued string stripped')
+}
+{
+  const src = ['const d = "one \\', '// dq continued data \\', 'two"', 'tail()'].join('\n')
+  const out = stripComments(src)
+  assert.ok(out.includes('// dq continued data'), 'dq line-continuation interior survives')
+}
+// Determinism + idempotence: same input -> byte-identical; re-stripping strips nothing further.
+{
+  const fixture = require('fs').readFileSync(__filename, 'utf8')
+  const once = stripComments(fixture)
+  assert.strictEqual(once, stripComments(fixture), 'stripComments deterministic')
+  assert.strictEqual(stripComments(once), once, 'stripComments idempotent')
+}
+console.log('ok: line-continuation strings + determinism (#295 r1 second panel)')

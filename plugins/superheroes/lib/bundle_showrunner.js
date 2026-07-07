@@ -474,10 +474,15 @@ function stripComments(src) {
       // The NEXT line begins in plain-code context only when we are in the base `code`/`line` states
       // (a line comment ends at the newline). Every other state — block comment or any string/template/
       // regex — is either a multi-line construct we must keep verbatim (block, tpl) or a defensive
-      // non-code reset (sq/dq/regex/rclass never legitimately span a line).
+      // non-code reset — EXCEPT an ESCAPED newline inside a quoted string, which is a line
+      // continuation: the string keeps going, so sq/dq state must survive or the continued lines get
+      // lexed as code and a continued line beginning with `//` strips as a comment while `node
+      // --check` still passes (semantic, not syntactic, damage — the fail-direction class from the
+      // #295 review). Regex cannot legally continue across a newline, escaped or not, so it resets.
+      const continued = escaped && (state === 'sq' || state === 'dq')
       codeStart[line] = (state === 'code' || state === 'line')
       if (state === 'line') state = 'code'
-      if (state === 'sq' || state === 'dq' || state === 'regex' || state === 'rclass') state = 'code'
+      if (!continued && (state === 'sq' || state === 'dq' || state === 'regex' || state === 'rclass')) state = 'code'
       escaped = false
       i++
       continue
