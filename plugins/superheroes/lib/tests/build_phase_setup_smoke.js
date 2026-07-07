@@ -35,7 +35,14 @@ function gatherRoute(map) {
     execRoute((p) => {
       // Run-9 adversarial shape: the courier FENCES its verbatim JSON answer. extractJson must
       // still accept it (the old plain-string leg compared the fenced text and false-parked).
-      if (p.includes('read-gate')) return '```json\n{"review": "passed"}\n```'
+      // Pin the COMMAND CONTRACT, not just the parser: without --json the real CLI prints the
+      // plain gate word, which strict extraction rejects — a --json-dropping mutation must
+      // fail HERE, not ship a permanent live false-park (codex review of PR #273).
+      if (p.includes('read-gate')) {
+        assert.ok(p.includes('read-gate --doc tasks') && p.includes(' --json'),
+          'buildPhase must call read-gate --doc tasks with --json')
+        return '```json\n{"review": "passed"}\n```'
+      }
       if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
       if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [] })
       return '{}'
