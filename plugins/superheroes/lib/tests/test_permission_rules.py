@@ -216,3 +216,64 @@ def test_remove_rule(monkeypatch, tmp_path):
     pr.set_rule("/cwd", {"family": "b", "pattern": "y"}, root=str(tmp_path))
     pr.remove_rule("/cwd", "a", root=str(tmp_path))
     assert [r["family"] for r in pr.rules("/cwd", root=str(tmp_path))] == ["b"]
+
+
+# --- Task 14: seed the initial rules.json families + audit.json from the FR-7 audit (FR-6, FR-7) ---
+
+
+def test_seed_families_cover_routine_exclude_floor(monkeypatch, tmp_path):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    fams = {r["family"] for r in pr.rules("/cwd", root=str(tmp_path))}
+    assert {"test-run", "validators", "worktree-vcs", "draft-pr"} <= fams
+    # the owner-role floor set must NOT be auto-allowed by any seeded rule
+    for cmd in ["gh pr merge 1", "gh release create v1", "git push --force",
+                "gh workflow run ci.yml", "git push origin main"]:
+        pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+        assert pr.evaluate(cmd, "/cwd", "R", root=str(tmp_path))[0] == "fall"
+
+
+def test_seed_rules_are_provenance_stamped(monkeypatch, tmp_path):
+    # Every seeded rule must carry the configure provenance stamp so `rules()` (which filters
+    # on _provenance_ok) surfaces it — an unstamped seed would be invisible to evaluate.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    for r in pr.rules("/cwd", root=str(tmp_path)):
+        assert r["provenance"]["source"] == "configure"
+
+
+def test_seed_routine_families_allow_their_commands(monkeypatch, tmp_path):
+    # The seeded routine families must actually allow the routine commands they name.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    for cmd in [
+        "python3 -m pytest -q",
+        "python3 .github/scripts/validate_marketplace.py",
+        "git commit -m 'x'",
+        "gh pr create --draft --title X",
+        "gh pr ready 12",
+    ]:
+        assert pr.evaluate(cmd, "/cwd", "R", root=str(tmp_path))[0] == "allow", cmd
+    # base-branch change is NOT in the draft-pr family — normal prompt path
+    assert pr.evaluate("gh pr edit 12 --base develop", "/cwd", "R", root=str(tmp_path))[0] == "fall"
+
+
+def test_seed_audit_traces_every_family(monkeypatch, tmp_path):
+    # FR-7: an out-of-repo audit.json lists the prompt-provoking commands observed in a run,
+    # and every seeded routine family maps to at least one audit entry.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    audit = pr.audit("/cwd", root=str(tmp_path))
+    assert isinstance(audit, list) and audit
+    # each entry names a command + a disposition (a rule/family id or "keep prompting")
+    for entry in audit:
+        assert entry.get("command")
+        assert entry.get("disposition")
+    audited_families = {e.get("disposition") for e in audit}
+    for fam in ("test-run", "validators", "worktree-vcs", "draft-pr"):
+        assert fam in audited_families, fam

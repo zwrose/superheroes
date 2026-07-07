@@ -346,3 +346,117 @@ def remove_rule(cwd, family, root=None):
     entries = [e for e in _read_rules_raw(cwd, root)
                if not (isinstance(e, dict) and e.get("family") == family)]
     _write_rules_raw(cwd, entries, root)
+
+
+# --- Task 14: seed the initial rules families + audit.json from the FR-7 audit (FR-6, FR-7) ---
+
+# The four routine command families a full showrunner run exercises, grounded in the FR-7
+# audit of which permission prompts actually fire during a run (`_AUDIT` below). Each pattern
+# is written NARROW — the owner-role floor set (merge/release/workflow-run/force-push/
+# push-to-default) is deliberately NOT matched, and even if a pattern were overbroad the
+# floor still catches those via `evaluate`'s defensive `enforcer.gated_action` re-check (UFR-1),
+# so the exclusion is guaranteed structurally, not merely by regex care.
+#
+# - test-run     — the repo's test invocations: pytest, the `python3 -m pytest` form, and the
+#                  node smoke runner the pytest wrapper drives.
+# - validators   — the three CI validators run at the gate.
+# - worktree-vcs — VCS operations a build performs. `git push` is admitted ONLY for a
+#                  superheroes/* feature branch (never force, never a `:main`/` main`
+#                  destination — the floor owns those). read-only/staging verbs are broad.
+# - draft-pr     — draft PR creation + title/body/metadata edits + the draft→ready promotion.
+#                  `gh pr edit ... --base` (changing base) is NOT here — normal prompt path.
+_SEED_FAMILIES = [
+    {
+        "family": "test-run",
+        "pattern": r"\b(?:python[0-9.]*\s+-m\s+pytest|pytest)\b|\bnode\b.*\bsmoke",
+    },
+    {
+        "family": "validators",
+        "pattern": r"\bvalidate_(?:marketplace|hosts|skills)\.py\b",
+    },
+    {
+        "family": "worktree-vcs",
+        # staging / read-only VCS verbs, plus a NON-force feature-branch push (no `main`/
+        # `master` destination). The push arm requires a `superheroes/` ref so it can never
+        # name the default branch; force/`:main` still fall to the floor.
+        "pattern": (
+            r"\bgit\s+(?:add|commit|status|diff|log|show|fetch|switch|checkout|restore|stash|worktree)\b"
+            r"|\bgit\s+push\b(?!.*(?:--force\b|-f\b|--force-with-lease|(?::|[ \t])(?:refs/heads/)?(?:main|master)(?:\s|$)))"
+            r".*\bsuperheroes/"
+        ),
+    },
+    {
+        "family": "draft-pr",
+        # create a draft PR, edit its title/body/labels/etc., and the draft→ready promotion.
+        # `--base` (changing the base branch) is intentionally excluded — normal prompt path.
+        "pattern": (
+            r"\bgh\s+pr\s+create\b(?=.*--draft\b)"
+            r"|\bgh\s+pr\s+edit\b(?!.*--base\b)"
+            r"|\bgh\s+pr\s+ready\b"
+        ),
+    },
+]
+
+# The FR-7 audit: the prompt-provoking commands observed in a full showrunner run and each
+# one's disposition (the routine family that allows it, or "keep prompting" for a command left
+# to the normal permission path). Every seeded family traces to at least one entry here, and
+# the owner-role floor commands are recorded as "keep prompting" so the audit shows they were
+# considered and deliberately NOT auto-allowed.
+_AUDIT = [
+    {"command": "python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ -q",
+     "disposition": "test-run"},
+    {"command": "pytest -q", "disposition": "test-run"},
+    {"command": "node plugins/superheroes/lib/tests/showrunner_smoke.js",
+     "disposition": "test-run"},
+    {"command": "python3 .github/scripts/validate_marketplace.py", "disposition": "validators"},
+    {"command": "python3 .github/scripts/validate_hosts.py", "disposition": "validators"},
+    {"command": "python3 .github/scripts/validate_skills.py", "disposition": "validators"},
+    {"command": "git add -A", "disposition": "worktree-vcs"},
+    {"command": "git commit -m 'feat(superheroes): ...'", "disposition": "worktree-vcs"},
+    {"command": "git status", "disposition": "worktree-vcs"},
+    {"command": "git push origin superheroes/<work-item>", "disposition": "worktree-vcs"},
+    {"command": "gh pr create --draft --title '...' --body '...'", "disposition": "draft-pr"},
+    {"command": "gh pr edit 12 --body '...'", "disposition": "draft-pr"},
+    {"command": "gh pr ready 12", "disposition": "draft-pr"},
+    # Owner-role floor commands were observed and deliberately left to the prompt path (UFR-1).
+    {"command": "gh pr merge 12", "disposition": "keep prompting"},
+    {"command": "gh release create v1.0.0", "disposition": "keep prompting"},
+    {"command": "gh workflow run ci.yml", "disposition": "keep prompting"},
+    {"command": "git push --force origin superheroes/<work-item>", "disposition": "keep prompting"},
+    {"command": "git push origin main", "disposition": "keep prompting"},
+    # Changing a PR's base branch is not in the draft-pr family — normal prompt path.
+    {"command": "gh pr edit 12 --base develop", "disposition": "keep prompting"},
+]
+
+
+def seed_default_rules(cwd, root=None):
+    """Seed the four routine families (FR-6) via `set_rule` (so each is provenance-stamped and
+    thus visible to `evaluate`), and write the FR-7 `audit.json` alongside `rules.json`.
+
+    Idempotent per family: `set_rule` replaces a same-family entry rather than duplicating, so
+    a re-seed refreshes the seeded patterns without accumulating. The seeded VCS/PR patterns
+    are written narrow, but the owner-role floor set is excluded STRUCTURALLY by `evaluate`'s
+    `enforcer.gated_action` re-check regardless (UFR-1)."""
+    for fam in _SEED_FAMILIES:
+        set_rule(cwd, dict(fam), root=root)
+    d = _store_dir(cwd, root)
+    os.makedirs(d, exist_ok=True)
+    control_plane.atomic_write(
+        os.path.join(d, "audit.json"),
+        json.dumps({"observed": _AUDIT}, indent=2),
+    )
+
+
+def audit(cwd, root=None):
+    """Read the FR-7 audit record — the prompt-provoking commands observed in a full run and
+    each one's disposition (a routine family id, or "keep prompting"). Fail-safe (UFR-2): a
+    missing / corrupt / non-dict record reads as `[]`."""
+    try:
+        with open(os.path.join(_store_dir(cwd, root), "audit.json")) as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    observed = data.get("observed")
+    return observed if isinstance(observed, list) else []
