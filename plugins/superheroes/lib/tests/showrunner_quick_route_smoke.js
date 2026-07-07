@@ -79,7 +79,7 @@ function makeAgent(startupFacts, trace, opts) {
         checkpoint: opts.checkpoint || null, world: WORLD, generation: 7, root: CHECKOUT_ROOT })
     }
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify(Object.assign({ ok: true }, startupFacts)) }]
+      return [{ ok: true, stdout: markedStdout(Object.assign({ ok: true }, startupFacts)) }]
     }
     if (label === 'record skipped phases') {
       trace.skipRecord = prompt

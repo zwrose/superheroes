@@ -2,7 +2,7 @@ require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const bp = require('../build_phase.js')
 const { testPilotPhase } = require('../test_pilot_phase.js')
-const { saveProgressOk } = require('./_marked_stdout.js')
+const { saveProgressOk, markedStdout } = require('./_marked_stdout.js')
 
 const exercised = [
   'read startup state', 'read plan draft', 'read tasks draft',
@@ -31,7 +31,7 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     seen.add(label)
     if (forbidden.includes(label)) throw new Error('forbidden label exercised: ' + label)
     if (label === 'read startup state') {
-      return jsonOut({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', world: {} })
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', world: {} }) }]
     }
     if (label === 'read world-snapshot') {
       return jsonOut({ ok: true, gate: 'passed' })
