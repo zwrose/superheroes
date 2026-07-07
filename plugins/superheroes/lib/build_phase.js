@@ -449,6 +449,22 @@ function _tasksDocPath(workItem) {
   return require('./showrunner.js').docPathFor(workItem, 'tasks')
 }
 
+// #275: the build leaf's structured-output schema. Constrain `ok` to a boolean and `signal` to the
+// three recovery signals so schema-validated output retries a stringy shape AT THE SOURCE — the #219
+// live escape was every build leaf returning `ok` as the string "false"/"true" past an untyped
+// {required:['ok']} schema, and "false" is truthy in JS. `evidence` is left unconstrained (it is not
+// consumed here, and the leaf sometimes emits it as a JSON string — don't force needless retries on it).
+const BUILD_LEAF_SCHEMA = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    // Reference the canonical token (CONVENTIONS §11) rather than re-typing the string —
+    // worker_recovery.js is the home of the plan_wrong signal, already required in this file.
+    signal: { enum: ['ok', 'needs_context', workerRecoveryTwin.PLAN_WRONG] },
+  },
+}
+
 // #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
 // task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
@@ -497,9 +513,20 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), schema: BUILD_LEAF_SCHEMA }),
     })
-    if (worker.ok) {
+    // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
+    // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
+    // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
+    // an explicit refusal and recorded built:passed for zero commits. Only a genuine boolean `true`
+    // advances; anything else falls through to the recovery twin (which parks immediately on
+    // plan_wrong, UFR-3). `worker` can be null (agent() returns null on a dead/skipped subagent), so
+    // guard the deref — a null result must fall through to bounded recovery, never crash the run.
+    // Scope: this is type-strictness on the NATIVE leaf only. It does NOT catch an EXTERNAL-engine
+    // refusal: engine_adapter.py parse_result coerces any parseable external stdout to a genuine
+    // boolean `ok:true` UPSTREAM of this gate (build|fix branch), so an external {ok:false,plan_wrong}
+    // never reaches here as a falsy value — that refusal-laundering is tracked separately (#288).
+    if (worker && worker.ok === true) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
@@ -531,7 +558,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return reviewLoop(workItem, generation, task, branch, wt)
     }
     // #115 increment B: bounded recovery decided in-process via the worker_recovery twin (no leaf).
-    const rec = workerRecoveryTwin.decide(attempt, worker.signal || 'needs_context')
+    // #275: `worker` may be null (dead/skipped subagent) — a null signal defaults to needs_context
+    // (bounded retry → escalate → park), never a crash.
+    const rec = workerRecoveryTwin.decide(attempt, (worker && worker.signal) || 'needs_context')
     if (rec.action === 'park') return { parked: true, reason: rec.reason }
     attempt += 1                                   // retry_with_context / escalate -> re-dispatch
   }

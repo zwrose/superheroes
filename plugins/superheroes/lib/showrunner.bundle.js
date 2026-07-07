@@ -3587,7 +3587,11 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     } catch (err) {
       return { done: low(`test-pilot browser fix batch failed: ${message(err)}`) }
     }
-    if (!fixResult || fixResult.ok === false || fixResult.action === 'park' || fixResult.confidence === 'low') {
+    // #275: fail closed on the fix leaf's `ok` — a stringy 'false' (truthy in JS) or a missing ok both
+    // slipped past the old `ok === false` gate and recorded false progress (empty shas, unchanged head)
+    // while the browser pass re-ran against the unfixed app. Only a genuine boolean `true` is a fix;
+    // mirrors the #275 build-gate consumer (`worker.ok === true`), belt-and-braces with the typed schema.
+    if (!fixResult || fixResult.ok !== true || fixResult.action === 'park' || fixResult.confidence === 'low') {
       return { done: low((fixResult && (fixResult.reason || fixResult.message)) || 'test-pilot browser fix batch parked') }
     }
 
@@ -5388,6 +5392,22 @@ function _tasksDocPath(workItem) {
   return require('./showrunner.js').docPathFor(workItem, 'tasks')
 }
 
+// #275: the build leaf's structured-output schema. Constrain `ok` to a boolean and `signal` to the
+// three recovery signals so schema-validated output retries a stringy shape AT THE SOURCE — the #219
+// live escape was every build leaf returning `ok` as the string "false"/"true" past an untyped
+// {required:['ok']} schema, and "false" is truthy in JS. `evidence` is left unconstrained (it is not
+// consumed here, and the leaf sometimes emits it as a JSON string — don't force needless retries on it).
+const BUILD_LEAF_SCHEMA = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    // Reference the canonical token (CONVENTIONS §11) rather than re-typing the string —
+    // worker_recovery.js is the home of the plan_wrong signal, already required in this file.
+    signal: { enum: ['ok', 'needs_context', workerRecoveryTwin.PLAN_WRONG] },
+  },
+}
+
 // #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
 // task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
@@ -5436,9 +5456,20 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), schema: BUILD_LEAF_SCHEMA }),
     })
-    if (worker.ok) {
+    // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
+    // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
+    // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
+    // an explicit refusal and recorded built:passed for zero commits. Only a genuine boolean `true`
+    // advances; anything else falls through to the recovery twin (which parks immediately on
+    // plan_wrong, UFR-3). `worker` can be null (agent() returns null on a dead/skipped subagent), so
+    // guard the deref — a null result must fall through to bounded recovery, never crash the run.
+    // Scope: this is type-strictness on the NATIVE leaf only. It does NOT catch an EXTERNAL-engine
+    // refusal: engine_adapter.py parse_result coerces any parseable external stdout to a genuine
+    // boolean `ok:true` UPSTREAM of this gate (build|fix branch), so an external {ok:false,plan_wrong}
+    // never reaches here as a falsy value — that refusal-laundering is tracked separately (#288).
+    if (worker && worker.ok === true) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
@@ -5470,7 +5501,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return reviewLoop(workItem, generation, task, branch, wt)
     }
     // #115 increment B: bounded recovery decided in-process via the worker_recovery twin (no leaf).
-    const rec = workerRecoveryTwin.decide(attempt, worker.signal || 'needs_context')
+    // #275: `worker` may be null (dead/skipped subagent) — a null signal defaults to needs_context
+    // (bounded retry → escalate → park), never a crash.
+    const rec = workerRecoveryTwin.decide(attempt, (worker && worker.signal) || 'needs_context')
     if (rec.action === 'park') return { parked: true, reason: rec.reason }
     attempt += 1                                   // retry_with_context / escalate -> re-dispatch
   }
@@ -6233,8 +6266,6 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -8210,7 +8241,10 @@ function testPilotDeps(workItem, generation) {
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'fix-app-bug', schema: { type: 'object' } }),
+      // #275: type `ok` boolean so a stringy 'false' refusal is retried at the source (its consumer
+      // gates on ok, test_pilot_phase.js) and `commitShas` array so a stringified list can't slip past
+      // normalizeShas (which returns [] for a non-array, silently losing the shas → false progress).
+      { label: 'fix-app-bug', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, commitShas: { type: 'array' } } } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -8736,7 +8770,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
