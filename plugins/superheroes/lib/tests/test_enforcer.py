@@ -561,6 +561,75 @@ def test_external_engine_own_feature_branch_push_is_allowed():
     assert enforcer.classify_command("cursor-agent -f -m composer", host="codex")[0] == "allow"
 
 
+# --- Task 5: allowance layer wired into the NON-GATED branch only (UFR-1/UFR-2) ---
+# enforcer's import inserts lib/ onto sys.path, so the sibling core is importable here.
+import permission_rules  # noqa: E402
+
+
+def test_owner_role_outcome_unchanged_with_rules_present(monkeypatch):
+    # A rule that would match a merge must never flip the floor's ask/deny — the allowance
+    # layer is NEVER consulted on the gated branch (it returns before the layer's call site).
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "should-not-be-consulted"))
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "ask"
+    assert enforcer.classify_command("gh pr merge 1", host="codex", in_scope=True)[0] == "deny"
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=False)[0] == "allow"
+
+
+def test_non_gated_command_allowed_when_rule_matches(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True)
+    assert decision == "allow"
+    # The allowance layer must actually be consulted — its reason surfaces (distinguishes an
+    # auto-allow from today's default-allow, which would otherwise mask an unwired layer).
+    assert "auto-allowed" in reason and "routine:test-run" in reason
+
+
+def test_non_gated_command_falls_through_to_default_allow(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate", lambda *a, **k: ("fall", "no match"))
+    # today's outcome is preserved (default allow)
+    assert enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True)[0] == "allow"
+
+
+def test_allowance_exception_falls_through(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    assert enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True)[0] == "allow"
+
+
+def test_unconditional_surfaces_still_deny_before_allowance(monkeypatch):
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "should-not-be-reached"))
+    assert enforcer.classify_command(": workhorse-enforcer-canary")[0] == "deny"
+
+
+# --- Task 6: hook threads cwd + run_id; selfcheck asserts the invariant (UFR-1) ---
+
+
+def test_hook_passes_cwd_run_id_and_work_item(monkeypatch):
+    # The hook resolves the (work_item, run_id) PAIR once via the shared lease seam and
+    # threads BOTH into classify_command (work_item namespaces the frozen-file read and
+    # keeps the allowance journal attributed to the same run the evaluation used).
+    seen = {}
+
+    def fake_classify(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None):
+        seen.update(cwd=cwd, run_id=run_id, work_item=work_item)
+        return ("allow", "")
+
+    monkeypatch.setattr(enforcer, "classify_command", fake_classify)
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: ("wi-9", "RUN9"))
+    payload = '{"tool_name":"Bash","tool_input":{"command":"python3 -m pytest"},"cwd":"/w"}'
+    enforcer.hook(payload, host="claude")
+    assert seen["cwd"] == "/w" and seen["run_id"] == "RUN9" and seen["work_item"] == "wi-9"
+
+
+def test_selfcheck_matrix_holds_with_allowance(monkeypatch):
+    assert enforcer.selfcheck() == 0   # the added assertions pass on a correct build
+
+
+
 # --- Task 8: deny-only marker (UFR-6) — the acceptance-harness never-merge floor ---
 MARKER = "SUPERHEROES_ACCEPTANCE_DENY_ONLY"
 
@@ -663,3 +732,261 @@ def test_dod_filler_command_surface_stays_non_gated(monkeypatch):
     for cmd in surface:
         assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "allow", (
             "deny-only floor must not gate the fill leg: %s" % cmd)
+
+
+# --- #149 auditability NFR: auto-ALLOWANCES are journaled (best-effort, fail-open) ---
+# Denials already ride the journal's permission_denied event → the readout. Automatic
+# allowances (evaluate -> ('allow', <reason>)) were silent; these pin that each one now
+# leaves an allowance_fired line in the run's OWN events.jsonl, and that the emission is pure
+# observability — it can NEVER change the allow decision or let an error escape.
+
+
+def test_allowance_fired_is_journaled(tmp_path, monkeypatch):
+    # An auto-allowance leaves exactly one allowance_fired line carrying the reason + the
+    # first-16-hex command hash (the SAME hashing permission_rules._hash uses, so it correlates
+    # against the composed-command store) — and NEVER the raw command text.
+    import journal
+    import control_plane
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    cwd = str(tmp_path)
+    cmd = "python3 -m pytest"
+    decision, reason = enforcer.classify_command(cmd, host="claude", in_scope=True,
+                                                 cwd=cwd, run_id="RUN1")
+    assert decision == "allow" and "auto-allowed" in reason
+    events = control_plane.paths(cwd, "wi-x")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1
+    payload = fired[0]["payload"]
+    assert payload["reason"] == "routine:test-run"
+    assert payload["command_sha256"] == permission_rules._hash(cmd)[:16]
+    assert len(payload["command_sha256"]) == 16
+    assert payload["cwd"] == cwd
+    assert cmd not in open(events).read()      # the raw command is never written
+
+
+def test_default_allow_journals_nothing(tmp_path, monkeypatch):
+    # The default-allow fall-through (evaluate -> 'fall') must journal NOTHING — else every
+    # routine command in every session would spam the run's journal.
+    import journal
+    import control_plane
+    monkeypatch.setattr(permission_rules, "evaluate", lambda *a, **k: ("fall", "no match"))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    cwd = str(tmp_path)
+    assert enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                                     cwd=cwd, run_id="RUN1")[0] == "allow"
+    events = control_plane.paths(cwd, "wi-x")["events"]
+    assert journal.read_events(events) == []
+
+
+def test_allowance_journal_failure_never_affects_decision(tmp_path, monkeypatch):
+    # Fail-open: a journal.append that RAISES must not change the allow decision nor escape.
+    import journal
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "worktree-confined"))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    monkeypatch.setattr(journal, "append",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude",
+                                                 in_scope=True, cwd=str(tmp_path), run_id="RUN1")
+    assert decision == "allow" and "auto-allowed" in reason
+
+
+def test_hook_journals_allowance_via_active_run(tmp_path, monkeypatch, capsys):
+    # End-to-end through hook(): an active run (the lease resolves to the (work_item, run_id)
+    # pair via the shared permission_rules.resolve_active_lease seam hook() actually calls) + an
+    # auto-allowance leaves the allowance_fired record AND stays silent (allow == silent).
+    import journal
+    import control_plane
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: ("wi-x", "RUN1"))
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "composed-exact"))
+    cwd = str(tmp_path)
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": "python3 build.py"}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""   # allow is silent
+    events = control_plane.paths(cwd, "wi-x")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1 and fired[0]["payload"]["reason"] == "composed-exact"
+
+
+# --- #149 REAL-SEAM integration: no monkeypatch of the lease-resolution chain ------------
+# The phantom `control_plane.get_current` (removed by #170) left `_active_run_id`/`_run_is_live`
+# DEAD in production while every existing test monkeypatched `_active_run_id`/`_run_is_live` or
+# passed run_id directly — so a nonexistent function passed the whole suite. These drive the
+# REAL `ref_lock` lease on disk (the conftest pins the store root under tmp_path) and let the
+# repaired `_active_run_id` resolve run_id INTERNALLY through hook(); nothing in the resolution
+# chain is stubbed.
+
+
+def _real_lease_cwd(tmp_path, monkeypatch, work_item):
+    """A real checkout dir + a real LIVE ref_lock lease for `work_item`, in the pinned
+    tmp store. Returns (cwd, generation). The lease store is the real control-plane
+    checkout store `resolve_active_lease`/`_active_run_id` read — no seam is patched."""
+    import control_plane
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    assert store is not None and store == control_plane.checkout_dir(cwd)
+    ok, generation, _ = ref_lock.acquire(store, work_item)
+    assert ok
+    return cwd, generation, store
+
+
+def test_active_run_id_resolves_live_lease_generation(tmp_path, monkeypatch):
+    # Direct pin: with a REAL live lease on disk, _active_run_id resolves its generation via
+    # the real active_work_items seam (NOT the dead control_plane.get_current). This is the
+    # exact assertion that would have caught the phantom-function escape.
+    cwd, generation, _store = _real_lease_cwd(tmp_path, monkeypatch, "wi-live")
+    assert enforcer._active_run_id(cwd) == generation
+
+
+def test_active_run_id_none_when_lease_stale(tmp_path, monkeypatch):
+    # Direct pin, fail-safe: a STALE lease (ancient acquiredAt + dead pid) is filtered by
+    # active_work_items, so _active_run_id resolves to None — never a spurious run_id.
+    import control_plane
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    ref_lock._force_lease(store, "wi-stale", {"pid": 999999, "host": ref_lock._host(),
+                          "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None,
+                          "generation": 7, "ttl": 1})
+    assert enforcer._active_run_id(cwd) is None
+
+
+def test_hook_allowance_fires_end_to_end_through_real_lease(tmp_path, monkeypatch, capsys):
+    # (a) THE load-bearing integration test. A real live lease + a frozen routine rule for that
+    # run's generation; hook() resolves run_id INTERNALLY via the real _active_run_id and the
+    # allowance fires end-to-end: allow (silent) AND one allowance_fired line in the resolved
+    # run's OWN journal (real _active_work_item). NOTHING in the resolution chain is stubbed.
+    import control_plane
+    import journal
+    cwd, generation, _store = _real_lease_cwd(tmp_path, monkeypatch, "wi-run")
+    # Seed a routine-family rule + freeze it for THIS run's generation, in the real store
+    # (default root == the pinned control_plane.store_root()).
+    permission_rules.set_rule(cwd, {"family": "test-run", "pattern": r"\bpytest\b"})
+    permission_rules.freeze_run_rules(generation, cwd, work_item="wi-run")
+    cmd = "python3 -m pytest -q"
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": cmd}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""     # allowance allow == silent
+    events = control_plane.paths(cwd, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1, "the repaired seam must let the allowance fire+journal end-to-end"
+    assert fired[0]["payload"]["reason"].startswith("routine:")
+    assert fired[0]["payload"]["command_sha256"] == permission_rules._hash(cmd)[:16]
+
+
+def test_hook_falls_back_when_lease_released_no_allowance(tmp_path, monkeypatch, capsys):
+    # (b) With the SAME setup but the lease RELEASED (no live run), _active_run_id resolves to
+    # None, evaluate is inert (FR-3), and the very same command falls back to today's default
+    # allow with NO allowance_fired journaled — proving the allowance only fires on a real run.
+    import control_plane
+    import journal
+    import ref_lock
+    cwd, generation, store = _real_lease_cwd(tmp_path, monkeypatch, "wi-run")
+    permission_rules.set_rule(cwd, {"family": "test-run", "pattern": r"\bpytest\b"})
+    permission_rules.freeze_run_rules(generation, cwd, work_item="wi-run")
+    assert ref_lock.release(store, "wi-run", generation) is True     # run ends -> lease gone
+    assert enforcer._active_run_id(cwd) is None                       # real seam sees no run
+    cmd = "python3 -m pytest -q"
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": cmd}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""          # still allow (default), silent
+    events = control_plane.paths(cwd, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert fired == [], "no active run -> allowance layer inert -> nothing journaled"
+
+
+# --- fix round 2 (escalated pair): work-item-namespaced run files + injected floor check ---
+
+
+def test_run_files_namespaced_by_work_item_no_collision(tmp_path, monkeypatch):
+    # premortem-002: a lease generation is a per-work-item counter, so two concurrent
+    # same-project runs both present generation 1. Namespaced run files keep run B's freeze
+    # from wiping run A's frozen snapshot (UFR-9) or resetting its composed set (FR-8).
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "proj")
+    os.makedirs(cwd, exist_ok=True)
+    permission_rules.freeze_run_rules(1, cwd, work_item="wi-a")
+    permission_rules.record_composed(1, "cmd-for-a", cwd, work_item="wi-a")
+    permission_rules.freeze_run_rules(1, cwd, work_item="wi-b")  # would clobber pre-fix
+    a = permission_rules.frozen_rules(1, cwd, work_item="wi-a")
+    b = permission_rules.frozen_rules(1, cwd, work_item="wi-b")
+    assert permission_rules._hash("cmd-for-a") in a["composed"]   # A's set survived B's freeze
+    assert b["composed"] == []
+    # cross-run isolation: A's composed command confers nothing under B's file
+    assert permission_rules._hash("cmd-for-a") not in b["composed"]
+
+
+def test_resolve_active_lease_prefers_cwd_matching_work_item(tmp_path, monkeypatch):
+    # premortem-002 attribution: with TWO live leases in one clone, a cwd that names exactly
+    # one work-item (a build worktree path embeds it) resolves to THAT run; an ambiguous cwd
+    # falls back to sorted-first (deterministic).
+    import control_plane
+    import ref_lock
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    ok_a, gen_a, _ = ref_lock.acquire(store, "wi-alpha")
+    ok_b, gen_b, _ = ref_lock.acquire(store, "wi-beta")
+    assert ok_a and ok_b
+    wt_b = str(tmp_path / "trees" / "wi-beta-1234" / "sub")
+    # a real build worktree shares the clone's common-dir store key; a scratch dir does not,
+    # so pin the store resolution to target the preference logic itself.
+    monkeypatch.setattr(permission_rules.control_plane, "checkout_dir", lambda c: store)
+    wi, gen = permission_rules.resolve_active_lease(wt_b)
+    assert (wi, gen) == ("wi-beta", gen_b)
+    wi_first, _ = permission_rules.resolve_active_lease(cwd)   # no work-item in cwd -> sorted-first
+    assert wi_first == "wi-alpha"
+
+
+def test_resolve_active_lease_prefers_longest_overlapping_work_item(tmp_path, monkeypatch):
+    # code-001: when one work-item name is a substring of another (`wi-abc` inside
+    # `wi-abc-task5`), a plain `p[0] in cwd` test matches BOTH and the preference collapses to
+    # the wrong (shorter, sorted-first) run. Longest-UNIQUE match must pick the more specific one.
+    import control_plane
+    import ref_lock
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    ok_short, _gs, _ = ref_lock.acquire(store, "wi-abc")
+    ok_long, _gl, _ = ref_lock.acquire(store, "wi-abc-task5")
+    assert ok_short and ok_long
+    monkeypatch.setattr(permission_rules.control_plane, "checkout_dir", lambda c: store)
+    # a build worktree whose path embeds the LONGER name (and therefore the shorter as a substring)
+    wt_long = str(tmp_path / "trees" / "wi-abc-task5-1234" / "sub")
+    wi_long, _ = permission_rules.resolve_active_lease(wt_long)
+    assert wi_long == "wi-abc-task5"                 # longest-unique wins over the embedded prefix
+    # a worktree whose path embeds ONLY the shorter name resolves to it
+    wt_short = str(tmp_path / "trees" / "wi-abc-9999" / "sub")
+    wi_short, _ = permission_rules.resolve_active_lease(wt_short)
+    assert wi_short == "wi-abc"
+
+
+def test_evaluate_uses_injected_gated_check_and_lazy_fallback(tmp_path, monkeypatch):
+    # architecture-001: the enforcer injects its own gated_action (primary path — no upward
+    # import); a caller that injects nothing still gets the lazy fail-closed fallback.
+    import permission_rules
+    flagged = {}
+
+    def fake_gated(cmd):
+        flagged["cmd"] = cmd
+        return True
+
+    verdict, why = permission_rules.evaluate("echo hi", None, "RUN1", gated_check=fake_gated)
+    assert verdict == "fall" and "floor owns it" in why and flagged["cmd"] == "echo hi"
+    # fallback: no injection -> lazy enforcer import still gates a real owner-role command
+    verdict2, why2 = permission_rules.evaluate("gh pr " + "merge 1", None, "RUN1")
+    assert verdict2 == "fall" and "floor owns it" in why2

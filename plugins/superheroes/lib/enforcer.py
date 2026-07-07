@@ -33,6 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import allowance  # noqa: E402
 import escalation  # noqa: E402  (same-tree sibling core; no band_lib, no subprocess)
+import permission_rules  # noqa: E402  (pure below-the-floor allowance layer; non-gated branch only)
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Acceptance-harness enforcement marker (UFR-6). Set by the child-process launcher on the
@@ -222,7 +223,7 @@ def _in_superheroes_repo(cwd):
         return False
 
 
-def classify_command(command, host="codex", in_scope=True):
+def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None):
     """('allow'|'ask'|'deny', reason). Decision order:
 
       1. non-string                         → deny (fail-closed)
@@ -232,10 +233,19 @@ def classify_command(command, host="codex", in_scope=True):
            - outside a superheroes repo     → allow (not gated here)
            - in-scope, host honors `ask`    → ask  (live owner prompt)
            - in-scope, deny-only host       → deny (the hook runs the allowance overlay)
-      5. anything else                      → allow
+      5. non-gated (today = allow): consult the below-the-floor allowance layer
+         (permission_rules.evaluate). A matching owner-curated routine family / managed-
+         worktree-confined / composed-exact command turns a would-be prompt into `allow`;
+         anything else falls through to today's default allow.
+      6. default                            → allow
 
     `host`/`in_scope` affect ONLY the gated set. Default host=`codex` (deny-only) is the
-    fail-safe: only an explicit host that honors `ask` unlocks the prompt."""
+    fail-safe: only an explicit host that honors `ask` unlocks the prompt. `cwd`/`run_id`
+    thread the hook's context into the allowance layer; both default to `None` (no active
+    run → the layer's composed/freeze machinery is inert). The allowance layer is reached
+    ONLY here, on the non-gated branch: the canary/safety-write/owner-role arms all `return`
+    above it, so it can never widen the floor (UFR-1). Any allowance error is swallowed and
+    falls through to today's default allow (fail-safe toward the existing outcome, UFR-2)."""
     if not isinstance(command, str):
         return ("deny", "non-string command (fail-closed)")
     if _CANARY.search(command):
@@ -259,6 +269,23 @@ def classify_command(command, host="codex", in_scope=True):
         if host == "claude":
             return ("ask", "owner-authority action '%s' needs your live approval" % action)
         return ("deny", "owner-authority action '%s' needs the owner's live approval" % action)
+    # Non-gated branch (today: unconditional allow). Consult the allowance layer; it can only
+    # turn a would-be prompt into an allow, never flip an allow to a deny.
+    try:
+        # Inject our own gated_action as the floor re-check (primary path; breaks the load-bearing
+        # upward call of the enforcer<->permission_rules cycle — the lazy import inside evaluate is
+        # now only the fallback for callers that inject nothing). work_item namespaces the per-run
+        # frozen file (a lease generation is per-work-item; see permission_rules._run_path).
+        verdict, why = permission_rules.evaluate(command, cwd, run_id,
+                                                 work_item=work_item, gated_check=gated_action)
+        if verdict == "allow":
+            # #149 auditability NFR: record this auto-allowance in the run's own journal. Pure
+            # best-effort observability — fail-open, NEVER affects the decision or latency, and
+            # fires ONLY here (the allowance layer's allow), not on the default-allow fall-through.
+            _journal_allowance(command, cwd, run_id, why, work_item=work_item)
+            return ("allow", "auto-allowed (%s)" % why)
+    except Exception:
+        pass
     return ("allow", "")
 
 
@@ -349,6 +376,63 @@ def _codex_gate_reason(command, action, cwd):
     )
 
 
+def _active_run_id(cwd):
+    """The `run_id` of the currently-active run for `cwd`'s clone, or None.
+
+    "A run is active" is a fresh `ref_lock` lease on a work-item's lock ref; its `generation`
+    field is the `run_id` the spine freezes/composes under. This threads that signal into the
+    allowance layer so the composed/freeze machinery is inert outside an active run (FR-3) — an
+    interactive session with no lease sees `run_id=None`.
+
+    Resolved via `permission_rules.resolve_active_lease` — the ONE shared lease-resolution path
+    (also behind `_active_work_item` and `permission_rules._run_is_live`), built on the #170
+    `ref_lock.active_work_items` seam that REPLACED the removed `control_plane.get_current` /
+    `current.json` pointer (the pre-#170 seam this branch was authored against; it no longer
+    resolves). Fail-SAFE (UFR-2): any error, no store, no live lease, or a stale lease → None,
+    never a spurious run_id — a None run_id only makes the layer MORE conservative
+    (composed/freeze cannot fire), so the fail-safe direction is always toward prompting."""
+    return permission_rules.resolve_active_lease(cwd)[1]
+
+
+def _active_work_item(cwd, run_id):
+    """The live work-item in this clone whose lease `generation == run_id` — the run the
+    allowance layer just fired for, so a journaled allowance lands in the RIGHT run's records.
+
+    Resolved via `permission_rules.resolve_active_lease` — the SAME shared lease-resolution
+    path `_active_run_id` uses (the #170 `ref_lock.active_work_items` seam), so the two can
+    never drift. Fail-SAFE (UFR-2): any error, no live lease, or no generation match → None."""
+    return permission_rules.resolve_active_lease(cwd, run_id)[0]
+
+
+def _journal_allowance(command, cwd, run_id, reason, work_item=None):
+    """Record an auto-allowance in the active run's own events.jsonl (#149 auditability NFR:
+    "every automatic allowance ... made during a run is visible in that run's records").
+
+    Best-effort OBSERVABILITY, NEVER gating: this append is wrapped whole so any error in path
+    resolution or the write is swallowed — the hook's decision and latency are untouched (no
+    retries). The raw command is NEVER written (it may embed tokens/secrets); only the first 16
+    hex of its sha256, hashed with the SAME `permission_rules._hash` the composed-command store
+    uses, so the two correlate. Fires ONLY for the allowance layer's allow — the caller does not
+    reach here on the default-allow fall-through, which must journal nothing."""
+    try:
+        import control_plane
+        import journal
+        if not work_item:
+            # fallback for callers that did not thread the pair (e.g. direct classify_command
+            # use in tests) — same shared seam, so attribution cannot drift.
+            work_item = _active_work_item(cwd, run_id)
+        if not work_item:
+            return
+        events = control_plane.paths(cwd, work_item)["events"]
+        journal.append(events, "allowance_fired", payload={
+            "reason": reason,
+            "command_sha256": permission_rules._hash(command)[:16],
+            "cwd": cwd or None,
+        })
+    except Exception:
+        return
+
+
 def hook(stdin_text, host="codex"):
     """Read a PreToolUse payload; emit allow (silent) / ask / deny. Fail-CLOSED: an
     unparseable payload denies. The gated set is host- and scope-aware; on the deny-only
@@ -365,7 +449,13 @@ def hook(stdin_text, host="codex"):
     in_scope = _in_superheroes_repo(cwd)
     if tool in _CMD_TOOLS:
         command = _command_text(ti)
-        decision, reason = classify_command(command, host=host, in_scope=in_scope)
+        # Resolve the active run's (work_item, run_id) pair ONCE per hook invocation (a single
+        # Bash call), then thread both + the payload cwd into the allowance layer — the pair keeps
+        # the frozen-file read work-item-namespaced and the allowance journal attributed to the
+        # SAME run the evaluation used (never re-resolved downstream).
+        work_item, run_id = permission_rules.resolve_active_lease(cwd)
+        decision, reason = classify_command(command, host=host, in_scope=in_scope,
+                                            cwd=cwd, run_id=run_id, work_item=work_item)
         action = gated_action(command)
         # Codex (deny-only host) gated overlay: the deny is the BACKSTOP that forces the
         # ask; a live owner-minted allowance lets the next matching call through once.
@@ -396,24 +486,46 @@ def selfcheck():
     """Deterministic startup self-check: the gate classifies the full matrix correctly,
     the escalation lib the Edit guard depends on RESOLVES, and the hook config exists.
     Exit 0 iff armed; the producer refuses to run on non-zero."""
+    # The classifier matrix, including the below-the-floor allowance layer. A broken
+    # allowance layer that RAISES must be reported here (armed=0), not crash selfcheck — so
+    # the whole matrix is evaluated inside a try/except that fail-closes `ok` to False.
     # Under the acceptance deny-only marker (UFR-6), "deny" IS the correct armed
     # classification for the owner-authority set on every host and scope — asserting
     # "ask"/"allow" there would make the harness's own safety marker fail the spine's
     # step-0 arming gate (mutual-deadlock, found live in the 0.10.0 qualification).
-    gated_expected = "deny" if _deny_only() else "ask"
-    ok = (
-        # gated merge: ask on Claude, deny on a deny-only host (both in-scope)...
-        classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == gated_expected
-        and classify_command("gh pr merge 1", host="codex", in_scope=True)[0] == "deny"
-        # ...and NOT gated outside a superheroes repo (flaw #1) — except under
-        # deny-only, which denies the owner-authority set regardless of scope (UFR-6)...
-        and classify_command("gh pr merge 1", host="claude", in_scope=False)[0]
-            == ("deny" if _deny_only() else "allow")
-        # ...unconditional surfaces hold regardless of host/scope...
-        and classify_command(": workhorse-enforcer-canary")[0] == "deny"
-        # ...and the producer's own commands stay allowed.
-        and classify_command("git commit -m x")[0] == "allow"
-    )
+    try:
+        gated_expected = "deny" if _deny_only() else "ask"
+        ok = (
+            # gated merge: ask on Claude (deny under the deny-only marker), deny on a
+            # deny-only host (both in-scope)...
+            classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == gated_expected
+            and classify_command("gh pr merge 1", host="codex", in_scope=True)[0] == "deny"
+            # ...and NOT gated outside a superheroes repo (flaw #1) — except under
+            # deny-only, which denies the owner-authority set regardless of scope (UFR-6)...
+            and classify_command("gh pr merge 1", host="claude", in_scope=False)[0]
+                == ("deny" if _deny_only() else "allow")
+            # ...unconditional surfaces hold regardless of host/scope...
+            and classify_command(": workhorse-enforcer-canary")[0] == "deny"
+            # ...and the producer's own commands stay allowed.
+            and classify_command("git commit -m x")[0] == "allow"
+            # Task 6 (UFR-1): the allowance layer NEVER widens the owner-role floor. Even the
+            # broadest hypothetical rule cannot flip a gated action — Task 4's defensive
+            # gated_action re-check inside evaluate guarantees it — so the gated outcomes above
+            # hold WITH the layer live. Re-assert against an owner-role command that also
+            # threads a cwd/run_id (the exact shape the hook now passes), proving the layer's
+            # presence on the non-gated branch did not leak into the gated arms.
+            and classify_command("gh pr merge 1", host="claude", in_scope=True,
+                                 cwd=None, run_id=None)[0] == gated_expected
+            and classify_command("gh release create v1", host="codex", in_scope=True,
+                                 cwd=None, run_id=None)[0] == "deny"
+            # Task 6 (observability): a would-be routine command with NO rules store present
+            # stays allow-by-default — the layer can only turn a would-be prompt INTO an allow,
+            # it never DENIES. (No active run / no store → evaluate falls through → default allow.)
+            and classify_command("python3 -m pytest", host="claude", in_scope=True,
+                                 cwd=None, run_id=None)[0] == "allow"
+        )
+    except Exception:
+        ok = False
     # The Edit guard (classify_path) needs the escalation core. If it can't be imported, the
     # guard fail-closes to deny EVERYTHING — which would still PASS the step 0 canaries yet wedge
     # step 1 Build with misdirecting per-edit denials. Surface the broken install HERE. Direct

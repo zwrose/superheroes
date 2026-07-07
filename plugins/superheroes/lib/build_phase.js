@@ -475,7 +475,10 @@ const BUILD_LEAF_SCHEMA = {
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
 // nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
 // appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
-function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+// `deniedNote` (FR-1 finality) carries forward the actions a prior attempt reported the permission
+// timeout denied — a re-dispatched fresh leaf is a re-attempt of the SAME step, so it must not retry the
+// denied action in any rewording. Appended AFTER retryNote so it rides every subsequent dispatch.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
     + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
@@ -483,9 +486,26 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
     + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
     + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
-    + `Co-Authored-By). Return JSON `
-    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + `Co-Authored-By). ${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
+    + `fired on ANY substantive step (not a verification probe — an actual implementation/commit action), set `
+    + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
+    + `to null — never fabricate a completed step you were denied. Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
     + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+
+// FR-1 finality memory: the action(s) a prior attempt of THIS step reported the permission timeout
+// denied are FINAL — a fresh re-dispatch of the same work is a re-attempt, not a distinct step, so the
+// worker must not re-enter the denied action in any rewording. One tight sentence naming each denied
+// action so the worker works around them and reports honestly instead of re-hitting the permission wait.
+function buildDeniedNote(deniedActions) {
+  if (!deniedActions || !deniedActions.length) return ''
+  return (
+    ` FINAL — the following action(s) were already denied by the permission timeout in this step and are `
+    + `FINAL; do NOT re-attempt them in any form or rewording — work around them and report honestly: `
+    + deniedActions.join('; ') + '.'
   )
 }
 
@@ -500,19 +520,95 @@ function buildRetryNote(task, docPath) {
   )
 }
 
+// #149 Task 11/12: the SINGLE object-arg composer for the spine's leaf prompt — used by BOTH
+// production (buildOneTask, below) and the permission smokes, so the dispatched bytes and the bytes
+// tests reconstruct for the FR-8 composed-exact hash can never drift (one composer, zero re-encoding).
+// Delegates to buildTaskPrompt; threads `deniedNote` (FR-1 finality) through so the production caller's
+// denial-memory suffix rides the same source of truth. `deniedNote` defaults to '' — a smoke that omits
+// it composes byte-identically to a first-attempt dispatch.
+function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote, deniedNote }) {
+  return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '', deniedNote || '')
+}
+
+// UFR-6/UFR-8 dual-carrier denial recording (premortem-001), extracted from buildOneTask's loop so
+// the loop body stays control flow. Returns a park result to return, or null (nothing denied / both
+// carriers rode). The denial is written to TWO independent carriers the ship gate (ship_gate.decide)
+// both consult; EITHER gates the PR to a draft, REGARDLESS of whether the leaf still reports ok:true:
+//   1. the run's journal `permission_denied` event (step `build:<id>`, detail = the denied action) —
+//      best-effort/fail-open but courier-RETRIED, written FIRST so it survives even if carrier 2 fails
+//      and the task then parks (a resume skips this already-committed leaf, so carrier 2 stays empty).
+//      ship_gate.journal_build_denials folds these `build:` events in as the second gate signal.
+//   2. the prov_entry build-denial provenance entry (ship_gate.record_build_denial) — fail-CLOSED
+//      (record-before-advance): a dropped courier (null) or durable-write failure (ok!==true) PARKs
+//      the task, never silently promoting a tainted build to a ready PR.
+// Ordering (journal first) narrows the loss window to a CORRELATED double failure: writing the durable
+// journal event before carrier 2's park closes any SINGLE-carrier failure. RESIDUAL (transport-
+// inherent, cannot be closed by ordering): if the courier drops/garbles BOTH writes in the same window,
+// both durable carriers stay empty — and because the resume forward-walk skips the already-committed
+// leaf, that denial is never re-earned. For exactly that double-drop, the fail-closed PARK REASON below
+// names the denied action, so the disclosure still reaches the resuming owner through the park channel
+// even when neither durable carrier landed.
+async function recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions) {
+  if (!(worker && worker.deniedAction)) return null
+  const denied = String(worker.deniedAction)
+  // Carrier 1 (journal) FIRST — best-effort + fail-open, courier-retried.
+  try {
+    await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type permission_denied --step ${shq('build:' + task.id)} `
+      + `--detail ${shq(denied)}`,
+      'journal build denial',
+    )
+  } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
+  // Carrier 2 (provenance) — fail-CLOSED. The park on a failed provenance write STAYS: even though
+  // carrier 1 may have ridden, parking here keeps record-before-advance honest for the provenance path.
+  const denialRec = await execJson(
+    `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
+    + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(denied)}`,
+    'record build denial',
+  )
+  if (!(denialRec && denialRec.ok === true)) {
+    // Name the denied action in the park reason: on a correlated double-drop this is the only surviving
+    // disclosure of the denial, and it reaches the resuming owner through the park channel.
+    return { parked: true,
+             reason: `build-denial record write failed for denied action '${denied}' `
+                     + `(record-before-advance) — park (UFR-6/UFR-8)` }
+  }
+  // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is told
+  // the action is FINAL and must not be re-attempted — carried into the next attempt's prompt.
+  deniedActions.push(denied)
+  return null
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
+  // FR-1 finality: actions a prior attempt reported the permission timeout denied. Accumulated across
+  // attempts and threaded into EVERY subsequent dispatch so a fresh re-dispatched leaf never re-attempts
+  // the denied action (re-dispatching denied work under a new leaf is a re-attempt, not a distinct step).
+  const deniedActions = []
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
-    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
+    // FR-1: also thread any prior-attempt denied actions so the fresh leaf works around them, never re-tries them.
+    // Compose via buildLeafPrompt — the SINGLE source-of-truth composer the smokes also use — so the
+    // dispatched bytes provably equal what the FR-8 record_composed hash covers (no parallel inline path).
+    const prompt = buildLeafPrompt({
+      wt, branch, task, docPath,
+      retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
+      deniedNote: buildDeniedNote(deniedActions),
+    })
+    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
+    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
+    // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
+    // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
+    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
     // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
     // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
     // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
@@ -529,6 +625,10 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
         prompt,
         { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
+    // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence.
+    // Record it on both carriers (recordBuildDenialIfAny); a failed fail-closed carrier parks here.
+    const denialPark = await recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions)
+    if (denialPark) return denialPark
     // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
     // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
     // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
@@ -866,6 +966,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.buildDeniedNote = buildDeniedNote
+module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

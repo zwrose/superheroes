@@ -58,7 +58,11 @@ fix path.
 
 Engine onboarding (Codex/Cursor per role — availability, preference, show-authorization,
 test-dispatch) lives in `set-up.md` §4.5 and is tunable via `view-and-tune.md` §2. Model-tier
-overrides (including explicit `fable`) are also a `view-and-tune.md` §2 tune item.
+overrides (including explicit `fable`) are also a `view-and-tune.md` §2 tune item. The
+**permission posture** — the auto-allow routine families that keep an owner-absent showrunner run
+from babysitting (below the never-widened owner-role floor) — is viewed on the combined screen and,
+via the `reference/permission.md` sub-init, seeded (the batteries-included four-family setup, when
+empty) or edited one family at a time — the one sanctioned change path (FR-9).
 
 ## Common mistakes
 

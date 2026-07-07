@@ -7,6 +7,23 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import journal
+
+
+def _permission_denials(state):
+    """Enumerate (never decide) the run's timeout-denial events (UFR-3). Reads the run's
+    `events` path threaded onto `state` and maps each `permission_denied` journal event to
+    a readout entry naming the affected step. Fail-soft: a missing/unreadable path yields no
+    denials, never a raise (the enumeration must never break the readout)."""
+    events_path = state.get("events_path")
+    if not events_path:
+        return []
+    # Single reader of the literal `permission_denied` type (architecture-001): the shared
+    # journal.permission_denied_events (fail-safe []) matches; this projects every one as a
+    # disclosure entry (its own shape — step + detail, no build:-step filter).
+    return [{"step": ev.get("step"), "detail": ev.get("detail")}
+            for ev in journal.permission_denied_events(events_path)]
+
 
 def _cost_summary(state):
     """#130: the run-cost rollup for the readout. Prefer a precomputed `cost` dict; otherwise
@@ -71,6 +88,7 @@ def assemble(state):
         "raw_ci_excerpt": state.get("raw_ci_excerpt"),
         "cost": _cost_summary(state),
         "root": state.get("root"),
+        "permissionDenials": _permission_denials(state),
     }
 
 

@@ -109,6 +109,10 @@ function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(lab
 // the observed as-built count; the breakdown comments map every leaf to its matrix row so a
 // future courier added to a phase fails here and has to justify itself against the matrix.
 const PHASE_BUDGETS = {
+  // Task 12 (FR-8/UFR-9): the run-start rules freeze — ONE 'io' bookkeeping leaf that snapshots the
+  // provenance-valid rules for this run (permission_rules.freeze_run_rules via the io() runHelper
+  // shim). Grouped under its own phase so it never inflates the sanctioned two-leaf startup stretch.
+  'permission-freeze': 1,
   // read world-snapshot (exec) + read startup state — the FR-1 two-leaf exception. Was 3 before
   // #118 conformance (engine_pref_load.py rode its own exec leaf).
   startup: 2,
@@ -128,7 +132,9 @@ const PHASE_BUDGETS = {
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
   // decider + telemetry write + stamp build coverage + prov exec + save phase progress. Was 19
   // pre-#211 (separate load-summary + coverage + deferred reads, in-memory tally), 24 pre-D3.
-  workhorse: 18,
+  // Task 12 (FR-8, #149): +1 per built task — the record_composed 'io' leaf that freezes the
+  // spine-composed leaf command into this run's composed-exact allow set (1 task in this canned run).
+  workhorse: 19,
   // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + #211 pre-round
   // SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1 plan + coverage, folded Python-side) +
   // one panel round (run verify, persist-skeleton, #211 tally-round decider, telemetry write = 4) +

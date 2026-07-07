@@ -1813,6 +1813,10 @@ function _retryableReviewerIssue(out) {
 // Covers every retryable cause, not only receipts: `malformed` catches a schema-failing/off-task
 // answer (live precedent: a reviewer glitched onto an unrelated MCP connector and returned nonsense).
 function _retryReason(out) {
+  // FR-1/FR-2: a denied verification probe (permissionDenied) is degraded to receiptMissing by
+  // ensureReviewerShape, but its retry must NOT be told to "supply a receipt" — it must be told the
+  // denied probe is FINAL and to verify another way / return low. Surface it ahead of receipt-missing.
+  if (out && out.permissionDenied) return 'permission-denied'
   if (out && out.receiptMissing) return 'receipt-missing'
   if (out && out.receiptStale) return 'receipt-stale'
   if (!_validReviewerResult(out)) return 'malformed'
@@ -5499,7 +5503,10 @@ const BUILD_LEAF_SCHEMA = {
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
 // nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
 // appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
-function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+// `deniedNote` (FR-1 finality) carries forward the actions a prior attempt reported the permission
+// timeout denied — a re-dispatched fresh leaf is a re-attempt of the SAME step, so it must not retry the
+// denied action in any rewording. Appended AFTER retryNote so it rides every subsequent dispatch.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
     + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
@@ -5507,9 +5514,26 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
     + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
     + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
-    + `Co-Authored-By). Return JSON `
-    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + `Co-Authored-By). ${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
+    + `fired on ANY substantive step (not a verification probe — an actual implementation/commit action), set `
+    + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
+    + `to null — never fabricate a completed step you were denied. Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
     + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+
+// FR-1 finality memory: the action(s) a prior attempt of THIS step reported the permission timeout
+// denied are FINAL — a fresh re-dispatch of the same work is a re-attempt, not a distinct step, so the
+// worker must not re-enter the denied action in any rewording. One tight sentence naming each denied
+// action so the worker works around them and reports honestly instead of re-hitting the permission wait.
+function buildDeniedNote(deniedActions) {
+  if (!deniedActions || !deniedActions.length) return ''
+  return (
+    ` FINAL — the following action(s) were already denied by the permission timeout in this step and are `
+    + `FINAL; do NOT re-attempt them in any form or rewording — work around them and report honestly: `
+    + deniedActions.join('; ') + '.'
   )
 }
 
@@ -5524,19 +5548,95 @@ function buildRetryNote(task, docPath) {
   )
 }
 
+// #149 Task 11/12: the SINGLE object-arg composer for the spine's leaf prompt — used by BOTH
+// production (buildOneTask, below) and the permission smokes, so the dispatched bytes and the bytes
+// tests reconstruct for the FR-8 composed-exact hash can never drift (one composer, zero re-encoding).
+// Delegates to buildTaskPrompt; threads `deniedNote` (FR-1 finality) through so the production caller's
+// denial-memory suffix rides the same source of truth. `deniedNote` defaults to '' — a smoke that omits
+// it composes byte-identically to a first-attempt dispatch.
+function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote, deniedNote }) {
+  return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '', deniedNote || '')
+}
+
+// UFR-6/UFR-8 dual-carrier denial recording (premortem-001), extracted from buildOneTask's loop so
+// the loop body stays control flow. Returns a park result to return, or null (nothing denied / both
+// carriers rode). The denial is written to TWO independent carriers the ship gate (ship_gate.decide)
+// both consult; EITHER gates the PR to a draft, REGARDLESS of whether the leaf still reports ok:true:
+//   1. the run's journal `permission_denied` event (step `build:<id>`, detail = the denied action) —
+//      best-effort/fail-open but courier-RETRIED, written FIRST so it survives even if carrier 2 fails
+//      and the task then parks (a resume skips this already-committed leaf, so carrier 2 stays empty).
+//      ship_gate.journal_build_denials folds these `build:` events in as the second gate signal.
+//   2. the prov_entry build-denial provenance entry (ship_gate.record_build_denial) — fail-CLOSED
+//      (record-before-advance): a dropped courier (null) or durable-write failure (ok!==true) PARKs
+//      the task, never silently promoting a tainted build to a ready PR.
+// Ordering (journal first) narrows the loss window to a CORRELATED double failure: writing the durable
+// journal event before carrier 2's park closes any SINGLE-carrier failure. RESIDUAL (transport-
+// inherent, cannot be closed by ordering): if the courier drops/garbles BOTH writes in the same window,
+// both durable carriers stay empty — and because the resume forward-walk skips the already-committed
+// leaf, that denial is never re-earned. For exactly that double-drop, the fail-closed PARK REASON below
+// names the denied action, so the disclosure still reaches the resuming owner through the park channel
+// even when neither durable carrier landed.
+async function recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions) {
+  if (!(worker && worker.deniedAction)) return null
+  const denied = String(worker.deniedAction)
+  // Carrier 1 (journal) FIRST — best-effort + fail-open, courier-retried.
+  try {
+    await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type permission_denied --step ${shq('build:' + task.id)} `
+      + `--detail ${shq(denied)}`,
+      'journal build denial',
+    )
+  } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
+  // Carrier 2 (provenance) — fail-CLOSED. The park on a failed provenance write STAYS: even though
+  // carrier 1 may have ridden, parking here keeps record-before-advance honest for the provenance path.
+  const denialRec = await execJson(
+    `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
+    + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(denied)}`,
+    'record build denial',
+  )
+  if (!(denialRec && denialRec.ok === true)) {
+    // Name the denied action in the park reason: on a correlated double-drop this is the only surviving
+    // disclosure of the denial, and it reaches the resuming owner through the park channel.
+    return { parked: true,
+             reason: `build-denial record write failed for denied action '${denied}' `
+                     + `(record-before-advance) — park (UFR-6/UFR-8)` }
+  }
+  // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is told
+  // the action is FINAL and must not be re-attempted — carried into the next attempt's prompt.
+  deniedActions.push(denied)
+  return null
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
+  // FR-1 finality: actions a prior attempt reported the permission timeout denied. Accumulated across
+  // attempts and threaded into EVERY subsequent dispatch so a fresh re-dispatched leaf never re-attempts
+  // the denied action (re-dispatching denied work under a new leaf is a re-attempt, not a distinct step).
+  const deniedActions = []
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
-    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
+    // FR-1: also thread any prior-attempt denied actions so the fresh leaf works around them, never re-tries them.
+    // Compose via buildLeafPrompt — the SINGLE source-of-truth composer the smokes also use — so the
+    // dispatched bytes provably equal what the FR-8 record_composed hash covers (no parallel inline path).
+    const prompt = buildLeafPrompt({
+      wt, branch, task, docPath,
+      retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
+      deniedNote: buildDeniedNote(deniedActions),
+    })
+    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
+    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
+    // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
+    // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
+    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
     // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
     // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
     // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
@@ -5553,6 +5653,10 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
         prompt,
         { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
+    // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence.
+    // Record it on both carriers (recordBuildDenialIfAny); a failed fail-closed carrier parks here.
+    const denialPark = await recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions)
+    if (denialPark) return denialPark
     // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
     // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
     // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
@@ -5890,6 +5994,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.buildDeniedNote = buildDeniedNote
+module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop
@@ -6604,11 +6711,46 @@ const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
+// Task 11 (FR-4) probe steering: an unattended leaf/reviewer that needs to *run* something to verify
+// its work must use the sanctioned throwaway-test-file-in-worktree + allowed test-run family (which the
+// enforcer's allowance layer auto-allows), NOT an improvised inline interpreter one-liner (which the
+// enforcer prompts on and — owner absent — stalls). One tight sentence: the allowance layer only
+// recognizes these shapes, so steering the probe here is what turns a would-be stall into an auto-allow.
+const PROBE_STEERING =
+  'To verify by running code, write a throwaway test file inside the build worktree and run it with the ' +
+  'project test-run family (e.g. pytest / the repo test command); do not improvise inline interpreter ' +
+  'one-liners (python3 -c / node -e) — those are not on the allowed probe path and will stall on a permission prompt.'
+
+// Task 10 (FR-2) reviewer-side denial flag: TIMEOUT_PROCEED_CONTRACT tells a reviewer to proceed and
+// report a denied probe honestly IN PROSE, but ensureReviewerShape only degrades a dimension when the
+// STRUCTURED result carries permissionDenied:true — a reviewer that only narrates the denial in prose
+// never sets the flag, so the degradation branch is unreachable. This sentence closes that gap: it is
+// the reviewer-specific instruction (the builder/leaf prompt uses its own `deniedAction` field instead,
+// since the shell — not a structured contract keyword — decides what happens to a build denial).
+const REVIEWER_DENIAL_FLAG =
+  'If the 15-minute timeout fired on YOUR verification probe (you proceeded without actually verifying), ' +
+  'set "permissionDenied":true in your JSON result (in addition to reporting it honestly in prose) — this ' +
+  'is what tells the review loop your dimension was not actually verified.'
+
+// Task 11 (FR-1/UFR-6) 15-minute proceed contract: the enforcer stays synchronous, so the timeout bound
+// lives in the dispatched instruction. If an action awaits owner permission unanswered for 15 minutes,
+// the leaf proceeds without it and reports the denied action HONESTLY — never as done. The spine absorbs
+// the denial (a denied probe -> low-confidence; a denied substantive build step -> incomplete build
+// evidence that holds the PR a draft), so honest reporting is what makes the absorption correct.
+const TIMEOUT_PROCEED_CONTRACT =
+  'If any action awaits owner permission with no response for 15 minutes, proceed without it and report ' +
+  'the denied action honestly (never as done) — say exactly what you could not do so the run records it. ' +
+  'A denied action is FINAL for this step: do not re-attempt it in any rewording or variation — report it and move on.'
+
 // #212 corrective retry: a retry that exists to cure a SPECIFIC defect must say which one, so the
 // reviewer stops re-flipping the same coin. Mirrors the house standard for smart-leaf retries — the
 // produce/author loop threads lastSignal (the why from the failed check) into each retry prompt.
 // null/unknown retryReason → no correction (e.g. a plain low→deep escalation with nothing to cure).
 function reviewerRetryCorrection(retryReason) {
+  if (retryReason === 'permission-denied') {
+    return ' RETRY: your previous verification probe was permission-DENIED by the 15-minute timeout — that denied probe is FINAL; do NOT re-attempt the same denied probe in any rewording. ' +
+      'Verify this dimension another way, or return confidence "low" and report honestly — do NOT fabricate a receipt for a probe you could not run.'
+  }
   if (retryReason === 'receipt-missing') {
     return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
       'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +
@@ -6628,6 +6770,71 @@ function reviewerRetryCorrection(retryReason) {
 const FIX_RESULT_INSTRUCTION =
   'Read the fix worklist JSON at the path in fixContext.worklistPath (#211 — the findings are on disk, never inlined here). It holds: findings (every round\'s findings, this round\'s first — each with file, line, title, severity, classKey; read the code at each file:line for detail), classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Fix every blocking finding. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode) for EVERY dimension you touched — the scheduler re-runs those dimensions, so under-declaring skips a needed re-review. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
+// Task 10 (FR-2) journal seam: record a reviewer's denied verification probe as a `permission_denied`
+// event (step `review:<reviewer>`) via the Python journal.append, run through the io() runHelper seam so
+// the SAME call works under node (fs-backed defaultIo) and under the Workflow bundle (leaf-bash io from
+// the preamble) — never a bare node child-process/process reference, which the bundle guard bans. Best-effort
+// + fail-open: fired-and-not-awaited from the synchronous ensureReviewerShape and any error is swallowed,
+// so a recording failure NEVER derails the review (the low-confidence degradation is what protects the
+// gate; this journal entry is the readout's UFR-3 disclosure). Injectable so the smoke harness observes
+// it without shelling Python.
+function _defaultDenialRecorder(reviewer, eventsPath) {
+  if (!eventsPath) return
+  // Put the plugin lib dir on sys.path so `import journal` resolves regardless of the helper's cwd.
+  // Helpers run from the repo/worktree root (the sanctioned runHelper contract), and the dir comes
+  // from lib_root.pyLibDir() (#170) — never a hand-typed path; no __dirname (absent in the bundle sandbox).
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import journal; ` +
+    'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
+    'detail={"probe": "denied", "reviewer": sys.argv[2]})'
+  try {
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
+}
+// A mutable holder so the recorder is overridable (the smoke harness swaps in an observer) — a plain
+// `let` exported by value would be a copy the caller could not rebind.
+const _denialSeam = { record: _defaultDenialRecorder }
+
+// Task 12 (FR-8, UFR-9 wiring): the spine's two permission_rules seams, run through the SAME io()
+// runHelper Python shim the denial recorder uses (works under node's fs-backed defaultIo AND under the
+// Workflow bundle's leaf-bash io — never a bare child_process/process reference the bundle guard bans).
+// The byte-exact hashing lives in Python (permission_rules._hash), so the JS side NEVER re-implements
+// it — it shells freeze_run_rules / record_composed so a recorded command's hash byte-equals evaluate()'s
+// composed-exact check. Both are best-effort + fail-open (UFR-2): a freeze/record error is swallowed and
+// the run proceeds (the allowance simply won't fire for that command → the existing prompt path).
+//
+// The lib dir goes on sys.path via lib_root.pyLibDir() (#170), the same seam the denial recorder uses
+// (helpers run from the repo/worktree root — the sanctioned runHelper contract; no __dirname in the
+// bundle sandbox).
+function _permHelper(call, args) {
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
+    call
+  try {
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
+}
+// freeze_run_rules(run_id, cwd): snapshot the current provenance-valid rules for THIS run (a mid-run
+// edit is invisible to a run that already froze — UFR-9) + init the empty composed set + lazy-reap.
+function _defaultFreezeRunRules(runId, cwd, workItem) {
+  if (runId == null) return   // no active run -> nothing to freeze (FR-3: allowance inert)
+  // work_item namespaces the per-run frozen file (a lease generation is per-work-item, so two
+  // concurrent same-project runs would otherwise collide on runs/<gen>.json — UFR-9/FR-8).
+  _permHelper('permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2], work_item=(sys.argv[3] or None))',
+    [runId, cwd || procCwd(), workItem || ''])
+}
+// record_composed(run_id, command): register a spine-composed leaf command in this run's frozen file so
+// evaluate() allows the leaf to run it byte-for-byte (FR-8), and only within the run that composed it.
+function _defaultRecordComposed(runId, command, workItem) {
+  if (runId == null || typeof command !== 'string' || !command) return
+  _permHelper('permission_rules.record_composed(sys.argv[1], sys.argv[2], sys.argv[3], work_item=(sys.argv[4] or None))',
+    [runId, command, procCwd(), workItem || ''])
+}
+// Mutable holders so both seams are overridable (the smoke harness swaps in observers).
+const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
+
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -6637,6 +6844,18 @@ function ensureReviewerShape(out, opts = {}) {
   out = Object.assign({}, out, { findings: normalizeReviewerFindings(out.findings) })
   if (out.confidence !== 'high' && out.confidence !== 'low') {
     out = Object.assign({}, out, { confidence: 'high' })
+  }
+  // FR-2: a reviewer whose verification probe was DENIED (the 15-min timeout fired on its improvised
+  // probe, recorded as a permission_denied for this reviewer) did NOT actually verify its dimension.
+  // Force confidence:low + receiptMissing so the existing deep-retry / degraded-dimension path (in
+  // review_panel_shell.dispatchReviewer) treats it exactly like an unverified reviewer — one deep retry,
+  // then a degraded (never re-cycled) dimension on the loop's existing single-retry ceiling. Record the
+  // denial to the journal (UFR-3 disclosure). This must precede the receipt-missing branch below so a
+  // denied probe never masquerades as a receipt-bearing high-confidence pass.
+  if (out.permissionDenied) {
+    _denialSeam.record(opts.reviewer, opts.eventsPath)
+    out = Object.assign({}, out, { confidence: 'low', receiptMissing: true, permissionDenied: true })
+    return _withRealUsage(out)
   }
   if (out.confidence === 'high' && !out.verificationReceipt) {
     if (opts.external) {
@@ -6705,7 +6924,12 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT} ${REVIEWER_DENIAL_FLAG}${reviewerRetryCorrection(opts.retryReason)}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+    // Task 10 (FR-2): thread the reviewer identity + the run's journal path so ensureReviewerShape can
+    // tag a denied-probe permission_denied event to `review:<reviewer>`. eventsPath rides context when
+    // the caller supplies it; absent, the denial degrades the dimension (low confidence) without a
+    // journal line — the gate protection is intact either way (fail-open, UFR-2).
+    const shapeExtra = { reviewer, eventsPath: (context && context.eventsPath) || undefined }
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
     // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
@@ -6721,16 +6945,16 @@ function reviewCodeLeaves(tiers, opts) {
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
-          Object.assign({}, opts, { round, external: true, externalEngine: rEngine }))
+          Object.assign({}, opts, shapeExtra, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
       const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
       if (!out || !Array.isArray(out.findings)) return null
-      return ensureReviewerShape(out, Object.assign({}, opts, { round }))
+      return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
     }
     const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
     if (!out || !Array.isArray(out.findings)) return null
-    return ensureReviewerShape(out, Object.assign({}, opts, { round }))
+    return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
   }
 
   // Synthesis stays LOOP-OWNED (native Claude, tiers.synthesis) — never engine-routed. It is the
@@ -6815,6 +7039,32 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 }
 
 module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
+module.exports.ensureReviewerShape = ensureReviewerShape
+// Task 11: export the reviewer-leaf factory + the two shared contract blocks (single source of truth
+// for the FR-4 probe steering and the 15-min proceed contract; build_phase.js reuses the latter so the
+// builder leaf and reviewer leaf agree byte-for-byte on the timeout instruction).
+module.exports.reviewCodeLeaves = reviewCodeLeaves
+module.exports.PROBE_STEERING = PROBE_STEERING
+module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
+module.exports.REVIEWER_DENIAL_FLAG = REVIEWER_DENIAL_FLAG
+// Task 10 seam: the denial recorder is overridable for the smoke harness. Read/write it through the
+// mutable holder so an assignment (`sr._denialRecorder = fn`) actually rebinds what ensureReviewerShape
+// calls.
+Object.defineProperty(module.exports, '_denialRecorder', {
+  get() { return _denialSeam.record },
+  set(fn) { _denialSeam.record = fn },
+})
+// Task 12 seams: overridable through mutable holders so an assignment (`sr._freezeRunRules = fn`,
+// `sr._recordComposed = fn`) rebinds what showrunner()/build_phase call. build_phase.js reaches
+// _recordComposed through this export (lazy require) so the smoke's override is honored there too.
+Object.defineProperty(module.exports, '_freezeRunRules', {
+  get() { return _permissionSeam.freeze },
+  set(fn) { _permissionSeam.freeze = fn },
+})
+Object.defineProperty(module.exports, '_recordComposed', {
+  get() { return _permissionSeam.recordComposed },
+  set(fn) { _permissionSeam.recordComposed = fn },
+})
 
 // The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
 const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
@@ -7982,6 +8232,16 @@ async function showrunner({ workItem }) {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
+  // Task 12 (FR-8, UFR-9): the moment the run's lease generation (the run_id) is known — reconcile
+  // has acquired/reconciled it — freeze the current provenance-valid rules ONCE for THIS run and init
+  // its empty composed-command set. A mid-run edit to rules.json is thereafter invisible to this run
+  // (UFR-9); the freeze also lazily reaps stale sibling run files. Fail-open (UFR-2): a freeze error
+  // is swallowed inside the seam and the run proceeds (allowance simply won't fire → prompt path).
+  // Grouped under its OWN 'permission-freeze' progress phase (NOT 'startup') so it never inflates
+  // the deliberately-two-leaf startup stretch (#118 budget): a single run-start bookkeeping leaf.
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
+  _permissionSeam.freeze(r.generation, procCwd(), workItem)
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
   // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)
   // and the launch-declared route; on the quick route it either hands back the tasks gate to check or
@@ -8823,6 +9083,12 @@ async function reviewCodePhase(workItem, opts) {
   let resolvedConfig = null
   let cwdHeadBefore = null
   let resolvedViaGather = false
+  // Task 10 (FR-2/UFR-3): the run's events.jsonl path, threaded through context so a denied reviewer
+  // probe's permission_denied event lands in the SAME journal the readout later reads (UFR-3
+  // disclosure). opts.eventsPath lets a caller/smoke override it directly; otherwise it rides the
+  // resolver's gather below. Absent -> the denial still degrades the dimension, just without a
+  // journal line (fail-open, UFR-2) — the gate protection never depends on this path resolving.
+  let resolvedEventsPath = opts.eventsPath || null
   if (!opts.worktree) {
     const resolver = opts.resolveTarget || resolveBuildTarget
     const resolved = await resolver(workItem)
@@ -8840,6 +9106,7 @@ async function reviewCodePhase(workItem, opts) {
     resolvedConfig = _coerceObj(resolved.config)
     cwdHeadBefore = resolved.cwdHead || null
     resolvedViaGather = true
+    if (!resolvedEventsPath) resolvedEventsPath = resolved.eventsPath || null
   }
   const initialHead = resolvedHead || null
   // The head re-check only fires when the head was supplied EXTERNALLY (opts.expectedHead —
@@ -8869,7 +9136,7 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, synthesisVerificationRoot: targetWorktree },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, eventsPath: resolvedEventsPath, synthesisVerificationRoot: targetWorktree },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
     preloaded: setup || undefined,
@@ -9000,7 +9267,7 @@ const buildPhase = (workItem, generation) => require('./build_phase.js').buildPh
 // Returns {worktree, expectedHead, config, cwdHead} or null on any failure (caller parks on null).
 async function resolveBuildTarget(workItem) {
   const script = [
-    'import json, subprocess, sys',
+    'import json, os, subprocess, sys',
     'wi = sys.argv[1]',
     'setup = None',
     'for _ in range(2):',
@@ -9040,7 +9307,18 @@ async function resolveBuildTarget(workItem) {
     '        cwd_head = r.stdout.strip()',
     'except Exception:',
     '    cwd_head = None',
-    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head}))',
+    // Task 10 (FR-2/UFR-3) wiring: this leaf already resolves the work item, so it is the cheapest
+    // place to also resolve the run's events.jsonl path (control_plane.paths keys off cwd + work-item —
+    // no separate leaf). Best-effort: an events-path resolution failure must not fail the whole gather
+    // (the reviewer denial flag still degrades the dimension even with no journal line — fail-open).
+    'events_path = None',
+    'try:',
+    `    sys.path.insert(0, ${pyLibDir()})`,
+    '    import control_plane',
+    '    events_path = control_plane.paths(os.getcwd(), wi)["events"]',
+    'except Exception:',
+    '    events_path = None',
+    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head, "eventsPath": events_path}))',
   ].join('\n')
   let setup = null
   try {
@@ -9058,6 +9336,7 @@ async function resolveBuildTarget(workItem) {
     expectedHead: setup.expectedHead,
     config: setup.config != null ? setup.config : null,
     cwdHead: setup.cwdHead || null,
+    eventsPath: setup.eventsPath || null,
   }
 }
 

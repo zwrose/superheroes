@@ -17,6 +17,7 @@ import json
 import os
 
 import control_plane
+import journal
 
 _TERMINAL = "exit_clean"
 
@@ -49,6 +50,18 @@ def write_build(path, *, engine, head):
     return prov
 
 
+def record_build_denial(path, *, step, command):
+    """Record that a substantive build sub-step was denied by the 15-min timeout.
+
+    Read-modify-write: append to the `buildDenials` list (never clobber a sibling key or a
+    prior denial). A denial marks the build evidence incomplete/tainted so `decide` GATEs
+    (UFR-6/UFR-8) — the PR is held a draft even though the build step nominally "ran"."""
+    prov = read_provenance(path)
+    prov.setdefault("buildDenials", []).append({"step": step, "command": command})
+    control_plane.atomic_write(path, json.dumps(prov))
+    return prov
+
+
 def set_review_covers(path, head):
     """Record the HEAD review-code's clean exit covered (read-modify-write; never clobbers)."""
     prov = read_provenance(path)
@@ -57,19 +70,59 @@ def set_review_covers(path, head):
     return prov
 
 
-def decide(provenance, review_result, head):
+def journal_build_denials(events_path):
+    """The SECOND build-denial carrier (premortem-001): the run's journal `permission_denied`
+    events whose `step` is a build step (`build:<id>`). buildOneTask writes this best-effort
+    (courier-retried) event BEFORE the fail-closed provenance write, so a build denial survives
+    even when the provenance write itself fails and the task then parks — a resume that skips
+    buildOneTask (its commit already exists) would otherwise drop the denial forever.
+
+    Fail-SAFE toward provenance-only: a journal read error (or absent file) swallows to `[]` (via
+    the shared reader), so this carrier can only ever ADD denials to the provenance carrier, never
+    clear one. The literal `permission_denied` type is read in ONE place — journal.permission_denied_events
+    (architecture-001) — with this call keeping only the `build:` steps as its secondary filter."""
+    out = []
+    for ev in journal.permission_denied_events(events_path):
+        step = ev.get("step")
+        if isinstance(step, str) and step.startswith("build:"):
+            out.append({"step": step, "command": ev.get("detail")})
+    return out
+
+
+def decide(provenance, review_result, head, *, journal_denials=None):
     """Pure step 3 ship-gate decision; fail-closed (anything unproven -> gate).
 
     `provenance`: from read_provenance (a dict, or {} when absent).
     `review_result`: from a fail-closed parse of review-code's --result-file
         ({"action": ...}, or {"action": "halt"} on missing/garbled).
     `head`: the current branch HEAD (`git rev-parse HEAD`).
+    `journal_denials`: the SECOND build-denial carrier (premortem-001) — the run's journal
+        `build:` permission_denied events (from `journal_build_denials`). EITHER carrier gates;
+        the fold is additive (fail-safe), so an unreadable journal (`[]`) never weakens the
+        provenance carrier.
     """
     # 1. Build evidence (FR-3 / UFR-4): SDD must have run.
     if not isinstance(provenance, dict) or not provenance.get("build"):
         return {"action": "gate",
                 "reason": "build provenance absent — subagent-driven-development did not run "
                           "(build bypassed)"}
+    # 1b. Denied build evidence (UFR-6 / UFR-8): a substantive build sub-step denied by the
+    # 15-min timeout means the build step "ran" but its evidence is incomplete/tainted. GATE
+    # so the PR stays a draft (reused draft-hold path via mark_ready_action / revert-draft).
+    # DUAL-CARRIER (premortem-001): the provenance list AND the run's journal `build:` denial
+    # events are independent carriers — EITHER gates. The journal carrier catches a denial that
+    # was journaled before a failed provenance write parked the task (a resume then skips the
+    # already-committed leaf, so provenance.buildDenials stays empty). The fold only ADDs.
+    denials = provenance.get("buildDenials") if isinstance(provenance, dict) else None
+    jdenials = journal_denials or []
+    if denials or jdenials:
+        # code-001: the common case records the SAME denial on both carriers, so count DISTINCT denied
+        # steps (not carrier occurrences) — one denial on both carriers reads "(1 step(s))", not "(2)".
+        # The boolean gate above is unchanged (an `or`, never additive).
+        distinct = {d.get("step") for d in (denials or [])} | {d.get("step") for d in jdenials}
+        return {"action": "gate",
+                "reason": "build evidence incomplete — a substantive build step was denied "
+                          "by the 15-min timeout (%d step(s))" % len(distinct)}
     # 2. Review evidence (FR-1 / FR-2 / UFR-1 / UFR-3), reason keyed by action.
     action = review_result.get("action") if isinstance(review_result, dict) else None
     if action != _TERMINAL:

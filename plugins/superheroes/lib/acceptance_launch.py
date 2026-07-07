@@ -478,7 +478,7 @@ def _default_child_factory(stamped, terminal_path=None, spine_lib=None, root=Non
     # STRICTER posture: nothing is auto-approved beyond the project's explicit
     # permission rules, and an unmatched command denies cleanly (the leaf sees the
     # tool error and the spine's retry/park machinery owns it — no hang, no silent
-    # skip). The courier surface is the OWNER-applied `permission_rules.py apply
+    # skip). The courier surface is the OWNER-applied `courier_allow_rules.py apply
     # --tier headless` (deliberately never auto-applied here: widening a user's
     # settings with broad verb grants is an owner action, not harness setup — a run
     # without the tier parks honestly on permission denials instead).

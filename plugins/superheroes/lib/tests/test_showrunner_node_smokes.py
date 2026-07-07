@@ -36,6 +36,16 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js",
+    # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
+    # ceiling), with the denial recorded to the journal.
+    "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
+    # Task 11 (FR-1/FR-4/UFR-6): reviewer + builder/leaf prompts embed the FR-4 probe steering
+    # (throwaway-test-file family, no inline interpreter probes) + the 15-min proceed-honestly contract.
+    "plugins/superheroes/lib/tests/showrunner_permission_contract_smoke.js",
+    # Task 12 (FR-8/UFR-9 wiring): the spine freezes the rules ONCE at run start (run_id = reconcile
+    # generation) and records each composed leaf command against that run_id, via the Python
+    # permission_rules seams; both seams are fail-open (UFR-2).
+    "plugins/superheroes/lib/tests/showrunner_permission_freeze_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_verify_readback_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
@@ -110,6 +120,10 @@ SHOWRUNNER_SMOKES = [
     # #115 courier-drop retry: execJson/execText retry the cheap haiku exec courier ONCE on a
     # dropped/garbled stdout (journal recover/park/no-retry-on-real-fail/happy-path + read-gate recover).
     "plugins/superheroes/lib/tests/build_phase_courier_retry_smoke.js",
+    # UFR-6/UFR-8 (permission posture): a build leaf's deniedAction (a substantive step the 15-min
+    # timeout denied) is instructed in buildLeafPrompt AND recorded via prov_entry's build-denial
+    # step, tainting provenance so the ship gate later GATEs.
+    "plugins/superheroes/lib/tests/build_phase_denial_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
