@@ -7707,7 +7707,7 @@ async function showrunner({ workItem }) {
   }
   const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
   // Config-derived model-tier map (the resolve-live baseline). The frozen-snapshot fork below
-  // (FR-8) merges the frozen pins over this before it is planted on the global.
+  // (FR-8) merges the frozen pins over this before it is planted on globalThis.
   const _ovConfig = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   // Plant the startup-resolved, storage-mode-aware docs dir for docDirFor (docPathFor /
   // notifyLedgerFor). Best-effort: an absent/empty doc_dir (resolution failed, or an older canned
