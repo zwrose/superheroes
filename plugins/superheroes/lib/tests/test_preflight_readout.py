@@ -266,3 +266,20 @@ def test_reapply_revalidate_flags_now_invalid_override():
     rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {}, ro)
     rev = [r for r in rows if r["role"] == "reviewer" and r["phase"] == "review-plan"][0]
     assert rev.get("overrideInvalid") is True
+
+
+# --- Task 6: UFR-4 — flag an unexpected inherit (a non-orchestration role that resolves to None) ---
+
+def test_non_orchestration_none_model_flagged_unexpected():
+    # a tier override that maps a normal role to None (session inherit) must be shown flagged
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {"author": None})
+    author = [r for r in rows if r["role"] == "author"][0]
+    assert author["model"] is None
+    assert author.get("unexpectedInherit") is True
+
+
+def test_orchestration_none_is_not_unexpected():
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {})
+    orch = [r for r in rows if r["kind"] == "orchestration"][0]
+    assert orch["model"] is None
+    assert not orch.get("unexpectedInherit")

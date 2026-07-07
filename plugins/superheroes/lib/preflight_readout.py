@@ -95,6 +95,11 @@ def enumerate_dispatch(prefs, tier_overrides, run_overrides=None):
             row = {"phase": phase, "role": tier_role, "roleLabel": label,
                    "engine": engine, "model": model, "effort": effort, "kind": kind,
                    "configuredOrDefault": "configured" if configured else "default"}
+            # UFR-4: a non-orchestration role whose model resolved to None (session inherit) is
+            # unexpected — the orchestration role inherits by design (kind == "orchestration"), any
+            # other role inheriting is flagged so the owner sees it rather than a silent inherit.
+            if model is None and kind != "orchestration":
+                row["unexpectedInherit"] = True
             _apply_override(row, run_overrides.get(tier_role))
             rows.append(row)
     return rows
