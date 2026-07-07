@@ -481,6 +481,56 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     console.log('OK: #160 per-task reviewer honors the reviewer engine + explicit model tier')
   }
 
+  // ===========================================================================
+  // Scenario 7: the native BUILDER dispatch carries an EXPLICIT model equal to the readout's
+  // builder-row model. Before this fix, buildOneTask called agent() with NO `model` option, so the
+  // dispatch silently rode the bundle preamble's __safeSmartDefault() Opus floor while the preflight
+  // readout's builder row (model_tier role 'builder') claimed the tier's model — an NFR-Accuracy break
+  // (readout vs dispatch disagree). The mutation this pins: someone removes the `model` option and the
+  // dispatch falls back to __safeSmartDefault() while the readout still shows the tier model. Both the
+  // dispatch and the readout row resolve through model_tier.resolveModel('builder', ...), so this
+  // asserts they share ONE source (the same guarantee the readout's builder row makes in Python).
+  {
+    delete require.cache[require.resolve('../build_phase.js')]
+    delete require.cache[require.resolve('../engine_dispatch.js')]
+    const modelTier = require('../model_tier.js')
+    const bp = require('../build_phase.js')
+
+    // (a) default config (impl:claude) -> the native builder fires WITH an explicit model equal to the
+    //     readout's builder-row model (resolveModel('builder')), never a silent safeSmartDefault fall.
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', effort: {} }
+    delete globalThis.__SR_OVERRIDES
+    let capturedBuilderModel = 'UNSET'
+    global.agent = makeAgent([
+      execRoute((p) => standardLeaf(p)),
+      ['implement-task', (_p, opts) => { capturedBuilderModel = opts && opts.model; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ])
+    let r = await bp.buildOneTask('wi', 5, { id: '11', title: 'Eleven' }, 'br', '11', '/tmp/wt', 1)
+    assert.strictEqual(r.parked, false, 'the native builder path completes')
+    const readoutBuilderModel = modelTier.resolveModel('builder', null, null)
+    assert.strictEqual(readoutBuilderModel, 'opus', 'the builder tier defaults to opus (owner smart-leaf policy)')
+    assert.strictEqual(capturedBuilderModel, readoutBuilderModel,
+      'the native builder dispatch carries an EXPLICIT model equal to the readout builder-row model (no safeSmartDefault fall)')
+
+    // (b) a per-run builder override REACHES the dispatch — impossible before this fix (no `model`
+    //     option existed to carry it). __SR_OVERRIDES.builder wins over the tier default.
+    globalThis.__SR_OVERRIDES = { builder: 'sonnet' }
+    let capturedBuilderModelOv = 'UNSET'
+    global.agent = makeAgent([
+      execRoute((p) => standardLeaf(p)),
+      ['implement-task', (_p, opts) => { capturedBuilderModelOv = opts && opts.model; return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } } }],
+      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ])
+    r = await bp.buildOneTask('wi', 5, { id: '12', title: 'Twelve' }, 'br', '12', '/tmp/wt', 1)
+    assert.strictEqual(r.parked, false, 'the native builder path completes under an override')
+    assert.strictEqual(capturedBuilderModelOv, modelTier.resolveModel('builder', globalThis.__SR_OVERRIDES, null),
+      'a per-run builder-model override reaches the native builder dispatch (opts.model)')
+    assert.strictEqual(capturedBuilderModelOv, 'sonnet', 'the builder override value (sonnet) is what the dispatch carries')
+    delete globalThis.__SR_OVERRIDES
+    console.log('OK: native builder dispatch carries an explicit model equal to the readout builder-row model')
+  }
+
   delete globalThis.__SR_ENGINE_PREFS
   console.log('OK: build_phase engine branch (worker/fixer/final-review routing, UFR-2/4, FR-15, FIX I5)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })

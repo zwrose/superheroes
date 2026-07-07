@@ -51,7 +51,7 @@ async function partA() {
     // #118 fold: spec-gate + model-overrides + ENGINE PREFS all ride the ONE 'read startup state'
     // courier — a separate engine_pref_load.py leaf must never fire.
     if (label === 'read startup state') {
-      return markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '',
+      return markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', run_overrides_present: false,
         engine_prefs: { reviewer: 'codex', implementation: 'cursor', planAuthor: 'cursor', effort: { review: 'medium' } } })
     }
     if (opts && opts.courier) {
@@ -97,7 +97,7 @@ async function partA() {
   globalThis.agent = async function (prompt, opts) {
     const label = (opts && opts.label) || ''
     // an older/mangled canned response WITHOUT engine_prefs must degrade to both-'claude'
-    if (label === 'read startup state') return markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' })
+    if (label === 'read startup state') return markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', run_overrides_present: false })
     if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         return markedStdout({

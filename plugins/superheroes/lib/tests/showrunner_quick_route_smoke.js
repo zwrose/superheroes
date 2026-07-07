@@ -104,7 +104,7 @@ function makeAgent(startupFacts, trace, opts) {
 }
 
 const QUICK_FACTS = {
-  spec_gate: 'unreadable', model_overrides: {}, doc_dir: '',
+  spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', run_overrides_present: false,
   engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
   spec_present: false, tasks_present: true, tasks_gate: 'passed',
 }
@@ -138,7 +138,7 @@ const QUICK_FACTS = {
   {
     globalThis.__SR_ROUTE = 'quick'
     const trace = { releases: [] }
-    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '',
+    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', run_overrides_present: false,
       engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
       spec_present: false, tasks_present: false, tasks_gate: null }, trace)
     const out = await sr.showrunner({ workItem: 'wi' })
@@ -155,7 +155,7 @@ const QUICK_FACTS = {
   // -------------------------------------------------------------------------
   {
     const trace = { releases: [] }
-    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '',
+    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', run_overrides_present: false,
       engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
       spec_present: false, tasks_present: true, tasks_gate: 'malformed' }, trace)
     const out = await sr.showrunner({ workItem: 'wi' })
@@ -169,7 +169,7 @@ const QUICK_FACTS = {
   // -------------------------------------------------------------------------
   {
     const trace = { releases: [] }
-    global.agent = makeAgent({ spec_gate: 'pending', model_overrides: {}, doc_dir: '',
+    global.agent = makeAgent({ spec_gate: 'pending', model_overrides: {}, doc_dir: '', run_overrides_present: false,
       engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
       spec_present: true, tasks_present: false, tasks_gate: null }, trace)
     const out = await sr.showrunner({ workItem: 'wi' })

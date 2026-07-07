@@ -142,7 +142,7 @@ async function partStartupPlants() {
     if (label === 'read startup state') {
       return [{ ok: true, stdout: markedStdout({
         ok: true, spec_gate: 'passed', model_overrides: {},
-        doc_dir: '/abs/proj-store/docs/wi-s' }) }]
+        doc_dir: '/abs/proj-store/docs/wi-s', run_overrides_present: false }) }]
     }
     if (opts && opts.courier) {
       if (prompt.includes('recover_entry.py')) return markedStdout({
@@ -169,7 +169,7 @@ async function partStartupPlants() {
   globalThis.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', run_overrides_present: false }) }]
     }
     if (opts && opts.courier) {
       if (String(prompt).includes('recover_entry.py')) return markedStdout({

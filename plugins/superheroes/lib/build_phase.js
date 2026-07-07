@@ -513,12 +513,21 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
     const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
+    // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
+    // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
+    // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
+    // leaf, but IMPLICIT: the preflight readout's builder row (model_tier role) then disagreed with the
+    // dispatch (readout showed the tier's model, dispatch showed the safeSmartDefault fallthrough), and a
+    // per-run builder-model override could never REACH the dispatch (no `model` option existed to carry
+    // it). resolveModel('builder') defaults to the same opus (no behavior change in the default config)
+    // AND makes the readout row + dispatch share one source (NFR-Accuracy) + lets an override land here.
+    const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: BUILD_LEAF_SCHEMA }),
+        { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
     // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
     // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT

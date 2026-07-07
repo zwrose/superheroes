@@ -382,7 +382,7 @@ function answerCommandPrompt(prompt) {
 }
 
 const COURIER_JSON = {
-  'read startup state': () => markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
+  'read startup state': () => markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {}, run_overrides_present: false }),
   'save phase progress': (prompt) => {
     // The review-phase tail chains set-gate ahead of the save — flip the mini gate store so the
     // NEXT read-gate (workhorse's UFR-1 entry read of the tasks doc) sees the passed gate.

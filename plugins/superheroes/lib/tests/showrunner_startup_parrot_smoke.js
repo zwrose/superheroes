@@ -16,14 +16,14 @@ global.log = () => {}
 // The exact live-park fabrication: well-formed payload, poisoned gate + rewritten prefs, but (as a
 // did-not-run answer) NO __SR_EXIT execution marker.
 const PARROT = {
-  ok: true, spec_gate: 'unreadable', model_overrides: {},
+  ok: true, spec_gate: 'unreadable', model_overrides: {}, run_overrides_present: false,
   doc_dir: '/Users/zwrose/weekly-eats/docs/superheroes/wi',   // the MAIN checkout, not the leaf worktree
   engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
   spec_present: true, tasks_present: false, tasks_gate: null,
 }
 // A genuine execution's answer for this work item: real gate + the owner's real store pref (cursor).
 const REAL = {
-  ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '/wt/docs/superheroes/wi',
+  ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '/wt/docs/superheroes/wi', run_overrides_present: false,
   engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: {} },
   spec_present: true, tasks_present: false, tasks_gate: null,
 }
@@ -112,7 +112,7 @@ const REAL = {
       if (opts && opts.label === 'read startup state') {
         n += 1
         return markedStdout({ ok: true, spec_present: false, spec_gate: 'unreadable', model_overrides: {},
-          doc_dir: '', engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
+          doc_dir: '', run_overrides_present: false, engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
           tasks_present: false, tasks_gate: null })
       }
       return [{ ok: true, stdout: '{}' }]
@@ -130,7 +130,7 @@ const REAL = {
   {
     let n = 0
     const REAL_SUSPECT = { ok: true, spec_present: true, spec_gate: 'unreadable', model_overrides: {},
-      doc_dir: '/wt/docs/superheroes/wi', engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: {} },
+      doc_dir: '/wt/docs/superheroes/wi', run_overrides_present: false, engine_prefs: { reviewer: 'codex', implementation: 'cursor', effort: {} },
       tasks_present: false, tasks_gate: null }
     global.agent = async (_p, opts) => {
       if (opts && opts.label === 'read startup state') {
