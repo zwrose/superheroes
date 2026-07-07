@@ -13,6 +13,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_leaf_budget_labels_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_bundle_smoke.js",
+    # #295: stripComments() unit coverage — template-data preservation, code-comment stripping,
+    # regex/division heuristic hardening, and the EOF tokenizer-desync self-check.
+    "plugins/superheroes/lib/tests/showrunner_bundle_strip_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_entry_await_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_boundary_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_extras_smoke.js",
