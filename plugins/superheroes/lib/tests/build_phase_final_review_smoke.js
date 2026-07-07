@@ -50,21 +50,29 @@ function makeAgent({ reviewerFindings, verifyResult }) {
 }
 
 global.recordDeferred = async () => {}
+// pid-unique runDir + reason-bearing terminal assertions (see _final_review_probe.js;
+// must load before build_phase.js binds reviewPanel).
+const { uniqueWorkItem, resetRunDir, assertTerminal } = require('./_final_review_probe.js')
 const bp = require('../build_phase.js')
 
 ;(async () => {
+  const WI = uniqueWorkItem()
+  // One reset up front: hermetic start (no stale accumulator), while the three calls below
+  // still share the runDir exactly as before (the resume decider sees the accumulated rounds).
+  resetRunDir(WI)
+
   // 1. Clean single-round final review: no findings + verify pass -> terminal 'clean'.
   global.agent = makeAgent({ reviewerFindings: [], verifyResult: 'pass' })
-  let r = await bp.runFinalReview('wi', 5, 'superheroes/wi-abc',
+  let r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
-  assert.strictEqual(r.terminal, 'clean')
+  assertTerminal(r, 'clean', 'no findings + verify pass certifies clean')
 
   // 2. Verify fails -> a clean-looking round cannot certify clean -> terminal 'halted'
   //    (the caller parks, UFR-4). No findings, so the only thing blocking clean is the verify gate.
   global.agent = makeAgent({ reviewerFindings: [], verifyResult: 'fail' })
-  r = await bp.runFinalReview('wi', 5, 'superheroes/wi-abc',
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
-  assert.strictEqual(r.terminal, 'halted')
+  assertTerminal(r, 'halted', 'a failing verify blocks a clean certification (FR-17/UFR-4)')
   // #279: the halted verdict carries an honest reason naming the failing stage + the verify error
   // head, so the caller's park says WHY (verify, with the resolve error) rather than a bare 'halted'.
   assert.ok(/verify failed r\d+/.test(r.reason || ''), '#279: final-review reason names the verify stage')
@@ -75,9 +83,9 @@ const bp = require('../build_phase.js')
   //    (which would certify clean). The spine classifies with the command it knows -> 'fail' ->
   //    the clean-looking round CANNOT certify -> terminal 'halted'.
   global.agent = makeAgent({ reviewerFindings: [], verifyResult: 'garbled-no-command' })
-  r = await bp.runFinalReview('wi', 5, 'superheroes/wi-abc',
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
-  assert.strictEqual(r.terminal, 'halted',
+  assertTerminal(r, 'halted',
     'a verify failure with a dropped command echo must classify fail (not skipped) -> no clean certify')
   console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed (in-memory panel, FR-17/UFR-4/FIX2)')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
