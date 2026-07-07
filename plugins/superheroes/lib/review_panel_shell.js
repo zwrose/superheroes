@@ -14,7 +14,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
-const BLOCKING = new Set(['Critical', 'Important'])
+// #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
+// — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
@@ -90,7 +91,7 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
     const result = roundFindings[name]
     if (!result || result.status !== 'run') continue
     for (const f of result.findings || []) {
-      if (!BLOCKING.has(f.severity)) continue
+      if (!circuitBreaker.isBlocking(f.severity)) continue
       const key = f.classKey || reviewMemory.classKey(f)
       if (!known.has(key)) continue
       const decision = byClass[key]

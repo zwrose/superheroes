@@ -29,6 +29,7 @@ PARITY_TWINS = [
     ("circuit_breaker", "normalizeTitle", "circuit_breaker", "normalize_title"),
     ("circuit_breaker", "findingIdentity", "circuit_breaker", "finding_identity"),
     ("circuit_breaker", "checkCircuitBreaker", "circuit_breaker", "check_circuit_breaker"),
+    ("circuit_breaker", "isBlocking", "circuit_breaker", "is_blocking"),
     ("loop_state", "decide", "loop_state", "decide"),
     ("loop_synthesis", "consume", "loop_synthesis", "consume"),
     ("panel_tally", "compileFindings", "panel_tally", "compile_findings"),

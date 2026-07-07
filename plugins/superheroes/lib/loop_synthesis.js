@@ -1,9 +1,10 @@
 // plugins/superheroes/lib/loop_synthesis.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
-const _BLOCKING = new Set(['Critical', 'Important'])
-const _NON_BLOCKING = new Set(['Minor', 'Nit'])
 const _DEFAULT_BLOCKING_SEVERITY = 'Important'
+// #276: the blocking partition (was-tagged-blocking, blocking→non-blocking downgrade detection) routes
+// through circuit_breaker.isBlocking — the single, case-normalized, fail-closed predicate — so this
+// leg can never disagree with _partition / the breaker / the panel gate on what blocks.
 
 function _keptSeverity(f, v) {
   const verdictSeverity = (v && typeof v === 'object') ? v.severity : null
@@ -28,7 +29,7 @@ function consume(merged, leafVerdicts) {
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
       drops.push({ id, file: f.file === undefined ? null : f.file, title: f.title === undefined ? null : f.title,
-        reason: reason.trim(), was_blocking_tagged: _BLOCKING.has(f.severity) })
+        reason: reason.trim(), was_blocking_tagged: isBlocking(f.severity) })
       continue
     }
     const kept = Object.assign({}, f)
@@ -37,7 +38,7 @@ function consume(merged, leafVerdicts) {
     // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
     // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
     const fromSeverity = f && f.severity
-    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+    if (isBlocking(fromSeverity) && !isBlocking(kept.severity)) {
       const entry = { id, file: f.file === undefined ? null : f.file,
         title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
       if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()

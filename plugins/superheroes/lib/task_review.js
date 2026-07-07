@@ -7,26 +7,19 @@ const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 
 const REQUIRED_VERDICTS = ['spec_compliance', 'code_quality']
-// The ONLY severities that demote a finding to a non-blocking Minor: the rubric's non-blocking tiers
-// (Minor/Nit — SSOT §11, guarded by test_ssot_drift). Matched case-insensitively, and — crucially —
-// every OTHER value FAILS CLOSED to blocking (#276): a foreign scale (`blocker`/`high`/`medium`), an
-// unknown tier, a mis-cased `critical`, or a missing severity must never silently demote a blocker to
-// a Minor. Unknown severity means blocking, not non-blocking.
-const _NON_BLOCKING = new Set(['minor', 'nit'])
 // exit_skipped maps to PARK, never complete: a deliberately-left-unresolved blocker must park (UFR-4).
 // (The bespoke loop passes skippedBlocking=0 so loop_state never returns exit_skipped today; the
 // fail-closed mapping guards against a future contract change rather than fail open.)
 const _MAP = { review: 'review', exit_clean: 'complete', exit_skipped: 'park', halt: 'park' }
 
-function _isBlocking(severity) {
-  return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
-}
-
 function _partition(findings) {
   const blocking = []; const minors = []; const cannotVerify = []
   for (const f of findings || []) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
-    if (_isBlocking(f && f.severity)) blocking.push(f)
+    // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
+    // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
+    // breaker's own stuck-detection so the two can never disagree.
+    if (circuitBreaker.isBlocking(f && f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }

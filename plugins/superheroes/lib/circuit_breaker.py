@@ -14,9 +14,22 @@ import sys
 from review_memory import clamp_title, canonical_class_key, class_key_aliases
 
 BLOCKING = {"Critical", "Important"}
+# The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
+# (Minor/Nit — SSOT §11, guarded by test_ssot_drift). `is_blocking` is the single, case-normalized,
+# FAIL-CLOSED blocking predicate every severity consumer routes through (#276): a foreign scale
+# (`blocker`/`high`/`medium`), an unknown tier, a mis-cased `critical`, or a missing severity is
+# treated as blocking — an unrecognized severity means blocking, never a silent demotion. Consumers
+# keep BLOCKING for rank/identity/"was-tagged-blocking" bookkeeping but ask `is_blocking` the
+# partition question, so _partition, the breaker's own stuck-detection, the panel gate, and the
+# build legs can never disagree on what blocks.
+_NON_BLOCKING = frozenset({"minor", "nit"})
 
 _NON_WORD = re.compile(r"[^\w\s]", re.ASCII)   # JS \w is ASCII-only — match it
 _WS = re.compile(r"\s+", re.ASCII)
+
+
+def is_blocking(severity):
+    return str("" if severity is None else severity).strip().lower() not in _NON_BLOCKING
 
 
 def normalize_title(title):
@@ -50,7 +63,7 @@ def recurrence_aliases(finding):
 
 
 def _blocking(round_findings):
-    return [f for f in round_findings["findings"] if f["severity"] in BLOCKING]
+    return [f for f in round_findings["findings"] if is_blocking(f.get("severity"))]
 
 
 def _round_recorded_fix(round_rec):

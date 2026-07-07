@@ -153,11 +153,13 @@ def test_severity_vocabulary_is_single_sourced():
     import review_memory
     import review_telemetry
 
-    # Python copy-holders (read at runtime) — every BLOCKING constant.
+    # Python copy-holders (read at runtime) — every BLOCKING constant. #276 consolidated the blocking
+    # PARTITION decision into one predicate (circuit_breaker.is_blocking); loop_synthesis and
+    # review_panel_shell dropped their own blocking sets and now route through it, so they are no longer
+    # copy-holders. The remaining sets are the drift-guarded canonical vocabulary declarations.
     py_blocking = {
         "circuit_breaker.BLOCKING": set(circuit_breaker.BLOCKING),
         "loop_state._BLOCKING": set(loop_state._BLOCKING),
-        "loop_synthesis._BLOCKING": set(loop_synthesis._BLOCKING),
         "loop_plan_common.BLOCKING": set(loop_plan_common.BLOCKING),
         "panel_tally.BLOCKING": set(panel_tally.BLOCKING),
         "review_loop_plan.BLOCKING": set(review_loop_plan.BLOCKING),
@@ -169,20 +171,28 @@ def test_severity_vocabulary_is_single_sourced():
 
     assert list(loop_state._ALL_SEVERITIES) == tiers, "loop_state._ALL_SEVERITIES order/vocab drift"
     assert list(loop_synthesis._TIERS) == tiers, "loop_synthesis._TIERS order/vocab drift"
-    assert set(loop_synthesis._NON_BLOCKING) == non_blocking, "loop_synthesis._NON_BLOCKING drift"
     assert panel_tally.SEV_RANK == rank, "panel_tally.SEV_RANK drift"
+
+    # #276: the shared FAIL-CLOSED blocking predicate has ONE home (circuit_breaker). Its non-blocking
+    # set (the ONLY tiers that demote; everything else fails closed to blocking) must equal the rubric's
+    # non-blocking tiers, case-folded — Python home + JS twin. The predicate's cross-language behavior
+    # (canonical + foreign/mis-cased/degenerate corpus) is pinned by the isBlocking parity twin.
+    non_blocking_lc = {t.lower() for t in non_blocking}
+    assert {s.lower() for s in circuit_breaker._NON_BLOCKING} == non_blocking_lc, (
+        "circuit_breaker.py _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
+    assert circuit_breaker.is_blocking("Critical") and circuit_breaker.is_blocking("Important")
+    assert not circuit_breaker.is_blocking("Minor") and not circuit_breaker.is_blocking("Nit")
+    assert circuit_breaker.is_blocking("blocker") and circuit_breaker.is_blocking(None)  # fail closed
 
     # JS copy-holders (regex-extracted, fail-closed).
     cb = _read(os.path.join("lib", "circuit_breaker.js"))
     assert _js_str_set(cb, "BLOCKING", "circuit_breaker.js") == blocking
-    rps = _read(os.path.join("lib", "review_panel_shell.js"))
-    assert _js_str_set(rps, "BLOCKING", "review_panel_shell.js") == blocking
+    assert {s.lower() for s in _js_str_set(cb, "_NON_BLOCKING", "circuit_breaker.js")} == non_blocking_lc, (
+        "circuit_breaker.js _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
     rmjs = _read(os.path.join("lib", "review_memory.js"))
     assert _js_str_set(rmjs, "BLOCKING", "review_memory.js") == blocking
     lsjs = _read(os.path.join("lib", "loop_synthesis.js"))
     assert _js_str_set(lsjs, "_TIERS", "loop_synthesis.js") == vocab
-    assert _js_str_set(lsjs, "_BLOCKING", "loop_synthesis.js") == blocking
-    assert _js_str_set(lsjs, "_NON_BLOCKING", "loop_synthesis.js") == non_blocking
     ptjs = _read(os.path.join("lib", "panel_tally.js"))
     assert _js_str_set(ptjs, "BLOCKING", "panel_tally.js") == blocking
     assert _js_rank_map(ptjs, "SEV_RANK", "panel_tally.js") == rank
@@ -193,27 +203,27 @@ def test_severity_vocabulary_is_single_sourced():
     assert len(enum) == 1, "showrunner.js: expected exactly one severity enum, found %d" % len(enum)
     assert ast.literal_eval(enum[0]) == tiers, "showrunner.js severity enum drift"
 
-    # #276: the per-task reviewer's schema enum + prompt must speak the SAME tier vocabulary — the
-    # live escape (2026-07-06) was the reviewer emitting a foreign scale (blocker/critical/high) the
-    # partition then demoted. Schema enum:
+    # #276: the per-task AND whole-branch final reviewers' schema enums must speak the SAME tier
+    # vocabulary — the live escape (2026-07-06) was reviewers emitting a foreign scale
+    # (blocker/critical/high) the partition then demoted. build_phase.js now carries two such enums
+    # (REVIEW_TASK_SCHEMA + FINAL_REVIEW_SCHEMA); EVERY one must equal the rubric tiers.
     bp = _read(os.path.join("lib", "build_phase.js"))
-    bp_enum = re.findall(r"severity:\s*\{\s*enum:\s*(\[[^\]]+\])", bp)
-    assert len(bp_enum) == 1, "build_phase.js: expected exactly one severity enum, found %d" % len(bp_enum)
-    assert ast.literal_eval(bp_enum[0]) == tiers, "build_phase.js REVIEW_TASK_SCHEMA severity enum drift"
-    # Prompt shape hint names every tier (so a reviewer sees the allowed values, not just the schema).
-    for t in tiers:
-        assert re.search(r"\b%s\b" % re.escape(t), bp), (
-            "build_phase.js: per-task reviewer prompt/schema does not name severity tier %r" % t)
-
-    # #276: task_review's non-blocking set (the ONLY tiers that demote; everything else fails closed
-    # to blocking) must equal the rubric's non-blocking tiers, case-folded. Python home + JS twin.
-    import task_review
-    non_blocking_lc = {t.lower() for t in non_blocking}
-    assert {s.lower() for s in task_review._NON_BLOCKING} == non_blocking_lc, (
-        "task_review.py _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
-    trjs = _read(os.path.join("lib", "task_review.js"))
-    assert {s.lower() for s in _js_str_set(trjs, "_NON_BLOCKING", "task_review.js")} == non_blocking_lc, (
-        "task_review.js _NON_BLOCKING drifted from the rubric non-blocking tiers %r" % non_blocking)
+    bp_enums = re.findall(r"severity:\s*\{\s*enum:\s*(\[[^\]]+\])", bp)
+    assert len(bp_enums) == 2, "build_phase.js: expected two severity enums, found %d" % len(bp_enums)
+    for e in bp_enums:
+        assert ast.literal_eval(e) == tiers, "build_phase.js severity enum drift: %s" % e
+    # The reviewer PROMPTS (not just the schemas) name the closed vocabulary so an off-scale label is
+    # forbidden at the source. Anchor to the exact prompt sentence — a whole-file `\bNit\b` search would
+    # pass on the schema enum alone (the mutant that reverts the prompt hint must NOT survive). Both the
+    # per-task and whole-branch reviewer prompts carry it, so require both occurrences.
+    prompt_sentence = "severity MUST be one of Critical, Important, Minor, Nit (no other scale)"
+    assert bp.count(prompt_sentence) == 2, (
+        "build_phase.js: expected the closed-severity prompt sentence in both reviewer prompts (per-task "
+        "+ whole-branch), found %d" % bp.count(prompt_sentence))
+    # The rubric's shared findings schema (the panel reviewers' single source) must also forbid the
+    # foreign scale, not just name the tiers — the live panel escape emitted high/medium/low.
+    assert "closed enum" in text and "no `high`/`medium`/`low`" in text, (
+        "review-base.md: findings schema must forbid off-scale severities (the panel-vocabulary fix)")
 
 
 # --- Cluster 2: task-review required verdicts --------------------------------

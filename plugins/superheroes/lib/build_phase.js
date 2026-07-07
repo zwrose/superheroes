@@ -15,9 +15,10 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
-// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
-// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
-// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+// #160/#276: circuit_breaker.isBlocking is the single, case-normalized, FAIL-CLOSED blocking predicate
+// the task_review twin's partition also reads. Used here to synthesize the per-task review's two
+// verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
+// final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
@@ -612,6 +613,25 @@ const REVIEW_TASK_SCHEMA = {
   },
 }
 
+// #276: the whole-branch final-review reviewer's findings schema — same canonical severity-tier enum
+// (SSOT §11, guarded by test_ssot_drift) as REVIEW_TASK_SCHEMA, so a branch reviewer emitting a
+// foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
+// instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
+// sites in runFinalReview's reviewerAgent.
+const FINAL_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['findings'],
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+      },
+    },
+  },
+}
+
 // #160: dispatch ONE per-task review, honoring enginePreferences.reviewer AND the model-tier policy —
 // mirroring the whole-branch final review beside it (runFinalReview's reviewerAgent). Before this, the
 // per-task reviewer called agent() with NO model + NO engine resolution, so a project configured
@@ -649,7 +669,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     // two-verdict review that returned the same findings. An unreadable external review (null / no
     // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
     if (res && Array.isArray(res.findings)) {
-      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
       return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
     }
   }
@@ -769,24 +789,25 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity":"Critical|Important|Minor|Nit","evidence"}]} ({"findings":[]} if nothing to flag). `
+      + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
     if (rEngine !== 'claude') {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+        schema: FINAL_REVIEW_SCHEMA,
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+        schema: FINAL_REVIEW_SCHEMA })
       return (out && Array.isArray(out.findings)) ? out.findings : null
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      schema: FINAL_REVIEW_SCHEMA })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -801,7 +822,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
     await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
+    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
+    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
+    // severity is dispatched to the fixer, never silently counted nowhere.
+    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
