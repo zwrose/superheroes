@@ -4,6 +4,8 @@
 // requires; ./io_seam.js resolves to the preamble's leaf-bash io (no fs/path/os in the sandbox).
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
+const { execFileSync } = require('child_process')
 
 const LIB = __dirname
 // io_seam is intentionally absent: the preamble provides a leaf-bash io for it.
@@ -428,9 +430,205 @@ if (globalThis.__SR_RUN !== false) {
 }
 `
 
+// stripComments: shrink the emitted bundle under the Workflow tool's hard script-size cap (#295) by
+// removing full-line `//` comments and blank lines — measured ~36% of the un-stripped bundle. The
+// SOURCE modules keep every comment; only this generated artifact slims. Two properties make it safe:
+//
+//  (1) String / template-literal / regex / block-comment awareness. The bundled sources carry many
+//      multi-line template literals (agent prompts, embedded Python) whose lines legitimately begin
+//      with `//` — that is STRING DATA, not a comment, and stripping it would corrupt the spine. So we
+//      tokenize the whole emitted bundle once (single char scan tracking string/template/regex/block
+//      state, with a frame stack for `${...}` substitution nesting) and record, per line, whether the
+//      line BEGINS in plain-code context. A line is removed ONLY when it begins in code context AND is
+//      blank or its first non-whitespace chars are `//` (a full-line, statement-level comment). Trailing
+//      (end-of-line) comments are never touched — that sidesteps `https://` false positives entirely.
+//  (2) Determinism. Same input -> byte-identical output, so `--check` round-trips against the committed
+//      artifact. `node --check` on the result (verifyEmit) then guarantees a stripper bug can never ship
+//      a bundle that does not parse.
+function stripComments(src) {
+  const s = src, N = s.length
+  // codeStart[k] === true iff, at the first character of line k, the lexer is in plain-code context
+  // (not inside a template literal, string, block comment, or regex). Only those lines may be stripped.
+  const codeStart = [true]
+  let line = 0
+  // Frame stack for template / `${...}` substitution nesting. Bottom frame is code; a backtick pushes a
+  // template frame; `${` inside a template pushes a code frame; the matching `}` (brace depth 0) pops it.
+  const frames = [{ tpl: false, braces: 0 }]
+  const top = () => frames[frames.length - 1]
+  let state = 'code'   // code | line | block | sq | dq | tpl | regex | rclass
+  let escaped = false  // inside sq/dq/tpl/regex: previous char was an unconsumed backslash
+  // Regex-vs-division disambiguation: 'op' => a `/` here starts a regex; 'value' => it is division.
+  let lastTok = 'op'
+  const EXPR_KW = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+                           'do', 'else', 'yield', 'await', 'case', 'throw'])
+  const isIdStart = (ch) => (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_' || ch === '$'
+  const isIdPart = (ch) => isIdStart(ch) || (ch >= '0' && ch <= '9')
+  const isDigit = (ch) => ch >= '0' && ch <= '9'
+  const isFlag = (ch) => (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+
+  let i = 0
+  while (i < N) {
+    const c = s[i]
+    if (c === '\n') {
+      line++
+      // The NEXT line begins in plain-code context only when we are in the base `code`/`line` states
+      // (a line comment ends at the newline). Every other state — block comment or any string/template/
+      // regex — is either a multi-line construct we must keep verbatim (block, tpl) or a defensive
+      // non-code reset — EXCEPT an ESCAPED newline inside a quoted string, which is a line
+      // continuation: the string keeps going, so sq/dq state must survive or the continued lines get
+      // lexed as code and a continued line beginning with `//` strips as a comment while `node
+      // --check` still passes (semantic, not syntactic, damage — the fail-direction class from the
+      // #295 review). Regex cannot legally continue across a newline, escaped or not, so it resets.
+      const continued = escaped && (state === 'sq' || state === 'dq')
+      codeStart[line] = (state === 'code' || state === 'line')
+      if (state === 'line') state = 'code'
+      if (!continued && (state === 'sq' || state === 'dq' || state === 'regex' || state === 'rclass')) state = 'code'
+      escaped = false
+      i++
+      continue
+    }
+    switch (state) {
+      case 'code': {
+        const d = s[i + 1]
+        if (c === '/' && d === '/') { state = 'line'; i += 2; break }
+        if (c === '/' && d === '*') { state = 'block'; i += 2; break }
+        if (c === '`') { frames.push({ tpl: true, braces: 0 }); state = 'tpl'; lastTok = 'op'; i++; break }
+        if (c === '\'') { state = 'sq'; i++; break }
+        if (c === '"') { state = 'dq'; i++; break }
+        if (c === '/' && lastTok === 'op') { state = 'regex'; i++; break }
+        if (c === '/') { lastTok = 'op'; i++; break }   // division operator
+        if (c === ' ' || c === '\t' || c === '\r') { i++; break }
+        if (c === '{') { top().braces++; lastTok = 'op'; i++; break }
+        if (c === '}') {
+          if (top().braces > 0) { top().braces--; lastTok = 'value'; i++; break }
+          if (frames.length > 1) { frames.pop(); state = 'tpl'; lastTok = 'value'; i++; break }  // close ${}
+          lastTok = 'value'; i++; break
+        }
+        if ((c === '+' && s[i + 1] === '+') || (c === '-' && s[i + 1] === '-')) {
+          lastTok = 'value'; i += 2; break   // postfix ++/-- yields a value: a following `/` is division
+        }
+        if (isIdStart(c)) {
+          let j = i + 1
+          while (j < N && isIdPart(s[j])) j++
+          // A keyword in PROPERTY position (`obj.in`, `x.of`) is an identifier, never the expression-
+          // introducing keyword — look back past whitespace for a `.`/`?.` so a following `/` reads as
+          // division. Otherwise a genuine `return`/`typeof`/… puts `/` in regex position.
+          let p = i - 1
+          while (p >= 0 && (s[p] === ' ' || s[p] === '\t' || s[p] === '\r' || s[p] === '\n')) p--
+          const propAccess = p >= 0 && s[p] === '.'
+          lastTok = (!propAccess && EXPR_KW.has(s.slice(i, j))) ? 'op' : 'value'
+          i = j; break
+        }
+        if (isDigit(c)) {
+          let j = i + 1
+          while (j < N && (isIdPart(s[j]) || s[j] === '.')) j++
+          lastTok = 'value'; i = j; break
+        }
+        if (c === ')' || c === ']') { lastTok = 'value'; i++; break }
+        lastTok = 'op'; i++; break   // any other punctuator leaves a `/` in regex position
+      }
+      case 'line': { i++; break }
+      case 'block': {
+        // A block comment is transparent: leave lastTok as whatever preceded the comment so a `/`
+        // right after `*/` is classified by the real prior token (`a /*c*/ / b` is division).
+        if (c === '*' && s[i + 1] === '/') { state = 'code'; i += 2; break }
+        i++; break
+      }
+      case 'sq': {
+        if (escaped) { escaped = false; i++; break }
+        if (c === '\\') { escaped = true; i++; break }
+        if (c === '\'') { state = 'code'; lastTok = 'value'; i++; break }
+        i++; break
+      }
+      case 'dq': {
+        if (escaped) { escaped = false; i++; break }
+        if (c === '\\') { escaped = true; i++; break }
+        if (c === '"') { state = 'code'; lastTok = 'value'; i++; break }
+        i++; break
+      }
+      case 'tpl': {
+        if (escaped) { escaped = false; i++; break }
+        if (c === '\\') { escaped = true; i++; break }
+        if (c === '`') { frames.pop(); state = 'code'; lastTok = 'value'; i++; break }
+        if (c === '$' && s[i + 1] === '{') { frames.push({ tpl: false, braces: 0 }); state = 'code'; lastTok = 'op'; i += 2; break }
+        i++; break
+      }
+      case 'regex': {
+        if (escaped) { escaped = false; i++; break }
+        if (c === '\\') { escaped = true; i++; break }
+        if (c === '[') { state = 'rclass'; i++; break }
+        if (c === '/') { state = 'code'; lastTok = 'value'; i++; while (i < N && isFlag(s[i])) i++; break }
+        i++; break
+      }
+      case 'rclass': {
+        if (escaped) { escaped = false; i++; break }
+        if (c === '\\') { escaped = true; i++; break }
+        if (c === ']') { state = 'regex'; i++; break }
+        i++; break
+      }
+    }
+  }
+
+  // Tokenizer self-check (dependency-free). A correct scan of the whole bundle ends in base-code state
+  // with only the bottom frame left. Ending mid-template or mid-block-comment (or with a leftover
+  // `${...}` frame) means the regex-vs-division heuristic desynced and opened a construct that never
+  // closed — the one way a wrongly-stripped template line could slip past `node --check` (stripping
+  // string data still parses). Fail closed rather than emit a corrupted bundle. verifyEmit's node parse
+  // check cannot see this class of bug; this can.
+  if ((state !== 'code' && state !== 'line') || frames.length !== 1) {
+    throw new Error('stripComments: tokenizer desync at EOF (state=' + state + ', frames=' +
+      frames.length + ') — refusing to strip; a source construct broke the regex/division lexer')
+  }
+
+  const lines = s.split('\n')
+  const out = []
+  for (let k = 0; k < lines.length; k++) {
+    if (codeStart[k]) {
+      const t = lines[k].trim()
+      if (t === '' || t.startsWith('//')) continue   // strip blank line or full-line statement comment
+    }
+    out.push(lines[k])
+  }
+  return out.join('\n')
+}
+
+// verifyEmit: `node --check` the emitted bundle so a stripper bug can never ship an artifact that
+// doesn't parse. Runs on every emit() (so --write and --check both gate on it).
+//
+// The bundle's first statement is `export const meta` (ESM) and its entry uses a top-level `return`
+// (function/async-wrapper only) — a combination `node --check` rejects on node without module-syntax
+// detection (< 20.19 / < 22.7). So we check the async-WRAPPED form (the exact shape the Workflow
+// runtime and the bundle smoke evaluate), which parses on every node version. Uses process.execPath
+// (the node already running the bundler) — never a bare `node` that may be off PATH. A distinct temp
+// name per call avoids collisions when bundles are emitted concurrently.
+let __verifyCheckSeq = 0
+function verifyEmit(out) {
+  const wrapped = ';(async () => {\n' + out.replace(/export\s+const\s+meta/, 'const meta') + '\n})();'
+  const tmp = path.join(os.tmpdir(), 'sr-bundle-check-' + process.pid + '-' + (++__verifyCheckSeq) + '.js')
+  // FAIL CLOSED on every failure mode (#295 review r2): an unrun verifier must never count as
+  // success. The stage-write and the exec are guarded SEPARATELY so a temp-write ENOENT (e.g. a
+  // missing TMPDIR) cannot be mistaken for the old "node binary unavailable" tolerance — and that
+  // tolerance is gone too: process.execPath is the node running this bundler, so an ENOENT from the
+  // exec is itself an environment fault worth stopping on, not a reason to skip the gate.
+  try {
+    fs.writeFileSync(tmp, wrapped)
+  } catch (e) {
+    throw new Error('verifyEmit could not stage the check file at ' + tmp + ' — the parse gate did ' +
+      'NOT run; fix the temp dir rather than emitting unverified: ' + String((e && e.message) || e))
+  }
+  try {
+    execFileSync(process.execPath, ['--check', tmp], { stdio: 'pipe' })
+  } catch (e) {
+    throw new Error('emitted bundle failed `node --check` (stripper produced unparseable output): ' +
+      String((e && e.stderr) || (e && e.message) || e))
+  } finally {
+    try { fs.unlinkSync(tmp) } catch (_) {}
+  }
+}
+
 function emit() {
   const factories = MODULES.map((f) => '// ===== ' + f + ' =====\n' + factory(f, fs.readFileSync(path.join(LIB, f), 'utf8')))
-  const out = PREAMBLE + '\n' + factories.join('\n') + '\n' + ENTRY
+  const out = stripComments(PREAMBLE + '\n' + factories.join('\n') + '\n' + ENTRY)
   // The Workflow tool's permission layer rejects scripts containing raw control characters, so a
   // bundle carrying one can never be launched verbatim. Refuse to emit it — escape the offending
   // literal (\xNN) in the source module instead. Tab/newline are the only allowed controls.
@@ -440,6 +638,7 @@ function emit() {
       raw[0].charCodeAt(0).toString(16) + ' at index ' + raw.index +
       ' — escape it (\\xNN) in the source module')
   }
+  verifyEmit(out)
   return out
 }
 
@@ -454,4 +653,7 @@ function main(argv) {
   if (argv.includes('--write')) { fs.writeFileSync(out, emit()); process.stdout.write('wrote ' + out + '\n'); return }
   process.stdout.write(emit())
 }
-main(process.argv.slice(2))
+
+// Run as a CLI when invoked directly; export the pure helpers when required as a module (unit tests).
+if (require.main === module) main(process.argv.slice(2))
+module.exports = { stripComments, verifyEmit, emit }
