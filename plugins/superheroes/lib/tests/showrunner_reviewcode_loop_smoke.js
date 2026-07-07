@@ -38,7 +38,7 @@ function reviewerPayload(findings, runDir, round) {
 function install({ roundFindings, fix = 'resolve', provOk = true }) {
   const queue = roundFindings.slice()
   const nextFindings = () => (queue.length > 1 ? queue.shift() : queue[0])
-  const calls = { prov: 0, readout: 0, readoutPost: 0, fix: 0, recordDeferred: 0, reviewerModels: [] }
+  const calls = { prov: 0, readout: 0, readoutPost: 0, fix: 0, recordDeferred: 0, reviewerModels: [], fixerModels: [] }
   function runRecordDeferred(cmd) {
     calls.recordDeferred += 1
     const rd = cmd.match(/--run-dir '([^']+)'/)
@@ -64,6 +64,7 @@ function install({ roundFindings, fix = 'resolve', provOk = true }) {
     if (opts && opts.courier && prompt.includes('record_deferred.py')) return [{ index: 0, ok: true, stdout: runRecordDeferred(prompt) }]
     if (label.startsWith('fix-code')) {
       calls.fix += 1
+      calls.fixerModels.push({ label, model: opts && opts.model })
       const f = nextFindings() || []
       const ids = f.filter((x) => x.severity === 'Critical' || x.severity === 'Important').map(findingIdentity)
       if (fix === 'fail') return null
@@ -172,6 +173,36 @@ async function main() {
   assert.ok(calls.reviewerModels.some((call) => call.round === 2 && call.model === 'sonnet'),
     'a cheap-scheduled round-2 reviewer must dispatch with an explicit Sonnet-tier model')
 
+  // ── FR-8 / NFR-Accuracy: frozen per-run model pins reach the review-code dispatch ──────────────
+  // With NO pins (__SR_OVERRIDES absent), the dispatch carries the cfg.tiers values EXACTLY — the
+  // deep reviewer at the reviewerDeep tier ('opus') and the fixer at the fixer tier ('sonnet').
+  // (This is the byte-identical no-op control; the mutation to kill is removing the pinnedTier overlay.)
+  assert.ok(!globalThis.__SR_OVERRIDES, 'precondition: no frozen pins for the no-op control')
+  assert.ok(calls.fixerModels.length >= 1 && calls.fixerModels.every((c) => c.model === 'sonnet'),
+    'no pins: the fixer dispatch carries the cfg.tiers fixer model (sonnet), unchanged')
+  assert.ok(calls.reviewerModels.some((c) => c.round === 1 && c.model === 'opus'),
+    'no pins: the round-1 deep reviewer dispatch carries the cfg.tiers reviewerDeep model (opus), unchanged')
+
+  // With a FROZEN pin for the deep reviewer AND the fixer (as mergeFrozenSnapshot lands them into
+  // __SR_OVERRIDES, keyed by the model_tier role — 'reviewer-deep' / 'fixer'), the dispatch carries
+  // the PINNED model, NOT cfg.tiers'. cfg.tiers is still {reviewerDeep:'opus', fixer:'sonnet'}; the
+  // pins ('haiku' / 'opus') are distinct from those so a miss is visible.
+  const pinRunDir = fresh()
+  const pinCalls = install({ roundFindings: [BLOCKER, [], []], fix: 'resolve' })
+  globalThis.__SR_OVERRIDES = { 'reviewer-deep': 'haiku', fixer: 'opus' }
+  try {
+    r = await sr.reviewCodePhase('wi-pinned', { runDir: pinRunDir, resolveTarget: stubResolveTarget })
+  } finally {
+    delete globalThis.__SR_OVERRIDES
+  }
+  assert.strictEqual(r.gate, 'passed', 'pinned run still converges to passed')
+  assert.ok(pinCalls.reviewerModels.some((c) => c.round === 1 && c.model === 'haiku'),
+    'frozen reviewer-deep pin reaches the deep-reviewer dispatch (haiku), overriding cfg.tiers opus')
+  assert.ok(pinCalls.reviewerModels.every((c) => c.model !== 'opus'),
+    'the disk-resolved reviewerDeep model (opus) never reaches dispatch once a per-run pin exists')
+  assert.ok(pinCalls.fixerModels.length >= 1 && pinCalls.fixerModels.every((c) => c.model === 'opus'),
+    'frozen fixer pin reaches the fixer dispatch (opus), overriding cfg.tiers sonnet')
+
   const rawRunDir = fresh()
   const rawCalls = []
   const rawLeaves = {
@@ -204,7 +235,7 @@ async function main() {
   assert.ok(rawCalls.some((call) => call.round === 2 && call.reviewer === 'code-reviewer'),
     'the prior-finding dimension actually ran on the intermediate round')
 
-  console.log('ok: reviewCodePhase clean/skips/halted/cannot-certify + UFR-2 + continue/fix/clean')
+  console.log('ok: reviewCodePhase clean/skips/halted/cannot-certify + UFR-2 + continue/fix/clean + frozen model pins reach dispatch')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

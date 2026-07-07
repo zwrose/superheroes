@@ -304,6 +304,38 @@ function ensureReviewerShape(out, opts = {}) {
 function reviewCodeLeaves(tiers, opts) {
   opts = opts || {}
   const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
+  // Overlay the FROZEN per-run model pin (readout gate) over the disk-resolved cfg.tiers value.
+  // `tiers` comes from review_code_config.py (model_tier_overrides.load_overrides read fresh off the
+  // DISK profile) and CANNOT see globalThis.__SR_OVERRIDES — so a per-run model override the owner
+  // accepted at the readout (persisted into __SR_OVERRIDES by mergeFrozenSnapshot) never reached this
+  // dispatch (ENGINE/EFFORT do, via resolveEngine/resolveEffort; MODEL rode cfg.tiers). This mirrors
+  // build_phase's in-build review roles, which already resolve through resolveModel(role,_overrides()).
+  //
+  // The ONE place the two vocabularies are mapped: cfg.tiers key (camelCase, from resolve_tiers) ->
+  // model_tier role (= the __SR_OVERRIDES pin key, which is the readout row's `tier_role`). A frozen
+  // pin for the role WINS; with no pin the exact cfg.tiers value flows through (byte-identical no-op —
+  // the backward-compat invariant). Keyed by cfg.tiers key so callers keep reading tiers.<key>.
+  const _TIER_ROLE = {
+    reviewer: { role: 'reviewer', context: null },
+    reviewerDeep: { role: 'reviewer-deep', context: null },
+    synthesis: { role: 'synthesis', context: null },
+    fixer: { role: 'fixer', context: 'code' },
+  }
+  const pinnedTier = (tierKey) => {
+    const base = tiers[tierKey]
+    const m = _TIER_ROLE[tierKey]
+    if (!m) return base
+    const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+    // Only an OWN per-run pin for this exact role overrides the disk-resolved value; otherwise the
+    // cfg.tiers value flows through unchanged (resolveModel's own-default would be the twin's
+    // DEFAULT_TIERS, which can differ from a project's disk-profile tier — so we fall through to
+    // `base`, never to resolveModel's default, when there is no pin).
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)
+        && Object.prototype.hasOwnProperty.call(overrides, m.role)) {
+      return modelTierTwin.resolveModel(m.role, overrides, m.context)
+    }
+    return base
+  }
   const target = opts.target || {}
   const targetSuffix = target.worktree || target.head
     ? `\n\nTarget worktree: ${target.worktree || procCwd()}\nExpected head: ${target.head || 'current HEAD'}`
@@ -311,7 +343,7 @@ function reviewCodeLeaves(tiers, opts) {
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round, opts = {}) => {
     const tier = opts.tier || 'reviewer-deep'
-    const model = tier === 'reviewer' ? tiers.reviewer : tiers.reviewerDeep
+    const model = tier === 'reviewer' ? pinnedTier('reviewer') : pinnedTier('reviewerDeep')
     const workItem = (context && context.workItem) || context
     const promptContext = Object.assign({}, context || {}, {
       roundKind: opts.roundKind,
@@ -368,7 +400,7 @@ function reviewCodeLeaves(tiers, opts) {
       `showrunner/session cwd as the reality anchor.\n\n` +
       `Prompt context: ${JSON.stringify(promptContext)}\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
-      withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
+      withModel(pinnedTier('synthesis'), { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
     return out || null
   }
 
@@ -385,10 +417,10 @@ function reviewCodeLeaves(tiers, opts) {
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
-      const out = await agent(prompt, withModel(tiers.fixer, { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+      const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
       return normalizeFixResult(out, fixContext)
     }
-    const out = await agent(prompt, withModel(tiers.fixer, { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+    const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
     return normalizeFixResult(out, fixContext)
   }
 
