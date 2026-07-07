@@ -10,8 +10,12 @@ function clean(wi) {
 }
 
 ;(async () => {
-  clean('wi-round-state')
-  const runDir = '/tmp/showrunner-wi-round-state-review-plan'
+  // pid-unique work item: reviewDocPhase derives its runDir as the machine-global
+  // /tmp/showrunner-<wi>-review-plan, so a fixed name collides with a concurrent pytest
+  // suite on the same machine (see _final_review_probe.js for the flake story).
+  const WI = `wi-round-state-pid${process.pid}`
+  clean(WI)
+  const runDir = `/tmp/showrunner-${WI}-review-plan`
   fs.mkdirSync(runDir, { recursive: true })
   fs.writeFileSync(`${runDir}/deferred-set.json`, JSON.stringify({ 'A-1': 'Critical' }))
   const labels = []
@@ -44,7 +48,7 @@ function clean(wi) {
     return { ok: true }
   }
 
-  const out = await sr.reviewDocPhase('plan', 'wi-round-state')
+  const out = await sr.reviewDocPhase('plan', WI)
   const runtimeDeferredIds = out.runtimeDeferredIds || []
   assert.ok(labels.includes('save round state'))
   assert.strictEqual(labels.filter((label) => label === 'save round state').length, 1)

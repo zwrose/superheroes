@@ -10,6 +10,11 @@ const sr = require('../showrunner.js')
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 
+// pid-unique work item: the outcome envelope stages machine-global payload files derived from
+// the work-item name (/tmp/showrunner-<wi>-fronthalf-*.json*), so a fixed name collides with a
+// concurrent pytest suite on this machine (see _final_review_probe.js for the flake story).
+const WI = `wi-pid${process.pid}`
+
 const agentCalls = []
 global.agent = async (prompt, opts) => {
   agentCalls.push({ prompt: String(prompt), label: (opts && opts.label) || '' })
@@ -22,7 +27,7 @@ global.agent = async (prompt, opts) => {
 
 async function main() {
   agentCalls.length = 0
-  const r = await sr.frontHalfBoundary('wi')
+  const r = await sr.frontHalfBoundary(WI)
   assert.strictEqual(r.outcome, 'parked', 'the boundary parks')
   assert.strictEqual(r.phase, 'front-half-boundary', 'names the front-half boundary')
   // (b) envelope header is in the reason — produced in-process by the twin

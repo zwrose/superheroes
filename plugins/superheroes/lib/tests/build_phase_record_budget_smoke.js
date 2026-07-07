@@ -1,7 +1,23 @@
 require('./_smoke_checkout_root.js')
+// Pin cwd to the checkout root: buildPhase's final review runs REAL root-pinned helpers
+// (review_setup_gather.py), so repo-relative state only lines up when the smoke itself runs
+// from the root (pre-existing; see showrunner_fronthalf_phase_smoke.js for the story).
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('assert')
 const bp = require('../build_phase.js')
 const { routeMatches } = require('./_task_leaf_route.js')
+
+// pid-unique work item: buildPhase's final review derives a machine-global
+// /tmp/workhorse-<wi>-final-review dir from the work-item name, so a fixed name shares (and
+// reads) state with a concurrent pytest suite on this machine (see _final_review_probe.js for
+// the flake story). The dir is reaped on a passing exit; a failing run keeps it as evidence.
+const WI = `wi-pid${process.pid}`
+process.on('exit', (code) => {
+  if (code !== 0) return
+  try { require('fs').rmSync(`/tmp/workhorse-${WI}-final-review`, { recursive: true, force: true }) } catch (_) {}
+  try { require('fs').rmSync(`/tmp/showrunner-${WI}-review-plan`, { recursive: true, force: true }) } catch (_) {}
+})
+
 
 global.log = () => {}
 global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
@@ -51,7 +67,7 @@ function makeAgent(routes, labels) {
 
   globalThis.reviewerAgent = async () => []
   globalThis.recordDeferred = async () => {}
-  const r = await bp.buildPhase('wi', 5)
+  const r = await bp.buildPhase(WI, 5)
   assert.strictEqual(r.confidence, 'high')
   assert.deepStrictEqual(
     labels.filter((label) =>
