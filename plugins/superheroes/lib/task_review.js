@@ -18,8 +18,9 @@ function _partition(findings) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
     // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
     // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
-    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard so a
-    // falsy element routes to minors exactly as the Python twin's dict-shaped loop does (twin parity).
+    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard (as on
+    // the cannot_verify line above) so a falsy element routes to minors rather than blocking — the
+    // Python twin only ever receives dict findings, so this guard is JS-side defensiveness, not parity.
     if (f && circuitBreaker.isBlocking(f.severity)) blocking.push(f)
     else minors.push(f)
   }
