@@ -231,3 +231,38 @@ def test_one_field_error_degrades_not_fails(monkeypatch=None):
 def test_total_failure_returns_failure_sentinel():
     snap = preflight_readout.assemble("wi", "/root", readers=None, _force_total_failure=True)
     assert snap.get("ok") is False and snap.get("reason")
+
+
+# --- Task 5: Apply run overrides + re-validate on relaunch (FR-11, FR-14, UFR-5) ---
+
+
+def test_override_marks_row_and_takes_value():
+    ro = {"reviewer": {"engine": "codex", "effort": "xhigh"}}
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {}, ro)
+    rev = [r for r in rows if r["role"] == "reviewer" and r["phase"] == "review-plan"][0]
+    assert rev["engine"] == "codex" and rev["effort"] == "xhigh"
+    assert rev["overridden"] is True
+
+
+def test_non_overridden_rows_unchanged():
+    ro = {"reviewer": {"engine": "codex"}}
+    base = preflight_readout.enumerate_dispatch(_claude_prefs(), {})
+    with_ov = preflight_readout.enumerate_dispatch(_claude_prefs(), {}, ro)
+    author_base = [r for r in base if r["phase"] == "plan"][0]
+    author_ov = [r for r in with_ov if r["phase"] == "plan"][0]
+    assert author_base == author_ov  # no override on author -> byte-identical
+
+
+def test_unrecognized_engine_marked_not_dropped():
+    ro = {"reviewer": {"engine": "quantum"}}  # not in ENGINES
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {}, ro)
+    rev = [r for r in rows if r["role"] == "reviewer" and r["phase"] == "review-plan"][0]
+    assert rev["engine"] == "quantum" and rev.get("unrecognized") is True
+
+
+def test_reapply_revalidate_flags_now_invalid_override():
+    # a recorded override that is no longer a valid option is flagged, not silently applied (FR-14)
+    ro = {"reviewer": {"model": "gpt5"}}  # not in KNOWN_MODELS
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {}, ro)
+    rev = [r for r in rows if r["role"] == "reviewer" and r["phase"] == "review-plan"][0]
+    assert rev.get("overrideInvalid") is True

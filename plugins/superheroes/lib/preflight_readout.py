@@ -101,8 +101,35 @@ def enumerate_dispatch(prefs, tier_overrides, run_overrides=None):
 
 
 def _apply_override(row, ov):
-    """Apply a per-run override (engine/model/effort) to a row in place, marking it overridden.
-    A None/empty override is a no-op. Filled in by Task 5."""
+    """Apply a per-run override to a row in place. Sparse: only fields present are applied. An
+    invalid model/effort is flagged (overrideInvalid) not applied (FR-14); an engine outside
+    ENGINES is applied-but-marked unrecognized (UFR-5, the owner sees the raw value they asked for)."""
+    if not isinstance(ov, dict):
+        return row
+    applied = False
+    if "engine" in ov and isinstance(ov["engine"], str):
+        row["engine"] = ov["engine"]
+        applied = True
+        if ov["engine"] not in engine_pref.ENGINES:
+            row["unrecognized"] = True
+        # re-derive effort for the (possibly new) engine unless the override also pins effort
+        if "effort" not in ov:
+            row["effort"] = engine_pref.resolve_effort(row["engine"],
+                            ("review-deep" if row["kind"] == "review-deep" else row["kind"]), None)
+    if "model" in ov and isinstance(ov["model"], str):
+        if ov["model"] in model_tier_overrides.KNOWN_MODELS:
+            row["model"] = ov["model"]
+            applied = True
+        else:
+            row["overrideInvalid"] = True
+    if "effort" in ov and isinstance(ov["effort"], str):
+        if ov["effort"] in _EFFORT_TOKENS:
+            row["effort"] = ov["effort"]
+            applied = True
+        else:
+            row["overrideInvalid"] = True
+    if applied:
+        row["overridden"] = True
     return row
 
 
