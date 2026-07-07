@@ -61,8 +61,11 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
+// #275: ok is a BOOLEAN, not an untyped `{}` — an untyped ok invites the leaf to emit the string
+// "false" (truthy in JS), the shape that shipped a false merge-ready in the #219 run. Typed so a
+// schema-validated leaf retries a stringy ok at the source and any truthiness consumer stays honest.
+const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, error: { type: 'string' } } }
+const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -2564,7 +2567,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, rows: { type: 'array' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.

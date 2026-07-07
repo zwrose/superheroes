@@ -5388,6 +5388,20 @@ function _tasksDocPath(workItem) {
   return require('./showrunner.js').docPathFor(workItem, 'tasks')
 }
 
+// #275: the build leaf's structured-output schema. Constrain `ok` to a boolean and `signal` to the
+// three recovery signals so schema-validated output retries a stringy shape AT THE SOURCE — the #219
+// live escape was every build leaf returning `ok` as the string "false"/"true" past an untyped
+// {required:['ok']} schema, and "false" is truthy in JS. `evidence` is left unconstrained (it is not
+// consumed here, and the leaf sometimes emits it as a JSON string — don't force needless retries on it).
+const BUILD_LEAF_SCHEMA = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    signal: { enum: ['ok', 'needs_context', 'plan_wrong'] },
+  },
+}
+
 // #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
 // task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
@@ -5436,9 +5450,15 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), schema: BUILD_LEAF_SCHEMA }),
     })
-    if (worker.ok) {
+    // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
+    // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
+    // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
+    // an explicit refusal and recorded built:passed for zero commits. Only a genuine boolean `true`
+    // advances; anything else falls through to the recovery twin (which parks immediately on
+    // plan_wrong, UFR-3), keeping the untyped external-dispatch shape (#277) honest here too.
+    if (worker.ok === true) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
@@ -6233,8 +6253,11 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
+// #275: ok is a BOOLEAN, not an untyped `{}` — an untyped ok invites the leaf to emit the string
+// "false" (truthy in JS), the shape that shipped a false merge-ready in the #219 run. Typed so a
+// schema-validated leaf retries a stringy ok at the source and any truthiness consumer stays honest.
+const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, error: { type: 'string' } } }
+const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -8736,7 +8759,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, rows: { type: 'array' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
