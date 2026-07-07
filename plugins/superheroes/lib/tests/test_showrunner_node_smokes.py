@@ -165,6 +165,10 @@ SHOWRUNNER_SMOKES = [
     # a pinned frozen-snapshot value wins over the config-derived map; an unpinned field resolves
     # live; no snapshot present -> the config-derived maps are returned unchanged (rollback state).
     "plugins/superheroes/lib/tests/showrunner_preflight_freeze_smoke.js",
+    # spec showrunner-preflight-readout Task 10: roster-parity guard — preflight_readout.PHASES must
+    # equal showrunner.js's exported PHASES, so a phase add in the spine fails a test rather than
+    # silently under-reporting in the readout (Risk: roster drift).
+    "plugins/superheroes/lib/tests/showrunner_preflight_roster_smoke.js",
 ]
 
 
