@@ -283,3 +283,30 @@ def test_orchestration_none_is_not_unexpected():
     orch = [r for r in rows if r["kind"] == "orchestration"][0]
     assert orch["model"] is None
     assert not orch.get("unexpectedInherit")
+
+
+# --- Task 7: The JSON CLI (main) — the verified interface the skill shells (FR-1 plumbing, UFR-3) ---
+
+import io, json, contextlib
+
+
+def _run_cli(argv):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = preflight_readout.main(argv)
+    return code, buf.getvalue()
+
+
+def test_cli_assemble_emits_snapshot_json_exit_0_even_when_degraded(tmp_path):
+    # a real assemble over an empty root degrades fields but must still exit 0 with a snapshot
+    code, out = _run_cli(["assemble", "--work-item", "wi", "--root", str(tmp_path)])
+    obj = json.loads(out)
+    assert code == 0
+    assert "phases" in obj  # a snapshot, not a total-failure sentinel
+
+
+def test_cli_validate_override_emits_verdict():
+    code, out = _run_cli(["validate-override", "--role", "reviewer",
+                          "--field", "engine", "--value", "gpt"])
+    obj = json.loads(out)
+    assert obj["ok"] is False and "acceptedValues" in obj

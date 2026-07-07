@@ -342,3 +342,50 @@ def assemble(work_item, root, run_overrides=None, readers=None, _force_total_fai
             "calibration": {"status": (cal or {}).get("status"), "provisional": provisional},
             "verify": verify, "storage": storage, "degraded": degraded,
             "version": READOUT_VERSION}
+
+
+# --- Task 7: The JSON CLI (main) — the verified interface the skill shells (FR-1 plumbing, UFR-3) ---
+
+
+def main(argv):
+    import argparse
+    ap = argparse.ArgumentParser(prog="preflight_readout")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("assemble")
+    a.add_argument("--work-item", required=True)
+    a.add_argument("--root", default=".")
+    a.add_argument("--run-overrides", default=None, help="optional JSON {role:{engine?,model?,effort?}}")
+    r = sub.add_parser("render")
+    r.add_argument("--snapshot", required=True, help="a snapshot JSON string (from assemble)")
+    v = sub.add_parser("validate-override")
+    v.add_argument("--role", required=True)
+    v.add_argument("--field", required=True, choices=("engine", "model", "effort"))
+    v.add_argument("--value", required=True)
+    args = ap.parse_args(argv)
+    if args.cmd == "assemble":
+        ro = None
+        if args.run_overrides:
+            try:
+                ro = json.loads(args.run_overrides)
+            except (ValueError, json.JSONDecodeError):
+                ro = None
+        snap = assemble(args.work_item, args.root, ro)
+        sys.stdout.write(json.dumps(snap) + "\n")
+        return 0 if snap.get("ok", True) is not False else 1  # UFR-3: total failure -> non-zero
+    if args.cmd == "render":
+        try:
+            snap = json.loads(args.snapshot)
+        except (ValueError, json.JSONDecodeError):
+            sys.stdout.write("readout unavailable (unreadable snapshot)\n")
+            return 1
+        sys.stdout.write(render(snap) + "\n")
+        return 0
+    if args.cmd == "validate-override":
+        out = validate_override(args.role, args.field, args.value, {})
+        sys.stdout.write(json.dumps(out) + "\n")
+        return 0 if out.get("ok") else 1
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
