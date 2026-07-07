@@ -154,12 +154,13 @@ def test_severity_vocabulary_is_single_sourced():
     import review_telemetry
 
     # Python copy-holders (read at runtime) — every BLOCKING constant. #276 consolidated the blocking
-    # PARTITION decision into one predicate (circuit_breaker.is_blocking); loop_synthesis and
-    # review_panel_shell dropped their own blocking sets and now route through it, so they are no longer
-    # copy-holders. The remaining sets are the drift-guarded canonical vocabulary declarations.
+    # PARTITION decision into one predicate (circuit_breaker.is_blocking); loop_state, loop_synthesis
+    # and review_panel_shell dropped their own blocking sets and now route through it, so they are no
+    # longer copy-holders. The remaining sets are the drift-guarded canonical vocabulary declarations
+    # (review_loop_plan / review_memory / review_telemetry are non-gating reporting consumers that keep
+    # their own set — see the PR scope note).
     py_blocking = {
         "circuit_breaker.BLOCKING": set(circuit_breaker.BLOCKING),
-        "loop_state._BLOCKING": set(loop_state._BLOCKING),
         "loop_plan_common.BLOCKING": set(loop_plan_common.BLOCKING),
         "panel_tally.BLOCKING": set(panel_tally.BLOCKING),
         "review_loop_plan.BLOCKING": set(review_loop_plan.BLOCKING),

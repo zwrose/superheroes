@@ -4535,8 +4535,9 @@ function _partition(findings) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
     // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
     // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
-    // breaker's own stuck-detection so the two can never disagree.
-    if (circuitBreaker.isBlocking(f && f.severity)) blocking.push(f)
+    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard so a
+    // falsy element routes to minors exactly as the Python twin's dict-shaped loop does (twin parity).
+    if (f && circuitBreaker.isBlocking(f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }
