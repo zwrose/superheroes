@@ -605,11 +605,20 @@ let __verifyCheckSeq = 0
 function verifyEmit(out) {
   const wrapped = ';(async () => {\n' + out.replace(/export\s+const\s+meta/, 'const meta') + '\n})();'
   const tmp = path.join(os.tmpdir(), 'sr-bundle-check-' + process.pid + '-' + (++__verifyCheckSeq) + '.js')
+  // FAIL CLOSED on every failure mode (#295 review r2): an unrun verifier must never count as
+  // success. The stage-write and the exec are guarded SEPARATELY so a temp-write ENOENT (e.g. a
+  // missing TMPDIR) cannot be mistaken for the old "node binary unavailable" tolerance — and that
+  // tolerance is gone too: process.execPath is the node running this bundler, so an ENOENT from the
+  // exec is itself an environment fault worth stopping on, not a reason to skip the gate.
   try {
     fs.writeFileSync(tmp, wrapped)
+  } catch (e) {
+    throw new Error('verifyEmit could not stage the check file at ' + tmp + ' — the parse gate did ' +
+      'NOT run; fix the temp dir rather than emitting unverified: ' + String((e && e.message) || e))
+  }
+  try {
     execFileSync(process.execPath, ['--check', tmp], { stdio: 'pipe' })
   } catch (e) {
-    if (e && e.code === 'ENOENT') return   // node binary somehow unavailable — cannot verify, don't block emit
     throw new Error('emitted bundle failed `node --check` (stripper produced unparseable output): ' +
       String((e && e.stderr) || (e && e.message) || e))
   } finally {

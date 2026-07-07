@@ -135,3 +135,17 @@ console.log('OK: stripComments preserves template data, strips code comments/bla
   assert.strictEqual(stripComments(once), once, 'stripComments idempotent')
 }
 console.log('ok: line-continuation strings + determinism (#295 r1 second panel)')
+
+// ── #295 r2: verifyEmit fails CLOSED — an unrun verifier never counts as success ────────────────
+// (r2 premortem: the old ENOENT tolerance also swallowed a temp-write ENOENT, so a missing TMPDIR
+// silently skipped the parse gate.) Drive both failure modes in a child process.
+{
+  const { execFileSync } = require('child_process')
+  const probe = 'const b = require(' + JSON.stringify(require.resolve('../bundle_showrunner.js')) + ');\n'
+  // (a) busted TMPDIR: the stage-write fails -> verifyEmit must THROW, not return success.
+  const badTmp = 'try { b.emit(); console.log("BAD: emitted unverified") } catch (e) { console.log("ok-threw: " + (e.message.includes("did NOT run") ? "stage" : "other")) }'
+  const out1 = execFileSync(process.execPath, ['-e', probe + badTmp],
+    { env: Object.assign({}, process.env, { TMPDIR: '/no/such/dir/for/sr-strip-smoke' }), encoding: 'utf8', cwd: __dirname + '/..' })
+  assert.ok(out1.includes('ok-threw: stage'), 'busted TMPDIR fails closed (got: ' + out1.trim() + ')')
+}
+console.log('ok: verifyEmit fail-closed on temp-stage failure (#295 r2)')
