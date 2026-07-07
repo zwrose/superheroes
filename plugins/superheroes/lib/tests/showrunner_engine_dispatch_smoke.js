@@ -107,6 +107,67 @@ function makeAgent(routes) {
   console.log('OK: engine_dispatch write-path')
 
   // ---------------------------------------------------------------------
+  // #288: HONEST REFUSAL. The external build leaf refuses ({"ok":false,"signal":"plan_wrong"}) —
+  // parse-result no longer launders that to ok:true, so dispatchExternal must route it to the
+  // write-FAILURE path: return {ok:false, reason:'plan_wrong'} (the caller then discards uncommitted
+  // edits (UFR-2) + falls open to Claude, parking (UFR-3)), leave NO commit (a refusal must never be
+  // committed and recorded built:passed), and still journal exactly one external_dispatch audit line.
+  const execLogRefuse = []
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      execLogRefuse.push(prompt)
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) {
+        return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      }
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      }
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        // What the (fixed) parse_result returns for an honest refusal — an un-laundered ok:false.
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, signal: 'plan_wrong', reason: 'plan_wrong', evidence: { testFailed: true, testPassed: false } }) }]
+      }
+      if (prompt.includes('engine_adapter.py commit')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      }
+      if (prompt.includes('journal_entry.py')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('--sandbox')) {
+        return [{ index: 0, ok: true, stdout: '{"ok":false,"signal":"plan_wrong"}' }]
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rRefuse = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rRefuse.ok, false, '#288: an honest refusal must NOT dispatch as ok:true')
+  assert.strictEqual(rRefuse.reason, 'plan_wrong', '#288: the leaf refusal signal must survive as the dispatch reason')
+  assert.ok(!execLogRefuse.some((c) => c.includes('engine_adapter.py commit')),
+    '#288: a refused build must NEVER be committed (the adapter is the sole committer; commit runs only on ok:true)')
+  assert.ok(execLogRefuse.some((c) => c.includes('journal_entry.py') && c.includes('--event-type external_dispatch') && c.includes('plan_wrong')),
+    '#288: a refused build must still leave exactly one external_dispatch audit line carrying the refusal reason')
+
+  // Mutation guard: if parse-result were to launder the SAME refusal back to ok:true, dispatch would
+  // commit it and report ok:true — the exact #288 defect. Assert that shape is caught (would-be false pass).
+  const execLogLaunder = []
+  global.agent = makeAgent([
+    ['exec', (prompt) => {
+      execLogLaunder.push(prompt)
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
+      if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{"ok":false,"signal":"plan_wrong"}' }]
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }],
+  ])
+  const rLaunder = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, taskId: 'T1', workItem: 'wi-abc' })
+  assert.strictEqual(rLaunder.ok, true, 'control: a laundered ok:true DOES commit + pass — proving the refusal case above is load-bearing on parse_result, not on dispatch swallowing it')
+  assert.ok(execLogLaunder.some((c) => c.includes('engine_adapter.py commit')), 'control: the laundered shape reaches commit — which is exactly why parse_result must not emit it (#288)')
+
+  console.log('OK: engine_dispatch honest-refusal (#288)')
+
+  // ---------------------------------------------------------------------
   // UFR-5 timeout / UFR-6 unauditable / sec-101 commit-failure audit.
   // ---------------------------------------------------------------------
 
