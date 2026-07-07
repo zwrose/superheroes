@@ -48,16 +48,24 @@ def resolve_verify_from_profile(profile_path):
     return None, "none"
 
 
+# The cfg.tiers key -> (model_tier role, resolve context) map. The SINGLE named home for the
+# review-code tier vocabulary on the Python side; showrunner.js's _TIER_ROLE is its JS twin and the
+# tier-role drift smoke deepStrictEquals the two so a rename here fails CI. The fixer resolves in the
+# CODE context (mid-tier floor, sonnet) — never the doc context (opus); review-code only fixes code.
+_TIER_ROLE = {
+    "reviewer": ("reviewer", None),
+    "reviewerDeep": ("reviewer-deep", None),
+    "synthesis": ("synthesis", None),
+    "fixer": ("fixer", "code"),
+}
+
+
 def resolve_tiers(overrides):
     """The four leaf tiers (FR-7), honoring per-role profile overrides; None => inherit session.
-    The fixer is resolved in the CODE context (the mid-tier floor, sonnet) — never the doc context
-    (opus); review-code only ever fixes code."""
-    return {
-        "reviewer": model_tier.resolve_model("reviewer", overrides),
-        "reviewerDeep": model_tier.resolve_model("reviewer-deep", overrides),
-        "synthesis": model_tier.resolve_model("synthesis", overrides),
-        "fixer": model_tier.resolve_model("fixer", overrides, context="code"),
-    }
+    Resolved through the _TIER_ROLE vocabulary map (the SSOT for the cfg-key -> model_tier-role
+    mapping, drift-guarded against showrunner.js's _TIER_ROLE)."""
+    return {key: model_tier.resolve_model(role, overrides, context)
+            for key, (role, context) in _TIER_ROLE.items()}
 
 
 def resolve(cwd, root=None):

@@ -609,12 +609,21 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
     // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
     try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
+    // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
+    // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
+    // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
+    // leaf, but IMPLICIT: the preflight readout's builder row (model_tier role) then disagreed with the
+    // dispatch (readout showed the tier's model, dispatch showed the safeSmartDefault fallthrough), and a
+    // per-run builder-model override could never REACH the dispatch (no `model` option existed to carry
+    // it). resolveModel('builder') defaults to the same opus (no behavior change in the default config)
+    // AND makes the readout row + dispatch share one source (NFR-Accuracy) + lets an override land here.
+    const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: BUILD_LEAF_SCHEMA }),
+        { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
     // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence.
     // Record it on both carriers (recordBuildDenialIfAny); a failed fail-closed carrier parks here.

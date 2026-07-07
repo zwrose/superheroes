@@ -9,7 +9,14 @@ const DEFAULT_TIERS = {
   synthesis: 'opus',
   fixer: 'sonnet',
   author: 'opus',
+  builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
 }
+
+// The accepted-model set — twin of model_tier_overrides.KNOWN_MODELS (the Python validator's domain).
+// This is NOT DEFAULT_TIERS' value set (which omits 'fable', a valid but non-default model). The
+// freeze-consume merge boundary validates a snapshot's pinned model against this before pinning it,
+// mirroring the producer's refusal posture. Drift-guarded against the Python home by test_ssot_drift.py.
+const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable']
 
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
 
@@ -46,4 +53,4 @@ function resolveModel(role, overrides, context) {
   return def   // malformed (non-str / empty) -> default
 }
 
-module.exports = { resolveModel, DEFAULT_TIERS }
+module.exports = { resolveModel, DEFAULT_TIERS, KNOWN_MODELS }

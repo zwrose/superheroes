@@ -24,6 +24,7 @@ _FALLBACK = {
     "synthesis": "opus",
     "fixer": "sonnet",
     "author": "opus",
+    "builder": "opus",
     "author-plan": "opus",
 }
 

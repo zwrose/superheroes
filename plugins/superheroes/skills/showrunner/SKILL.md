@@ -40,6 +40,77 @@ state is; a never-started showrunner pick simply re-enters here.
    literal the launch step (2) declares to the spine. Read `route` from the verdict; do not
    free-type it.
 
+1.5. **Preflight readout — confirm/override the run (the one interactive surface).** After the
+   gate passes, show the owner exactly what the confirmed run will dispatch and let them override
+   any overridable role for this run, then confirm. **No agent dispatches before this confirm**
+   (FR-1). Read the recorded per-run overrides first, so a relaunch re-renders with what was
+   already accepted (FR-9/FR-14):
+
+   ```bash
+   OV=$(python3 - "$LIB" "<work-item>" "$ROOT" <<'PY'
+   import sys, json
+   sys.path.insert(0, sys.argv[1]); import run_overrides
+   print(json.dumps(run_overrides.read(sys.argv[2], sys.argv[3]).get("overrides") or {}))
+   PY
+   )
+   ```
+
+   - **Assemble** the snapshot from the run's own resolvers (never a parallel table), carrying the
+     accumulated overrides so the render matches dispatch:
+
+     ```bash
+     python3 "$LIB/preflight_readout.py" assemble --work-item "<work-item>" --root "$ROOT" \
+       --run-overrides "$OV"
+     ```
+
+     Parse the snapshot JSON. On a **total-failure sentinel** (`ok:false`), print its `reason` +
+     `remediation` and **STOP** — do not launch (UFR-3, fail-closed, matching the gate's posture).
+     A snapshot with a non-empty `degraded[]` is NOT a failure: each degraded field renders as
+     `unavailable` and the run still proceeds (UFR-2).
+
+   - **Render** the readout and print it verbatim (or render in-process via a heredoc, like the
+     run-end readout in step 3):
+
+     ```bash
+     python3 "$LIB/preflight_readout.py" render --snapshot "$SNAPSHOT_JSON"
+     ```
+
+     A recorded override that is **no longer valid** prints on its own phase line as
+     `recorded override no longer valid, NOT applied ⚠` — carried, not silently applied (FR-14).
+     A role whose engine is unauthorized prints on its own row as `falls back to Claude ⚠`
+     (FR-4). Provisional (not owner-confirmed) calibration is flagged; the verify command and the
+     storage mode + docs read/write location are named.
+
+   - **Ask the owner** via the host **ask primitive** (resolve per the host tool map), and loop:
+     - **Confirm** → freeze the snapshot + persist any accepted overrides to the durable per-run
+       record, then proceed to step 2 (launch). The spine reads this frozen snapshot at startup so
+       dispatch honors it even if config is edited afterward (FR-8/FR-13):
+
+       ```bash
+       python3 - "$LIB" "<work-item>" "$ROOT" "$OV" "$SNAPSHOT_JSON" <<'PY'
+       import sys, json
+       sys.path.insert(0, sys.argv[1]); import run_overrides
+       run_overrides.write(sys.argv[2], sys.argv[3], json.loads(sys.argv[4] or "{}"),
+                           json.loads(sys.argv[5]))
+       PY
+       ```
+
+     - **Override** → collect `role`, `field` (engine/model/effort), and `value`, then gate it:
+
+       ```bash
+       python3 "$LIB/preflight_readout.py" validate-override \
+         --role "<role>" --field "<field>" --value "<value>"
+       ```
+
+       On `ok:false`, show the verdict's `acceptedValues` + `reason`, keep the currently-effective
+       value, and re-prompt (UFR-6). On `ok:true`, fold the accepted `{role:{field:value}}` into
+       `$OV`, re-assemble (`--run-overrides "$OV"`), re-render (the overridden line marked, all
+       others unchanged, FR-11), and re-confirm.
+
+     - **Decline** → abort the launch immediately: **no `run_overrides.write`, no bundle launch,
+       the run is not marked started, no branch or PR touched** (UFR-1). Print a plain
+       `aborted, no changes` line and stop.
+
 2. **Launch the bundle on the Workflow tool.** Read the committed, self-contained bundle and
    invoke the **Workflow tool** with that script and the work-item argument — never re-bundle or
    edit the spine here:

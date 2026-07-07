@@ -184,6 +184,22 @@ SHOWRUNNER_SMOKES = [
     # output-token deltas) and the spine's best-effort phase_cost / run_completed emit path.
     "plugins/superheroes/lib/tests/showrunner_cost_meter_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_cost_emit_smoke.js",
+    # spec showrunner-preflight-readout Task 9: the pin-or-resolve fork (FR-8, UFR-2 second clause) —
+    # a pinned frozen-snapshot value wins over the config-derived map; an unpinned field resolves
+    # live; no snapshot present -> the config-derived maps are returned unchanged (rollback state).
+    "plugins/superheroes/lib/tests/showrunner_preflight_freeze_smoke.js",
+    # spec showrunner-preflight-readout Task 10: roster-parity guard — preflight_readout.PHASES must
+    # equal showrunner.js's exported PHASES, so a phase add in the spine fails a test rather than
+    # silently under-reporting in the readout (Risk: roster drift).
+    "plugins/superheroes/lib/tests/showrunner_preflight_roster_smoke.js",
+    # freeze-consume hardening (B): the JS consumer's READOUT_VERSION is a COPY of the Python writer's
+    # preflight_readout.READOUT_VERSION — dumped via python3 -c and asserted equal, so a Python bump
+    # that isn't mirrored in the migration gate fails CI (roster-parity pattern).
+    "plugins/superheroes/lib/tests/showrunner_freeze_version_drift_smoke.js",
+    # freeze-consume hardening (E): showrunner.js's _TIER_ROLE (review-code tier vocabulary) must match
+    # review_code_config._TIER_ROLE AND appear in preflight_readout._PHASE_ROLES — a rename on either
+    # Python home fails CI rather than silently mis-routing a frozen pin.
+    "plugins/superheroes/lib/tests/showrunner_reviewcode_tier_role_drift_smoke.js",
 ]
 
 

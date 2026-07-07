@@ -62,6 +62,17 @@ def test_synthesis_role_is_opus():
     assert MT.resolve_model("synthesis") == "opus"
 
 
+def test_builder_role_defaults_to_opus():
+    # The native build-phase implementer is a smart leaf; owner model governance defaults it to opus.
+    # This is the tier the preflight readout's builder row AND build_phase.js's dispatch both resolve.
+    assert MT.resolve_model("builder") == "opus"
+
+
+def test_builder_override_wins():
+    assert MT.resolve_model("builder", {"builder": "sonnet"}) == "sonnet"
+    assert MT.resolve_model("reviewer", {"builder": "sonnet"}) == "sonnet"  # untouched -> default
+
+
 def test_fixer_role_defaults_to_sonnet_code_fixer():
     assert MT.resolve_model("fixer") == "sonnet"          # no context = code-fixer floor
     assert MT.resolve_model("fixer", context="code") == "sonnet"
