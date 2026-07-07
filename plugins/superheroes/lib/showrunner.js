@@ -224,6 +224,17 @@ const PROBE_STEERING =
   'project test-run family (e.g. pytest / the repo test command); do not improvise inline interpreter ' +
   'one-liners (python3 -c / node -e) — those are not on the allowed probe path and will stall on a permission prompt.'
 
+// Task 10 (FR-2) reviewer-side denial flag: TIMEOUT_PROCEED_CONTRACT tells a reviewer to proceed and
+// report a denied probe honestly IN PROSE, but ensureReviewerShape only degrades a dimension when the
+// STRUCTURED result carries permissionDenied:true — a reviewer that only narrates the denial in prose
+// never sets the flag, so the degradation branch is unreachable. This sentence closes that gap: it is
+// the reviewer-specific instruction (the builder/leaf prompt uses its own `deniedAction` field instead,
+// since the shell — not a structured contract keyword — decides what happens to a build denial).
+const REVIEWER_DENIAL_FLAG =
+  'If the 15-minute timeout fired on YOUR verification probe (you proceeded without actually verifying), ' +
+  'set "permissionDenied":true in your JSON result (in addition to reporting it honestly in prose) — this ' +
+  'is what tells the review loop your dimension was not actually verified.'
+
 // Task 11 (FR-1/UFR-6) 15-minute proceed contract: the enforcer stays synchronous, so the timeout bound
 // lives in the dispatched instruction. If an action awaits owner permission unanswered for 15 minutes,
 // the leaf proceeds without it and reports the denied action HONESTLY — never as done. The spine absorbs
@@ -362,7 +373,7 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT}` +
+      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT} ${REVIEWER_DENIAL_FLAG}` +
       `${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     // Task 10 (FR-2): thread the reviewer identity + the run's journal path so ensureReviewerShape can
     // tag a denied-probe permission_denied event to `review:<reviewer>`. eventsPath rides context when
@@ -478,6 +489,7 @@ module.exports.ensureReviewerShape = ensureReviewerShape
 module.exports.reviewCodeLeaves = reviewCodeLeaves
 module.exports.PROBE_STEERING = PROBE_STEERING
 module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
+module.exports.REVIEWER_DENIAL_FLAG = REVIEWER_DENIAL_FLAG
 // Task 10 seam: the denial recorder is overridable for the smoke harness. Read/write it through the
 // mutable holder so an assignment (`sr._denialRecorder = fn`) actually rebinds what ensureReviewerShape
 // calls.
@@ -1845,6 +1857,12 @@ async function reviewCodePhase(workItem, opts) {
   let resolvedConfig = null
   let cwdHeadBefore = null
   let resolvedViaGather = false
+  // Task 10 (FR-2/UFR-3): the run's events.jsonl path, threaded through context so a denied reviewer
+  // probe's permission_denied event lands in the SAME journal the readout later reads (UFR-3
+  // disclosure). opts.eventsPath lets a caller/smoke override it directly; otherwise it rides the
+  // resolver's gather below. Absent -> the denial still degrades the dimension, just without a
+  // journal line (fail-open, UFR-2) — the gate protection never depends on this path resolving.
+  let resolvedEventsPath = opts.eventsPath || null
   if (!opts.worktree) {
     const resolver = opts.resolveTarget || resolveBuildTarget
     const resolved = await resolver(workItem)
@@ -1862,6 +1880,7 @@ async function reviewCodePhase(workItem, opts) {
     resolvedConfig = _coerceObj(resolved.config)
     cwdHeadBefore = resolved.cwdHead || null
     resolvedViaGather = true
+    if (!resolvedEventsPath) resolvedEventsPath = resolved.eventsPath || null
   }
   const initialHead = resolvedHead || null
   // The head re-check only fires when the head was supplied EXTERNALLY (opts.expectedHead —
@@ -1891,7 +1910,7 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, eventsPath: resolvedEventsPath },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
     preloaded: setup || undefined,
@@ -1990,7 +2009,7 @@ const buildPhase = (workItem, generation) => require('./build_phase.js').buildPh
 // Returns {worktree, expectedHead, config, cwdHead} or null on any failure (caller parks on null).
 async function resolveBuildTarget(workItem) {
   const script = [
-    'import json, subprocess, sys',
+    'import json, os, subprocess, sys',
     'wi = sys.argv[1]',
     'setup = None',
     'for _ in range(2):',
@@ -2030,7 +2049,18 @@ async function resolveBuildTarget(workItem) {
     '        cwd_head = r.stdout.strip()',
     'except Exception:',
     '    cwd_head = None',
-    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head}))',
+    // Task 10 (FR-2/UFR-3) wiring: this leaf already resolves the work item, so it is the cheapest
+    // place to also resolve the run's events.jsonl path (control_plane.paths keys off cwd + work-item —
+    // no separate leaf). Best-effort: an events-path resolution failure must not fail the whole gather
+    // (the reviewer denial flag still degrades the dimension even with no journal line — fail-open).
+    'events_path = None',
+    'try:',
+    '    sys.path.insert(0, "plugins/superheroes/lib")',
+    '    import control_plane',
+    '    events_path = control_plane.paths(os.getcwd(), wi)["events"]',
+    'except Exception:',
+    '    events_path = None',
+    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head, "eventsPath": events_path}))',
   ].join('\n')
   let setup = null
   try {
@@ -2048,6 +2078,7 @@ async function resolveBuildTarget(workItem) {
     expectedHead: setup.expectedHead,
     config: setup.config != null ? setup.config : null,
     cwdHead: setup.cwdHead || null,
+    eventsPath: setup.eventsPath || null,
   }
 }
 

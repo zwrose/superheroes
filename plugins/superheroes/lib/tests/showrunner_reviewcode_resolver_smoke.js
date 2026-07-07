@@ -21,11 +21,12 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────────
   const RESOLVED_WT = '/tmp/resolved-build-wt'
   const RESOLVED_HEAD = 'resolved-head-abc123'
+  const RESOLVED_EVENTS_PATH = '/tmp/resolved-store/events.jsonl'
   let resolverCalled = false
   const resolveTarget = async (wi) => {
     resolverCalled = true
     assert.strictEqual(wi, 'wi-resolver-a', 'resolver receives the work-item')
-    return { worktree: RESOLVED_WT, expectedHead: RESOLVED_HEAD }
+    return { worktree: RESOLVED_WT, expectedHead: RESOLVED_HEAD, eventsPath: RESOLVED_EVENTS_PATH }
   }
 
   // Collect prompts to verify the resolved worktree is targeted.
@@ -81,6 +82,12 @@ async function main() {
     reviewerPrompt.prompt.includes(RESOLVED_HEAD),
     `reviewer prompt names the resolved head (got: ${reviewerPrompt && reviewerPrompt.prompt.slice(0, 300)})`
   )
+  // Task 10 (FR-2/UFR-3): the resolver's eventsPath must ride the reviewer's prompt context so a
+  // denied probe's permission_denied event lands in the run's OWN journal (not silently dropped).
+  assert.ok(
+    reviewerPrompt.prompt.includes(RESOLVED_EVENTS_PATH),
+    `reviewer prompt context carries the resolved eventsPath (got: ${reviewerPrompt && reviewerPrompt.prompt.slice(0, 400)})`
+  )
 
   // ─────────────────────────────────────────────────────────────────────────
   // (b) When resolveTarget returns null -> PARKS (changes-requested), names "could not resolve",
@@ -131,8 +138,8 @@ async function main() {
   // 'reused' -> resolves the worktree + head
   global.agent = execStubForOutcome('reused')
   const reused = await sr.resolveBuildTarget('wi-real-reused')
-  assert.deepStrictEqual(reused, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef', config: null, cwdHead: null },
-    `'reused' outcome resolves {worktree, expectedHead} (+ folded config/cwdHead, null when absent) (got: ${JSON.stringify(reused)})`)
+  assert.deepStrictEqual(reused, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef', config: null, cwdHead: null, eventsPath: null },
+    `'reused' outcome resolves {worktree, expectedHead} (+ folded config/cwdHead/eventsPath, null when absent) (got: ${JSON.stringify(reused)})`)
 
   // 'created' -> fail-closed: returns null (never certifies a fresh empty build worktree)
   global.agent = execStubForOutcome('created')
@@ -142,7 +149,7 @@ async function main() {
   // missing outcome (older build_entry.py) -> permissive, resolves normally
   global.agent = execStubForOutcome(undefined)
   const legacy = await sr.resolveBuildTarget('wi-real-legacy')
-  assert.deepStrictEqual(legacy, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef', config: null, cwdHead: null },
+  assert.deepStrictEqual(legacy, { worktree: '/tmp/real-build-wt', expectedHead: 'real-head-deadbeef', config: null, cwdHead: null, eventsPath: null },
     `missing outcome stays permissive (got: ${JSON.stringify(legacy)})`)
 
   console.log('ok: FIX A — resolveTarget seam targets build worktree + null-resolver parks; resolveBuildTarget fail-closes on a created worktree')

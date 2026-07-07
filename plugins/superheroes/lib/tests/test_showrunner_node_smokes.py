@@ -94,6 +94,10 @@ SHOWRUNNER_SMOKES = [
     # #115 courier-drop retry: execJson/execText retry the cheap haiku exec courier ONCE on a
     # dropped/garbled stdout (journal recover/park/no-retry-on-real-fail/happy-path + read-gate recover).
     "plugins/superheroes/lib/tests/build_phase_courier_retry_smoke.js",
+    # UFR-6/UFR-8 (permission posture): a build leaf's deniedAction (a substantive step the 15-min
+    # timeout denied) is instructed in buildLeafPrompt AND recorded via prov_entry's build-denial
+    # step, tainting provenance so the ship gate later GATEs.
+    "plugins/superheroes/lib/tests/build_phase_denial_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.

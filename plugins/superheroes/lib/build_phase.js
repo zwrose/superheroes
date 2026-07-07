@@ -447,8 +447,11 @@ function buildLeafPrompt({ wt, branch, task }) {
     + `run to observe FAIL, implement, run to observe PASS. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} `
     + `trailer in the FINAL paragraph of the commit message with no blank line between it and any `
-    + `other trailer (e.g. Co-Authored-By). ${contract} Return JSON `
-    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + `other trailer (e.g. Co-Authored-By). ${contract} If the 15-minute timeout fired on ANY `
+    + `substantive step (not a verification probe — an actual implementation/commit action), set `
+    + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
+    + `to null — never fabricate a completed step you were denied. Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
   )
 }
 
@@ -476,6 +479,21 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
         _leafPrompt,
         { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
     })
+    // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence —
+    // record it via prov_entry's build-denial step (ship_gate.record_build_denial) so the ship gate
+    // (ship_gate.decide) GATEs and the draft-hold path holds the PR a draft, REGARDLESS of whether the
+    // leaf still reports ok:true for the rest of the task. Best-effort + fail-open (UFR-2): a recording
+    // failure never derails the build (the honest report already happened in the leaf's JSON; this is
+    // the durable evidence trail, not the sole signal).
+    if (worker && worker.deniedAction) {
+      try {
+        await execJson(
+          `python3 ${LIB}/prov_entry.py --step build-denial --work-item ${shq(workItem)} `
+          + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(String(worker.deniedAction))}`,
+          'record build denial',
+        )
+      } catch (_e) { /* fail-open: never let a denial recording failure derail the build */ }
+    }
     if (worker.ok) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
