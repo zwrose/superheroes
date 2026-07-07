@@ -124,3 +124,47 @@ def test_render_labels_a_default_row():
     snap["phases"][0]["configuredOrDefault"] = "default"
     text = preflight_readout.render(snap)
     assert "[default]" in text
+
+
+# --- Task 3: validate_override — the pure override gate (FR-10, UFR-6) ---
+
+def _rows_by_role():
+    return {r["role"]: r for r in preflight_readout.enumerate_dispatch(_claude_prefs(), {})}
+
+
+def test_valid_engine_override_accepted():
+    snap = _snapshot_default()
+    out = preflight_readout.validate_override("reviewer", "engine", "codex", snap)
+    assert out["ok"] is True and out["accepted"] == "codex"
+
+
+def test_invalid_engine_rejected_with_accepted_values():
+    snap = _snapshot_default()
+    out = preflight_readout.validate_override("reviewer", "engine", "gpt", snap)
+    assert out["ok"] is False
+    assert set(out["acceptedValues"]) == set(preflight_readout.preflight_readout_engines())  # engine_pref.ENGINES
+
+
+def test_invalid_model_rejected_with_accepted_values():
+    snap = _snapshot_default()
+    out = preflight_readout.validate_override("reviewer", "model", "gpt5", snap)
+    assert out["ok"] is False
+    assert "sonnet" in out["acceptedValues"] and "opus" in out["acceptedValues"]
+
+
+def test_orchestration_role_is_not_overridable():
+    snap = _snapshot_default()
+    out = preflight_readout.validate_override("orchestrator", "model", "opus", snap)
+    assert out["ok"] is False and "orchestration" in out["reason"].lower()
+
+
+def test_effort_override_valid_for_codex():
+    snap = _snapshot_default()
+    out = preflight_readout.validate_override("reviewer", "effort", "xhigh", snap)
+    assert out["ok"] is True and out["accepted"] == "xhigh"
+
+
+def test_unknown_field_rejected():
+    snap = _snapshot_default()
+    out = preflight_readout.validate_override("reviewer", "storage", "x", snap)
+    assert out["ok"] is False

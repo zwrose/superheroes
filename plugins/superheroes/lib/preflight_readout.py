@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import model_tier
 import engine_pref
 import engine_adapter  # for the external-engine display model constants (single source of truth)
+import model_tier_overrides
 
 READOUT_VERSION = 1
 
@@ -180,3 +181,34 @@ def render(snapshot):
     # Privacy note (spec NFR): verify/storage strings echo verbatim, owner-only. Revisit redaction
     # before ever routing readout content to a shared destination (out of scope here).
     return "\n".join(lines)
+
+
+_EFFORT_TOKENS = ("none", "low", "medium", "high", "xhigh", "composer")
+
+
+def preflight_readout_engines():
+    return list(engine_pref.ENGINES)
+
+
+def validate_override(role, field, value, snapshot):
+    """Pure. ok:false + accepted set for an invalid engine/model/effort (UFR-6) or the
+    non-overridable orchestration role (FR-10). ok:true echoing the concrete value otherwise.
+    Accepted sets come from the resolvers' own domains — never re-hardcoded here."""
+    if role == "orchestrator":
+        return {"ok": False, "reason": "the orchestration role is session-inherited and not overridable"}
+    if field == "engine":
+        if isinstance(value, str) and value in engine_pref.ENGINES:
+            return {"ok": True, "accepted": value}
+        return {"ok": False, "acceptedValues": list(engine_pref.ENGINES),
+                "reason": "not a valid engine"}
+    if field == "model":
+        if isinstance(value, str) and value in model_tier_overrides.KNOWN_MODELS:
+            return {"ok": True, "accepted": value}
+        return {"ok": False, "acceptedValues": list(model_tier_overrides.KNOWN_MODELS),
+                "reason": "not a valid model"}
+    if field == "effort":
+        if isinstance(value, str) and value in _EFFORT_TOKENS:
+            return {"ok": True, "accepted": value}
+        return {"ok": False, "acceptedValues": list(_EFFORT_TOKENS),
+                "reason": "not a valid effort"}
+    return {"ok": False, "reason": "field must be one of engine, model, effort"}
