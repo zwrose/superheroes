@@ -191,6 +191,29 @@ async function main() {
   }
 
   {
+    // #279 boundary: the corrective re-run is scoped to verifyResult === 'fail' ONLY. A 'timeout' is a
+    // real terminal signal (not a transient flake), so it must NOT earn the re-run — verify runs once
+    // and the round halts. Pins the fail-vs-timeout distinction the guard intentionally draws.
+    const dir = freshDir()
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => cleanResult(runDir, round, opts)
+    const prevAgent = global.agent
+    let verifyCalls = 0
+    global.agent = async (prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        const payload = { result: 'timeout', code: null, tail: 'verify timed out after 600000ms' }
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'), JSON.stringify(payload))
+        return payload
+      }
+      return null
+    }
+    v = await reviewPanel({ ...base(dir), legKind: { panel: false, code: true }, verifyCommand: 'run-tests' })
+    global.agent = prevAgent
+    assert.strictEqual(v.terminal, 'halted', '#279: a verify timeout halts (not re-run)')
+    assert.strictEqual(verifyCalls, 1, '#279: timeout must NOT earn the corrective re-run (verify runs once)')
+  }
+
+  {
     const dir = freshDir()
     const seen = []
     const fixRounds = []

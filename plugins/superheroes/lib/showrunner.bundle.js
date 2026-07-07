@@ -2022,8 +2022,12 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       // (precedent: #212 corrective retry / fix-before-park). A round with blocking findings takes the
       // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
       if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
+        try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
         try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
         catch (e) { verifyResult = 'fail' }
+        // Surface the flake vs the real regression: a fail→pass flip means the verify gate is flaky
+        // (worth investigating the infra cause); a fail→fail confirms a genuine failure (halts below).
+        try { log(`review-panel r${round}: corrective re-run verify → ${verifyResult}`) } catch (_) {}
       }
     }
 

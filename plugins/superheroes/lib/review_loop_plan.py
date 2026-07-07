@@ -89,10 +89,12 @@ def _clamp_reason(text):
 def _verify_tail(records_path, round_no):
     """A clamped, single-line head of the round's verify-gate output, for the #279 honest park reason.
     `records_path` is round-records.json; the verify result sits beside it as verify-result-r{N}.json
-    ({"result","code","tail"}, written by verify_gate.py). The tail is untrusted subprocess output, so
-    collapse whitespace and clamp to _MAX_VERIFY_TAIL here at the sink. Fail-soft to '' — a missing or
-    garbled verify file must never break the tally; the reason still parks, just without the
-    breadcrumb."""
+    ({"result","code","tail"}, written by verify_gate.py). The stored tail is already the LAST ~2000
+    chars of the run's output, and test runners (jest/vitest/pytest) print the failure summary + error
+    LAST — so keep the END of the tail, not the head (the head is lead-in progress noise). The tail is
+    untrusted subprocess output, so collapse whitespace and clamp to _MAX_VERIFY_TAIL here at the sink.
+    Fail-soft to '' — a missing or garbled verify file must never break the tally; the reason still
+    parks, just without the breadcrumb."""
     try:
         beside = os.path.join(os.path.dirname(records_path),
                               "verify-result-r%d.json" % round_no)
@@ -103,7 +105,7 @@ def _verify_tail(records_path, round_no):
         collapsed = " ".join(tail.split())
         if len(collapsed) <= _MAX_VERIFY_TAIL:
             return collapsed
-        return collapsed[:_MAX_VERIFY_TAIL].rstrip() + "…"
+        return "…" + collapsed[-_MAX_VERIFY_TAIL:].lstrip()
     except Exception:  # noqa: BLE001 — a missing/garbled verify file must not break the tally
         return ""
 

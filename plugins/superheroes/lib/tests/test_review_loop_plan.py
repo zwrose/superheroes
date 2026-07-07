@@ -340,17 +340,20 @@ def test_tally_verify_fail_reason_carries_clamped_error_head(tmp_path):
     assert "Failed to resolve import" in ans["reason"]
 
 
-def test_tally_verify_fail_reason_clamps_a_long_tail(tmp_path):
-    # #279 the untrusted tail is clamped at the sink (the reason flows into journals + readouts).
+def test_tally_verify_fail_reason_clamps_a_long_tail_keeping_the_end(tmp_path):
+    # #279 the untrusted tail is clamped at the sink (the reason flows into journals + readouts), and
+    # the END of the tail is kept — test runners print the failure line LAST, so a head-slice would
+    # surface progress noise. The marker sits at the very end of a long tail; it must survive.
     recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
     path = _write_records(tmp_path, recs)
     (tmp_path / "verify-result-r1.json").write_text(json.dumps(
-        {"result": "fail", "code": 1, "tail": "x" * 5000}))
+        {"result": "fail", "code": 1, "tail": ("progress noise " * 400) + "REAL_FAILURE_MARKER"}))
     ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
     assert ans["terminal"] == "halted"
-    # stage prefix + clamped tail (<=160) + ellipsis — well under the reason bound.
+    # stage prefix + leading ellipsis + clamped tail (<=160) — well under the reason bound.
     assert len(ans["reason"]) < 220
-    assert ans["reason"].endswith("…")
+    assert "REAL_FAILURE_MARKER" in ans["reason"], "the trailing failure summary must survive the clamp"
+    assert "…" in ans["reason"]
 
 
 def test_tally_verify_timeout_reason_names_the_stage(tmp_path):
