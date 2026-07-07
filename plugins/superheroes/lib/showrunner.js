@@ -1825,23 +1825,22 @@ function startupStateScript() {
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
-    // FR-8: the frozen preflight-readout snapshot + accepted per-run overrides ride the SAME startup
-    // gather (no new startup leaf — respect the #118 two-leaf budget). run_overrides.read is itself
-    // fail-open; any failure here degrades to no-overrides/no-snapshot, so the run resolves live
-    // exactly as it does pre-readout (the rollback state).
-    'frozen_overrides = {}',
+    // FR-8: the frozen preflight-readout snapshot rides the SAME startup gather (no new startup leaf
+    // — respect the #118 two-leaf budget). run_overrides.read is itself fail-open; any failure here
+    // degrades to no-snapshot, so the run resolves live exactly as it does pre-readout (the rollback
+    // state). Only frozen_snapshot is consumed (mergeFrozenSnapshot folds ALL its concrete rows over
+    // the config-derived maps); the record's separate `overrides` field is NOT read here — the
+    // snapshot's per-row `overridden` values already ride the frozen rows, so a second copy would be
+    // a producer without a consumer.
     'frozen_snapshot = None',
     'try:',
     '    import run_overrides',
     '    _rec = run_overrides.read(wi, root)',
     '    if isinstance(_rec, dict):',
-    '        _fo = _rec.get("overrides")',
-    '        frozen_overrides = _fo if isinstance(_fo, dict) else {}',
     '        frozen_snapshot = _rec.get("frozenSnapshot")',
     'except Exception:',
-    '    frozen_overrides = {}',
     '    frozen_snapshot = None',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate, "frozen_overrides": frozen_overrides, "frozen_snapshot": frozen_snapshot}))',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate, "frozen_snapshot": frozen_snapshot}))',
   ].join('\n')
 }
 
@@ -1864,13 +1863,33 @@ async function readStartupState(workItem) {
   }
 }
 
-// Pure pin-or-resolve fork (FR-8, UFR-2 second clause). Fold the frozen snapshot's pinned per-role
-// values over the config-derived model-tier + engine-pref maps: a role the snapshot PINS wins; a
-// role it left unavailable (no pin) keeps the config-derived resolve-live value. Behavior-preserving
-// when no snapshot is present — the config-derived maps are returned unchanged (the rollback state).
-// The frozen snapshot rows carry {role, engine?, model?, effort?} (preflight_readout's row shape);
-// only a row explicitly `overridden` seeds a pin, so a merely-rendered (non-overridden) row never
-// silently pins the config-derived value it merely echoed.
+// Pure freeze fork (FR-8). Fold the frozen preflight-readout snapshot's per-role dispatch values
+// over the config-derived model-tier + engine-pref maps so the run dispatches with the EXACT
+// settings the confirmed readout displayed — a snapshot frozen at confirmation, regardless of any
+// config edit made in the confirm window (FR-8 acceptance bullet 2). Every row that displayed a
+// concrete, recognized value is pinned — NOT only rows the owner overrode; a merely-rendered row's
+// displayed value is just as much part of the frozen render, and pinning it is what keeps a later
+// config edit from leaking into dispatch. Behavior-preserving when no snapshot is present: the
+// config-derived maps are returned unchanged (the rollback state), so the seed is byte-equivalent
+// to pre-readout — mergeFrozenSnapshot(null, …) and an empty snapshot both pass config through live.
+//
+// The frozen snapshot rows carry preflight_readout's row shape ({phase, role, roleLabel, engine,
+// model, effort, kind, …flags}). Exclusions — each row NOT pinned, and why:
+//   - kind 'orchestration' (role 'orchestrator'): session-inherited by design (FR-3); never pinned
+//     so the run inherits the live session model at dispatch.
+//   - kind 'none' (draft-PR / mark-ready): a deterministic spine step that dispatches no agent —
+//     nothing to pin.
+//   - a row flagged `unavailable`: no snapshot value existed (a per-field read degraded, UFR-2);
+//     FR-8 says the run resolves that phase normally at dispatch, so leave it live (no pin).
+//   - a row flagged `unrecognized` (UFR-5): the owner asked for a raw, unvalidated engine value;
+//     pinning it into the dispatch resolvers is riskier than resolving live (a bad value could
+//     mis-route), and the dispatch outcome is identical unless config changed — which the owner was
+//     already warned about via the `unrecognized` flag. So leave it live rather than freeze a raw value.
+//   - a row flagged `fallbackToClaude` (FR-4): the readout showed the unauthorized target engine but
+//     dispatch falls back to Claude. Pin the EFFECTIVE dispatch values (engine 'claude' + the row's
+//     resolved model), never the unauthorized target — freezing the target would re-route to it.
+const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'implementation',
+  'author-plan': 'planAuthor' }
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -1880,27 +1899,48 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
     ? Object.assign({}, src.effort) : {}
   const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
-  const _engineRoleKind = { review: 'reviewer', build: 'implementation', fix: 'implementation',
-    'author-plan': 'planAuthor' }
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
-    if (!row.overridden) continue                 // only an accepted override seeds a pin
+    // --- Exclusions: rows that must NOT freeze a snapshot value (each keeps the resolve-live path) ---
+    // Orchestration is session-inherited by design (FR-3) — never pin, or the run would freeze a
+    // stale session model instead of inheriting the live one at dispatch.
+    if (row.kind === 'orchestration') continue
+    // No-agent spine steps (draft-PR / mark-ready) dispatch nothing — no value to pin.
+    if (row.kind === 'none') continue
+    // UFR-2/FR-8: `unavailable` means no snapshot value was captured (a per-field read degraded);
+    // the run resolves that phase normally at dispatch, so leave it live.
+    if (row.unavailable) continue
+    // UFR-5: an `unrecognized` engine is a raw, unvalidated value. Pinning it into the dispatch
+    // resolvers is riskier than live resolution — a raw value could mis-route — and the dispatch
+    // outcome is identical unless config changed, which the owner was already warned about via the
+    // `unrecognized` flag. So leave it live rather than freeze the raw value.
+    if (row.unrecognized) continue
+
     const role = row.role
+    // FR-4: a `fallbackToClaude` row displayed the unauthorized target engine but dispatches on
+    // Claude. Freeze the EFFECTIVE dispatch (engine 'claude' + the row's resolved model), never the
+    // target engine — pinning the target would route the frozen run straight to the unauthorized one.
+    const effectiveEngine = row.fallbackToClaude ? 'claude'
+      : (typeof row.engine === 'string' && row.engine.trim() ? row.engine : null)
+
     // Pin the model onto the model-tier override map (resolveModel reads __SR_OVERRIDES[role]).
     if (typeof role === 'string' && typeof row.model === 'string' && row.model.trim()) {
       overrides[role] = row.model
     }
     // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
+    // The pref map is keyed by role_kind, so normalize review-deep -> review for the engine key.
     const kind = row.kind === 'review-deep' ? 'review'
       : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
-    const epKey = kind && Object.prototype.hasOwnProperty.call(_engineRoleKind, kind)
-      ? _engineRoleKind[kind] : null
-    if (epKey && typeof row.engine === 'string' && row.engine.trim()) {
-      enginePrefs[epKey] = row.engine
+    const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
+      ? _ENGINE_ROLE_KIND[kind] : null
+    if (epKey && effectiveEngine) {
+      enginePrefs[epKey] = effectiveEngine
     }
     // Pin the effort onto the effort sub-map (resolveEffort reads __SR_ENGINE_PREFS.effort[role_kind]).
-    // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name.
-    if (kind && typeof row.effort === 'string' && row.effort.trim()) {
+    // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name. A
+    // Claude fallback has null effort (resolveEffort returns null for claude), so a fallback row that
+    // still carries the target engine's effort must not pin it — only pin effort for a non-fallback row.
+    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()) {
       const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
       enginePrefs.effort[effortKind] = row.effort
     }
