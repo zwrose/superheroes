@@ -12,6 +12,7 @@ import model_tier
 import engine_pref
 import engine_adapter  # for the external-engine display model constants (single source of truth)
 import model_tier_overrides
+import engine_detect
 
 READOUT_VERSION = 1
 
@@ -212,3 +213,100 @@ def validate_override(role, field, value, snapshot):
         return {"ok": False, "acceptedValues": list(_EFFORT_TOKENS),
                 "reason": "not a valid effort"}
     return {"ok": False, "reason": "field must be one of engine, model, effort"}
+
+
+# --- Task 4: assemble — compose the snapshot from the real readers (FR-4/5/6/7, UFR-2/3) ---
+
+_RAISE = object()  # sentinel: a per-field read error (test-injected OR a real read that raised)
+
+
+def _read_field(fn):
+    """Run one field's reader; return _RAISE (never propagate) on ANY exception, so a single source
+    raising degrades only that field. This is the per-field guard the UFR-2 fail-soft claim rests on
+    — _load_readers wraps EVERY real read in it, so no one source can collapse the whole readout."""
+    try:
+        return fn()
+    except Exception:
+        return _RAISE
+
+
+def _load_readers(work_item, root):
+    """Real-reader loader: read each source once via its existing reader, EACH wrapped in _read_field
+    so a raise degrades that one field to _RAISE (assemble maps _RAISE -> unavailable + degraded[]),
+    never the whole readout. Only the shared setup (profile path) can raise past this into UFR-3."""
+    import core_md, verify_command_cli, mode_registry, definition_doc
+    import engine_pref as _ep
+    # Shared setup — a raise here has no single owning field, so it (correctly) escapes to assemble's
+    # total-failure guard (UFR-3), not a per-field degrade.
+    profile = model_tier_overrides.resolve_profile_path(root)
+    # Per-field reads — each independently guarded so one raise degrades only its own field (UFR-2).
+    prefs = _read_field(lambda: _ep.load_engine_prefs(root, root))
+    tier_overrides = _read_field(lambda: model_tier_overrides.load_overrides(profile))
+    authz = _read_field(lambda: engine_detect.probe(root))
+    calibration = _read_field(
+        lambda: {"status": (core_md.read(root, root) or {}).get("status", "provisional")})
+    verify = _read_field(lambda: verify_command_cli.resolve_command(root))
+    storage = _read_field(lambda: {"mode": mode_registry.resolve(root, root)["mode"],
+                                   "docsPath": definition_doc.resolve_work_item_dir(
+                                       work_item, root=root, cwd=root)})
+    return {"prefs": prefs, "tier_overrides": tier_overrides, "authz": authz,
+            "calibration": calibration, "verify": verify, "storage": storage}
+
+
+def assemble(work_item, root, run_overrides=None, readers=None, _force_total_failure=False):
+    """Read config once, enumerate the roster, apply run_overrides, return the snapshot. Fail-soft
+    per field (UFR-2); fail-closed only when no frame can be built (UFR-3)."""
+    if _force_total_failure:
+        return {"ok": False, "reason": "readout could not be assembled",
+                "remediation": "re-run the band's init so the profile + storage config resolve"}
+    if readers is None:
+        try:
+            readers = _load_readers(work_item, root)
+        except Exception as exc:
+            return {"ok": False, "reason": "readout could not be assembled (%s)" % type(exc).__name__,
+                    "remediation": "re-run the band's init so the profile + storage config resolve"}
+    degraded = []
+
+    def _field(name, default):
+        """Read one field; a _RAISE (a per-field read that raised in _load_readers, or a test
+        sentinel) degrades to `default` + a degraded[] entry — the UFR-2 fail-soft path."""
+        v = readers.get(name)
+        if v is _RAISE:
+            degraded.append({"field": name, "reason": "%s unreadable" % name})
+            return default
+        return v
+
+    prefs = _field("prefs", None) or {"reviewer": "claude", "implementation": "claude", "effort": {}}
+    tier_overrides = _field("tier_overrides", None) or {}
+    phases = enumerate_dispatch(prefs, tier_overrides, run_overrides)
+
+    authz = _field("authz", None) or {}
+    external = {}
+    for eng in ("codex", "cursor"):
+        if any(r["engine"] == eng for r in phases):
+            ok, _cause, _rem = engine_detect.decide(authz, eng)
+            external[eng] = {"authorized": bool(ok)}
+    for r in phases:
+        if r["engine"] in external and not external[r["engine"]]["authorized"]:
+            r["fallbackToClaude"] = True
+
+    cal = _field("calibration", {"status": "provisional"}) or {"status": "provisional"}
+    provisional = cal.get("status") != "confirmed"
+
+    verify_val = readers.get("verify")
+    verify = {"command": verify_val if verify_val is not _RAISE else None}
+    if verify_val is _RAISE:
+        degraded.append({"field": "verify", "reason": "verify command unreadable"})
+        verify["unavailable"] = True
+
+    storage_val = readers.get("storage")
+    if storage_val is _RAISE:
+        degraded.append({"field": "storage", "reason": "storage mode unreadable"})
+        storage = {"unavailable": True}
+    else:
+        storage = storage_val or {"unavailable": True}
+
+    return {"workItem": work_item, "phases": phases, "externalEngines": external,
+            "calibration": {"status": (cal or {}).get("status"), "provisional": provisional},
+            "verify": verify, "storage": storage, "degraded": degraded,
+            "version": READOUT_VERSION}

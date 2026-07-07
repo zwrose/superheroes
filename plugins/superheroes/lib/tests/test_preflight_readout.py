@@ -168,3 +168,66 @@ def test_unknown_field_rejected():
     snap = _snapshot_default()
     out = preflight_readout.validate_override("reviewer", "storage", "x", snap)
     assert out["ok"] is False
+
+
+# --- Task 4: assemble — compose the snapshot from the real readers (FR-4/5/6/7, UFR-2/3) ---
+
+def _fake_readers(**over):
+    base = {
+        "prefs": {"reviewer": "claude", "implementation": "claude", "effort": {}},
+        "tier_overrides": {},
+        "authz": {"codex": {"installed": True, "authed": True, "error": None},
+                  "cursor": {"installed": True, "authed": True, "error": None}},
+        "calibration": {"status": "provisional"},
+        "verify": "npm test",
+        "storage": {"mode": "global", "docsPath": "/proj/docs"},
+    }
+    base.update(over)
+    return base
+
+
+def test_assemble_returns_snapshot_shape():
+    snap = preflight_readout.assemble("wi", "/root", readers=_fake_readers())
+    for key in ("workItem", "phases", "externalEngines", "calibration",
+                "verify", "storage", "degraded", "version"):
+        assert key in snap
+    assert snap["version"] == preflight_readout.READOUT_VERSION
+
+
+def test_provisional_calibration_flagged():
+    snap = preflight_readout.assemble("wi", "/root", readers=_fake_readers())
+    assert snap["calibration"]["provisional"] is True
+
+
+def test_unverified_when_command_is_none():
+    snap = preflight_readout.assemble("wi", "/root", readers=_fake_readers(verify="none"))
+    assert snap["verify"]["command"] in ("none", None)
+
+
+def test_storage_mode_and_docs_path_present():
+    snap = preflight_readout.assemble("wi", "/root", readers=_fake_readers())
+    assert snap["storage"]["mode"] == "global"
+    assert snap["storage"]["docsPath"] == "/proj/docs"
+
+
+def test_external_engine_authorization_reported():
+    readers = _fake_readers(prefs={"reviewer": "codex", "implementation": "claude", "effort": {}},
+                            authz={"codex": {"installed": True, "authed": False, "error": None},
+                                   "cursor": {"installed": False, "authed": False, "error": None}})
+    snap = preflight_readout.assemble("wi", "/root", readers=readers)
+    assert snap["externalEngines"]["codex"]["authorized"] is False
+    # a role whose engine is unauthorized is flagged fallbackToClaude
+    review = [r for r in snap["phases"] if r["kind"] == "review"][0]
+    assert review.get("fallbackToClaude") is True
+
+
+def test_one_field_error_degrades_not_fails(monkeypatch=None):
+    readers = _fake_readers(storage=preflight_readout._RAISE)  # sentinel: this reader raises
+    snap = preflight_readout.assemble("wi", "/root", readers=readers)
+    assert any(d for d in snap["degraded"] if d.get("field") == "storage")
+    assert snap["storage"].get("unavailable") is True
+
+
+def test_total_failure_returns_failure_sentinel():
+    snap = preflight_readout.assemble("wi", "/root", readers=None, _force_total_failure=True)
+    assert snap.get("ok") is False and snap.get("reason")
