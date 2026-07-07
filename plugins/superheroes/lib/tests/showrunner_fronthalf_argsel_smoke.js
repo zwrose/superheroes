@@ -15,6 +15,20 @@ const fs = require('fs')
 const path = require('path')
 const sr = require('../showrunner.js')
 
+// pid-unique work item: the run-mode outcome envelope stages machine-global payload files derived
+// from the work-item name (/tmp/showrunner-<wi>-fronthalf-*.json*), so a fixed name collides with
+// a concurrent pytest suite on this machine (see _final_review_probe.js for the flake story).
+// The pid-named files are reaped on a PASSING exit; a failing run keeps them as evidence.
+const WI = `wi-pid${process.pid}`
+process.on('exit', (code) => {
+  if (code !== 0) return
+  for (const f of [`/tmp/showrunner-${WI}-fronthalf-outcome.json`,
+                   `/tmp/showrunner-${WI}-fronthalf-outcome.json.payload`,
+                   `/tmp/showrunner-${WI}-fronthalf-readout-tmp.json`]) {
+    try { fs.rmSync(f, { force: true }) } catch (_) {}
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Shared agent stub — handles all leaf dispatch that showrunner() reaches on
 // the front-half path:
@@ -109,7 +123,7 @@ async function main() {
       globalThis.SUPERHEROES_FRONT_HALF_NATIVE = true
       delete process.env.SUPERHEROES_FRONT_HALF   // ensure env path is NOT the trigger
       global.agent = makeAgentStub()
-      const result = await sr.showrunner({ workItem: 'wi' })
+      const result = await sr.showrunner({ workItem: WI })
       assert.strictEqual(result.outcome, 'parked',
         'a1: globalThis FRONT_HALF_NATIVE -> showrunner() parks')
       assert.strictEqual(result.phase, 'front-half-boundary',
@@ -134,7 +148,7 @@ async function main() {
       delete globalThis.SUPERHEROES_FRONT_HALF_NATIVE   // ensure globalThis path is NOT the trigger
       process.env.SUPERHEROES_FRONT_HALF = 'native'
       global.agent = makeAgentStub()
-      const result = await sr.showrunner({ workItem: 'wi' })
+      const result = await sr.showrunner({ workItem: WI })
       assert.strictEqual(result.outcome, 'parked',
         'a2: env SUPERHEROES_FRONT_HALF=native -> showrunner() parks')
       assert.strictEqual(result.phase, 'front-half-boundary',
@@ -159,7 +173,7 @@ async function main() {
       delete globalThis.SUPERHEROES_FRONT_HALF_NATIVE
       delete process.env.SUPERHEROES_FRONT_HALF
       global.agent = makeAgentStub()
-      const result = await sr.showrunner({ workItem: 'wi' })
+      const result = await sr.showrunner({ workItem: WI })
       assert.ok(result.phase !== 'front-half-boundary',
         'a3: full-run default does NOT park at front-half-boundary (proceeds into workhorse)')
     } finally {

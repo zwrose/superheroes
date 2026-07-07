@@ -16,6 +16,11 @@
 //   (b4 below asserts dispatchExternal is never called with a synthesis-shaped payload).
 require('./_smoke_checkout_root.js')
 'use strict'
+// Pin cwd to the checkout root: the review-code panel's entry gather runs the REAL
+// review_setup_gather.py with its cwd pinned to __SR_ROOT (FR-5), so repo-relative state only
+// lines up when the smoke itself runs from the root (see showrunner_fronthalf_phase_smoke.js
+// for the stale-fixture masking story).
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('assert')
 const { markedStdout } = require('./_marked_stdout.js')
 
@@ -24,12 +29,25 @@ const engineDispatchMod = require('../engine_dispatch.js')
 const fs = require('fs')
 
 // #129's reviewPanel persists a durable round-records.json (+ deferred-set.json) accumulator in the
-// runDir. These scenarios use FIXED /tmp runDirs, so a stale accumulator from an earlier run of this
-// very file would corrupt the next run's round-1 state (e.g. the blocking finding arrives pre-deferred
-// and the fix dispatch never fires). Reset before every scenario for hermetic re-runs.
+// runDir. These scenarios use per-process /tmp runDirs, so a stale accumulator from an earlier run of
+// this very file would corrupt the next run's round-1 state (e.g. the blocking finding arrives
+// pre-deferred and the fix dispatch never fires). Reset before every scenario for hermetic re-runs.
+// SFX makes every work item + runDir pid-unique: with a FIXED path, two pytest suites running
+// concurrently on one machine (each showrunner verify step runs the whole suite) reset and write the
+// SAME dir mid-panel and flip this smoke's terminals — reproduced 2026-07-06, two concurrent lanes
+// fail within a few iterations (see _final_review_probe.js for the sibling build_phase story).
+// pid-unique dirs would pile up in /tmp, so reap them on a PASSING exit — a failing run keeps
+// its dirs as post-mortem evidence (same posture as _final_review_probe.js).
+const SFX = `-pid${process.pid}`
+const madeRunDirs = new Set()
+process.on('exit', (code) => {
+  if (code !== 0) return
+  for (const d of madeRunDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch (_) {} }
+})
 function freshRunDir(d) {
   fs.rmSync(d, { recursive: true, force: true })
   fs.mkdirSync(d, { recursive: true })
+  madeRunDirs.add(d)
   return d
 }
 
@@ -77,7 +95,7 @@ async function partA() {
   globalThis.log = () => {}
 
   try {
-    await sr.showrunner({ workItem: 'wi-eng' })
+    await sr.showrunner({ workItem: `wi-eng${SFX}` })
   } catch (_) {
     // park or exception is fine; we only care that the engine prefs were planted
   }
@@ -115,7 +133,7 @@ async function partA() {
     return null
   }
   try {
-    await sr.showrunner({ workItem: 'wi-eng-fail' })
+    await sr.showrunner({ workItem: `wi-eng-fail${SFX}` })
   } catch (_) {}
   assert.deepStrictEqual(
     globalThis.__SR_ENGINE_PREFS,
@@ -190,10 +208,10 @@ async function partB() {
   global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
   global.log = () => {}
 
-  const r1 = await sr.reviewCodePhase('wi-eng-review', {
+  const r1 = await sr.reviewCodePhase(`wi-eng-review${SFX}`, {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: freshRunDir('/tmp/showrunner-wi-eng-review-review-code-test-1'),
+    runDir: freshRunDir(`/tmp/showrunner-wi-eng-review${SFX}-review-code-test-1`),
   })
 
   const reviewDispatch = dispatchCalls.filter((c) => c.roleKind === 'review')
@@ -246,10 +264,10 @@ async function partB() {
     return { findings: [] }
   }
 
-  const r2 = await sr.reviewCodePhase('wi-eng-ufr7', {
+  const r2 = await sr.reviewCodePhase(`wi-eng-ufr7${SFX}`, {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: freshRunDir('/tmp/showrunner-wi-eng-ufr7-review-code-test-1'),
+    runDir: freshRunDir(`/tmp/showrunner-wi-eng-ufr7${SFX}-review-code-test-1`),
   })
   assert.ok(dispatchCalls.some((c) => c.roleKind === 'review'), 'FAIL (b2a): dispatchExternal must still be attempted for roleKind:review')
   assert.strictEqual(nativeReviewerFired, true, 'FAIL (b2b): UFR-7 unreadable external review must fall open to the native reviewer agent()')
@@ -294,10 +312,10 @@ async function partB() {
     return { findings: [] }
   }
 
-  const r3 = await sr.reviewCodePhase('wi-eng-mixed', {
+  const r3 = await sr.reviewCodePhase(`wi-eng-mixed${SFX}`, {
     worktree: '/tmp/build-worktree',
     expectedHead: 'head-1',
-    runDir: freshRunDir('/tmp/showrunner-wi-eng-mixed-review-code-test-1'),
+    runDir: freshRunDir(`/tmp/showrunner-wi-eng-mixed${SFX}-review-code-test-1`),
   })
   const reviewDispatch3 = dispatchCalls.filter((c) => c.roleKind === 'review')
   const fixDispatch3 = dispatchCalls.filter((c) => c.roleKind === 'fix')

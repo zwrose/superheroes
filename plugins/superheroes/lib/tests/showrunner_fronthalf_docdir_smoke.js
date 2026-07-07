@@ -8,6 +8,10 @@
 // NOTIFY ledger under) the hard-wired in-repo path.
 'use strict'
 require('./_smoke_checkout_root.js')
+// Pin cwd to the checkout root: this smoke seeds repo-relative decoy fixtures
+// (docs/superheroes/<wi>) that root-pinned helpers read back (see
+// showrunner_fronthalf_phase_smoke.js for the stale-fixture masking story).
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
@@ -74,15 +78,23 @@ async function partAppendNotify() {
 
 // (d) reviewDocPhase reads + hashes the doc at the RESOLVED dir. A decoy doc with different
 // content sits at the legacy path — a regression to the hard-wired path yields its hash instead.
+// pid-unique work item: reviewDocPhase derives its runDir as the machine-global
+// /tmp/showrunner-<wi>-review-plan, so a fixed name collides with a concurrent pytest suite
+// on the same machine (see _final_review_probe.js for the flake story).
+const WI_D = `wi-d-pid${process.pid}`
+
 async function partReviewRead() {
   const resolved = fs.mkdtempSync('/tmp/sr-docdir-')
   fs.writeFileSync(`${resolved}/plan.md`, '# Resolved plan\n## Review coverage decisions\n')
-  const legacy = 'docs/superheroes/wi-d'
+  const legacy = `docs/superheroes/${WI_D}`
   fs.mkdirSync(legacy, { recursive: true })
   fs.writeFileSync(`${legacy}/plan.md`, '# DECOY (legacy path) plan\n## Review coverage decisions\n')
-  try { fs.rmSync('/tmp/showrunner-wi-d-review-plan', { recursive: true, force: true }) } catch (_) {}
+  try { fs.rmSync(`/tmp/showrunner-${WI_D}-review-plan`, { recursive: true, force: true }) } catch (_) {}
   try {
     await partReviewReadInner(resolved, legacy)
+    // pass path only — a failed run keeps the pid-named runDir as post-mortem evidence
+    // (the throw skips this line and the finally below leaves it in place).
+    try { fs.rmSync(`/tmp/showrunner-${WI_D}-review-plan`, { recursive: true, force: true }) } catch (_) {}
   } finally {
     try { fs.rmSync(resolved, { recursive: true, force: true }) } catch (_) {}
     try { fs.rmSync(legacy, { recursive: true, force: true }) } catch (_) {}
@@ -90,7 +102,7 @@ async function partReviewRead() {
 }
 
 async function partReviewReadInner(resolved, legacy) {
-  globalThis.__SR_DOC_DIRS = { 'wi-d': resolved }
+  globalThis.__SR_DOC_DIRS = { [WI_D]: resolved }
   const persistPrompts = []
   globalThis.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
@@ -113,7 +125,7 @@ async function partReviewReadInner(resolved, legacy) {
     if (label === 'revise-doc') return { fixes: [], deferred: [] }
     return null
   }
-  const r = await sr.reviewDocPhase('plan', 'wi-d', { runId: 'run-d' })
+  const r = await sr.reviewDocPhase('plan', WI_D, { runId: 'run-d' })
   assert.strictEqual(r.gate, 'passed', 'clean panel maps to passed')
   // #118: reviewDocPhase RETURNS the set-gate persist spec; runPhases' tail chains it into the ONE
   // 'save phase progress' leaf. The fence hash is the Python-side 'current' sentinel:

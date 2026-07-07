@@ -1,4 +1,8 @@
 require('./_smoke_checkout_root.js')
+// Pin cwd to the checkout root: buildPhase's final review runs REAL root-pinned helpers
+// (review_setup_gather.py), so repo-relative state only lines up when the smoke itself runs
+// from the root (pre-existing; see showrunner_fronthalf_phase_smoke.js for the story).
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 // plugins/superheroes/lib/tests/build_phase_loop_smoke.js
 // FR-4a contract: build_state gather runs ONCE at entry (not per loop iteration).
 // reconcile is the in-process twin (build_progress.js), NOT an agent.
@@ -16,6 +20,18 @@ require('./_smoke_checkout_root.js')
 // THROUGH the module (require('./build_progress.js').reconcile via _reconcile), so the spy takes effect.
 const assert = require('assert')
 const { routeMatches } = require('./_task_leaf_route.js')
+
+// pid-unique work item: buildPhase's final review derives a machine-global
+// /tmp/workhorse-<wi>-final-review dir from the work-item name, so a fixed name shares (and
+// reads) state with a concurrent pytest suite on this machine (see _final_review_probe.js for
+// the flake story). The dir is reaped on a passing exit; a failing run keeps it as evidence.
+const WI = `wi-pid${process.pid}`
+process.on('exit', (code) => {
+  if (code !== 0) return
+  try { require('fs').rmSync(`/tmp/workhorse-${WI}-final-review`, { recursive: true, force: true }) } catch (_) {}
+  try { require('fs').rmSync(`/tmp/showrunner-${WI}-review-plan`, { recursive: true, force: true }) } catch (_) {}
+})
+
 global.log = () => {}
 // reviewPanel uses parallel() — stub it to run all functions sequentially.
 global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
@@ -125,7 +141,7 @@ const SMART_STUBS = [
       ])
       globalThis.reviewerAgent = async () => ([])
       globalThis.recordDeferred = async () => {}
-      const r = await bp.buildPhase('wi', 5)
+      const r = await bp.buildPhase(WI, 5)
       assert.strictEqual(r.confidence, 'high', 'continuous 2-task run should complete')
       assert.strictEqual(spy.calls(), 1,
         'FR-4a: entry reconcile must run EXACTLY ONCE on a continuous 2-task run (not per iteration)')
@@ -152,7 +168,7 @@ const SMART_STUBS = [
       ])
       globalThis.reviewerAgent = async () => ([])
       globalThis.recordDeferred = async () => {}
-      const r = await bp.buildPhase('wi', 5)
+      const r = await bp.buildPhase(WI, 5)
       assert.strictEqual(r.confidence, 'high', 'resume run should complete (task 2 built, final review clean)')
       assert.strictEqual(spy.calls(), 1,
         'resume correctness: entry reconcile runs ONCE to re-derive state after a park/crash')
@@ -175,7 +191,7 @@ const SMART_STUBS = [
     ])
     globalThis.reviewerAgent = async () => ([])
     globalThis.recordDeferred = async () => {}
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'high')
     assert.strictEqual(provWrites, 1, 'provenance written exactly once (FR-9)')
   }
@@ -197,7 +213,7 @@ const SMART_STUBS = [
     ])
     globalThis.reviewerAgent = async () => ([])
     globalThis.recordDeferred = async () => {}
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'low', 'provenance write failure parks (UFR-6)')
   }
 
@@ -226,7 +242,7 @@ const SMART_STUBS = [
     ])
     globalThis.reviewerAgent = async () => ([])
     globalThis.recordDeferred = async () => {}
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'high', 'stale-final-review + un-built task: build + re-review + prov -> high')
     assert.strictEqual(workerBuilt, 1, 'FIX 3: the un-built task IS built (didWork=true)')
     assert.ok(finalReviewRan >= 1, 'FIX 3: whole-branch final review RE-RUNS (NOT skipped on stale entry state)')
@@ -245,7 +261,7 @@ const SMART_STUBS = [
         return standardLeaf(p)
       }),
     ])
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'low', 'unmapped commit at entry should park')
   }
 
@@ -274,7 +290,7 @@ const SMART_STUBS = [
       ])
       globalThis.reviewerAgent = async () => ([])
       globalThis.recordDeferred = async () => {}
-      const r = await bp.buildPhase('wi', 5)
+      const r = await bp.buildPhase(WI, 5)
       assert.strictEqual(r.confidence, 'high')
       assert.strictEqual(resets, 1, 'reset ran once (UFR-12)')
       assert.strictEqual(spy.calls(), 2, 'after reset: reconcile runs exactly twice (entry + re-reconcile)')
@@ -293,7 +309,7 @@ const SMART_STUBS = [
       }),
       ['reset-uncommitted', { ok: false, error: 'dirty submodule' }],
     ])
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'low', 'a failed reset parks (UFR-6)')
     assert.ok(/could not reset/i.test((r.assumptions || [])[0] || ''), 'honest reset-failure reason')
   }
@@ -315,7 +331,7 @@ const SMART_STUBS = [
       ['reset-uncommitted', { ok: true }],   // reset "succeeds" but doesn't actually clean the tree
       ['implement-task', () => { workerDispatched += 1; return { ok: true, signal: 'ok', evidence: {} } }],
     ])
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'low', 'FIX 4: a still-dirty tree after reset parks (UFR-12)')
     assert.ok(/still dirty after reset/i.test((r.assumptions || [])[0] || ''),
       'FIX 4: park reason names the still-dirty worktree (UFR-12)')
@@ -336,7 +352,7 @@ const SMART_STUBS = [
         return [{ index: 0, ok: true, stdout }]
       }],
     ])
-    const r = await bp.buildPhase('wi', 5)
+    const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'low', 'a failed entry gather leaf must park (fail closed)')
     assert.ok(/gather authoritative git state/i.test((r.assumptions || [])[0] || ''), 'honest gather fail-closed reason')
   }

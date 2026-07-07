@@ -1,8 +1,28 @@
 require('./_smoke_checkout_root.js')
+// Pin cwd to the checkout root: buildPhase's final review runs REAL root-pinned helpers
+// (review_setup_gather.py), so repo-relative state only lines up when the smoke itself runs
+// from the root (pre-existing; see showrunner_fronthalf_phase_smoke.js for the story).
+if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('assert')
 const bp = require('../build_phase.js')
 const { testPilotPhase } = require('../test_pilot_phase.js')
 const { saveProgressOk, markedStdout } = require('./_marked_stdout.js')
+
+// pid-unique work item: buildPhase's final review derives a machine-global
+// /tmp/workhorse-<wi>-final-review dir from the work-item name, so a fixed name shares (and
+// reads) state with a concurrent pytest suite on this machine (see _final_review_probe.js for
+// the flake story). The dir is reaped on a passing exit; a failing run keeps it as evidence.
+const WI = `wi-pid${process.pid}`
+process.on('exit', (code) => {
+  if (code !== 0) return
+  try { require('fs').rmSync(`/tmp/workhorse-${WI}-final-review`, { recursive: true, force: true }) } catch (_) {}
+  try { require('fs').rmSync(`/tmp/showrunner-${WI}-review-plan`, { recursive: true, force: true }) } catch (_) {}
+  // test-pilot's deps create /tmp/showrunner-<wi>-test-pilot lazily on their first writeJson;
+  // today this smoke's stubs park before that fires, but reap it anyway so a stub change can't
+  // start accumulating pid dirs silently.
+  try { require('fs').rmSync(`/tmp/showrunner-${WI}-test-pilot`, { recursive: true, force: true }) } catch (_) {}
+})
+
 
 const exercised = [
   'read startup state', 'read plan draft', 'read tasks draft',
@@ -109,18 +129,18 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
   globalThis.reviewerAgent = async () => []
   globalThis.recordDeferred = async () => {}
 
-  await sr.readStartupState('wi')
-  await sr.readDefinitionDraft('wi', 'plan')
-  await sr.readDefinitionDraft('wi', 'tasks')
-  await sr.producePhase('plan', 'wi')
-  await sr.producePhase('tasks', 'wi')
-  await sr.reviewDocPhase('plan', 'wi')
-  await sr.persistPhase('wi', { step: 1, phase: 'build', record: { phase: 'build' } })
-  await bp.buildPhase('wi', 5)
-  await sr.draftPRPhase('wi')
-  await sr.markReadyPhase('wi')
-  await testPilotPhase('wi', 1, sr.testPilotDeps('wi', 1))
-  await sr.shipPhase('wi', { number: 1 }, 1)
+  await sr.readStartupState(WI)
+  await sr.readDefinitionDraft(WI, 'plan')
+  await sr.readDefinitionDraft(WI, 'tasks')
+  await sr.producePhase('plan', WI)
+  await sr.producePhase('tasks', WI)
+  await sr.reviewDocPhase('plan', WI)
+  await sr.persistPhase(WI, { step: 1, phase: 'build', record: { phase: 'build' } })
+  await bp.buildPhase(WI, 5)
+  await sr.draftPRPhase(WI)
+  await sr.markReadyPhase(WI)
+  await testPilotPhase(WI, 1, sr.testPilotDeps(WI, 1))
+  await sr.shipPhase(WI, { number: 1 }, 1)
 
   for (const label of exercised) {
     assert.ok(seen.has(label), 'missing exercised label: ' + label)
