@@ -456,7 +456,11 @@ async function stringyOkFixBatchParksNotFalseProgress() {
       baseUrl: 'http://localhost:3000',
       steps: [{ id: 's1', status: 'failed', failureType: 'app_bug' }],
     }),
-    retryDecide: async () => ({ action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }),
+    // Capped so a REGRESSED gate (which would let the stringy result proceed) still terminates and
+    // returns — the `cleaned` assertion then fires as a clean kill instead of an infinite re-fix loop.
+    retryDecide: async (_passResult, history) => (history.length >= 3
+      ? { action: 'park_cap_reached', reason: 'reached 3 browser fix batches with failed browser steps remaining' }
+      : { action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }),
     dispatchFixBatch: async () => ({ ok: 'false', commitShas: [] }),  // stringy refusal
     ensureCleanWorktreeAfterFix: async () => { cleaned = true; return { ok: true } },
     reconcileCommittedMutations: async () => ({ ok: true, commitShas: [], head: 'x' }),
@@ -464,6 +468,26 @@ async function stringyOkFixBatchParksNotFalseProgress() {
   assert.strictEqual(out.confidence, 'low', 'a stringy ok:"false" fix batch must park, not record false progress (#275)')
   assert.strictEqual(cleaned, false, 'the stringy refusal must short-circuit at the gate, BEFORE the post-fix clean step (#275)')
   assert.match(out.assumptions[0], /fix batch parked/)
+
+  // Symmetric to the build-gate coverage: a stringy ok:'true' is ALSO not a genuine boolean, so the
+  // `ok !== true` gate fails it closed too — a stringy success must not record false progress either.
+  let cleaned2 = false
+  const out2 = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: true }),
+    runBrowserPass: async () => ({
+      source: 'browser',
+      baseUrl: 'http://localhost:3000',
+      steps: [{ id: 's1', status: 'failed', failureType: 'app_bug' }],
+    }),
+    retryDecide: async (_passResult, history) => (history.length >= 3
+      ? { action: 'park_cap_reached', reason: 'reached 3 browser fix batches with failed browser steps remaining' }
+      : { action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }),
+    dispatchFixBatch: async () => ({ ok: 'true', commitShas: ['deadbeef'] }),  // stringy (non-boolean) success
+    ensureCleanWorktreeAfterFix: async () => { cleaned2 = true; return { ok: true } },
+    reconcileCommittedMutations: async () => ({ ok: true, commitShas: ['deadbeef'], head: 'x' }),
+  }))
+  assert.strictEqual(out2.confidence, 'low', 'a stringy ok:"true" fix batch must also fail closed, not record progress (#275)')
+  assert.strictEqual(cleaned2, false, 'a stringy ok:"true" must short-circuit at the gate too (#275)')
 }
 
 async function knownDependencyRerunsFailedAndAffectedSubset() {
