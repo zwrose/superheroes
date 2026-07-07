@@ -256,7 +256,7 @@ function answerCommandPrompt(prompt) {
 }
 
 const COURIER_JSON = {
-  'read startup state': () => JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
+  'read startup state': () => markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
   'save phase progress': (prompt) => {
     // With prose reads live, ANY runtime-computed doc hash on the set-gate is prose-poisoned —
     // the fence must ride the Python-side 'current' sentinel (red: the pre-hardening bundle

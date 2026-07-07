@@ -43,6 +43,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    # #281: the startup gather (readStartupState) rides the __SR_EXIT proof-of-execution marker so a
+    # did-not-run parrot can't fabricate the payload (gate AND engine_prefs), plus a semantic tripwire
+    # on the spec_present+unreadable fabrication tell (live park wf_ac2f134f).
+    "plugins/superheroes/lib/tests/showrunner_startup_parrot_smoke.js",
     # #221: the startup gather resolves engine prefs from an OUT-OF-REPO core.md — runs the REAL gather
     # script (store-base=None), asserting the owner's non-claude prefs round-trip and that the (root,root)
     # bug degrades to all-claude (the canned-answer smokes were blind to the real Python resolution).
