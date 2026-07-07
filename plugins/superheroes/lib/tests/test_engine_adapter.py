@@ -245,6 +245,48 @@ def test_parse_result_build_unreadable():
     assert EA.parse_result("cursor", "build", "").get("ok") is False
 
 
+# #288: the build|fix branch must HONOR the external leaf's own ok/signal — never launder an honest
+# refusal into ok:true. A laundered refusal was committed (the adapter is the sole committer) and
+# recorded built:passed upstream of the native build gate (the #275 gate is native-leaf-only and can
+# never see a value parse_result already coerced to true) — the exact false-merge-ready class #275
+# closed for the native path, still open for the external path.
+def test_parse_result_build_honest_refusal_is_not_laundered_to_ok_true():
+    stdout = json.dumps({"ok": False, "signal": "plan_wrong",
+                         "evidence": {"testFailed": True, "testPassed": False}})
+    res = EA.parse_result("codex", "build", stdout)
+    assert res["ok"] is False, "an honest ok:false refusal must NOT be coerced to ok:true"
+    assert res["signal"] == "plan_wrong"      # the leaf's own signal is carried, not overwritten with 'ok'
+    assert res["reason"] == "plan_wrong"      # informative reason so dispatch does not read 'unreadable'
+    # evidence is still parsed to the two-boolean shape (the refusal path is not a parse failure)
+    assert res["evidence"] == {"testFailed": True, "testPassed": False}
+
+
+def test_parse_result_fix_honest_refusal_is_not_laundered_to_ok_true():
+    stdout = json.dumps({"ok": False, "signal": "needs_context"})
+    res = EA.parse_result("cursor", "fix", stdout)
+    assert res["ok"] is False and res["signal"] == "needs_context"
+
+
+def test_parse_result_build_stringified_false_ok_is_a_refusal_not_truthy():
+    # #275 class: a truthy stringified "false" must read as a refusal, not launder to ok:true. Strict
+    # boolean identity (mirrors the native gate's `worker.ok === true`) — only a genuine bool true wins.
+    res = EA.parse_result("codex", "build", json.dumps({"ok": "false", "signal": "plan_wrong"}))
+    assert res["ok"] is False
+
+
+def test_parse_result_build_missing_ok_key_is_a_refusal():
+    # No ok key at all -> fail closed (a refusal), defaulting the signal to the native worker-recovery
+    # default ('needs_context', mirroring build_phase's `worker.signal || 'needs_context'`).
+    res = EA.parse_result("codex", "build", json.dumps({"evidence": {"testPassed": True}}))
+    assert res["ok"] is False and res["signal"] == "needs_context"
+
+
+def test_parse_result_build_ok_true_preserves_success_signal():
+    # The happy path is unchanged: a genuine ok:true build reports signal 'ok'.
+    res = EA.parse_result("codex", "build", json.dumps({"ok": True, "signal": "ok", "evidence": {}}))
+    assert res["ok"] is True and res["signal"] == "ok"
+
+
 def test_parse_result_cli(capsys):
     import io, sys as _sys
     stdout = json.dumps({"ok": True, "evidence": {"testFailed": False, "testPassed": True}})

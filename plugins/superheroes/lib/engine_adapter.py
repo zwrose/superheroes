@@ -169,7 +169,9 @@ def _scrub_notify(notify):
 def parse_result(engine, role_kind, stdout):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
     findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
-    array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}};
+    array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}}
+    honoring the leaf's OWN ok/signal (an honest {"ok":false,"signal":"plan_wrong"} refusal stays
+    ok:false so it parks — never coerced to ok:true and committed, #288);
     author-plan →
     {ok,notify[]} (the doc itself is verified downstream by the deterministic usableDraft
     post-check — this parse only confirms the engine ran to completion and surfaces NOTIFY
@@ -205,6 +207,20 @@ def parse_result(engine, role_kind, stdout):
         ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
         evidence = {"testFailed": bool(ev.get("testFailed")),
                     "testPassed": bool(ev.get("testPassed"))}
+        # HONOR the leaf's own ok/signal — a parseable stdout is NOT a build success (#288). An
+        # external build|fix worker that honestly refuses ({"ok":false,"signal":"plan_wrong"}) with
+        # partial edits must reach dispatch's write-failure path as a FALSE result: NO commit (the
+        # adapter is the sole committer, and step-6 commit runs only on ok:true), its uncommitted
+        # edits discarded by the caller (UFR-2), and it parks (UFR-3) instead of being coerced to
+        # ok:true and recorded built:passed. The native build gate's #275 fix is native-leaf-only and
+        # can never catch this — the refusal never survives THIS boundary as a falsy value unless we
+        # preserve it here. Strict boolean identity mirrors that gate (`worker.ok === true`): a real
+        # `false`, a truthy stringified "false", or a missing key all read as a refusal, never true.
+        if obj.get("ok") is not True:
+            sig = obj.get("signal")
+            # default to the native worker-recovery default (build_phase's `worker.signal || 'needs_context'`)
+            sig = sig if isinstance(sig, str) and sig else "needs_context"
+            return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
         return {"ok": True, "signal": "ok", "evidence": evidence}
     except Exception:
         return {"ok": False, "reason": "unreadable"}
