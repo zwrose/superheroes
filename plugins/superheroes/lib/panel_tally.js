@@ -1,6 +1,9 @@
 // plugins/superheroes/lib/panel_tally.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
+// BLOCKING is the drift-guarded canonical blocking vocabulary (exported; SSOT §11). The blocking
+// PARTITION decision routes through circuit_breaker.isBlocking (#276) — case-normalized + fail-closed
+// — so the panel gate never disagrees with _partition / the breaker on what blocks.
 const BLOCKING = new Set(['Critical', 'Important'])
 const SEV_RANK = { Critical: 0, Important: 1, Minor: 2, Nit: 3 }
 const _ACTION_TO_TERMINAL = { review: 'continue', exit_clean: 'clean', exit_skipped: 'clean-with-skips', halt: 'halted' }
@@ -34,7 +37,7 @@ function compileFindings(findings, contextFiles) {
 }
 function roundGate(compiled, expectedRoster, completedRoster) {
   const incomplete = expectedRoster.filter((r) => !completedRoster.includes(r))
-  const hasBlocker = compiled.some((f) => BLOCKING.has(f.severity))
+  const hasBlocker = compiled.some((f) => isBlocking(f.severity))
   let gate
   if (incomplete.length) gate = 'cannot-certify'
   else if (hasBlocker) gate = 'blocking'
@@ -46,7 +49,7 @@ function roundGate(compiled, expectedRoster, completedRoster) {
 function presentDeferred(compiled, deferredSet) {
   let n = 0
   for (const f of compiled) {
-    if (!BLOCKING.has(f.severity)) continue
+    if (!isBlocking(f.severity)) continue
     const deferredSev = deferredSet[findingIdentity(f)]
     if (deferredSev === undefined || deferredSev === null) continue
     if ((SEV_RANK[f.severity] != null ? SEV_RANK[f.severity] : 99) >= (SEV_RANK[deferredSev] != null ? SEV_RANK[deferredSev] : 99)) n += 1
@@ -104,7 +107,7 @@ function _currentBlockingFindings(results) {
     if (!result || result.status !== 'run') continue
     for (const f of Array.isArray(result.findings) ? result.findings : []) {
       if (!f || f.carried) continue
-      if (BLOCKING.has(f.severity)) out.push(f)
+      if (isBlocking(f.severity)) out.push(f)
     }
   }
   return out

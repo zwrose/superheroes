@@ -569,6 +569,24 @@ __modules["circuit_breaker"] = function (module, exports, require) {
 // plugins/superheroes/lib/circuit_breaker.js
 const { clampTitle, canonicalClassKey, classKeyAliases } = require('./review_memory.js')
 const BLOCKING = new Set(['Critical', 'Important'])
+// The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
+// (Minor/Nit — SSOT §11, guarded by test_ssot_drift). `isBlocking` is the single, case-normalized,
+// FAIL-CLOSED blocking predicate every severity consumer routes through (#276): a foreign scale
+// (`blocker`/`high`/`medium`), an unknown tier, a mis-cased `critical`, or a missing severity is
+// treated as blocking — an unrecognized severity means blocking, never a silent demotion. Consumers
+// keep BLOCKING for rank/identity/"was-tagged-blocking" bookkeeping but ask `isBlocking` the
+// partition question, so _partition, the breaker's own stuck-detection, the panel gate, and the
+// build legs can never disagree on what blocks.
+const _NON_BLOCKING = new Set(['minor', 'nit'])
+function isBlocking(severity) {
+  return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
+}
+// #291: the TIER-specific Critical match (case-normalized), single-sourced alongside isBlocking so the
+// confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from isBlocking: Important
+// is blocking but NOT critical.
+function isCritical(severity) {
+  return String(severity == null ? '' : severity).trim().toLowerCase() === 'critical'
+}
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
 const _NON_WORD = /[^A-Za-z0-9_ \t\n\r\f\v]/g
@@ -602,7 +620,7 @@ function intersects(a, b) {
   for (const x of a) if (b.has(x)) return true
   return false
 }
-function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _blocking(round) { return round.findings.filter((f) => isBlocking(f.severity)) }
 function _roundRecordedFix(roundRec) {
   // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
   // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
@@ -692,7 +710,7 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING, isBlocking, isCritical }
 
 };
 
@@ -721,11 +739,12 @@ module.exports = { decide }
 // ===== loop_synthesis.js =====
 __modules["loop_synthesis"] = function (module, exports, require) {
 // plugins/superheroes/lib/loop_synthesis.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
-const _BLOCKING = new Set(['Critical', 'Important'])
-const _NON_BLOCKING = new Set(['Minor', 'Nit'])
 const _DEFAULT_BLOCKING_SEVERITY = 'Important'
+// #276: the blocking partition (was-tagged-blocking, blocking→non-blocking downgrade detection) routes
+// through circuit_breaker.isBlocking — the single, case-normalized, fail-closed predicate — so this
+// leg can never disagree with _partition / the breaker / the panel gate on what blocks.
 
 function _keptSeverity(f, v) {
   const verdictSeverity = (v && typeof v === 'object') ? v.severity : null
@@ -750,7 +769,7 @@ function consume(merged, leafVerdicts) {
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
       drops.push({ id, file: f.file === undefined ? null : f.file, title: f.title === undefined ? null : f.title,
-        reason: reason.trim(), was_blocking_tagged: _BLOCKING.has(f.severity) })
+        reason: reason.trim(), was_blocking_tagged: isBlocking(f.severity) })
       continue
     }
     const kept = Object.assign({}, f)
@@ -759,7 +778,7 @@ function consume(merged, leafVerdicts) {
     // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
     // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
     const fromSeverity = f && f.severity
-    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+    if (isBlocking(fromSeverity) && !isBlocking(kept.severity)) {
       const entry = { id, file: f.file === undefined ? null : f.file,
         title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
       if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()
@@ -775,8 +794,11 @@ module.exports = { consume }
 // ===== panel_tally.js =====
 __modules["panel_tally"] = function (module, exports, require) {
 // plugins/superheroes/lib/panel_tally.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
+// BLOCKING is the drift-guarded canonical blocking vocabulary (exported; SSOT §11). The blocking
+// PARTITION decision routes through circuit_breaker.isBlocking (#276) — case-normalized + fail-closed
+// — so the panel gate never disagrees with _partition / the breaker on what blocks.
 const BLOCKING = new Set(['Critical', 'Important'])
 const SEV_RANK = { Critical: 0, Important: 1, Minor: 2, Nit: 3 }
 const _ACTION_TO_TERMINAL = { review: 'continue', exit_clean: 'clean', exit_skipped: 'clean-with-skips', halt: 'halted' }
@@ -810,7 +832,7 @@ function compileFindings(findings, contextFiles) {
 }
 function roundGate(compiled, expectedRoster, completedRoster) {
   const incomplete = expectedRoster.filter((r) => !completedRoster.includes(r))
-  const hasBlocker = compiled.some((f) => BLOCKING.has(f.severity))
+  const hasBlocker = compiled.some((f) => isBlocking(f.severity))
   let gate
   if (incomplete.length) gate = 'cannot-certify'
   else if (hasBlocker) gate = 'blocking'
@@ -822,7 +844,7 @@ function roundGate(compiled, expectedRoster, completedRoster) {
 function presentDeferred(compiled, deferredSet) {
   let n = 0
   for (const f of compiled) {
-    if (!BLOCKING.has(f.severity)) continue
+    if (!isBlocking(f.severity)) continue
     const deferredSev = deferredSet[findingIdentity(f)]
     if (deferredSev === undefined || deferredSev === null) continue
     if ((SEV_RANK[f.severity] != null ? SEV_RANK[f.severity] : 99) >= (SEV_RANK[deferredSev] != null ? SEV_RANK[deferredSev] : 99)) n += 1
@@ -880,7 +902,7 @@ function _currentBlockingFindings(results) {
     if (!result || result.status !== 'run') continue
     for (const f of Array.isArray(result.findings) ? result.findings : []) {
       if (!f || f.carried) continue
-      if (BLOCKING.has(f.severity)) out.push(f)
+      if (isBlocking(f.severity)) out.push(f)
     }
   }
   return out
@@ -959,6 +981,7 @@ module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, 
 // ===== review_round_policy.js =====
 __modules["review_round_policy"] = function (module, exports, require) {
 // plugins/superheroes/lib/review_round_policy.js
+const { isCritical } = require('./circuit_breaker.js')
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 // #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
@@ -1107,7 +1130,9 @@ function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting
   // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
   // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
   const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
-  const hasCritical = sevs.includes('Critical')
+  // #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap
+  // (was `sevs.includes('Critical')`, case-sensitive, so a lowercase Critical resolved by scoped verify).
+  const hasCritical = sevs.some((s) => isCritical(s))
   const trigger = hasCritical || !!crossCutting
   const atCap = confirmationsRun >= maxConfirmations
   if (!trigger) {
@@ -1436,7 +1461,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
-const BLOCKING = new Set(['Critical', 'Important'])
+// #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
+// — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
@@ -1512,7 +1538,7 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
     const result = roundFindings[name]
     if (!result || result.status !== 'run') continue
     for (const f of result.findings || []) {
-      if (!BLOCKING.has(f.severity)) continue
+      if (!circuitBreaker.isBlocking(f.severity)) continue
       const key = f.classKey || reviewMemory.classKey(f)
       if (!known.has(key)) continue
       const decision = byClass[key]
@@ -4516,7 +4542,12 @@ function _partition(findings) {
   const blocking = []; const minors = []; const cannotVerify = []
   for (const f of findings || []) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
-    if (f && circuitBreaker.BLOCKING.has(f.severity)) blocking.push(f)
+    // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
+    // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
+    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard (as on
+    // the cannot_verify line above) so a falsy element routes to minors rather than blocking — the
+    // Python twin only ever receives dict findings, so this guard is JS-side defensiveness, not parity.
+    if (f && circuitBreaker.isBlocking(f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }
@@ -4536,6 +4567,15 @@ function decide(verdicts, findings, rnd, maxRounds, history) {
   let reason = loopReason
   if (brk.halt) {
     reason = brk.detail !== undefined ? brk.detail : reason
+  }
+  // FR-5/FR-6: the two verdicts GATE — they are not merely required-to-be-present. A non-'pass'
+  // spec_compliance or code_quality can never complete, even with zero blocking findings, so a
+  // reviewer that reports the task non-compliant sends it back for a fix round (#276). Vocabulary-
+  // independent backstop: this holds even if a finding's severity drifts past _partition.
+  const failing = REQUIRED_VERDICTS.filter((k) => verdicts[k] !== 'pass')
+  if (mapped === 'complete' && failing.length) {
+    mapped = 'review'
+    reason = `verdict(s) ${failing.join(' + ')} are not 'pass' — the task is not compliant; a fix round is required before completion (FR-5/FR-6).`
   }
   // UFR-5: never complete while a cannot-verify item is unresolved — force a resolution round.
   if (mapped === 'complete' && cannotVerify.length) {
@@ -4958,9 +4998,10 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
-// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
-// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
-// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+// #160/#276: circuit_breaker.isBlocking is the single, case-normalized, FAIL-CLOSED blocking predicate
+// the task_review twin's partition also reads. Used here to synthesize the per-task review's two
+// verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
+// final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
@@ -5534,7 +5575,43 @@ const REVIEW_TASK_SCHEMA = {
         code_quality: { enum: ['pass', 'fail'] },
       },
     },
-    findings: { type: 'array' },
+    // #276: constrain finding items so structured-output validation corrects severity-vocabulary
+    // drift AT THE SOURCE. `severity` is the canonical rubric tier enum (SSOT §11, guarded by
+    // test_ssot_drift) — the live escape was reviewers emitting a foreign scale (`blocker`/`critical`
+    // /`high`) that the blocking partition then demoted to Minor. Required so every finding carries a
+    // gating severity; the task_review twin still fails closed on anything that slips past.
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['severity'],
+        properties: {
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          file: { type: 'string' },
+          title: { type: 'string' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
+  },
+}
+
+// #276: the whole-branch final-review reviewer's findings schema — same canonical severity-tier enum
+// (SSOT §11, guarded by test_ssot_drift) as REVIEW_TASK_SCHEMA, so a branch reviewer emitting a
+// foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
+// instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
+// sites in runFinalReview's reviewerAgent.
+const FINAL_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['findings'],
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+      },
+    },
   },
 }
 
@@ -5558,7 +5635,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
     + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+    + `"findings":[{"severity":"Critical|Important|Minor|Nit","file","title","cannot_verify_from_diff"}]}. `
+    + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
@@ -5574,7 +5652,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     // two-verdict review that returned the same findings. An unreadable external review (null / no
     // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
     if (res && Array.isArray(res.findings)) {
-      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
       return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
     }
   }
@@ -5694,24 +5772,25 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity":"Critical|Important|Minor|Nit","evidence"}]} ({"findings":[]} if nothing to flag). `
+      + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
     if (rEngine !== 'claude') {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+        schema: FINAL_REVIEW_SCHEMA,
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+        schema: FINAL_REVIEW_SCHEMA })
       return (out && Array.isArray(out.findings)) ? out.findings : null
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      schema: FINAL_REVIEW_SCHEMA })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -5726,7 +5805,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
     await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
+    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
+    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
+    // severity is dispatched to the fixer, never silently counted nowhere.
+    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED

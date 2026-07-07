@@ -5,6 +5,8 @@ This helper never decides loop terminals and never computes recurrence. It only 
 round kind, reviewer run/skip choices, tiers, and cheap-result escalation policy.
 """
 
+import circuit_breaker
+
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
 # #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
@@ -185,7 +187,9 @@ def confirmation_followup(surfaced_severities, confirmations_run, cross_cutting,
     Returns {rearm, park, atCap, reason} — all deterministic; the caller schedules another full
     confirmation iff `rearm`, and withholds certification (parks) iff `park`."""
     sevs = [s for s in (surfaced_severities or []) if isinstance(s, str)]
-    has_critical = "Critical" in sevs
+    # #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap
+    # (was `"Critical" in sevs`, case-sensitive, so a lowercase Critical resolved by scoped verify).
+    has_critical = any(circuit_breaker.is_critical(s) for s in sevs)
     trigger = has_critical or bool(cross_cutting)
     at_cap = confirmations_run >= max_confirmations
     if not trigger:

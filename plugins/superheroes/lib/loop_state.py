@@ -29,12 +29,17 @@ import argparse
 import json
 import sys
 
-_BLOCKING = ("Critical", "Important")
+import circuit_breaker
+
 _ALL_SEVERITIES = ("Critical", "Important", "Minor", "Nit")
 
 
 def _count_blocking(findings):
-    return sum(1 for f in findings if f.get("severity") in _BLOCKING)
+    # #276: review-code's continuation gate (code_loop_plan.py) counts blockers here. Route through
+    # the shared case-normalized, FAIL-CLOSED predicate so a foreign/mis-cased blocker is counted (was
+    # case-sensitive `in {Critical, Important}`, which silently dropped a lowercase `critical`) — the
+    # same fail-closed contract review-base.md now states for every consumer.
+    return sum(1 for f in findings if circuit_breaker.is_blocking(f.get("severity")))
 
 
 def _blocking_fixed_from_fix_batch(path):
@@ -56,8 +61,11 @@ def _skipped_blocking_from_resolutions(path):
     for r in data.get("resolutions", []):
         if r.get("action") != "skip":
             continue
-        sev = r.get("severity")
-        if sev in _BLOCKING or sev not in _ALL_SEVERITIES:   # blocking, or malformed -> conservative
+        # #276: the shared FAIL-CLOSED predicate — a skip whose severity is blocking, foreign, mis-cased,
+        # or missing counts as a blocking skip (a real blocker recorded without a clean severity must not
+        # silently uncount → false exit_clean). Was `in {Critical,Important} or not in {the four tiers}`;
+        # is_blocking is the same conservative direction, now case-normalized and single-sourced.
+        if circuit_breaker.is_blocking(r.get("severity")):
             n += 1
     return n
 

@@ -728,3 +728,31 @@ def test_compose_fix_context_answer_is_small(tmp_path):
                      "--dimensions", json.dumps(DIMS), "--out-path", str(out))
     assert size < LIMIT
     assert ans["bytes"] > LIMIT, "the worklist file itself is large — the point is the ANSWER is not"
+
+
+# ── #291: the confirmation-gate feeders route the blocking/Critical partition through the shared
+# fail-closed predicate so a mis-cased severity reaches the gate (canonical-only tests miss a revert).
+import loop_plan_common as _lpc  # noqa: E402
+
+
+def test_surfaced_blocking_severities_includes_miscased_blocker():
+    # A lowercase `critical` / foreign `blocker` is surfaced (was `in BLOCKING`, which dropped it →
+    # confirmation gate never saw it → no park).
+    rec = {"findings": [{"file": "a", "line": 1, "title": "x", "severity": "critical"},
+                        {"file": "b", "line": 2, "title": "y", "severity": "blocker"},
+                        {"file": "c", "line": 3, "title": "z", "severity": "Minor"}]}
+    out = rlp._surfaced_blocking_severities(rec)
+    assert out == ["critical", "blocker"]  # Minor excluded; both blockers surfaced
+
+
+def test_read_findings_file_counts_miscased_severities(tmp_path):
+    p = tmp_path / "findings.json"
+    p.write_text(json.dumps([
+        {"file": "a", "line": 1, "title": "x", "severity": "critical"},  # mis-cased Critical
+        {"file": "b", "line": 2, "title": "y", "severity": "blocker"},   # foreign blocker
+        {"file": "c", "line": 3, "title": "z", "severity": "Minor"},
+    ]))
+    res = _lpc.read_findings_file(str(p), "reviewer-deep")
+    assert res["valid"] is True
+    assert res["blocking"] == 2   # critical + blocker (was 0 under case-sensitive `in BLOCKING`)
+    assert res["critical"] == 1   # lowercase critical counts (was 0 under `== "Critical"`)

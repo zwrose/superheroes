@@ -1,0 +1,1 @@
+{"input": [["critical"], 1, false], "expected": {"rearm": true, "park": false, "atCap": false, "reason": "Critical surfaced by confirmation \u2014 one more full confirmation panel required"}}

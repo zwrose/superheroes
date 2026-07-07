@@ -35,9 +35,10 @@ import sys
 import circuit_breaker
 
 _TIERS = ("Critical", "Important", "Minor", "Nit")
-_BLOCKING = ("Critical", "Important")
-_NON_BLOCKING = ("Minor", "Nit")
 _DEFAULT_BLOCKING_SEVERITY = "Important"
+# #276: the blocking partition (was-tagged-blocking, blocking→non-blocking downgrade detection) routes
+# through circuit_breaker.is_blocking — the single, case-normalized, fail-closed predicate — so this
+# leg can never disagree with _partition / the breaker / the panel gate on what blocks.
 
 
 def _identity(f):
@@ -75,7 +76,7 @@ def consume(merged, leaf_verdicts):
         if action == "drop" and isinstance(reason, str) and reason.strip():
             drops.append({"id": identity, "file": f.get("file"), "title": f.get("title"),
                           "reason": reason.strip(),
-                          "was_blocking_tagged": f.get("severity") in _BLOCKING})
+                          "was_blocking_tagged": circuit_breaker.is_blocking(f.get("severity"))})
             continue
         kept = dict(f)
         kept["severity"] = _kept_severity(f, v)
@@ -83,7 +84,7 @@ def consume(merged, leaf_verdicts):
         # DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
         # (severity outcome unchanged) so the readout can flag it like a dropped blocker.
         from_severity = f.get("severity")
-        if from_severity in _BLOCKING and kept["severity"] in _NON_BLOCKING:
+        if circuit_breaker.is_blocking(from_severity) and not circuit_breaker.is_blocking(kept["severity"]):
             entry = {"id": identity, "file": f.get("file"), "title": f.get("title"),
                      "from": from_severity, "to": kept["severity"]}
             if isinstance(reason, str) and reason.strip():
