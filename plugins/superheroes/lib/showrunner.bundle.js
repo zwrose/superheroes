@@ -7706,9 +7706,9 @@ async function showrunner({ workItem }) {
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
   const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
-  if (typeof globalThis !== 'undefined') {
-    globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
-  }
+  // Config-derived model-tier map (the resolve-live baseline). The frozen-snapshot fork below
+  // (FR-8) merges the frozen pins over this before it is planted on the global.
+  const _ovConfig = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   // Plant the startup-resolved, storage-mode-aware docs dir for docDirFor (docPathFor /
   // notifyLedgerFor). Best-effort: an absent/empty doc_dir (resolution failed, or an older canned
   // response) plants nothing and the legacy in-repo fallback stays in force.
@@ -7735,7 +7735,20 @@ async function showrunner({ workItem }) {
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
   }
-  if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
+  // FR-8 / UFR-2 (second clause): the pin-or-resolve fork. The frozen preflight-readout snapshot for
+  // this work-item (read off the control-plane store on the SAME startup gather — no new leaf) pins
+  // each role's confirmed engine/model/effort; mergeFrozenSnapshot folds those pins over the
+  // config-derived maps (a pinned role wins; an unpinned role keeps the resolve-live value). When no
+  // snapshot is present (the rollback state), the merge returns the config-derived maps unchanged, so
+  // the seed is byte-equivalent to pre-readout. Both globals are planted from the merged result.
+  const _frozenSnapshot = _coerceObj((startupFacts && startupFacts.frozen_snapshot) || null)
+  const _merged = mergeFrozenSnapshot(
+    (_frozenSnapshot && typeof _frozenSnapshot === 'object' && !Array.isArray(_frozenSnapshot)) ? _frozenSnapshot : null,
+    _ovConfig, _epMap)
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_OVERRIDES = _merged.overrides
+    globalThis.__SR_ENGINE_PREFS = _merged.enginePrefs
+  }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   // #25: a FRESH quick run starts at `workhorse` (plan/review-plan/tasks/review-tasks skipped — the
@@ -7865,7 +7878,23 @@ function startupStateScript() {
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
+    // FR-8: the frozen preflight-readout snapshot + accepted per-run overrides ride the SAME startup
+    // gather (no new startup leaf — respect the #118 two-leaf budget). run_overrides.read is itself
+    // fail-open; any failure here degrades to no-overrides/no-snapshot, so the run resolves live
+    // exactly as it does pre-readout (the rollback state).
+    'frozen_overrides = {}',
+    'frozen_snapshot = None',
+    'try:',
+    '    import run_overrides',
+    '    _rec = run_overrides.read(wi, root)',
+    '    if isinstance(_rec, dict):',
+    '        _fo = _rec.get("overrides")',
+    '        frozen_overrides = _fo if isinstance(_fo, dict) else {}',
+    '        frozen_snapshot = _rec.get("frozenSnapshot")',
+    'except Exception:',
+    '    frozen_overrides = {}',
+    '    frozen_snapshot = None',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate, "frozen_overrides": frozen_overrides, "frozen_snapshot": frozen_snapshot}))',
   ].join('\n')
 }
 
@@ -7886,6 +7915,50 @@ async function readStartupState(workItem) {
   } catch (_) {
     return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', engine_prefs: null }
   }
+}
+
+// Pure pin-or-resolve fork (FR-8, UFR-2 second clause). Fold the frozen snapshot's pinned per-role
+// values over the config-derived model-tier + engine-pref maps: a role the snapshot PINS wins; a
+// role it left unavailable (no pin) keeps the config-derived resolve-live value. Behavior-preserving
+// when no snapshot is present — the config-derived maps are returned unchanged (the rollback state).
+// The frozen snapshot rows carry {role, engine?, model?, effort?} (preflight_readout's row shape);
+// only a row explicitly `overridden` seeds a pin, so a merely-rendered (non-overridden) row never
+// silently pins the config-derived value it merely echoed.
+function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
+  const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
+    ? Object.assign({}, baseOverrides) : {}
+  const src = (baseEnginePrefs && typeof baseEnginePrefs === 'object' && !Array.isArray(baseEnginePrefs))
+    ? baseEnginePrefs : {}
+  const enginePrefs = Object.assign({}, src)
+  enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
+    ? Object.assign({}, src.effort) : {}
+  const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
+  const _engineRoleKind = { review: 'reviewer', build: 'implementation', fix: 'implementation',
+    'author-plan': 'planAuthor' }
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    if (!row.overridden) continue                 // only an accepted override seeds a pin
+    const role = row.role
+    // Pin the model onto the model-tier override map (resolveModel reads __SR_OVERRIDES[role]).
+    if (typeof role === 'string' && typeof row.model === 'string' && row.model.trim()) {
+      overrides[role] = row.model
+    }
+    // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
+    const kind = row.kind === 'review-deep' ? 'review'
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+    const epKey = kind && Object.prototype.hasOwnProperty.call(_engineRoleKind, kind)
+      ? _engineRoleKind[kind] : null
+    if (epKey && typeof row.engine === 'string' && row.engine.trim()) {
+      enginePrefs[epKey] = row.engine
+    }
+    // Pin the effort onto the effort sub-map (resolveEffort reads __SR_ENGINE_PREFS.effort[role_kind]).
+    // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name.
+    if (kind && typeof row.effort === 'string' && row.effort.trim()) {
+      const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
+      enginePrefs.effort[effortKind] = row.effort
+    }
+  }
+  return { overrides, enginePrefs }
 }
 
 async function readDefinitionDraft(workItem, doc) {
@@ -9024,6 +9097,7 @@ module.exports.persistPhase = persistPhase
 module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
 module.exports.startupStateScript = startupStateScript
+module.exports.mergeFrozenSnapshot = mergeFrozenSnapshot
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained

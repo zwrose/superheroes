@@ -161,6 +161,10 @@ SHOWRUNNER_SMOKES = [
     # output-token deltas) and the spine's best-effort phase_cost / run_completed emit path.
     "plugins/superheroes/lib/tests/showrunner_cost_meter_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_cost_emit_smoke.js",
+    # spec showrunner-preflight-readout Task 9: the pin-or-resolve fork (FR-8, UFR-2 second clause) —
+    # a pinned frozen-snapshot value wins over the config-derived map; an unpinned field resolves
+    # live; no snapshot present -> the config-derived maps are returned unchanged (rollback state).
+    "plugins/superheroes/lib/tests/showrunner_preflight_freeze_smoke.js",
 ]
 
 
