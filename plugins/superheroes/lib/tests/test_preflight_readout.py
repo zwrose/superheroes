@@ -310,3 +310,30 @@ def test_cli_validate_override_emits_verdict():
                           "--field", "engine", "--value", "gpt"])
     obj = json.loads(out)
     assert obj["ok"] is False and "acceptedValues" in obj
+
+
+# --- Task 12: End-to-end assemble->render golden test + the <=40-line bound under a full
+# external pipeline ---
+
+def test_full_external_pipeline_render_within_bound_and_complete():
+    readers = _fake_readers(
+        prefs={"reviewer": "codex", "implementation": "cursor", "effort": {"review": "high"}},
+        authz={"codex": {"installed": True, "authed": True, "error": None},
+               "cursor": {"installed": True, "authed": False, "error": None}},
+        calibration={"status": "provisional"}, verify="npm test",
+        storage={"mode": "global", "docsPath": "/proj/docs"})
+    snap = preflight_readout.assemble("wi", "/root", readers=readers)
+    text = preflight_readout.render(snap)
+    lines = text.splitlines()
+    assert len(lines) <= 40                       # NFR scannability
+    assert "provisional" in text                  # FR-5
+    assert "npm test" in text                      # FR-6
+    assert "global" in text and "/proj/docs" in text  # FR-7
+    assert "External engines" in text              # FR-4
+    # cursor unauthorized -> the affected phase ROW itself shows the fallback flag (FR-4,
+    # premortem-001), not merely the External-engines summary line.
+    assert "falls back to Claude" in text
+    builder = [r for r in snap["phases"] if r["kind"] == "build"][0]
+    assert builder.get("fallbackToClaude") is True
+    # and the whole-run summary line still names the unauthorized engine
+    assert "NOT authorized" in text
