@@ -223,7 +223,7 @@ def _in_superheroes_repo(cwd):
         return False
 
 
-def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None):
+def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None):
     """('allow'|'ask'|'deny', reason). Decision order:
 
       1. non-string                         → deny (fail-closed)
@@ -272,12 +272,17 @@ def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None
     # Non-gated branch (today: unconditional allow). Consult the allowance layer; it can only
     # turn a would-be prompt into an allow, never flip an allow to a deny.
     try:
-        verdict, why = permission_rules.evaluate(command, cwd, run_id)
+        # Inject our own gated_action as the floor re-check (primary path; breaks the load-bearing
+        # upward call of the enforcer<->permission_rules cycle — the lazy import inside evaluate is
+        # now only the fallback for callers that inject nothing). work_item namespaces the per-run
+        # frozen file (a lease generation is per-work-item; see permission_rules._run_path).
+        verdict, why = permission_rules.evaluate(command, cwd, run_id,
+                                                 work_item=work_item, gated_check=gated_action)
         if verdict == "allow":
             # #149 auditability NFR: record this auto-allowance in the run's own journal. Pure
             # best-effort observability — fail-open, NEVER affects the decision or latency, and
             # fires ONLY here (the allowance layer's allow), not on the default-allow fall-through.
-            _journal_allowance(command, cwd, run_id, why)
+            _journal_allowance(command, cwd, run_id, why, work_item=work_item)
             return ("allow", "auto-allowed (%s)" % why)
     except Exception:
         pass
@@ -399,7 +404,7 @@ def _active_work_item(cwd, run_id):
     return permission_rules.resolve_active_lease(cwd, run_id)[0]
 
 
-def _journal_allowance(command, cwd, run_id, reason):
+def _journal_allowance(command, cwd, run_id, reason, work_item=None):
     """Record an auto-allowance in the active run's own events.jsonl (#149 auditability NFR:
     "every automatic allowance ... made during a run is visible in that run's records").
 
@@ -412,7 +417,10 @@ def _journal_allowance(command, cwd, run_id, reason):
     try:
         import control_plane
         import journal
-        work_item = _active_work_item(cwd, run_id)
+        if not work_item:
+            # fallback for callers that did not thread the pair (e.g. direct classify_command
+            # use in tests) — same shared seam, so attribution cannot drift.
+            work_item = _active_work_item(cwd, run_id)
         if not work_item:
             return
         events = control_plane.paths(cwd, work_item)["events"]
@@ -441,11 +449,13 @@ def hook(stdin_text, host="codex"):
     in_scope = _in_superheroes_repo(cwd)
     if tool in _CMD_TOOLS:
         command = _command_text(ti)
-        # Resolve the active run's run_id ONCE per hook invocation (a single Bash call), then
-        # thread it + the payload cwd into the allowance layer via classify_command.
-        run_id = _active_run_id(cwd)
+        # Resolve the active run's (work_item, run_id) pair ONCE per hook invocation (a single
+        # Bash call), then thread both + the payload cwd into the allowance layer — the pair keeps
+        # the frozen-file read work-item-namespaced and the allowance journal attributed to the
+        # SAME run the evaluation used (never re-resolved downstream).
+        work_item, run_id = permission_rules.resolve_active_lease(cwd)
         decision, reason = classify_command(command, host=host, in_scope=in_scope,
-                                            cwd=cwd, run_id=run_id)
+                                            cwd=cwd, run_id=run_id, work_item=work_item)
         action = gated_action(command)
         # Codex (deny-only host) gated overlay: the deny is the BACKSTOP that forces the
         # ask; a live owner-minted allowance lets the next matching call through once.

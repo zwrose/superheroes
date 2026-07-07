@@ -537,7 +537,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
     // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
     // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
-    try { require('./showrunner.js')._recordComposed(generation, prompt) } catch (_e) { /* fail-open */ }
+    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt,

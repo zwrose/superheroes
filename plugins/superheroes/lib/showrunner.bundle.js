@@ -5480,7 +5480,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
     // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
     // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
-    try { require('./showrunner.js')._recordComposed(generation, prompt) } catch (_e) { /* fail-open */ }
+    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt,
@@ -6611,17 +6611,19 @@ function _permHelper(call, args) {
 }
 // freeze_run_rules(run_id, cwd): snapshot the current provenance-valid rules for THIS run (a mid-run
 // edit is invisible to a run that already froze — UFR-9) + init the empty composed set + lazy-reap.
-function _defaultFreezeRunRules(runId, cwd) {
+function _defaultFreezeRunRules(runId, cwd, workItem) {
   if (runId == null) return   // no active run -> nothing to freeze (FR-3: allowance inert)
-  _permHelper('permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2])',
-    [runId, cwd || procCwd()])
+  // work_item namespaces the per-run frozen file (a lease generation is per-work-item, so two
+  // concurrent same-project runs would otherwise collide on runs/<gen>.json — UFR-9/FR-8).
+  _permHelper('permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2], work_item=(sys.argv[3] or None))',
+    [runId, cwd || procCwd(), workItem || ''])
 }
 // record_composed(run_id, command): register a spine-composed leaf command in this run's frozen file so
 // evaluate() allows the leaf to run it byte-for-byte (FR-8), and only within the run that composed it.
-function _defaultRecordComposed(runId, command) {
+function _defaultRecordComposed(runId, command, workItem) {
   if (runId == null || typeof command !== 'string' || !command) return
-  _permHelper('permission_rules.record_composed(sys.argv[1], sys.argv[2], sys.argv[3])',
-    [runId, command, procCwd()])
+  _permHelper('permission_rules.record_composed(sys.argv[1], sys.argv[2], sys.argv[3], work_item=(sys.argv[4] or None))',
+    [runId, command, procCwd(), workItem || ''])
 }
 // Mutable holders so both seams are overridable (the smoke harness swaps in observers).
 const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
@@ -8006,7 +8008,7 @@ async function showrunner({ workItem }) {
   // Grouped under its OWN 'permission-freeze' progress phase (NOT 'startup') so it never inflates
   // the deliberately-two-leaf startup stretch (#118 budget): a single run-start bookkeeping leaf.
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
-  _permissionSeam.freeze(r.generation, procCwd())
+  _permissionSeam.freeze(r.generation, procCwd(), workItem)
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
   // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)

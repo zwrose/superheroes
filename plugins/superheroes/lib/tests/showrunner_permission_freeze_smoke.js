@@ -24,7 +24,7 @@ global.log = () => {}
 async function freezeOnceAtRunStart() {
   const frozen = []
   const origFreeze = sr._freezeRunRules
-  sr._freezeRunRules = (runId, cwd) => { frozen.push({ runId, cwd }) }
+  sr._freezeRunRules = (runId, cwd, workItem) => { frozen.push({ runId, cwd, workItem }) }
 
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
@@ -57,6 +57,8 @@ async function freezeOnceAtRunStart() {
   assert.strictEqual(frozen.length, 1, 'freeze_run_rules is called exactly once at run start')
   assert.strictEqual(frozen[0].runId, 'GEN9', 'the freeze run_id is the reconcile lease generation')
   assert.ok(frozen[0].cwd, 'the freeze passes a cwd (the store is config-keyed off it)')
+  assert.strictEqual(frozen[0].workItem, 'wi-freeze',
+    'the freeze passes the work item (namespaces the per-run file — no cross-run collision)')
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +68,7 @@ async function buildRecordsComposedLeafCommands() {
   const bp = require('../build_phase.js')
   const recorded = []
   const origRecord = sr._recordComposed
-  sr._recordComposed = (runId, command) => { recorded.push({ runId, command }) }
+  sr._recordComposed = (runId, command, workItem) => { recorded.push({ runId, command, workItem }) }
 
   // Drive the REAL leaf-command composition: buildOneTask composes the leaf command via
   // buildLeafPrompt, then dispatches it. We only need to reach (and pass) that composition point —

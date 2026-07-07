@@ -157,7 +157,16 @@ def _hash(command):
     return hashlib.sha256(command.encode("utf-8")).hexdigest()
 
 
-def _run_path(run_id, cwd, root):
+def _run_path(run_id, cwd, root, work_item=None):
+    """Per-run frozen-file path. Namespaced by work-item when known: a lease `generation` is a
+    PER-WORK-ITEM counter (two concurrent same-project runs both start at generation 1), so a
+    bare-`run_id` filename would collide across concurrent runs — run B's freeze would wipe run
+    A's frozen snapshot (UFR-9) and reset its composed set (FR-8). `work_item=None` keeps the
+    legacy bare name (fail-safe for callers with no work-item; write and read sides must simply
+    agree, and both thread the same lease-resolved work-item)."""
+    if work_item:
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", str(work_item))
+        return os.path.join(_store_dir(cwd, root), "runs", "%s--%s.json" % (safe, run_id))
     return os.path.join(_store_dir(cwd, root), "runs", "%s.json" % run_id)
 
 
@@ -188,18 +197,32 @@ def resolve_active_lease(cwd, run_id=None):
     fail-safe direction is always toward prompting."""
     try:
         store = control_plane.checkout_dir(cwd)
+        live = []
         for work_item in ref_lock.active_work_items(store):
             _sha, lease = ref_lock.read_lease(store, work_item)
             if not isinstance(lease, dict):
                 continue
-            generation = lease.get("generation")
-            if run_id is None:
-                return (work_item, generation)
-            if str(generation) == str(run_id):
-                return (work_item, generation)
+            live.append((work_item, lease.get("generation")))
+        if run_id is not None:
+            # "is THIS run live" — with two same-numbered generations (each work-item counts from
+            # 1), prefer the lease whose work-item appears in cwd (the leaf's own build worktree
+            # embeds it), so attribution never lands on the wrong concurrent run when the cwd
+            # disambiguates; else first match (sorted, deterministic).
+            matches = [p for p in live if str(p[1]) == str(run_id)]
+            if len(matches) > 1 and cwd:
+                named = [p for p in matches if p[0] in str(cwd)]
+                if len(named) == 1:
+                    return named[0]
+            return matches[0] if matches else (None, None)
+        if len(live) > 1 and cwd:
+            # "what run is active here" with >1 live lease: prefer the unique work-item named in
+            # cwd; ambiguity falls back to sorted-first (deterministic, fail-safe).
+            named = [p for p in live if p[0] in str(cwd)]
+            if len(named) == 1:
+                return named[0]
+        return live[0] if live else (None, None)
     except Exception:
         return (None, None)
-    return (None, None)
 
 
 def _run_is_live(run_id, cwd, root):
@@ -232,7 +255,9 @@ def _reap_stale(cwd, root):
             try:
                 if os.path.getmtime(path) >= cutoff:
                     continue                                 # recent -> keep
-                rid = name[:-len(".json")]
+                # namespaced names are "<work-item>--<generation>.json"; liveness keys on the
+                # generation (the lease's counter), so take the stem's tail past the separator.
+                rid = name[:-len(".json")].rsplit("--", 1)[-1]
                 if _run_is_live(rid, cwd, root):
                     continue                                 # live lease -> keep
                 os.remove(path)
@@ -242,7 +267,7 @@ def _reap_stale(cwd, root):
         return
 
 
-def freeze_run_rules(run_id, cwd, root=None):
+def freeze_run_rules(run_id, cwd, root=None, work_item=None):
     """Snapshot the current provenance-valid `rules.json` into `runs/<run_id>.json`, then
     lazily reap stale sibling run files.
 
@@ -251,19 +276,19 @@ def freeze_run_rules(run_id, cwd, root=None):
     per-run `composed` command-hash set (FR-8). Reap runs AFTER the write so a crash
     mid-freeze still leaves this run's own file intact."""
     snapshot = {"rules": rules(cwd, root), "composed": []}
-    path = _run_path(run_id, cwd, root)
+    path = _run_path(run_id, cwd, root, work_item=work_item)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     control_plane.atomic_write(path, json.dumps(snapshot))
     _reap_stale(cwd, root)
 
 
-def frozen_rules(run_id, cwd, root=None):
+def frozen_rules(run_id, cwd, root=None, work_item=None):
     """Read the per-run frozen snapshot for `run_id`. Fail-safe (UFR-2): a missing / corrupt /
     non-dict run file yields the empty snapshot `{"rules": [], "composed": []}`
     (→ no allowance → prompt), never a raise."""
     empty = {"rules": [], "composed": []}
     try:
-        with open(_run_path(run_id, cwd, root)) as f:
+        with open(_run_path(run_id, cwd, root, work_item=work_item)) as f:
             data = json.load(f)
     except Exception:
         return empty
@@ -275,16 +300,16 @@ def frozen_rules(run_id, cwd, root=None):
     }
 
 
-def record_composed(run_id, command, cwd, root=None):
+def record_composed(run_id, command, cwd, root=None, work_item=None):
     """Append the byte-exact hash of a spine-composed `command` to `run_id`'s frozen file
     (read-modify-write, idempotent — a repeat of the same command is a no-op). This is how
     `evaluate`'s composed-exact allow set (FR-8) is populated for the run that composed the
     command, and only that run."""
-    snapshot = frozen_rules(run_id, cwd, root)
+    snapshot = frozen_rules(run_id, cwd, root, work_item=work_item)
     h = _hash(command)
     if h not in snapshot["composed"]:
         snapshot["composed"].append(h)
-    path = _run_path(run_id, cwd, root)
+    path = _run_path(run_id, cwd, root, work_item=work_item)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     control_plane.atomic_write(path, json.dumps(snapshot))
 
@@ -292,7 +317,7 @@ def record_composed(run_id, command, cwd, root=None):
 # --- Task 4: evaluate — the pure allowance decision (FR-5/6/8, UFR-1, UFR-2) ---
 
 
-def evaluate(command, cwd, run_id, root=None):
+def evaluate(command, cwd, run_id, root=None, work_item=None, gated_check=None):
     """The pure below-the-floor allowance decision. Returns ('allow', reason) iff a frozen
     routine family matches (FR-6), the command byte-equals a spine-composed command frozen
     for `run_id` (FR-8), or the command is confined to a real managed worktree (FR-5);
@@ -306,8 +331,10 @@ def evaluate(command, cwd, run_id, root=None):
       called where the floor already resolved to the non-gated default allow;
     - any error is caught and falls through toward prompting (UFR-2).
 
-    `enforcer` is imported lazily inside the function to avoid a module-level import cycle
-    (enforcer imports permission_rules for the Task-5 wiring)."""
+    The floor re-check uses the INJECTED `gated_check` when the caller (enforcer) provides its
+    own `gated_action` — the primary path, which removes the load-bearing upward call of the
+    enforcer<->permission_rules cycle. The lazy `enforcer` import remains ONLY as the fail-closed
+    fallback for callers that inject nothing (tests, direct CLI use)."""
     if not isinstance(command, str):
         return ("fall", "non-string")
     # FR-3: the layer is INERT with no active showrunner run. A falsy `run_id` (an interactive
@@ -322,13 +349,15 @@ def evaluate(command, cwd, run_id, root=None):
     # partition; sufficient because `evaluate` is called solely where the floor already
     # resolved to the non-gated default allow.
     try:
-        import enforcer
-        if enforcer.gated_action(command):
+        if not callable(gated_check):
+            import enforcer
+            gated_check = enforcer.gated_action
+        if gated_check(command):
             return ("fall", "gated command — floor owns it")
     except Exception:
         return ("fall", "allowance error (fail-safe)")
     try:
-        frozen = frozen_rules(run_id, cwd, root)
+        frozen = frozen_rules(run_id, cwd, root, work_item=work_item)
         # Composed-exact (FR-8): a command byte-frozen for THIS run.
         if _hash(command) in frozen.get("composed", []):
             return ("allow", "composed-exact")

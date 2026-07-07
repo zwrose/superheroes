@@ -607,18 +607,22 @@ def test_unconditional_surfaces_still_deny_before_allowance(monkeypatch):
 # --- Task 6: hook threads cwd + run_id; selfcheck asserts the invariant (UFR-1) ---
 
 
-def test_hook_passes_cwd_and_run_id(monkeypatch):
+def test_hook_passes_cwd_run_id_and_work_item(monkeypatch):
+    # The hook resolves the (work_item, run_id) PAIR once via the shared lease seam and
+    # threads BOTH into classify_command (work_item namespaces the frozen-file read and
+    # keeps the allowance journal attributed to the same run the evaluation used).
     seen = {}
 
-    def fake_classify(command, host="codex", in_scope=True, cwd=None, run_id=None):
-        seen.update(cwd=cwd, run_id=run_id)
+    def fake_classify(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None):
+        seen.update(cwd=cwd, run_id=run_id, work_item=work_item)
         return ("allow", "")
 
     monkeypatch.setattr(enforcer, "classify_command", fake_classify)
-    monkeypatch.setattr(enforcer, "_active_run_id", lambda cwd: "RUN9")
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: ("wi-9", "RUN9"))
     payload = '{"tool_name":"Bash","tool_input":{"command":"python3 -m pytest"},"cwd":"/w"}'
     enforcer.hook(payload, host="claude")
-    assert seen["cwd"] == "/w" and seen["run_id"] == "RUN9"
+    assert seen["cwd"] == "/w" and seen["run_id"] == "RUN9" and seen["work_item"] == "wi-9"
 
 
 def test_selfcheck_matrix_holds_with_allowance(monkeypatch):
@@ -866,7 +870,7 @@ def test_hook_allowance_fires_end_to_end_through_real_lease(tmp_path, monkeypatc
     # Seed a routine-family rule + freeze it for THIS run's generation, in the real store
     # (default root == the pinned control_plane.store_root()).
     permission_rules.set_rule(cwd, {"family": "test-run", "pattern": r"\bpytest\b"})
-    permission_rules.freeze_run_rules(generation, cwd)
+    permission_rules.freeze_run_rules(generation, cwd, work_item="wi-run")
     cmd = "python3 -m pytest -q"
     rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
                                    "tool_input": {"command": cmd}}), host="claude")
@@ -887,7 +891,7 @@ def test_hook_falls_back_when_lease_released_no_allowance(tmp_path, monkeypatch,
     import ref_lock
     cwd, generation, store = _real_lease_cwd(tmp_path, monkeypatch, "wi-run")
     permission_rules.set_rule(cwd, {"family": "test-run", "pattern": r"\bpytest\b"})
-    permission_rules.freeze_run_rules(generation, cwd)
+    permission_rules.freeze_run_rules(generation, cwd, work_item="wi-run")
     assert ref_lock.release(store, "wi-run", generation) is True     # run ends -> lease gone
     assert enforcer._active_run_id(cwd) is None                       # real seam sees no run
     cmd = "python3 -m pytest -q"
@@ -897,3 +901,66 @@ def test_hook_falls_back_when_lease_released_no_allowance(tmp_path, monkeypatch,
     events = control_plane.paths(cwd, "wi-run")["events"]
     fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
     assert fired == [], "no active run -> allowance layer inert -> nothing journaled"
+
+
+# --- fix round 2 (escalated pair): work-item-namespaced run files + injected floor check ---
+
+
+def test_run_files_namespaced_by_work_item_no_collision(tmp_path, monkeypatch):
+    # premortem-002: a lease generation is a per-work-item counter, so two concurrent
+    # same-project runs both present generation 1. Namespaced run files keep run B's freeze
+    # from wiping run A's frozen snapshot (UFR-9) or resetting its composed set (FR-8).
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "proj")
+    os.makedirs(cwd, exist_ok=True)
+    permission_rules.freeze_run_rules(1, cwd, work_item="wi-a")
+    permission_rules.record_composed(1, "cmd-for-a", cwd, work_item="wi-a")
+    permission_rules.freeze_run_rules(1, cwd, work_item="wi-b")  # would clobber pre-fix
+    a = permission_rules.frozen_rules(1, cwd, work_item="wi-a")
+    b = permission_rules.frozen_rules(1, cwd, work_item="wi-b")
+    assert permission_rules._hash("cmd-for-a") in a["composed"]   # A's set survived B's freeze
+    assert b["composed"] == []
+    # cross-run isolation: A's composed command confers nothing under B's file
+    assert permission_rules._hash("cmd-for-a") not in b["composed"]
+
+
+def test_resolve_active_lease_prefers_cwd_matching_work_item(tmp_path, monkeypatch):
+    # premortem-002 attribution: with TWO live leases in one clone, a cwd that names exactly
+    # one work-item (a build worktree path embeds it) resolves to THAT run; an ambiguous cwd
+    # falls back to sorted-first (deterministic).
+    import control_plane
+    import ref_lock
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    ok_a, gen_a, _ = ref_lock.acquire(store, "wi-alpha")
+    ok_b, gen_b, _ = ref_lock.acquire(store, "wi-beta")
+    assert ok_a and ok_b
+    wt_b = str(tmp_path / "trees" / "wi-beta-1234" / "sub")
+    # a real build worktree shares the clone's common-dir store key; a scratch dir does not,
+    # so pin the store resolution to target the preference logic itself.
+    monkeypatch.setattr(permission_rules.control_plane, "checkout_dir", lambda c: store)
+    wi, gen = permission_rules.resolve_active_lease(wt_b)
+    assert (wi, gen) == ("wi-beta", gen_b)
+    wi_first, _ = permission_rules.resolve_active_lease(cwd)   # no work-item in cwd -> sorted-first
+    assert wi_first == "wi-alpha"
+
+
+def test_evaluate_uses_injected_gated_check_and_lazy_fallback(tmp_path, monkeypatch):
+    # architecture-001: the enforcer injects its own gated_action (primary path — no upward
+    # import); a caller that injects nothing still gets the lazy fail-closed fallback.
+    import permission_rules
+    flagged = {}
+
+    def fake_gated(cmd):
+        flagged["cmd"] = cmd
+        return True
+
+    verdict, why = permission_rules.evaluate("echo hi", None, "RUN1", gated_check=fake_gated)
+    assert verdict == "fall" and "floor owns it" in why and flagged["cmd"] == "echo hi"
+    # fallback: no injection -> lazy enforcer import still gates a real owner-role command
+    verdict2, why2 = permission_rules.evaluate("gh pr " + "merge 1", None, "RUN1")
+    assert verdict2 == "fall" and "floor owns it" in why2
