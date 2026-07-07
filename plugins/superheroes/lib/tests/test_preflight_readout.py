@@ -312,6 +312,83 @@ def test_cli_validate_override_emits_verdict():
     assert obj["ok"] is False and "acceptedValues" in obj
 
 
+# --- Documented-invocation regression: the readers get (cwd, store-base) — NOT (root, root) ---
+# The suite above drives assemble() with readers= injected, so it never exercises _load_readers'
+# real (cwd, store-base) wiring — the exact seam #221 recurred in here. These tests drive the
+# SHIPPED CLI path (main() -> assemble -> _load_readers, no readers= injection) against an
+# out-of-repo store fixture carrying a non-default engine pref + confirmed status, and assert the
+# readout reflects the REAL calibration. The adversarial control pins that the old (root, root)
+# shape produces the degenerate all-claude/provisional fallback (mirroring the #221 smoke).
+
+import importlib.util as _u
+import subprocess
+
+
+def _load_core_md():
+    spec = _u.spec_from_file_location(
+        "core_md", os.path.join(os.path.dirname(__file__), "..", "core_md.py"))
+    cm = _u.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    return cm
+
+
+def _fixture_repo_with_out_of_repo_calibration(tmp_path, monkeypatch):
+    """A git repo with NO in-repo calibration + an out-of-repo store holding core.md with a
+    non-default engine pref + confirmed status. The store-base seam (SUPERHEROES_STORE_ROOT)
+    points at the store, so the REAL default-store read (store-base=None) resolves it. A fresh
+    repo has no calibration evidence -> GLOBAL (out-of-repo) mode, so the write lands in the store
+    — the copy only reachable via the default store, never via <repo>/projects/<key>/config."""
+    repo = str(tmp_path / "repo")
+    store = str(tmp_path / "store")
+    os.makedirs(repo)
+    subprocess.run(["git", "init", "-q", repo], check=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
+    cm = _load_core_md()
+    cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
+                    "patterns": "", "enginePreferences": {"reviewer": "codex",
+                                                          "implementation": "cursor"}},
+             "confirmed", root=None, now="2026-06-30")
+    return repo, store
+
+
+def test_documented_cli_invocation_reflects_real_out_of_repo_calibration(tmp_path, monkeypatch):
+    # The SHIPPED path: main() assemble with --work-item/--root (--root is the repo, exactly what
+    # the SKILL passes: `--root "$(git rev-parse --show-toplevel)"`). No readers= injection.
+    repo, _store = _fixture_repo_with_out_of_repo_calibration(tmp_path, monkeypatch)
+    code, out = _run_cli(["assemble", "--work-item", "wi", "--root", repo])
+    assert code == 0
+    snap = json.loads(out)
+    # The owner's REAL prefs round-trip: the review rows dispatch on codex, the build rows on cursor.
+    review = [r for r in snap["phases"] if r["kind"] in ("review", "review-deep")]
+    assert review and all(r["engine"] == "codex" for r in review)
+    build = [r for r in snap["phases"] if r["kind"] == "build"]
+    assert build and all(r["engine"] == "cursor" for r in build)
+    # And the REAL confirmed status, not the provisional fallback.
+    assert snap["calibration"]["provisional"] is False
+    assert snap["calibration"]["status"] == "confirmed"
+
+
+def test_documented_invocation_adversarial_old_root_root_shape_degrades(tmp_path, monkeypatch):
+    # Adversarial control (mirrors the #221 smoke): the OLD (root, root) shape passed the repo root
+    # into every store-base slot -> calibration resolves under a never-existing
+    # <repo>/projects/<key>/config/core.md -> the fail-open degrades to all-claude + provisional.
+    # This proves the fixture is discriminating: it round-trips only via the correct (cwd, None) wiring.
+    repo, _store = _fixture_repo_with_out_of_repo_calibration(tmp_path, monkeypatch)
+    # Reproduce the buggy wiring directly against the same fixture, bypassing _load_readers.
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    import engine_pref as _ep
+    cm = _load_core_md()
+    degraded_prefs = _ep.load_engine_prefs(repo, repo)          # (root, root) — the bug
+    assert (degraded_prefs["reviewer"], degraded_prefs["implementation"]) == ("claude", "claude")
+    degraded_cal = cm.read(repo, repo)                          # (root, root) — the bug
+    # read() returns None (absent file) for the phantom in-store path -> assemble maps that to provisional.
+    assert degraded_cal is None
+    # Sanity: the FIXED wiring on the same fixture DOES round-trip (the two shapes truly differ here).
+    fixed_prefs = _ep.load_engine_prefs(repo, None)
+    assert (fixed_prefs["reviewer"], fixed_prefs["implementation"]) == ("codex", "cursor")
+    assert (cm.read(repo, None) or {}).get("status") == "confirmed"
+
+
 # --- Task 12: End-to-end assemble->render golden test + the <=40-line bound under a full
 # external pipeline ---
 

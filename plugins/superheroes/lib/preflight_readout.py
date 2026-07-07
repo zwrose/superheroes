@@ -265,22 +265,35 @@ def _read_field(fn):
 def _load_readers(work_item, root):
     """Real-reader loader: read each source once via its existing reader, EACH wrapped in _read_field
     so a raise degrades that one field to _RAISE (assemble maps _RAISE -> unavailable + degraded[]),
-    never the whole readout. Only the shared setup (profile path) can raise past this into UFR-3."""
+    never the whole readout. Only the shared setup (profile path) can raise past this into UFR-3.
+
+    `root` is the repo working tree (the CLI's --root == `git rev-parse --show-toplevel`). It is the
+    `cwd` every reader wants — NEVER the store-base override. The store-base is a distinct test seam:
+    readers that take it as their `root`/`store_root` second arg default it to None so the REAL store
+    (control_plane.store_root(), via the ~/.claude/superheroes seam) resolves. Passing the repo root
+    into that store-base slot collapses two different parameters and resolves calibration under a
+    never-existing <repo>/projects/<key>/config/core.md — the fail-open then silently degrades the
+    whole readout to the provisional/all-Claude fallback (this is the #221 recurrence: engine_pref
+    and core_md, plus mode_registry, take (cwd, store-base) — not (root, root)). Readers whose single
+    arg IS the repo cwd (resolve_profile_path, engine_detect.probe, verify_command_cli.resolve_command)
+    correctly receive `root`; definition_doc.resolve_work_item_dir's `root`/`cwd` ARE the repo, its
+    store_root seam defaults to None."""
     import core_md, verify_command_cli, mode_registry, definition_doc
     import engine_pref as _ep
     # Shared setup — a raise here has no single owning field, so it (correctly) escapes to assemble's
-    # total-failure guard (UFR-3), not a per-field degrade.
+    # total-failure guard (UFR-3), not a per-field degrade. resolve_profile_path's arg is the repo cwd.
     profile = model_tier_overrides.resolve_profile_path(root)
     # Per-field reads — each independently guarded so one raise degrades only its own field (UFR-2).
-    prefs = _read_field(lambda: _ep.load_engine_prefs(root, root))
+    # (cwd=root, store-base=None) for every reader whose second arg is the store-base seam.
+    prefs = _read_field(lambda: _ep.load_engine_prefs(root, None))
     tier_overrides = _read_field(lambda: model_tier_overrides.load_overrides(profile))
-    authz = _read_field(lambda: engine_detect.probe(root))
+    authz = _read_field(lambda: engine_detect.probe(root))  # probe's arg is the git cwd (repo)
     calibration = _read_field(
-        lambda: {"status": (core_md.read(root, root) or {}).get("status", "provisional")})
-    verify = _read_field(lambda: verify_command_cli.resolve_command(root))
-    storage = _read_field(lambda: {"mode": mode_registry.resolve(root, root)["mode"],
+        lambda: {"status": (core_md.read(root, None) or {}).get("status", "provisional")})
+    verify = _read_field(lambda: verify_command_cli.resolve_command(root))  # arg is the repo cwd
+    storage = _read_field(lambda: {"mode": mode_registry.resolve(root, None)["mode"],
                                    "docsPath": definition_doc.resolve_work_item_dir(
-                                       work_item, root=root, cwd=root)})
+                                       work_item, root=root, cwd=root)})  # root/cwd = repo; store_root=None
     return {"prefs": prefs, "tier_overrides": tier_overrides, "authz": authz,
             "calibration": calibration, "verify": verify, "storage": storage}
 
