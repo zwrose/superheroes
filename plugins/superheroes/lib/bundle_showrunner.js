@@ -471,12 +471,11 @@ function stripComments(src) {
     const c = s[i]
     if (c === '\n') {
       line++
-      // State that persists across the newline decides the NEXT line's start context. Only block
-      // comments and template text legitimately span lines; strings/regex do not (defensive reset).
-      const persist = (state === 'block' || state === 'tpl' || state === 'sq' ||
-                       state === 'dq' || state === 'regex' || state === 'rclass') ? false
-                    : (top().tpl ? false : true)
-      codeStart[line] = persist
+      // The NEXT line begins in plain-code context only when we are in the base `code`/`line` states
+      // (a line comment ends at the newline). Every other state — block comment or any string/template/
+      // regex — is either a multi-line construct we must keep verbatim (block, tpl) or a defensive
+      // non-code reset (sq/dq/regex/rclass never legitimately span a line).
+      codeStart[line] = (state === 'code' || state === 'line')
       if (state === 'line') state = 'code'
       if (state === 'sq' || state === 'dq' || state === 'regex' || state === 'rclass') state = 'code'
       escaped = false
@@ -500,10 +499,19 @@ function stripComments(src) {
           if (frames.length > 1) { frames.pop(); state = 'tpl'; lastTok = 'value'; i++; break }  // close ${}
           lastTok = 'value'; i++; break
         }
+        if ((c === '+' && s[i + 1] === '+') || (c === '-' && s[i + 1] === '-')) {
+          lastTok = 'value'; i += 2; break   // postfix ++/-- yields a value: a following `/` is division
+        }
         if (isIdStart(c)) {
           let j = i + 1
           while (j < N && isIdPart(s[j])) j++
-          lastTok = EXPR_KW.has(s.slice(i, j)) ? 'op' : 'value'
+          // A keyword in PROPERTY position (`obj.in`, `x.of`) is an identifier, never the expression-
+          // introducing keyword — look back past whitespace for a `.`/`?.` so a following `/` reads as
+          // division. Otherwise a genuine `return`/`typeof`/… puts `/` in regex position.
+          let p = i - 1
+          while (p >= 0 && (s[p] === ' ' || s[p] === '\t' || s[p] === '\r' || s[p] === '\n')) p--
+          const propAccess = p >= 0 && s[p] === '.'
+          lastTok = (!propAccess && EXPR_KW.has(s.slice(i, j))) ? 'op' : 'value'
           i = j; break
         }
         if (isDigit(c)) {
@@ -516,7 +524,9 @@ function stripComments(src) {
       }
       case 'line': { i++; break }
       case 'block': {
-        if (c === '*' && s[i + 1] === '/') { state = 'code'; lastTok = 'op'; i += 2; break }
+        // A block comment is transparent: leave lastTok as whatever preceded the comment so a `/`
+        // right after `*/` is classified by the real prior token (`a /*c*/ / b` is division).
+        if (c === '*' && s[i + 1] === '/') { state = 'code'; i += 2; break }
         i++; break
       }
       case 'sq': {
@@ -554,6 +564,17 @@ function stripComments(src) {
     }
   }
 
+  // Tokenizer self-check (dependency-free). A correct scan of the whole bundle ends in base-code state
+  // with only the bottom frame left. Ending mid-template or mid-block-comment (or with a leftover
+  // `${...}` frame) means the regex-vs-division heuristic desynced and opened a construct that never
+  // closed — the one way a wrongly-stripped template line could slip past `node --check` (stripping
+  // string data still parses). Fail closed rather than emit a corrupted bundle. verifyEmit's node parse
+  // check cannot see this class of bug; this can.
+  if ((state !== 'code' && state !== 'line') || frames.length !== 1) {
+    throw new Error('stripComments: tokenizer desync at EOF (state=' + state + ', frames=' +
+      frames.length + ') — refusing to strip; a source construct broke the regex/division lexer')
+  }
+
   const lines = s.split('\n')
   const out = []
   for (let k = 0; k < lines.length; k++) {
@@ -567,15 +588,23 @@ function stripComments(src) {
 }
 
 // verifyEmit: `node --check` the emitted bundle so a stripper bug can never ship an artifact that
-// doesn't parse. Runs on every emit() (so --write and --check both gate on it). Throws on any syntax
-// error; the bundle carries top-level `export`/`return` (valid in the Workflow runtime's async wrapper),
-// which `node --check` accepts, so a clean bundle passes.
+// doesn't parse. Runs on every emit() (so --write and --check both gate on it).
+//
+// The bundle's first statement is `export const meta` (ESM) and its entry uses a top-level `return`
+// (function/async-wrapper only) — a combination `node --check` rejects on node without module-syntax
+// detection (< 20.19 / < 22.7). So we check the async-WRAPPED form (the exact shape the Workflow
+// runtime and the bundle smoke evaluate), which parses on every node version. Uses process.execPath
+// (the node already running the bundler) — never a bare `node` that may be off PATH. A distinct temp
+// name per call avoids collisions when bundles are emitted concurrently.
+let __verifyCheckSeq = 0
 function verifyEmit(out) {
-  const tmp = path.join(os.tmpdir(), 'showrunner-bundle-check-' + process.pid + '.js')
+  const wrapped = ';(async () => {\n' + out.replace(/export\s+const\s+meta/, 'const meta') + '\n})();'
+  const tmp = path.join(os.tmpdir(), 'sr-bundle-check-' + process.pid + '-' + (++__verifyCheckSeq) + '.js')
   try {
-    fs.writeFileSync(tmp, out)
-    execFileSync('node', ['--check', tmp], { stdio: 'pipe' })
+    fs.writeFileSync(tmp, wrapped)
+    execFileSync(process.execPath, ['--check', tmp], { stdio: 'pipe' })
   } catch (e) {
+    if (e && e.code === 'ENOENT') return   // node binary somehow unavailable — cannot verify, don't block emit
     throw new Error('emitted bundle failed `node --check` (stripper produced unparseable output): ' +
       String((e && e.stderr) || (e && e.message) || e))
   } finally {
@@ -610,4 +639,7 @@ function main(argv) {
   if (argv.includes('--write')) { fs.writeFileSync(out, emit()); process.stdout.write('wrote ' + out + '\n'); return }
   process.stdout.write(emit())
 }
-main(process.argv.slice(2))
+
+// Run as a CLI when invoked directly; export the pure helpers when required as a module (unit tests).
+if (require.main === module) main(process.argv.slice(2))
+module.exports = { stripComments, verifyEmit, emit }

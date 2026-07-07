@@ -13,7 +13,8 @@ import os
 #
 # So CI reddens with two worst-case merges of headroom to spare, long before the Workflow tool would
 # refuse to launch. Assert against the COMMITTED artifact's byte size (what actually gets launched),
-# not a fresh emit, so a stale/hand-edited bundle is caught too.
+# not a fresh emit — this is the size gate; bundle freshness vs. the emitter is test_bundle_drift.py's
+# job, and parseability is showrunner_bundle_smoke.js's.
 GUARD_BYTES = 448_000
 
 BUNDLE = os.path.join(os.path.dirname(__file__), "..", "showrunner.bundle.js")
