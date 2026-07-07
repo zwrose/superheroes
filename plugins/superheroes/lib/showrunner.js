@@ -61,11 +61,6 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-// #275: ok is a BOOLEAN, not an untyped `{}` — an untyped ok invites the leaf to emit the string
-// "false" (truthy in JS), the shape that shipped a false merge-ready in the #219 run. Typed so a
-// schema-validated leaf retries a stringy ok at the source and any truthiness consumer stays honest.
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -2041,7 +2036,10 @@ function testPilotDeps(workItem, generation) {
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'fix-app-bug', schema: { type: 'object' } }),
+      // #275: type `ok` boolean so a stringy 'false' refusal is retried at the source (its consumer
+      // gates on ok, test_pilot_phase.js) and `commitShas` array so a stringified list can't slip past
+      // normalizeShas (which returns [] for a non-array, silently losing the shas → false progress).
+      { label: 'fix-app-bug', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, commitShas: { type: 'array' } } } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -2567,7 +2565,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, rows: { type: 'array' } } } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
