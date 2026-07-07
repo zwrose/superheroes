@@ -17,6 +17,10 @@ process.on('exit', (code) => {
   if (code !== 0) return
   try { require('fs').rmSync(`/tmp/workhorse-${WI}-final-review`, { recursive: true, force: true }) } catch (_) {}
   try { require('fs').rmSync(`/tmp/showrunner-${WI}-review-plan`, { recursive: true, force: true }) } catch (_) {}
+  // test-pilot's deps create /tmp/showrunner-<wi>-test-pilot lazily on their first writeJson;
+  // today this smoke's stubs park before that fires, but reap it anyway so a stub change can't
+  // start accumulating pid dirs silently.
+  try { require('fs').rmSync(`/tmp/showrunner-${WI}-test-pilot`, { recursive: true, force: true }) } catch (_) {}
 })
 
 
