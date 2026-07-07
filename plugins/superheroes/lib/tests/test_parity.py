@@ -91,6 +91,9 @@ BUNDLED_NON_TWINS = {
     "pr_comment_scrub.js",
     "fenced_json.js",
     "engine_dispatch.js",
+    # #277: a JS-only Buffer-less base64/utf8 encoder shared by the preamble + engine_dispatch; its
+    # correctness is pinned by bytes_smoke.js (against Node's Buffer), not a Python decider oracle.
+    "bytes.js",
     # #170: a JS-only compose-path helper (reads globalThis.__SR_LIB); no Python counterpart.
     "lib_root.js",
     # #130: a JS-only in-memory cost accumulator (globalThis.__SR_COST); the durable Python side is

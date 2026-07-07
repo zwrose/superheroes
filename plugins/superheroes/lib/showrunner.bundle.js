@@ -137,39 +137,16 @@ async function __sh(cmd, opts) {
   return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
-// __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
-// hashlib.sha256(text.encode('utf-8')).hexdigest() and io_seam's crypto twin. Parity is
-// load-bearing: the fenced set-gate compares this against definition_doc.content_hash, so a
-// divergence parks every live gate write as 'stale'. Byte-array padding (no string escapes),
-// so no control characters appear in this script (the Workflow permission layer rejects them).
-// Lone surrogates encode as U+FFFD, matching node's utf-8 conversion.
-function __utf8Bytes(text) {
-  var str = String(text || ''), bytes = [], i, c
-  for (i = 0; i < str.length; i++) {
-    c = str.charCodeAt(i)
-    if (c < 0x80) bytes.push(c)
-    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63))
-    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length && str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) < 0xe000) {
-      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(i + 1) - 0xdc00); i++
-      bytes.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
-    } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
-    else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
-  }
-  return bytes
-}
-// __b64: base64 over the UTF-8 bytes — the OPAQUE payload encoding for writeFile (an LLM leaf
-// can copy an alphabet-soup blob verbatim or fail visibly; it cannot paraphrase it the way it
-// can rewrite readable JSON — the live 2026-07-02 staged-write mangle class).
-function __b64(text) {
-  var bytes = __utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
-  for (var i = 0; i < bytes.length; i += 3) {
-    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
-    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
-    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
-    out += (b2 === undefined) ? '=' : A[b2 & 63]
-  }
-  return out
-}
+// __utf8Bytes / __b64: the OPAQUE-payload encoders (base64 over the string's UTF-8 bytes) used by the
+// leaf-bash io writeFile/stageAndRunHelper AND the UTF-8 byte step of __contentHash. #277: the single
+// implementation lives in bytes.js (SSOT, #231) so engine_dispatch's _stageCmd and this preamble use
+// ONE copy — a Buffer-less encoder that runs byte-identically in node and the sandbox (the sandbox has
+// no Buffer; a Buffer.from here was the #277 all-Claude fall-open). These delegate at CALL time (the
+// module registry is populated before any leaf runs), mirroring __helperResult -> __require('courier_exec').
+// __contentHash's sha-256 parity with Python/hashlib is load-bearing for the fenced set-gate, so its
+// UTF-8 byte step MUST stay byte-exact — bytes.utf8Bytes is the same code the parity smoke pins.
+function __utf8Bytes(text) { return __require('bytes').utf8Bytes(text) }
+function __b64(text) { return __require('bytes').b64(text) }
 function __contentHash(text) {
   var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
@@ -441,6 +418,64 @@ module.exports = {
   DEFAULT_LIB, libRoot, libPath, isAbsoluteLibRoot,
   libRootProbe, MISSING_MARKER, pyLibDir, pyLibScript,
 }
+
+};
+
+// ===== bytes.js =====
+__modules["bytes"] = function (module, exports, require) {
+// plugins/superheroes/lib/bytes.js
+// The single source of truth for sandbox-safe byte encoding. The Workflow sandbox has NO Node
+// `Buffer` global (same class as the FR-8-banned wall-clock/PRNG globals — see #277), so the spine cannot
+// reach for `Buffer.from(...).toString('base64')` anywhere on a live-run code path: the very first
+// such statement throws `ReferenceError: Buffer is not defined`. These pure-JS encoders run
+// byte-identically in BOTH runtimes (node smokes AND the sandbox), so a code path that stages via
+// b64() is exercised the same way everywhere — no `typeof Buffer` fork that leaves the sandbox path
+// untested (the exact blind spot that let #277 ship: staging was Buffer-based, smokes ran in node
+// where Buffer exists, and the dead sandbox path was invisible until a live run).
+//
+// Two consumers share this ONE copy (SSOT, #231):
+//   - engine_dispatch.js `_stageCmd` — base64-encodes untrusted external prompt/schema/output before
+//     it rides the LLM `exec` courier as an OPAQUE blob (a courier can copy alphabet-soup verbatim or
+//     fail visibly; it cannot paraphrase it the way it rewrites readable text — the 2026-07-02 mangle
+//     class), then a shell `base64 -d` decodes it.
+//   - the bundle preamble's leaf-bash io (`__b64`/`__utf8Bytes`, which delegate here) — the same
+//     opaque-payload transport for io.writeFile/stageAndRunHelper, and the UTF-8 byte step of
+//     `__contentHash` (whose sha-256 parity with Python/hashlib is load-bearing for the fenced
+//     set-gate — so utf8Bytes MUST stay byte-exact; the parity smoke pins b64 against Node's Buffer).
+
+// utf8Bytes: the string's UTF-8 bytes as a plain array (no TextEncoder — absent in the sandbox).
+// Byte-array output (no string escapes) so no control characters ever appear in the generated bundle
+// (the Workflow permission layer rejects them). A well-formed surrogate pair encodes as the astral
+// codepoint; a LONE surrogate encodes as U+FFFD, matching node's utf-8 conversion.
+function utf8Bytes(text) {
+  var str = String(text || ''), bytes = [], i, c
+  for (i = 0; i < str.length; i++) {
+    c = str.charCodeAt(i)
+    if (c < 0x80) bytes.push(c)
+    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63))
+    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length && str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) < 0xe000) {
+      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(i + 1) - 0xdc00); i++
+      bytes.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
+    } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
+    else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
+  }
+  return bytes
+}
+
+// b64: standard base64 (RFC 4648, `+`/`/` alphabet, `=` padding) over the UTF-8 bytes. Byte-for-byte
+// identical to `Buffer.from(text, 'utf8').toString('base64')` — the parity smoke pins that invariant.
+function b64(text) {
+  var bytes = utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
+    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
+    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
+    out += (b2 === undefined) ? '=' : A[b2 & 63]
+  }
+  return out
+}
+
+module.exports = { utf8Bytes, b64 }
 
 };
 
@@ -4580,19 +4615,25 @@ __modules["engine_dispatch"] = function (module, exports, require) {
 // everything downstream (loop math, verify gate, journal) is reused unchanged. Read roles are
 // read-only (no preSHA/commit); write roles capture preSHA -> engine edits -> adapter commits.
 const { libPath } = require('./lib_root.js')
+const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
 // text is untrusted and MAY contain a line identical to any fixed heredoc sentinel, which would
-// terminate the heredoc early and corrupt the staged file. Encoding sidesteps sentinels entirely.
-// Buffer is permitted in the bundle (the FR-8 static guard only bans a short list of non-deterministic
-// or Node-only globals — the wall-clock/PRNG/filesystem/process APIs); base64 output is pure ASCII so
-// shq's single-quote escaping is sufficient.
+// terminate the heredoc early and corrupt the staged file. Base64 also makes the payload an OPAQUE
+// blob as it rides the LLM `exec` courier — a courier can copy alphabet-soup verbatim or fail
+// visibly, but cannot paraphrase it the way it rewrites readable text (the 2026-07-02 staged-write
+// mangle class). Encoding sidesteps sentinels AND mangling; a shell `base64 -d` decodes it.
+// #277: the base64 encode MUST NOT use Node's `Buffer` — the Workflow sandbox has no Buffer global
+// (same class as the FR-8-banned wall-clock/PRNG globals), so `Buffer.from(...)` threw on the first
+// statement here and every external dispatch silently fell open to Claude. b64() is the shared,
+// Buffer-less encoder (bytes.js), byte-identical in node and the sandbox and exercised the same in
+// both. base64 output is pure ASCII so shq's single-quote escaping is sufficient.
 function _stageCmd(path, content) {
-  const b64 = Buffer.from(content == null ? '' : String(content), 'utf8').toString('base64')
-  return `printf %s ${shq(b64)} | base64 -d > ${shq(path)}`
+  const encoded = b64(content == null ? '' : String(content))
+  return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
 }
 
 // Reuse the spine's exec dumb-pipe (lazy require avoids a load-time cycle: showrunner requires the
@@ -4831,6 +4872,45 @@ async function _dispatchExternalInner(o) {
   return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
 }
 
+// #277 tripwire: the FIRST external dispatch is itself the end-to-end staging self-test — a
+// harness-level staging/dispatch death (the JS path can't stage inputs, or threw before the CLI ever
+// ran) means EVERY external role this run will silently fall open to Claude, violating the owner's
+// enginePreferences (the named requirement #219 was held weeks for). Surface it ONCE as a distinct,
+// NAMED narrator notice — run_watch shows narrator lines live, so this is the mechanical tripwire the
+// named-risk convention asks for, not the routine per-dispatch "falling open" line that repeats and
+// reads as normal. Keyed on PRE-CLI failure reasons only: could-not-stage-* (the staging pipe is
+// dead) and dispatch-error (a synchronous throw, e.g. a missing sandbox global) — NOT engine-specific
+// outcomes (timeout/unreadable/commit-failed) where the CLI genuinely ran and the harness is fine.
+let _harnessDeadNoticeShown = false
+function _isHarnessDeadReason(reason) {
+  const r = String(reason || '')
+  return r === 'could-not-stage-external-inputs' || r === 'could-not-stage-external-output' ||
+    r.indexOf('dispatch-error') === 0
+}
+function _maybeHarnessDeadNotice(o, reason) {
+  if (_harnessDeadNoticeShown || !_isHarnessDeadReason(reason)) return
+  _harnessDeadNoticeShown = true
+  const engine = (o && o.engine) || 'external'
+  try {
+    globalThis.log('ENGINE-UNAVAILABLE: engine ' + JSON.stringify(engine) + ' could not stage/dispatch in ' +
+      'this harness (' + String(reason) + ') — the JS dispatch path is dead, so EVERY external role this run ' +
+      'falls open to Claude, silently violating enginePreferences. Harness/staging defect (see #277), not engine auth.')
+  } catch (_) {}
+}
+
+// #277: preserve the underlying error name+message (clamped) in the fall-open reason. The catch below
+// is the catch-all for any synchronous throw; collapsing every throw to a bare 'dispatch-error' made
+// the #277 Buffer death a transcript-archaeology session. Carrying the error text makes the next
+// failure on this path self-identifying (e.g. 'dispatch-error: ReferenceError: Buffer is not defined').
+// The thrown value here is an internal JS engine error (bad destructure / missing global / exec shape),
+// never external free-text, so it needs no scrub — only a length clamp.
+function _errText(e) {
+  if (e == null) return String(e)
+  const name = e.name || 'Error'
+  const msg = e.message == null ? '' : String(e.message)
+  return (msg ? name + ': ' + msg : name).slice(0, 160)
+}
+
 // FIX 3 (premortem): a synchronous throw ANYWHERE in the dispatch body (a bad destructure, an
 // unavailable Buffer/setTimeout global, an unexpected exec-shape) must still resolve to the native
 // {ok:false} failure shape — never throw out of dispatchExternal. Callers rely on a returned
@@ -4838,13 +4918,20 @@ async function _dispatchExternalInner(o) {
 // uncaught throw here would instead propagate up and abort the whole run.
 async function dispatchExternal(o) {
   try {
-    return await _dispatchExternalInner(o || {})
-  } catch (_e) {
-    return { ok: false, reason: 'dispatch-error' }
+    const res = await _dispatchExternalInner(o || {})
+    _maybeHarnessDeadNotice(o, res && res.reason)
+    return res
+  } catch (e) {
+    const reason = 'dispatch-error: ' + _errText(e)
+    _maybeHarnessDeadNotice(o, reason)
+    return { ok: false, reason }
   }
 }
 
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS }
+// test-only: reset the once-per-process tripwire memo so a smoke can drive the notice deterministically.
+function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
+
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
 
 };
 
