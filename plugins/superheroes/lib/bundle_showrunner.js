@@ -20,7 +20,9 @@ const LIB = __dirname
 // build_phase.js/showrunner.js, which require them in-process).
 // #170: lib_root.js first — it has no deps and is required by the compose modules (showrunner /
 // build_phase / engine_dispatch / review_panel_shell / fenced_json) to resolve __SR_LIB at call time.
-const MODULES = ['lib_root.js', 'cost_meter.js',
+// #277: bytes.js (Buffer-less base64/utf8 encoder) is bundled early (no deps) — the preamble's
+// __b64/__utf8Bytes delegate to it and engine_dispatch requires it, so both share ONE copy (SSOT).
+const MODULES = ['lib_root.js', 'bytes.js', 'cost_meter.js',
                  'circuit_breaker.js', 'loop_state.js', 'loop_synthesis.js', 'panel_tally.js',
                  'review_round_policy.js',
                  'ci_status.js', 'verify_gate.js',
@@ -177,39 +179,16 @@ async function __sh(cmd, opts) {
   return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\\/+/g, '/') }
-// __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
-// hashlib.sha256(text.encode('utf-8')).hexdigest() and io_seam's crypto twin. Parity is
-// load-bearing: the fenced set-gate compares this against definition_doc.content_hash, so a
-// divergence parks every live gate write as 'stale'. Byte-array padding (no string escapes),
-// so no control characters appear in this script (the Workflow permission layer rejects them).
-// Lone surrogates encode as U+FFFD, matching node's utf-8 conversion.
-function __utf8Bytes(text) {
-  var str = String(text || ''), bytes = [], i, c
-  for (i = 0; i < str.length; i++) {
-    c = str.charCodeAt(i)
-    if (c < 0x80) bytes.push(c)
-    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63))
-    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length && str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) < 0xe000) {
-      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(i + 1) - 0xdc00); i++
-      bytes.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
-    } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
-    else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
-  }
-  return bytes
-}
-// __b64: base64 over the UTF-8 bytes — the OPAQUE payload encoding for writeFile (an LLM leaf
-// can copy an alphabet-soup blob verbatim or fail visibly; it cannot paraphrase it the way it
-// can rewrite readable JSON — the live 2026-07-02 staged-write mangle class).
-function __b64(text) {
-  var bytes = __utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
-  for (var i = 0; i < bytes.length; i += 3) {
-    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
-    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
-    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
-    out += (b2 === undefined) ? '=' : A[b2 & 63]
-  }
-  return out
-}
+// __utf8Bytes / __b64: the OPAQUE-payload encoders (base64 over the string's UTF-8 bytes) used by the
+// leaf-bash io writeFile/stageAndRunHelper AND the UTF-8 byte step of __contentHash. #277: the single
+// implementation lives in bytes.js (SSOT, #231) so engine_dispatch's _stageCmd and this preamble use
+// ONE copy — a Buffer-less encoder that runs byte-identically in node and the sandbox (the sandbox has
+// no Buffer; a Buffer.from here was the #277 all-Claude fall-open). These delegate at CALL time (the
+// module registry is populated before any leaf runs), mirroring __helperResult -> __require('courier_exec').
+// __contentHash's sha-256 parity with Python/hashlib is load-bearing for the fenced set-gate, so its
+// UTF-8 byte step MUST stay byte-exact — bytes.utf8Bytes is the same code the parity smoke pins.
+function __utf8Bytes(text) { return __require('bytes').utf8Bytes(text) }
+function __b64(text) { return __require('bytes').b64(text) }
 function __contentHash(text) {
   var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0

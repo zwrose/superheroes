@@ -43,6 +43,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    # #281: the startup gather (readStartupState) rides the __SR_EXIT proof-of-execution marker so a
+    # did-not-run parrot can't fabricate the payload (gate AND engine_prefs), plus a semantic tripwire
+    # on the spec_present+unreadable fabrication tell (live park wf_ac2f134f).
+    "plugins/superheroes/lib/tests/showrunner_startup_parrot_smoke.js",
     # #221: the startup gather resolves engine prefs from an OUT-OF-REPO core.md — runs the REAL gather
     # script (store-base=None), asserting the owner's non-claude prefs round-trip and that the (root,root)
     # bug degrades to all-claude (the canned-answer smokes were blind to the real Python resolution).
@@ -115,6 +119,11 @@ SHOWRUNNER_SMOKES = [
     # FR-5 cwd-rooting for cmdRunner: selfContained() in cmdRunner pins cwd to repo root when
     # __SR_ROOT is set (RED->GREEN after the fix); no-op when unset; no double-cd guard.
     "plugins/superheroes/lib/tests/showrunner_cmdrunner_cwd_smoke.js",
+    # #277: bytes.js — the Buffer-less base64/utf8 SSOT encoder, pinned byte-for-byte against Node's
+    # Buffer (empty/ASCII/multibyte/astral/lone-surrogate/every padding residue) AND proven to run with
+    # NO Buffer global (the exact sandbox condition that made external dispatch dead). Prefixed
+    # showrunner_ so the discovery-equality guard below auto-matches it.
+    "plugins/superheroes/lib/tests/showrunner_bytes_smoke.js",
     # #38: engine_dispatch.js dispatchExternal — review/build happy paths, stdin-redirect delivery,
     # UFR-5 timeout, UFR-6 unauditable, sec-101 commit-failure audit symmetry. Named
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality

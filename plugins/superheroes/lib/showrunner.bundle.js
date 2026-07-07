@@ -137,39 +137,16 @@ async function __sh(cmd, opts) {
   return ans
 }
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
-// __contentHash: sha-256 over the string's UTF-8 BYTES, hex — byte-identical to Python's
-// hashlib.sha256(text.encode('utf-8')).hexdigest() and io_seam's crypto twin. Parity is
-// load-bearing: the fenced set-gate compares this against definition_doc.content_hash, so a
-// divergence parks every live gate write as 'stale'. Byte-array padding (no string escapes),
-// so no control characters appear in this script (the Workflow permission layer rejects them).
-// Lone surrogates encode as U+FFFD, matching node's utf-8 conversion.
-function __utf8Bytes(text) {
-  var str = String(text || ''), bytes = [], i, c
-  for (i = 0; i < str.length; i++) {
-    c = str.charCodeAt(i)
-    if (c < 0x80) bytes.push(c)
-    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63))
-    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length && str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) < 0xe000) {
-      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(i + 1) - 0xdc00); i++
-      bytes.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
-    } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
-    else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
-  }
-  return bytes
-}
-// __b64: base64 over the UTF-8 bytes — the OPAQUE payload encoding for writeFile (an LLM leaf
-// can copy an alphabet-soup blob verbatim or fail visibly; it cannot paraphrase it the way it
-// can rewrite readable JSON — the live 2026-07-02 staged-write mangle class).
-function __b64(text) {
-  var bytes = __utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
-  for (var i = 0; i < bytes.length; i += 3) {
-    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
-    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
-    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
-    out += (b2 === undefined) ? '=' : A[b2 & 63]
-  }
-  return out
-}
+// __utf8Bytes / __b64: the OPAQUE-payload encoders (base64 over the string's UTF-8 bytes) used by the
+// leaf-bash io writeFile/stageAndRunHelper AND the UTF-8 byte step of __contentHash. #277: the single
+// implementation lives in bytes.js (SSOT, #231) so engine_dispatch's _stageCmd and this preamble use
+// ONE copy — a Buffer-less encoder that runs byte-identically in node and the sandbox (the sandbox has
+// no Buffer; a Buffer.from here was the #277 all-Claude fall-open). These delegate at CALL time (the
+// module registry is populated before any leaf runs), mirroring __helperResult -> __require('courier_exec').
+// __contentHash's sha-256 parity with Python/hashlib is load-bearing for the fenced set-gate, so its
+// UTF-8 byte step MUST stay byte-exact — bytes.utf8Bytes is the same code the parity smoke pins.
+function __utf8Bytes(text) { return __require('bytes').utf8Bytes(text) }
+function __b64(text) { return __require('bytes').b64(text) }
 function __contentHash(text) {
   var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
@@ -444,6 +421,64 @@ module.exports = {
 
 };
 
+// ===== bytes.js =====
+__modules["bytes"] = function (module, exports, require) {
+// plugins/superheroes/lib/bytes.js
+// The single source of truth for sandbox-safe byte encoding. The Workflow sandbox has NO Node
+// `Buffer` global (same class as the FR-8-banned wall-clock/PRNG globals — see #277), so the spine cannot
+// reach for `Buffer.from(...).toString('base64')` anywhere on a live-run code path: the very first
+// such statement throws `ReferenceError: Buffer is not defined`. These pure-JS encoders run
+// byte-identically in BOTH runtimes (node smokes AND the sandbox), so a code path that stages via
+// b64() is exercised the same way everywhere — no `typeof Buffer` fork that leaves the sandbox path
+// untested (the exact blind spot that let #277 ship: staging was Buffer-based, smokes ran in node
+// where Buffer exists, and the dead sandbox path was invisible until a live run).
+//
+// Two consumers share this ONE copy (SSOT, #231):
+//   - engine_dispatch.js `_stageCmd` — base64-encodes untrusted external prompt/schema/output before
+//     it rides the LLM `exec` courier as an OPAQUE blob (a courier can copy alphabet-soup verbatim or
+//     fail visibly; it cannot paraphrase it the way it rewrites readable text — the 2026-07-02 mangle
+//     class), then a shell `base64 -d` decodes it.
+//   - the bundle preamble's leaf-bash io (`__b64`/`__utf8Bytes`, which delegate here) — the same
+//     opaque-payload transport for io.writeFile/stageAndRunHelper, and the UTF-8 byte step of
+//     `__contentHash` (whose sha-256 parity with Python/hashlib is load-bearing for the fenced
+//     set-gate — so utf8Bytes MUST stay byte-exact; the parity smoke pins b64 against Node's Buffer).
+
+// utf8Bytes: the string's UTF-8 bytes as a plain array (no TextEncoder — absent in the sandbox).
+// Byte-array output (no string escapes) so no control characters ever appear in the generated bundle
+// (the Workflow permission layer rejects them). A well-formed surrogate pair encodes as the astral
+// codepoint; a LONE surrogate encodes as U+FFFD, matching node's utf-8 conversion.
+function utf8Bytes(text) {
+  var str = String(text || ''), bytes = [], i, c
+  for (i = 0; i < str.length; i++) {
+    c = str.charCodeAt(i)
+    if (c < 0x80) bytes.push(c)
+    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63))
+    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < str.length && str.charCodeAt(i + 1) >= 0xdc00 && str.charCodeAt(i + 1) < 0xe000) {
+      c = 0x10000 + ((c - 0xd800) << 10) + (str.charCodeAt(i + 1) - 0xdc00); i++
+      bytes.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
+    } else if (c >= 0xd800 && c < 0xe000) bytes.push(0xef, 0xbf, 0xbd)
+    else bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63))
+  }
+  return bytes
+}
+
+// b64: standard base64 (RFC 4648, `+`/`/` alphabet, `=` padding) over the UTF-8 bytes. Byte-for-byte
+// identical to `Buffer.from(text, 'utf8').toString('base64')` — the parity smoke pins that invariant.
+function b64(text) {
+  var bytes = utf8Bytes(text), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = ''
+  for (var i = 0; i < bytes.length; i += 3) {
+    var b0 = bytes[i], b1 = bytes[i + 1], b2 = bytes[i + 2]
+    out += A[b0 >> 2] + A[((b0 & 3) << 4) | ((b1 === undefined ? 0 : b1) >> 4)]
+    out += (b1 === undefined) ? '=' : A[((b1 & 15) << 2) | ((b2 === undefined ? 0 : b2) >> 6)]
+    out += (b2 === undefined) ? '=' : A[b2 & 63]
+  }
+  return out
+}
+
+module.exports = { utf8Bytes, b64 }
+
+};
+
 // ===== cost_meter.js =====
 __modules["cost_meter"] = function (module, exports, require) {
 // plugins/superheroes/lib/cost_meter.js
@@ -534,6 +569,24 @@ __modules["circuit_breaker"] = function (module, exports, require) {
 // plugins/superheroes/lib/circuit_breaker.js
 const { clampTitle, canonicalClassKey, classKeyAliases } = require('./review_memory.js')
 const BLOCKING = new Set(['Critical', 'Important'])
+// The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
+// (Minor/Nit — SSOT §11, guarded by test_ssot_drift). `isBlocking` is the single, case-normalized,
+// FAIL-CLOSED blocking predicate every severity consumer routes through (#276): a foreign scale
+// (`blocker`/`high`/`medium`), an unknown tier, a mis-cased `critical`, or a missing severity is
+// treated as blocking — an unrecognized severity means blocking, never a silent demotion. Consumers
+// keep BLOCKING for rank/identity/"was-tagged-blocking" bookkeeping but ask `isBlocking` the
+// partition question, so _partition, the breaker's own stuck-detection, the panel gate, and the
+// build legs can never disagree on what blocks.
+const _NON_BLOCKING = new Set(['minor', 'nit'])
+function isBlocking(severity) {
+  return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
+}
+// #291: the TIER-specific Critical match (case-normalized), single-sourced alongside isBlocking so the
+// confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from isBlocking: Important
+// is blocking but NOT critical.
+function isCritical(severity) {
+  return String(severity == null ? '' : severity).trim().toLowerCase() === 'critical'
+}
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
 const _NON_WORD = /[^A-Za-z0-9_ \t\n\r\f\v]/g
@@ -567,7 +620,7 @@ function intersects(a, b) {
   for (const x of a) if (b.has(x)) return true
   return false
 }
-function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _blocking(round) { return round.findings.filter((f) => isBlocking(f.severity)) }
 function _roundRecordedFix(roundRec) {
   // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
   // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
@@ -657,7 +710,7 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING, isBlocking, isCritical }
 
 };
 
@@ -686,11 +739,12 @@ module.exports = { decide }
 // ===== loop_synthesis.js =====
 __modules["loop_synthesis"] = function (module, exports, require) {
 // plugins/superheroes/lib/loop_synthesis.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
-const _BLOCKING = new Set(['Critical', 'Important'])
-const _NON_BLOCKING = new Set(['Minor', 'Nit'])
 const _DEFAULT_BLOCKING_SEVERITY = 'Important'
+// #276: the blocking partition (was-tagged-blocking, blocking→non-blocking downgrade detection) routes
+// through circuit_breaker.isBlocking — the single, case-normalized, fail-closed predicate — so this
+// leg can never disagree with _partition / the breaker / the panel gate on what blocks.
 
 function _keptSeverity(f, v) {
   const verdictSeverity = (v && typeof v === 'object') ? v.severity : null
@@ -715,7 +769,7 @@ function consume(merged, leafVerdicts) {
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
       drops.push({ id, file: f.file === undefined ? null : f.file, title: f.title === undefined ? null : f.title,
-        reason: reason.trim(), was_blocking_tagged: _BLOCKING.has(f.severity) })
+        reason: reason.trim(), was_blocking_tagged: isBlocking(f.severity) })
       continue
     }
     const kept = Object.assign({}, f)
@@ -724,7 +778,7 @@ function consume(merged, leafVerdicts) {
     // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
     // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
     const fromSeverity = f && f.severity
-    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+    if (isBlocking(fromSeverity) && !isBlocking(kept.severity)) {
       const entry = { id, file: f.file === undefined ? null : f.file,
         title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
       if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()
@@ -740,8 +794,11 @@ module.exports = { consume }
 // ===== panel_tally.js =====
 __modules["panel_tally"] = function (module, exports, require) {
 // plugins/superheroes/lib/panel_tally.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
+// BLOCKING is the drift-guarded canonical blocking vocabulary (exported; SSOT §11). The blocking
+// PARTITION decision routes through circuit_breaker.isBlocking (#276) — case-normalized + fail-closed
+// — so the panel gate never disagrees with _partition / the breaker on what blocks.
 const BLOCKING = new Set(['Critical', 'Important'])
 const SEV_RANK = { Critical: 0, Important: 1, Minor: 2, Nit: 3 }
 const _ACTION_TO_TERMINAL = { review: 'continue', exit_clean: 'clean', exit_skipped: 'clean-with-skips', halt: 'halted' }
@@ -775,7 +832,7 @@ function compileFindings(findings, contextFiles) {
 }
 function roundGate(compiled, expectedRoster, completedRoster) {
   const incomplete = expectedRoster.filter((r) => !completedRoster.includes(r))
-  const hasBlocker = compiled.some((f) => BLOCKING.has(f.severity))
+  const hasBlocker = compiled.some((f) => isBlocking(f.severity))
   let gate
   if (incomplete.length) gate = 'cannot-certify'
   else if (hasBlocker) gate = 'blocking'
@@ -787,7 +844,7 @@ function roundGate(compiled, expectedRoster, completedRoster) {
 function presentDeferred(compiled, deferredSet) {
   let n = 0
   for (const f of compiled) {
-    if (!BLOCKING.has(f.severity)) continue
+    if (!isBlocking(f.severity)) continue
     const deferredSev = deferredSet[findingIdentity(f)]
     if (deferredSev === undefined || deferredSev === null) continue
     if ((SEV_RANK[f.severity] != null ? SEV_RANK[f.severity] : 99) >= (SEV_RANK[deferredSev] != null ? SEV_RANK[deferredSev] : 99)) n += 1
@@ -845,7 +902,7 @@ function _currentBlockingFindings(results) {
     if (!result || result.status !== 'run') continue
     for (const f of Array.isArray(result.findings) ? result.findings : []) {
       if (!f || f.carried) continue
-      if (BLOCKING.has(f.severity)) out.push(f)
+      if (isBlocking(f.severity)) out.push(f)
     }
   }
   return out
@@ -924,6 +981,7 @@ module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, 
 // ===== review_round_policy.js =====
 __modules["review_round_policy"] = function (module, exports, require) {
 // plugins/superheroes/lib/review_round_policy.js
+const { isCritical } = require('./circuit_breaker.js')
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 // #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
@@ -1072,7 +1130,9 @@ function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting
   // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
   // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
   const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
-  const hasCritical = sevs.includes('Critical')
+  // #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap
+  // (was `sevs.includes('Critical')`, case-sensitive, so a lowercase Critical resolved by scoped verify).
+  const hasCritical = sevs.some((s) => isCritical(s))
   const trigger = hasCritical || !!crossCutting
   const atCap = confirmationsRun >= maxConfirmations
   if (!trigger) {
@@ -1401,7 +1461,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
-const BLOCKING = new Set(['Critical', 'Important'])
+// #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
+// — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
@@ -1477,7 +1538,7 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
     const result = roundFindings[name]
     if (!result || result.status !== 'run') continue
     for (const f of result.findings || []) {
-      if (!BLOCKING.has(f.severity)) continue
+      if (!circuitBreaker.isBlocking(f.severity)) continue
       const key = f.classKey || reviewMemory.classKey(f)
       if (!known.has(key)) continue
       const decision = byClass[key]
@@ -1952,6 +2013,22 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (legKind.code) {
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
+      // #279 bounded corrective re-run: when verify is the SOLE blocker — a 'fail' with zero blocking
+      // findings this round — the fix loop has nothing to resolve and so can never earn a re-verify,
+      // and one transient infra flake (a module-resolution error in an untouched file, node_modules
+      // still settling after an in-branch install, a shared vite-cache collision) becomes a terminal
+      // halt on a branch that found nothing to fix. Re-run verify exactly once (serialized, same round
+      // file). Two consecutive fails reproduce today's fail-closed halt exactly — no loop, cap 1
+      // (precedent: #212 corrective retry / fix-before-park). A round with blocking findings takes the
+      // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
+      if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
+        try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        catch (e) { verifyResult = 'fail' }
+        // Surface the flake vs the real regression: a fail→pass flip means the verify gate is flaky
+        // (worth investigating the infra cause); a fail→fail confirms a genuine failure (halts below).
+        try { log(`review-panel r${round}: corrective re-run verify → ${verifyResult}`) } catch (_) {}
+      }
     }
 
     const tokenUsage = collectRoundUsage(roundFindings, round, synthesized)
@@ -2476,6 +2553,28 @@ function extractJson(text) {
   return null
 }
 
+// extractJsonStrict: the fail-closed twin of extractJson for GATE-shaped reads whose parsed value
+// OPENS something (the UFR-1 tasks-gate read). The answer must BE the JSON: the whole trimmed
+// stdout parsing directly, or the whole answer being exactly ONE fenced block whose content
+// parses (the run-9 wf_b69571d9 courier shape — a correct answer wrapped in ```json fences).
+// Deliberately NO brace-slice, NO per-line pass, NO mid-prose fence: extractJson's permissive
+// candidates would let a courier answer that merely QUOTES the expected object in prose
+// ("...it would print {\"review\": \"passed\"}") open the gate — a false-PASS, the one direction
+// a gate read must never take. Prose answers land on the caller's fail-closed retry/park instead.
+function extractJsonStrict(text) {
+  const trimmed = String(text == null ? '' : text).trim()
+  const candidates = [trimmed]
+  const fenceOnly = trimmed.match(/^```(?:[a-zA-Z0-9]+)?\s*([\s\S]*?)```$/)
+  if (fenceOnly) candidates.push(fenceOnly[1].trim())
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed !== null && typeof parsed === 'object') return parsed
+    } catch (_e) { /* strict: no fallback slicing — fail closed */ }
+  }
+  return null
+}
+
 async function callOnce(label, command, promptOpts) {
   // `courier: true` marks this a dumb pipe for the bundle preamble's unconditional cheapest-model
   // pinning (same treatment as label 'exec'/'io'); the preamble strips it before the real agent().
@@ -2629,7 +2728,9 @@ async function runCourierJson(label, command, opts) {
       last = 'empty stdout'
       continue
     }
-    const parsed = extractJson(out)   // fence-tolerant (see extractJson) — bare parse alone parked live runs
+    // fence-tolerant (see extractJson) — bare parse alone parked live runs. opts.extract:'strict'
+    // narrows to extractJsonStrict for gate-shaped reads (whole-answer JSON only, no prose slicing).
+    const parsed = (options.extract === 'strict' ? extractJsonStrict : extractJson)(out)
     if (parsed == null) {
       last = 'unparseable JSON'
       continue
@@ -2655,6 +2756,7 @@ module.exports = {
   CourierTransportError,
   badCourierAnswer,
   extractJson,
+  extractJsonStrict,
   helperResult,
   markerSliceStdout,
   runCourierJson,
@@ -3552,7 +3654,11 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     } catch (err) {
       return { done: low(`test-pilot browser fix batch failed: ${message(err)}`) }
     }
-    if (!fixResult || fixResult.ok === false || fixResult.action === 'park' || fixResult.confidence === 'low') {
+    // #275: fail closed on the fix leaf's `ok` — a stringy 'false' (truthy in JS) or a missing ok both
+    // slipped past the old `ok === false` gate and recorded false progress (empty shas, unchanged head)
+    // while the browser pass re-ran against the unfixed app. Only a genuine boolean `true` is a fix;
+    // mirrors the #275 build-gate consumer (`worker.ok === true`), belt-and-braces with the typed schema.
+    if (!fixResult || fixResult.ok !== true || fixResult.action === 'park' || fixResult.confidence === 'low') {
       return { done: low((fixResult && (fixResult.reason || fixResult.message)) || 'test-pilot browser fix batch parked') }
     }
 
@@ -4477,7 +4583,12 @@ function _partition(findings) {
   const blocking = []; const minors = []; const cannotVerify = []
   for (const f of findings || []) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
-    if (f && circuitBreaker.BLOCKING.has(f.severity)) blocking.push(f)
+    // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
+    // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
+    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard (as on
+    // the cannot_verify line above) so a falsy element routes to minors rather than blocking — the
+    // Python twin only ever receives dict findings, so this guard is JS-side defensiveness, not parity.
+    if (f && circuitBreaker.isBlocking(f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }
@@ -4497,6 +4608,15 @@ function decide(verdicts, findings, rnd, maxRounds, history) {
   let reason = loopReason
   if (brk.halt) {
     reason = brk.detail !== undefined ? brk.detail : reason
+  }
+  // FR-5/FR-6: the two verdicts GATE — they are not merely required-to-be-present. A non-'pass'
+  // spec_compliance or code_quality can never complete, even with zero blocking findings, so a
+  // reviewer that reports the task non-compliant sends it back for a fix round (#276). Vocabulary-
+  // independent backstop: this holds even if a finding's severity drifts past _partition.
+  const failing = REQUIRED_VERDICTS.filter((k) => verdicts[k] !== 'pass')
+  if (mapped === 'complete' && failing.length) {
+    mapped = 'review'
+    reason = `verdict(s) ${failing.join(' + ')} are not 'pass' — the task is not compliant; a fix round is required before completion (FR-5/FR-6).`
   }
   // UFR-5: never complete while a cannot-verify item is unresolved — force a resolution round.
   if (mapped === 'complete' && cannotVerify.length) {
@@ -4580,19 +4700,25 @@ __modules["engine_dispatch"] = function (module, exports, require) {
 // everything downstream (loop math, verify gate, journal) is reused unchanged. Read roles are
 // read-only (no preSHA/commit); write roles capture preSHA -> engine edits -> adapter commits.
 const { libPath } = require('./lib_root.js')
+const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
 // text is untrusted and MAY contain a line identical to any fixed heredoc sentinel, which would
-// terminate the heredoc early and corrupt the staged file. Encoding sidesteps sentinels entirely.
-// Buffer is permitted in the bundle (the FR-8 static guard only bans a short list of non-deterministic
-// or Node-only globals — the wall-clock/PRNG/filesystem/process APIs); base64 output is pure ASCII so
-// shq's single-quote escaping is sufficient.
+// terminate the heredoc early and corrupt the staged file. Base64 also makes the payload an OPAQUE
+// blob as it rides the LLM `exec` courier — a courier can copy alphabet-soup verbatim or fail
+// visibly, but cannot paraphrase it the way it rewrites readable text (the 2026-07-02 staged-write
+// mangle class). Encoding sidesteps sentinels AND mangling; a shell `base64 -d` decodes it.
+// #277: the base64 encode MUST NOT use Node's `Buffer` — the Workflow sandbox has no Buffer global
+// (same class as the FR-8-banned wall-clock/PRNG globals), so `Buffer.from(...)` threw on the first
+// statement here and every external dispatch silently fell open to Claude. b64() is the shared,
+// Buffer-less encoder (bytes.js), byte-identical in node and the sandbox and exercised the same in
+// both. base64 output is pure ASCII so shq's single-quote escaping is sufficient.
 function _stageCmd(path, content) {
-  const b64 = Buffer.from(content == null ? '' : String(content), 'utf8').toString('base64')
-  return `printf %s ${shq(b64)} | base64 -d > ${shq(path)}`
+  const encoded = b64(content == null ? '' : String(content))
+  return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
 }
 
 // Reuse the spine's exec dumb-pipe (lazy require avoids a load-time cycle: showrunner requires the
@@ -4831,6 +4957,45 @@ async function _dispatchExternalInner(o) {
   return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
 }
 
+// #277 tripwire: the FIRST external dispatch is itself the end-to-end staging self-test — a
+// harness-level staging/dispatch death (the JS path can't stage inputs, or threw before the CLI ever
+// ran) means EVERY external role this run will silently fall open to Claude, violating the owner's
+// enginePreferences (the named requirement #219 was held weeks for). Surface it ONCE as a distinct,
+// NAMED narrator notice — run_watch shows narrator lines live, so this is the mechanical tripwire the
+// named-risk convention asks for, not the routine per-dispatch "falling open" line that repeats and
+// reads as normal. Keyed on PRE-CLI failure reasons only: could-not-stage-* (the staging pipe is
+// dead) and dispatch-error (a synchronous throw, e.g. a missing sandbox global) — NOT engine-specific
+// outcomes (timeout/unreadable/commit-failed) where the CLI genuinely ran and the harness is fine.
+let _harnessDeadNoticeShown = false
+function _isHarnessDeadReason(reason) {
+  const r = String(reason || '')
+  return r === 'could-not-stage-external-inputs' || r === 'could-not-stage-external-output' ||
+    r.indexOf('dispatch-error') === 0
+}
+function _maybeHarnessDeadNotice(o, reason) {
+  if (_harnessDeadNoticeShown || !_isHarnessDeadReason(reason)) return
+  _harnessDeadNoticeShown = true
+  const engine = (o && o.engine) || 'external'
+  try {
+    globalThis.log('ENGINE-UNAVAILABLE: engine ' + JSON.stringify(engine) + ' could not stage/dispatch in ' +
+      'this harness (' + String(reason) + ') — the JS dispatch path is dead, so EVERY external role this run ' +
+      'falls open to Claude, silently violating enginePreferences. Harness/staging defect (see #277), not engine auth.')
+  } catch (_) {}
+}
+
+// #277: preserve the underlying error name+message (clamped) in the fall-open reason. The catch below
+// is the catch-all for any synchronous throw; collapsing every throw to a bare 'dispatch-error' made
+// the #277 Buffer death a transcript-archaeology session. Carrying the error text makes the next
+// failure on this path self-identifying (e.g. 'dispatch-error: ReferenceError: Buffer is not defined').
+// The thrown value here is an internal JS engine error (bad destructure / missing global / exec shape),
+// never external free-text, so it needs no scrub — only a length clamp.
+function _errText(e) {
+  if (e == null) return String(e)
+  const name = e.name || 'Error'
+  const msg = e.message == null ? '' : String(e.message)
+  return (msg ? name + ': ' + msg : name).slice(0, 160)
+}
+
 // FIX 3 (premortem): a synchronous throw ANYWHERE in the dispatch body (a bad destructure, an
 // unavailable Buffer/setTimeout global, an unexpected exec-shape) must still resolve to the native
 // {ok:false} failure shape — never throw out of dispatchExternal. Callers rely on a returned
@@ -4838,13 +5003,20 @@ async function _dispatchExternalInner(o) {
 // uncaught throw here would instead propagate up and abort the whole run.
 async function dispatchExternal(o) {
   try {
-    return await _dispatchExternalInner(o || {})
-  } catch (_e) {
-    return { ok: false, reason: 'dispatch-error' }
+    const res = await _dispatchExternalInner(o || {})
+    _maybeHarnessDeadNotice(o, res && res.reason)
+    return res
+  } catch (e) {
+    const reason = 'dispatch-error: ' + _errText(e)
+    _maybeHarnessDeadNotice(o, reason)
+    return { ok: false, reason }
   }
 }
 
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS }
+// test-only: reset the once-per-process tripwire memo so a smoke can drive the notice deterministically.
+function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
+
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
 
 };
 
@@ -4867,9 +5039,10 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
-// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
-// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
-// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+// #160/#276: circuit_breaker.isBlocking is the single, case-normalized, FAIL-CLOSED blocking predicate
+// the task_review twin's partition also reads. Used here to synthesize the per-task review's two
+// verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
+// final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
@@ -4927,20 +5100,9 @@ function exec(commands, label) {
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
 // `label` is the cosmetic display purpose (defaults to 'exec'); dumb-pipe routing rides the courier's
 // `courier: true` marker, so a descriptive label never loosens the cheapest-model pinning.
-async function execJson(cmd, label) {
+async function execJson(cmd, label, opts) {
   try {
-    return await courier.runCourierJson(label || 'exec', cmd)
-  } catch (e) {
-    if (e instanceof courier.CourierTransportError) return null
-    throw e
-  }
-}
-
-// Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
-// Retry once on an empty stdout; returns the trimmed string, or null after the retry.
-async function execText(cmd, label) {
-  try {
-    return (await courier.runCourierText(label || 'exec', cmd)).trim()
+    return await courier.runCourierJson(label || 'exec', cmd, opts)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -5017,15 +5179,25 @@ function reconcileState(taskList, state) {
 
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
-  // UFR-1: refuse unless the tasks gate is passed. read-gate prints a PLAIN STRING (e.g. 'passed'),
-  // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
-  // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
-  const gate = await execText(
-    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+  // UFR-1: refuse unless the tasks gate is passed. Read via `read-gate --json` ({"review": "..."}
+  // — produced by definition_doc.py; showrunner.js readGate is the other JS consumer of the field)
+  // so a FENCED-but-correct courier answer parses: the plain-string mode byte-compared a fenced
+  // 'passed' and false-parked (run 9, wf_b69571d9). Extraction is STRICT — the whole answer must
+  // BE the JSON, bare or in one fence (extractJsonStrict); the permissive extractJson brace-slice
+  // would let an answer that merely QUOTES {"review":"passed"} in prose OPEN the gate, and this
+  // gate must only ever fail closed. NOTE this is deliberately STRICTER than showrunner.js
+  // readGate's bare JSON.parse-or-'unreadable' (which guards a skip decision, not a build).
+  const gateOut = await execJson(
+    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}" --json`,
     'read gate',
+    { extract: 'strict' },
   )
+  if (gateOut == null) return park('could not read the tasks gate — failing closed')
+  const gate = (gateOut && typeof gateOut.review === 'string') ? gateOut.review : null
   if (gate == null) return park('could not read the tasks gate — failing closed')
-  if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
+  // Clamp the untrusted courier-provided value at this sink: the reason flows into journal
+  // entries, readouts, and PR comments downstream.
+  if (gate !== 'passed') return park(`tasks gate not passed (${String(gate).slice(0, 80)}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
     `python3 ${libPath('build_entry.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
@@ -5159,7 +5331,12 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-    if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
+    // #279: carry the verdict's reason into the park so the owner sees WHY (e.g. the verify error),
+    // not a bare terminal — the sole difference between a real regression and a transient flake.
+    if (fr.terminal !== 'clean') {
+      const detail = fr.reason ? ' (' + fr.reason + ')' : ''
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
       return park('final review coverage stamp failed read-back')
@@ -5301,6 +5478,22 @@ function _tasksDocPath(workItem) {
   return require('./showrunner.js').docPathFor(workItem, 'tasks')
 }
 
+// #275: the build leaf's structured-output schema. Constrain `ok` to a boolean and `signal` to the
+// three recovery signals so schema-validated output retries a stringy shape AT THE SOURCE — the #219
+// live escape was every build leaf returning `ok` as the string "false"/"true" past an untyped
+// {required:['ok']} schema, and "false" is truthy in JS. `evidence` is left unconstrained (it is not
+// consumed here, and the leaf sometimes emits it as a JSON string — don't force needless retries on it).
+const BUILD_LEAF_SCHEMA = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    // Reference the canonical token (CONVENTIONS §11) rather than re-typing the string —
+    // worker_recovery.js is the home of the plan_wrong signal, already required in this file.
+    signal: { enum: ['ok', 'needs_context', workerRecoveryTwin.PLAN_WRONG] },
+  },
+}
+
 // #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
 // task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
@@ -5358,9 +5551,20 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), model: builderModel, schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
-    if (worker.ok) {
+    // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
+    // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
+    // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
+    // an explicit refusal and recorded built:passed for zero commits. Only a genuine boolean `true`
+    // advances; anything else falls through to the recovery twin (which parks immediately on
+    // plan_wrong, UFR-3). `worker` can be null (agent() returns null on a dead/skipped subagent), so
+    // guard the deref — a null result must fall through to bounded recovery, never crash the run.
+    // Scope: this is type-strictness on the NATIVE leaf only. It does NOT catch an EXTERNAL-engine
+    // refusal: engine_adapter.py parse_result coerces any parseable external stdout to a genuine
+    // boolean `ok:true` UPSTREAM of this gate (build|fix branch), so an external {ok:false,plan_wrong}
+    // never reaches here as a falsy value — that refusal-laundering is tracked separately (#288).
+    if (worker && worker.ok === true) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
@@ -5392,7 +5596,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return reviewLoop(workItem, generation, task, branch, wt)
     }
     // #115 increment B: bounded recovery decided in-process via the worker_recovery twin (no leaf).
-    const rec = workerRecoveryTwin.decide(attempt, worker.signal || 'needs_context')
+    // #275: `worker` may be null (dead/skipped subagent) — a null signal defaults to needs_context
+    // (bounded retry → escalate → park), never a crash.
+    const rec = workerRecoveryTwin.decide(attempt, (worker && worker.signal) || 'needs_context')
     if (rec.action === 'park') return { parked: true, reason: rec.reason }
     attempt += 1                                   // retry_with_context / escalate -> re-dispatch
   }
@@ -5423,7 +5629,43 @@ const REVIEW_TASK_SCHEMA = {
         code_quality: { enum: ['pass', 'fail'] },
       },
     },
-    findings: { type: 'array' },
+    // #276: constrain finding items so structured-output validation corrects severity-vocabulary
+    // drift AT THE SOURCE. `severity` is the canonical rubric tier enum (SSOT §11, guarded by
+    // test_ssot_drift) — the live escape was reviewers emitting a foreign scale (`blocker`/`critical`
+    // /`high`) that the blocking partition then demoted to Minor. Required so every finding carries a
+    // gating severity; the task_review twin still fails closed on anything that slips past.
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['severity'],
+        properties: {
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          file: { type: 'string' },
+          title: { type: 'string' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
+  },
+}
+
+// #276: the whole-branch final-review reviewer's findings schema — same canonical severity-tier enum
+// (SSOT §11, guarded by test_ssot_drift) as REVIEW_TASK_SCHEMA, so a branch reviewer emitting a
+// foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
+// instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
+// sites in runFinalReview's reviewerAgent.
+const FINAL_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['findings'],
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+      },
+    },
   },
 }
 
@@ -5447,7 +5689,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
     + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+    + `"findings":[{"severity":"Critical|Important|Minor|Nit","file","title","cannot_verify_from_diff"}]}. `
+    + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
@@ -5463,7 +5706,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     // two-verdict review that returned the same findings. An unreadable external review (null / no
     // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
     if (res && Array.isArray(res.findings)) {
-      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
       return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
     }
   }
@@ -5583,24 +5826,25 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity":"Critical|Important|Minor|Nit","evidence"}]} ({"findings":[]} if nothing to flag). `
+      + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
     if (rEngine !== 'claude') {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+        schema: FINAL_REVIEW_SCHEMA,
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+        schema: FINAL_REVIEW_SCHEMA })
       return (out && Array.isArray(out.findings)) ? out.findings : null
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      schema: FINAL_REVIEW_SCHEMA })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -5615,7 +5859,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
     await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
+    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
+    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
+    // severity is dispatched to the fixer, never silently counted nowhere.
+    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
@@ -5638,7 +5885,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal }
+  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
@@ -6175,8 +6422,6 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -7974,18 +8219,41 @@ function startupStateScript() {
 
 async function readStartupState(workItem) {
   const script = startupStateScript()
+  const cmd = `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`
+  // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed resolution), so an
+  // absent field means a mangled courier response — retry rather than silently planting nothing (which
+  // would mis-route the NOTIFY ledger + review doc paths to the in-repo fallback on an
+  // out-of-repo-calibrated project mid-run). engine_prefs is NOT required: an older canned response
+  // without it degrades to the safe both-'claude' default (the same fail-open engine_pref_load.py had).
+  const opts = { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] }
   try {
-    return await courier.runCourierJson(
-      'read startup state',
-      `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
-      // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed
-      // resolution), so an absent field means a mangled courier response — retry rather than
-      // silently planting nothing (which would mis-route the NOTIFY ledger + review doc paths
-      // to the in-repo fallback on an out-of-repo-calibrated project mid-run).
-      // engine_prefs is NOT required: an older canned response without it degrades to the safe
-      // both-'claude' default (the same fail-open engine_pref_load.py had), never a retry.
-      { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] },
-    )
+    // #281: PROOF OF EXECUTION. This gather was answered WITHOUT executing in a live run (park
+    // wf_ac2f134f: 4 transcript events, ZERO tool calls) — a courier mentally simulated the embedded
+    // Python and fabricated a well-formed payload: a poisoned spec_gate:'unreadable' (the script's
+    // init-default, only reachable via a read exception) AND a rewritten engine_prefs claude/claude
+    // when the store's real pref was implementation:cursor. runCourierMarkedJson requires the
+    // __SR_EXIT execution marker (appended by the shell AFTER the script prints the WHOLE payload), so
+    // a did-not-run answer has no real marker → retried (2×3) → fails closed. This is the #218/#232
+    // marker protocol extended from the libRoot probes to the startup gather, and it certifies EVERY
+    // field the gather returns (incl. engine_prefs — which, unlike the gate, has no
+    // impossible-combination signature a semantic tripwire could ever catch).
+    let res = await courier.runCourierMarkedJson('read startup state', cmd, opts)
+    // #281 semantic tripwire (a cheap adjunct the marker can't give, NOT the load-bearing fix):
+    // spec_present && spec_gate=='unreadable' is only reachable via a real read exception on a PRESENT
+    // spec — the exact fabrication tell from the live park. Retry ONCE (same marker protocol); a
+    // genuine read exception reproduces (the twin then parks honestly on it), a stochastic parrot
+    // usually self-corrects to the real gate on the re-dispatch. The first answer is ALREADY
+    // marker-certified (it executed), so scope the retry in its OWN try/catch: if the retry itself
+    // transport-fails, KEEP the certified first answer (its real doc_dir/engine_prefs) instead of
+    // letting the throw reach the outer catch and reset to the degenerate fallback — a genuine
+    // present-but-unparseable spec legitimately carries this combo WITH real prefs (#281 review).
+    if (res && res.spec_present === true && res.spec_gate === 'unreadable') {
+      try {
+        const retry = await courier.runCourierMarkedJson('read startup state', cmd, opts)
+        if (retry) res = retry
+      } catch (_) { /* retry transport-failed: keep the already-certified first answer */ }
+    }
+    return res
   } catch (_) {
     return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', engine_prefs: null }
   }
@@ -8347,7 +8615,10 @@ function testPilotDeps(workItem, generation) {
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'fix-app-bug', schema: { type: 'object' } }),
+      // #275: type `ok` boolean so a stringy 'false' refusal is retried at the source (its consumer
+      // gates on ok, test_pilot_phase.js) and `commitShas` array so a stringified list can't slip past
+      // normalizeShas (which returns [] for a non-array, silently losing the shas → false progress).
+      { label: 'fix-app-bug', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, commitShas: { type: 'array' } } } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -8873,7 +9144,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.

@@ -23,10 +23,14 @@ import json
 import os
 import tempfile
 
+import circuit_breaker
 import review_round_policy
 
 DEEP = "reviewer-deep"
 CHEAP = "reviewer"
+# BLOCKING is the drift-guarded canonical blocking vocabulary (SSOT §11), re-exported into
+# spec_loop_plan / code_loop_plan namespaces. The blocking/critical PARTITION routes through
+# circuit_breaker.is_blocking / is_critical (#276/#291) — case-normalized + fail-closed.
 BLOCKING = ("Critical", "Important")
 STATE_FILE = "loop-state.json"
 
@@ -113,8 +117,12 @@ def read_findings_file(path, tier):
         "findings": findings,
         "confidence": confidence,
         "hasFindings": len(findings) > 0,
-        "blocking": sum(1 for f in findings if f.get("severity") in BLOCKING),
-        "critical": sum(1 for f in findings if f.get("severity") == "Critical"),
+        # #276/#291: case-normalized, fail-closed partition. `blocking` feeds the surfaced-severity /
+        # confirmation path (code_loop_plan / spec_loop_plan); `critical` drives the confirmation
+        # re-arm/park gate. Was case-sensitive `in {Critical,Important}` / `== "Critical"`, which
+        # silently mis-counted a mis-cased or foreign severity.
+        "blocking": sum(1 for f in findings if circuit_breaker.is_blocking(f.get("severity"))),
+        "critical": sum(1 for f in findings if circuit_breaker.is_critical(f.get("severity"))),
     }
 
 

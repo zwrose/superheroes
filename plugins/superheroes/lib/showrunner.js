@@ -74,8 +74,6 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -1873,18 +1871,41 @@ function startupStateScript() {
 
 async function readStartupState(workItem) {
   const script = startupStateScript()
+  const cmd = `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`
+  // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed resolution), so an
+  // absent field means a mangled courier response — retry rather than silently planting nothing (which
+  // would mis-route the NOTIFY ledger + review doc paths to the in-repo fallback on an
+  // out-of-repo-calibrated project mid-run). engine_prefs is NOT required: an older canned response
+  // without it degrades to the safe both-'claude' default (the same fail-open engine_pref_load.py had).
+  const opts = { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] }
   try {
-    return await courier.runCourierJson(
-      'read startup state',
-      `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
-      // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed
-      // resolution), so an absent field means a mangled courier response — retry rather than
-      // silently planting nothing (which would mis-route the NOTIFY ledger + review doc paths
-      // to the in-repo fallback on an out-of-repo-calibrated project mid-run).
-      // engine_prefs is NOT required: an older canned response without it degrades to the safe
-      // both-'claude' default (the same fail-open engine_pref_load.py had), never a retry.
-      { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] },
-    )
+    // #281: PROOF OF EXECUTION. This gather was answered WITHOUT executing in a live run (park
+    // wf_ac2f134f: 4 transcript events, ZERO tool calls) — a courier mentally simulated the embedded
+    // Python and fabricated a well-formed payload: a poisoned spec_gate:'unreadable' (the script's
+    // init-default, only reachable via a read exception) AND a rewritten engine_prefs claude/claude
+    // when the store's real pref was implementation:cursor. runCourierMarkedJson requires the
+    // __SR_EXIT execution marker (appended by the shell AFTER the script prints the WHOLE payload), so
+    // a did-not-run answer has no real marker → retried (2×3) → fails closed. This is the #218/#232
+    // marker protocol extended from the libRoot probes to the startup gather, and it certifies EVERY
+    // field the gather returns (incl. engine_prefs — which, unlike the gate, has no
+    // impossible-combination signature a semantic tripwire could ever catch).
+    let res = await courier.runCourierMarkedJson('read startup state', cmd, opts)
+    // #281 semantic tripwire (a cheap adjunct the marker can't give, NOT the load-bearing fix):
+    // spec_present && spec_gate=='unreadable' is only reachable via a real read exception on a PRESENT
+    // spec — the exact fabrication tell from the live park. Retry ONCE (same marker protocol); a
+    // genuine read exception reproduces (the twin then parks honestly on it), a stochastic parrot
+    // usually self-corrects to the real gate on the re-dispatch. The first answer is ALREADY
+    // marker-certified (it executed), so scope the retry in its OWN try/catch: if the retry itself
+    // transport-fails, KEEP the certified first answer (its real doc_dir/engine_prefs) instead of
+    // letting the throw reach the outer catch and reset to the degenerate fallback — a genuine
+    // present-but-unparseable spec legitimately carries this combo WITH real prefs (#281 review).
+    if (res && res.spec_present === true && res.spec_gate === 'unreadable') {
+      try {
+        const retry = await courier.runCourierMarkedJson('read startup state', cmd, opts)
+        if (retry) res = retry
+      } catch (_) { /* retry transport-failed: keep the already-certified first answer */ }
+    }
+    return res
   } catch (_) {
     return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', engine_prefs: null }
   }
@@ -2246,7 +2267,10 @@ function testPilotDeps(workItem, generation) {
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'fix-app-bug', schema: { type: 'object' } }),
+      // #275: type `ok` boolean so a stringy 'false' refusal is retried at the source (its consumer
+      // gates on ok, test_pilot_phase.js) and `commitShas` array so a stringified list can't slip past
+      // normalizeShas (which returns [] for a non-array, silently losing the shas → false progress).
+      { label: 'fix-app-bug', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, commitShas: { type: 'array' } } } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -2772,7 +2796,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.

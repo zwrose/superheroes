@@ -46,6 +46,9 @@ const CHATTY_ACK = 'Done! I successfully wrote the file as requested.'
 
 const files = Object.create(null)
 const usableCalls = Object.create(null)
+// Stateful mini gate store (see stretch_budget smoke): pending until the chained set-gate flips
+// it — read-gate rides --json on BOTH the front-half and build_phase reads post run-9 fix.
+const gateStore = { plan: 'pending', tasks: 'pending' }
 const counters = { proseReads: 0, chattyAcks: 0, sabotagedWrites: 0, mangledAnswers: 0,
                    fencedHelpers: 0, releaseImprovised: 0, releaseCalls: 0 }
 
@@ -211,7 +214,13 @@ function shellResponse(cmd) {
     return JSON.stringify({ usable: usableCalls[doc] > 1, recorded: 'x', expected: 'x', missing_sections: [], placeholder: false })
   }
   if (cmd.includes('definition_doc.py read-gate')) {
-    return cmd.includes('--json') ? JSON.stringify({ review: 'pending' }) : 'passed'
+    const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
+    const body = JSON.stringify({ review: gateStore[doc] || 'pending' })
+    // FENCE the build-phase read's answer (bare `--doc tasks` — the run-9 wf_b69571d9
+    // misbehavior): the whole-answer single fence must still parse under the gate read's strict
+    // extraction and the run must still reach ready. The front-half readGate (shq-quoted --doc)
+    // stays bare — its exec leg does a bare JSON.parse and fencing it is not this PR's scope.
+    return /--doc tasks /.test(cmd) ? '```json\n' + body + '\n```' : body
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
   if (cmd.includes('phase_progress_entry.py')) {
@@ -247,7 +256,7 @@ function answerCommandPrompt(prompt) {
 }
 
 const COURIER_JSON = {
-  'read startup state': () => JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
+  'read startup state': () => markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
   'save phase progress': (prompt) => {
     // With prose reads live, ANY runtime-computed doc hash on the set-gate is prose-poisoned —
     // the fence must ride the Python-side 'current' sentinel (red: the pre-hardening bundle
@@ -255,6 +264,9 @@ const COURIER_JSON = {
     if (/set-gate/.test(prompt) && !/--expected-hash 'current'/.test(prompt)) {
       throw new Error('set-gate rode a runtime-computed hash — courier-read text entered a fence')
     }
+    // Chained set-gate flips the mini gate store (see gateStore comment above).
+    const sg = String(prompt).match(/set-gate --doc '?(plan|tasks)'?[\s\S]*?--review '?([a-z-]+)'?/)
+    if (sg) gateStore[sg[1]] = sg[2]
     return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
   },
   'save round state': () => JSON.stringify({ ok: true }),

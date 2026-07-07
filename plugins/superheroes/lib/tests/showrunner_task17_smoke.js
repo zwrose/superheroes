@@ -39,7 +39,7 @@ async function partA() {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' }, doc_dir: '' }) }]
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' }, doc_dir: '' }) }]
     }
     if (opts && opts.courier) {
       // Dumb-pipe leaves now carry descriptive labels ('gather snapshot'/'read gate'/…); route them
@@ -105,7 +105,7 @@ async function partA() {
   globalThis.agent = async function(prompt, opts) {
     const label = (opts && opts.label) || ''
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: 'bad', doc_dir: '' }) }]
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: 'bad', doc_dir: '' }) }]
     }
     if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {

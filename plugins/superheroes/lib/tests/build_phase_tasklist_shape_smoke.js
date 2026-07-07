@@ -30,12 +30,12 @@ function makeAgent(routes) {
 }
 const bp = require('../build_phase.js')
 
-// SETUP: read-gate -> 'passed' (plain string), build_entry -> a branch. taskListJson is the raw
+// SETUP: read-gate -> {"review": "passed"} (--json mode), build_entry -> a branch. taskListJson is the raw
 // stdout string the task_list_cli.py leaf returns; gatherJson (optional) the gather state.
 function makeExecRoute(taskListJson, gatherJson) {
   return ['exec', (p) => {
     let stdout = '{}'
-    if (p.includes('read-gate')) stdout = 'passed'
+    if (p.includes('read-gate')) stdout = '{"review": "passed"}'
     else if (p.includes('build_entry.py')) stdout = JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
     else if (p.includes('task_list_cli.py')) stdout = taskListJson
     else if (p.includes('build_state_cli.py gather') && gatherJson) stdout = gatherJson
@@ -139,7 +139,7 @@ function makeExecRoute(taskListJson, gatherJson) {
   logs.length = 0
   global.agent = makeAgent([
     ['exec', (p) => {
-      if (p.includes('read-gate')) return [{ index: 0, ok: true, stdout: 'passed' }]
+      if (p.includes('read-gate')) return [{ index: 0, ok: true, stdout: '{"review": "passed"}' }]
       if (p.includes('build_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'b', path: '/tmp/wt' }) }]
       if (p.includes('task_list_cli.py')) return [{ index: 0, ok: false, stdout: 'leaf crashed' }]
       return [{ index: 0, ok: true, stdout: '{}' }]

@@ -121,6 +121,99 @@ async function main() {
   }
 
   {
+    // #279 bounded corrective re-run: verify fails ONCE then passes with zero blocking findings ->
+    // terminal clean, verify invoked exactly twice, no park (one transient flake must not halt a
+    // final review that found nothing to fix).
+    const dir = freshDir()
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => cleanResult(runDir, round, opts)
+    const prevAgent = global.agent
+    let verifyCalls = 0
+    global.agent = async (prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        const payload = verifyCalls === 1
+          ? { result: 'fail', code: 1, tail: 'Failed to resolve import "next/server" in route.test.ts' }
+          : { result: 'pass', code: 0, tail: '' }
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'), JSON.stringify(payload))
+        return payload
+      }
+      return null
+    }
+    v = await reviewPanel({ ...base(dir), legKind: { panel: false, code: true }, verifyCommand: 'run-tests' })
+    global.agent = prevAgent
+    assert.strictEqual(v.terminal, 'clean', '#279: verify fail-once-then-pass with zero blockers -> clean')
+    assert.strictEqual(verifyCalls, 2, '#279: exactly one bounded re-run (2 verify invocations total)')
+  }
+
+  {
+    // #279 two consecutive verify fails -> halted, and the park reason carries the clamped verify
+    // error head (the failing stage + round + tail), not a bare "halted".
+    const dir = freshDir()
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => cleanResult(runDir, round, opts)
+    const prevAgent = global.agent
+    let verifyCalls = 0
+    global.agent = async (prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        const payload = { result: 'fail', code: 1, tail: 'Failed to resolve import "next/server" in route.test.ts' }
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'), JSON.stringify(payload))
+        return payload
+      }
+      return null
+    }
+    v = await reviewPanel({ ...base(dir), legKind: { panel: false, code: true }, verifyCommand: 'run-tests' })
+    global.agent = prevAgent
+    assert.strictEqual(v.terminal, 'halted', '#279: two consecutive verify fails -> halted (fail closed)')
+    assert.strictEqual(verifyCalls, 2, '#279: at most one re-run even on a persistent fail')
+    assert.ok(/verify failed r1/.test(v.reason || ''), '#279: reason names the failing stage + round')
+    assert.ok(/Failed to resolve import/.test(v.reason || ''), '#279: reason carries the verify error head')
+  }
+
+  {
+    // #279 guard: a round WITH blocking findings takes the fix leg (verify not consulted for the
+    // terminal), so the corrective re-run must NOT fire — verify runs once, no extra invocation.
+    const dir = freshDir()
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => blockerResult(runDir, round, opts)
+    const prevAgent = global.agent
+    let verifyCalls = 0
+    global.agent = async (prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        const payload = { result: 'fail', code: 1, tail: 'boom' }
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'), JSON.stringify(payload))
+        return payload
+      }
+      return null
+    }
+    v = await reviewPanel({ ...base(dir), legKind: { panel: false, code: true }, verifyCommand: 'run-tests', fixStep: async () => null })
+    global.agent = prevAgent
+    assert.strictEqual(verifyCalls, 1, '#279: blocking findings present -> no corrective re-run (verify runs once)')
+  }
+
+  {
+    // #279 boundary: the corrective re-run is scoped to verifyResult === 'fail' ONLY. A 'timeout' is a
+    // real terminal signal (not a transient flake), so it must NOT earn the re-run — verify runs once
+    // and the round halts. Pins the fail-vs-timeout distinction the guard intentionally draws.
+    const dir = freshDir()
+    global.reviewerAgent = async (_r, _c, _rub, runDir, round, opts) => cleanResult(runDir, round, opts)
+    const prevAgent = global.agent
+    let verifyCalls = 0
+    global.agent = async (prompt, opts) => {
+      if (opts && opts.label === 'run verify') {
+        verifyCalls += 1
+        const payload = { result: 'timeout', code: null, tail: 'verify timed out after 600000ms' }
+        fs.writeFileSync(path.join(dir, 'verify-result-r1.json'), JSON.stringify(payload))
+        return payload
+      }
+      return null
+    }
+    v = await reviewPanel({ ...base(dir), legKind: { panel: false, code: true }, verifyCommand: 'run-tests' })
+    global.agent = prevAgent
+    assert.strictEqual(v.terminal, 'halted', '#279: a verify timeout halts (not re-run)')
+    assert.strictEqual(verifyCalls, 1, '#279: timeout must NOT earn the corrective re-run (verify runs once)')
+  }
+
+  {
     const dir = freshDir()
     const seen = []
     const fixRounds = []

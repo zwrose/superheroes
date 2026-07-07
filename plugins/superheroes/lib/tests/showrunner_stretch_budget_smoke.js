@@ -165,6 +165,10 @@ const PR = { number: 7, url: 'https://github.com/o/r/pull/7', state: 'open', isD
 // fenced writes' hash verification passes with REAL hashes).
 const files = Object.create(null)
 const usableCalls = Object.create(null)   // per-doc draft-signal call count (1st: not usable)
+// Stateful mini gate store: pending until the phase tail's chained set-gate flips it. Both the
+// front-half readGate AND build_phase's UFR-1 entry read now ride --json (the run-9 fenced-answer
+// fix), so the old plain-vs-json discriminator can't tell them apart — the gate LIFECYCLE can.
+const gateStore = { plan: 'pending', tasks: 'pending' }
 
 function runHelperResponse(cmdline) {
   // runHelper prompts quote each argv element: 'python3' 'plugins/...X.py' 'sub' '--flag' 'v' ...
@@ -333,9 +337,8 @@ function shellResponse(cmd) {
     return JSON.stringify({ usable: usableCalls[doc] > 1, recorded: 'x', expected: 'x', missing_sections: [], placeholder: false })
   }
   if (cmd.includes('definition_doc.py read-gate')) {
-    // showrunner.readGate passes --json (front-half skip check: pending -> run the panel);
-    // build_phase's entry gate check reads the PLAIN gate word and needs 'passed' to build.
-    return cmd.includes('--json') ? JSON.stringify({ review: 'pending' }) : 'passed'
+    const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
+    return JSON.stringify({ review: gateStore[doc] || 'pending' })
   }
   if (cmd.includes('engine_pref_load.py')) throw new Error('engine_pref_load.py dispatched as its own leaf (#118 startup fold)')
   if (cmd.includes('journal_entry.py')) throw new Error('journal_entry.py rode its own leaf (#118 every-phase tail)')
@@ -379,8 +382,14 @@ function answerCommandPrompt(prompt) {
 }
 
 const COURIER_JSON = {
-  'read startup state': () => JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
-  'save phase progress': () => markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }),
+  'read startup state': () => markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
+  'save phase progress': (prompt) => {
+    // The review-phase tail chains set-gate ahead of the save — flip the mini gate store so the
+    // NEXT read-gate (workhorse's UFR-1 entry read of the tasks doc) sees the passed gate.
+    const sg = String(prompt).match(/set-gate --doc '?(plan|tasks)'?[\s\S]*?--review '?([a-z-]+)'?/)
+    if (sg) gateStore[sg[1]] = sg[2]
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  },
   'save round state': () => JSON.stringify({ ok: true }),
   'gather build state': () => JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' }),
   'record task built': () => JSON.stringify({ ok: true, read_back: true, task: '1' }),
@@ -438,7 +447,7 @@ async function cannedAgent(prompt, opts) {
     if (re.test(label)) return fn(prompt)
   }
   if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
-  if (COURIER_JSON[label]) return COURIER_JSON[label]()
+  if (COURIER_JSON[label]) return COURIER_JSON[label](String(prompt))
   return answerCommandPrompt(String(prompt))
 }
 

@@ -1,6 +1,8 @@
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
-const fs = require('fs')
+// pid-unique runDir + reason-bearing terminal assertions (see _final_review_probe.js;
+// must load before build_phase.js binds reviewPanel).
+const { uniqueWorkItem, resetRunDir, assertTerminal } = require('./_final_review_probe.js')
 const bp = require('../build_phase.js')
 
 global.log = () => {}
@@ -27,13 +29,12 @@ global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
     return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
   }
 
-  const runDir = '/tmp/workhorse-wi-final-review'
-  fs.rmSync(runDir, { recursive: true, force: true })
-  fs.mkdirSync(runDir, { recursive: true })
+  const WI = uniqueWorkItem()
+  resetRunDir(WI)
 
-  const fr = await bp.runFinalReview('wi', 5, 'superheroes/wi', '/tmp/wt')
-  assert.strictEqual(fr.terminal, 'clean')
-  const stamp = await bp.recordFinalReviewClean('wi')
+  const fr = await bp.runFinalReview(WI, 5, 'superheroes/wi', '/tmp/wt')
+  assertTerminal(fr, 'clean', 'coverage-folds final review certifies clean')
+  const stamp = await bp.recordFinalReviewClean(WI)
   assert.strictEqual(stamp.ok, true)
   assert.strictEqual(stamp.read_back, true)
   assert.ok(labels.includes('read verify + minors'))

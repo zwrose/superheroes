@@ -322,6 +322,46 @@ def test_tally_verify_fail_halts_a_clean_round(tmp_path):
     ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
     assert ans["terminal"] == "halted"
     assert "verify" in ans["reason"]
+    # #279: with no verify-result file beside the records, the reason still names the failing stage.
+    assert "verify failed r1" in ans["reason"]
+
+
+def test_tally_verify_fail_reason_carries_clamped_error_head(tmp_path):
+    # #279 honest park reason: when the round's verify-result-r{N}.json sits beside the records, its
+    # `tail` head rides into the reason so the owner sees WHY verify failed, not a bare "halted".
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    (tmp_path / "verify-result-r1.json").write_text(json.dumps(
+        {"result": "fail", "code": 1,
+         "tail": 'Failed to resolve import "next/server" in route.test.ts'}))
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
+    assert ans["terminal"] == "halted"
+    assert "verify failed r1:" in ans["reason"]
+    assert "Failed to resolve import" in ans["reason"]
+
+
+def test_tally_verify_fail_reason_clamps_a_long_tail_keeping_the_end(tmp_path):
+    # #279 the untrusted tail is clamped at the sink (the reason flows into journals + readouts), and
+    # the END of the tail is kept — test runners print the failure line LAST, so a head-slice would
+    # surface progress noise. The marker sits at the very end of a long tail; it must survive.
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    (tmp_path / "verify-result-r1.json").write_text(json.dumps(
+        {"result": "fail", "code": 1, "tail": ("progress noise " * 400) + "REAL_FAILURE_MARKER"}))
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
+    assert ans["terminal"] == "halted"
+    # stage prefix + leading ellipsis + clamped tail (<=160) — well under the reason bound.
+    assert len(ans["reason"]) < 220
+    assert "REAL_FAILURE_MARKER" in ans["reason"], "the trailing failure summary must survive the clamp"
+    assert "…" in ans["reason"]
+
+
+def test_tally_verify_timeout_reason_names_the_stage(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="timeout")
+    assert ans["terminal"] == "halted"
+    assert "verify timed out r1" in ans["reason"]
 
 
 def test_tally_empty_roster_cannot_certify(tmp_path):
@@ -728,3 +768,31 @@ def test_compose_fix_context_answer_is_small(tmp_path):
                      "--dimensions", json.dumps(DIMS), "--out-path", str(out))
     assert size < LIMIT
     assert ans["bytes"] > LIMIT, "the worklist file itself is large — the point is the ANSWER is not"
+
+
+# ── #291: the confirmation-gate feeders route the blocking/Critical partition through the shared
+# fail-closed predicate so a mis-cased severity reaches the gate (canonical-only tests miss a revert).
+import loop_plan_common as _lpc  # noqa: E402
+
+
+def test_surfaced_blocking_severities_includes_miscased_blocker():
+    # A lowercase `critical` / foreign `blocker` is surfaced (was `in BLOCKING`, which dropped it →
+    # confirmation gate never saw it → no park).
+    rec = {"findings": [{"file": "a", "line": 1, "title": "x", "severity": "critical"},
+                        {"file": "b", "line": 2, "title": "y", "severity": "blocker"},
+                        {"file": "c", "line": 3, "title": "z", "severity": "Minor"}]}
+    out = rlp._surfaced_blocking_severities(rec)
+    assert out == ["critical", "blocker"]  # Minor excluded; both blockers surfaced
+
+
+def test_read_findings_file_counts_miscased_severities(tmp_path):
+    p = tmp_path / "findings.json"
+    p.write_text(json.dumps([
+        {"file": "a", "line": 1, "title": "x", "severity": "critical"},  # mis-cased Critical
+        {"file": "b", "line": 2, "title": "y", "severity": "blocker"},   # foreign blocker
+        {"file": "c", "line": 3, "title": "z", "severity": "Minor"},
+    ]))
+    res = _lpc.read_findings_file(str(p), "reviewer-deep")
+    assert res["valid"] is True
+    assert res["blocking"] == 2   # critical + blocker (was 0 under case-sensitive `in BLOCKING`)
+    assert res["critical"] == 1   # lowercase critical counts (was 0 under `== "Critical"`)

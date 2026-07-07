@@ -16,7 +16,12 @@ function _partition(findings) {
   const blocking = []; const minors = []; const cannotVerify = []
   for (const f of findings || []) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
-    if (f && circuitBreaker.BLOCKING.has(f.severity)) blocking.push(f)
+    // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
+    // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
+    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard (as on
+    // the cannot_verify line above) so a falsy element routes to minors rather than blocking — the
+    // Python twin only ever receives dict findings, so this guard is JS-side defensiveness, not parity.
+    if (f && circuitBreaker.isBlocking(f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }
@@ -36,6 +41,15 @@ function decide(verdicts, findings, rnd, maxRounds, history) {
   let reason = loopReason
   if (brk.halt) {
     reason = brk.detail !== undefined ? brk.detail : reason
+  }
+  // FR-5/FR-6: the two verdicts GATE — they are not merely required-to-be-present. A non-'pass'
+  // spec_compliance or code_quality can never complete, even with zero blocking findings, so a
+  // reviewer that reports the task non-compliant sends it back for a fix round (#276). Vocabulary-
+  // independent backstop: this holds even if a finding's severity drifts past _partition.
+  const failing = REQUIRED_VERDICTS.filter((k) => verdicts[k] !== 'pass')
+  if (mapped === 'complete' && failing.length) {
+    mapped = 'review'
+    reason = `verdict(s) ${failing.join(' + ')} are not 'pass' — the task is not compliant; a fix round is required before completion (FR-5/FR-6).`
   }
   // UFR-5: never complete while a cannot-verify item is unresolved — force a resolution round.
   if (mapped === 'complete' && cannotVerify.length) {

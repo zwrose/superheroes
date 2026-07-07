@@ -127,19 +127,19 @@ const TASK = { id: '1', title: 'A' }
   assert.strictEqual(r.parked, false, 'a clean record-built write completes the task')
   assert.strictEqual(recordBuiltCalls4, 1, 'a clean read-back on the first call returns immediately — exactly one call, no retry')
 
-  // ---- (5) read-gate courier-drop (execText) recovered by the retry ----
+  // ---- (5) read-gate courier-drop (execJson) recovered by the retry ----
   let gateCalls = 0
   global.agent = makeAgent([
     ['exec', (prompt) => {
-      if (prompt.includes('read-gate')) { gateCalls += 1; return [{ ok: true, stdout: gateCalls === 1 ? '' : 'passed' }] }
+      if (prompt.includes('read-gate')) { gateCalls += 1; return [{ ok: true, stdout: gateCalls === 1 ? '' : '{"review": "passed"}' }] }
       if (prompt.includes('build_entry.py')) return [{ ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
       if (prompt.includes('task_list_cli.py')) return [{ ok: true, stdout: JSON.stringify({ tasks: [], raw_task_heading_count: 0 }) }]
       return [{ ok: true, stdout: '{}' }]
     }],
   ])
   const res = await bp.buildPhase('wi', 5)
-  assert.strictEqual(res.confidence, 'high', 'a dropped read-gate stdout must be recovered by the execText retry (build proceeds to a zero-task finish)')
+  assert.strictEqual(res.confidence, 'high', 'a dropped read-gate stdout must be recovered by the execJson retry (build proceeds to a zero-task finish)')
   assert.strictEqual(gateCalls, 2, 'the read-gate exec is retried exactly once on an empty stdout (2 calls total)')
 
-  console.log('ok: build_phase courier-drop retry (record-built recover/park/no-retry-on-real-fail/happy-path + execText read-gate recover)')
+  console.log('ok: build_phase courier-drop retry (record-built recover/park/no-retry-on-real-fail/happy-path + execJson read-gate recover)')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })
