@@ -287,6 +287,23 @@ def test_parse_result_build_ok_true_preserves_success_signal():
     assert res["ok"] is True and res["signal"] == "ok"
 
 
+def test_parse_result_build_refusal_signal_normalized_to_known_vocabulary():
+    # #288 (security + premortem review): the refusal signal is normalized to {plan_wrong,
+    # needs_context} — NO engine-controlled free-text may escape this scrub boundary as signal/reason
+    # (it flows into the journal outcome + narrator logs), and it must stay disjoint from the #277
+    # harness-dead tripwire's reserved reason tokens. Off-contract / empty / non-string / secret-bearing
+    # signals all collapse to needs_context; only an exact 'plan_wrong' survives.
+    def sig(stdout):
+        r = EA.parse_result("codex", "build", stdout)
+        assert r["ok"] is False and r["signal"] == r["reason"]
+        return r["signal"]
+    assert sig(json.dumps({"ok": False, "signal": ""})) == "needs_context"          # empty (the `and sig` half)
+    assert sig(json.dumps({"ok": False, "signal": 0})) == "needs_context"            # non-string
+    assert sig(json.dumps({"ok": False, "signal": "dispatch-error"})) == "needs_context"  # #277 tripwire-token collision
+    assert sig(json.dumps({"ok": False, "signal": "AKIA-SECRET-LEAK"})) == "needs_context"  # arbitrary free-text never escapes
+    assert sig(json.dumps({"ok": False, "signal": "plan_wrong"})) == "plan_wrong"    # the one contracted value survives
+
+
 def test_parse_result_cli(capsys):
     import io, sys as _sys
     stdout = json.dumps({"ok": True, "evidence": {"testFailed": False, "testPassed": True}})

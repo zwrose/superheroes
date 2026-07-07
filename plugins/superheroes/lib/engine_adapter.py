@@ -217,9 +217,17 @@ def parse_result(engine, role_kind, stdout):
         # preserve it here. Strict boolean identity mirrors that gate (`worker.ok === true`): a real
         # `false`, a truthy stringified "false", or a missing key all read as a refusal, never true.
         if obj.get("ok") is not True:
-            sig = obj.get("signal")
-            # default to the native worker-recovery default (build_phase's `worker.signal || 'needs_context'`)
-            sig = sig if isinstance(sig, str) and sig else "needs_context"
+            # Normalize the refusal signal to the known worker-recovery vocabulary — NEVER pass the
+            # engine's raw `signal` string through. This is a scrub boundary (Secret-hygiene): every
+            # other branch scrubs external free-text, and `signal` here becomes `reason`, which flows
+            # into the durable journal outcome AND owner-facing narrator logs (engine_dispatch.js).
+            # `plan_wrong` is the ONLY value the native worker-recovery twin treats specially
+            # (worker_recovery.decide); every other value — off-contract, empty, or non-string —
+            # collapses to `needs_context`, exactly as native's `worker.signal || 'needs_context'` plus
+            # the twin's non-plan_wrong bucket would. So this is behavior-identical to the native path
+            # AND leak-proof: no engine-controlled free-text can escape as signal/reason (which also
+            # keeps it disjoint from the #277 harness-dead tripwire's reserved reason tokens).
+            sig = "plan_wrong" if obj.get("signal") == "plan_wrong" else "needs_context"
             return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
         return {"ok": True, "signal": "ok", "evidence": evidence}
     except Exception:
