@@ -193,7 +193,12 @@ def main(argv=None):
         except ship_gate.ProvenanceError as e:           # corrupt provenance.json -> gate (fail closed)
             print(json.dumps({"ok": False, "reason": "provenance unreadable: %s" % e})); sys.exit(0)
         from review_result import read_result
-        decision = ship_gate.decide(prov, read_result(paths["review_result"]), head)
+        # premortem-001: fold in the run's journal `build:` denial events as a SECOND carrier —
+        # either carrier gates. A journal read error swallows to [] inside the helper (fail-safe
+        # toward the provenance carrier).
+        _jdenials = ship_gate.journal_build_denials(paths["events"])
+        decision = ship_gate.decide(prov, read_result(paths["review_result"]), head,
+                                    journal_denials=_jdenials)
         if decision["action"] != "proceed":
             print(json.dumps({"ok": False, "reason": decision["reason"]})); sys.exit(0)
         # Push the build branch before creating the PR (see push_branch): `gh pr create --head` needs

@@ -23,16 +23,20 @@ function makeAgent(routes) {
 const bp = require('../build_phase.js')
 const TASK = { id: '9', title: 'Denied step' }
 
-function execRoute(captures) {
+function execRoute(captures, order) {
   return ['exec', (prompt) => {
     if (prompt.includes('prov_entry.py --step build-denial')) {
       if (captures) captures.push(prompt)
+      if (order) order.push('prov')
       return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
     }
     let stdout = '{}'
     if (prompt.includes('build_state_cli.py gather')) stdout = JSON.stringify({ unmapped_commits: 0 })
     else if (prompt.includes('fence_cli.py')) stdout = JSON.stringify({ ok: true })
-    else if (prompt.includes('journal_entry.py')) stdout = JSON.stringify({ ok: true })
+    else if (prompt.includes('journal_entry.py')) {
+      if (order && prompt.includes('permission_denied')) order.push('journal')
+      stdout = JSON.stringify({ ok: true })
+    }
     return [{ index: 0, ok: true, stdout }]
   }]
 }
@@ -44,9 +48,13 @@ function execRoute(captures) {
   assert.ok(/never fabricate a completed step/i.test(leafPrompt), 'the leaf prompt forbids fabricating a denied step as done')
 
   // (2) A leaf reporting deniedAction (even with ok:true) must record the denial via prov_entry.
+  //     DUAL-CARRIER ordering (premortem-001): the best-effort journal `permission_denied` event
+  //     must be written BEFORE the fail-closed provenance write, so the denial survives even if the
+  //     provenance write later fails and the task parks (a resume skips the already-committed leaf).
   const calls = []
+  const order = []
   global.agent = makeAgent([
-    execRoute(calls),
+    execRoute(calls, order),
     ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true }, deniedAction: 'could not run the migration script' }],
     ['task-reviewer:r', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
     ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '9' }) }]],
@@ -57,6 +65,8 @@ function execRoute(captures) {
   assert.strictEqual(calls.length, 1, 'exactly one build-denial provenance write fires')
   assert.ok(calls[0].includes("--denied-step 'build:9'"), 'the denial is tagged with the task id')
   assert.ok(calls[0].includes('could not run the migration script'), 'the denied action text is recorded')
+  assert.deepStrictEqual(order, ['journal', 'prov'],
+    'the best-effort journal carrier is written BEFORE the fail-closed provenance write (dual-carrier ordering)')
 
   // (3) A clean task (no deniedAction) never calls build-denial.
   const cleanCalls = []

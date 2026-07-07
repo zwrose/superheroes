@@ -219,6 +219,33 @@ def test_unknown_event_type_still_parks(tmp_path):
         pass
 
 
+def test_journal_entry_cli_step_detail_passthrough(tmp_path, monkeypatch):
+    # test-001 (UFR-3 / code-001): build_phase.js shells journal_entry.py with --step/--detail
+    # (and NO --payload) to record a build-step permission_denied event. Exercise the real CLI
+    # argparse end-to-end and confirm both flags land at top level in the written event — a broken
+    # flag name here would silently drop the build-denial disclosure (and the ship gate's second
+    # denial carrier) with no other test failing.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    import journal
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    monkeypatch.chdir(tmp_path)
+    out = _sp.run(
+        [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+         "--work-item", "wi-x", "--event-type", "permission_denied",
+         "--step", "build:task-3", "--detail", "could not run migration"],
+        capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert _json.loads(out.stdout) == {"ok": True}
+    evs = journal.read_events(control_plane.paths(str(tmp_path), "wi-x")["events"])
+    assert evs[-1]["type"] == "permission_denied"
+    assert evs[-1]["step"] == "build:task-3"
+    assert evs[-1]["detail"] == "could not run migration"
+
+
 def test_journal_entry_cli_defaults_to_phase_record(tmp_path, monkeypatch):
     # Back-compat: NO --event-type -> phase_record (the existing behavior is byte-preserved).
     import json as _json

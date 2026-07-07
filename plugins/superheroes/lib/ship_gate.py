@@ -17,6 +17,7 @@ import json
 import os
 
 import control_plane
+import journal
 
 _TERMINAL = "exit_clean"
 
@@ -69,13 +70,40 @@ def set_review_covers(path, head):
     return prov
 
 
-def decide(provenance, review_result, head):
+def journal_build_denials(events_path):
+    """The SECOND build-denial carrier (premortem-001): the run's journal `permission_denied`
+    events whose `step` is a build step (`build:<id>`). buildOneTask writes this best-effort
+    (courier-retried) event BEFORE the fail-closed provenance write, so a build denial survives
+    even when the provenance write itself fails and the task then parks — a resume that skips
+    buildOneTask (its commit already exists) would otherwise drop the denial forever.
+
+    Fail-SAFE toward provenance-only: a journal read error (or absent file) swallows to `[]`, so
+    this carrier can only ever ADD denials to the provenance carrier, never clear one."""
+    try:
+        evs = journal.read_events(events_path)
+    except Exception:
+        return []
+    out = []
+    for ev in evs:
+        if not isinstance(ev, dict) or ev.get("type") != "permission_denied":
+            continue
+        step = ev.get("step")
+        if isinstance(step, str) and step.startswith("build:"):
+            out.append({"step": step, "command": ev.get("detail")})
+    return out
+
+
+def decide(provenance, review_result, head, *, journal_denials=None):
     """Pure step 3 ship-gate decision; fail-closed (anything unproven -> gate).
 
     `provenance`: from read_provenance (a dict, or {} when absent).
     `review_result`: from a fail-closed parse of review-code's --result-file
         ({"action": ...}, or {"action": "halt"} on missing/garbled).
     `head`: the current branch HEAD (`git rev-parse HEAD`).
+    `journal_denials`: the SECOND build-denial carrier (premortem-001) — the run's journal
+        `build:` permission_denied events (from `journal_build_denials`). EITHER carrier gates;
+        the fold is additive (fail-safe), so an unreadable journal (`[]`) never weakens the
+        provenance carrier.
     """
     # 1. Build evidence (FR-3 / UFR-4): SDD must have run.
     if not isinstance(provenance, dict) or not provenance.get("build"):
@@ -85,11 +113,16 @@ def decide(provenance, review_result, head):
     # 1b. Denied build evidence (UFR-6 / UFR-8): a substantive build sub-step denied by the
     # 15-min timeout means the build step "ran" but its evidence is incomplete/tainted. GATE
     # so the PR stays a draft (reused draft-hold path via mark_ready_action / revert-draft).
+    # DUAL-CARRIER (premortem-001): the provenance list AND the run's journal `build:` denial
+    # events are independent carriers — EITHER gates. The journal carrier catches a denial that
+    # was journaled before a failed provenance write parked the task (a resume then skips the
+    # already-committed leaf, so provenance.buildDenials stays empty). The fold only ADDs.
     denials = provenance.get("buildDenials") if isinstance(provenance, dict) else None
-    if denials:
+    jdenials = journal_denials or []
+    if denials or jdenials:
         return {"action": "gate",
                 "reason": "build evidence incomplete — a substantive build step was denied "
-                          "by the 15-min timeout (%d step(s))" % len(denials)}
+                          "by the 15-min timeout (%d step(s))" % (len(denials or []) + len(jdenials))}
     # 2. Review evidence (FR-1 / FR-2 / UFR-1 / UFR-3), reason keyed by action.
     action = review_result.get("action") if isinstance(review_result, dict) else None
     if action != _TERMINAL:

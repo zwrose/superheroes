@@ -165,3 +165,45 @@ def test_record_build_denial_aborts_on_garbled_not_clobber(tmp_path):
     with pytest.raises(ship_gate.ProvenanceError):
         ship_gate.record_build_denial(str(p), step="task-3", command="python3 -c x")
     assert p.read_text() == "{garbled"  # unchanged — never clobbered
+
+
+# --- premortem-001: the journal is a SECOND build-denial carrier; either carrier gates ---
+
+def test_journal_only_denial_still_gates():
+    # provenance carries NO buildDenials (its write was lost), but the journal recorded the
+    # `build:` denial first — the ship gate must still GATE off the journal carrier alone.
+    prov = {"build": {"engine": "claude", "head": "abc"}, "review": {"covers": "abc"}}
+    jdenials = [{"step": "build:9", "command": "run the migration"}]
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc", journal_denials=jdenials)
+    assert out["action"] == "gate"
+    assert "incomplete" in out["reason"] or "denied" in out["reason"]
+
+
+def test_provenance_denial_gates_even_when_journal_unreadable():
+    # journal unreadable -> journal_build_denials returned [] (fail-safe toward provenance-only);
+    # the provenance carrier alone still GATEs.
+    prov = {"build": {"engine": "claude", "head": "abc"}, "review": {"covers": "abc"},
+            "buildDenials": [{"step": "build:9", "command": "python3 -c x"}]}
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc", journal_denials=[])
+    assert out["action"] == "gate"
+
+
+def test_both_carriers_empty_proceeds():
+    prov = {"build": {"engine": "claude", "head": "abc"}, "review": {"covers": "abc"}}
+    out = ship_gate.decide(prov, _clean_review("abc"), "abc", journal_denials=[])
+    assert out["action"] == "proceed"
+
+
+def test_journal_build_denials_filters_to_build_steps(tmp_path):
+    import journal
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "permission_denied", step="build:9", detail="run the migration")
+    journal.append(p, "permission_denied", step="review:probe", detail="a reviewer probe")  # not build:
+    journal.append(p, "allowance_fired", payload={"reason": "routine"})                     # not a denial
+    got = ship_gate.journal_build_denials(p)
+    assert got == [{"step": "build:9", "command": "run the migration"}]
+
+
+def test_journal_build_denials_absent_file_is_empty():
+    # a missing events file (or any read error) swallows to [] -> fold only ever ADDs, never clears.
+    assert ship_gate.journal_build_denials("/nonexistent/events.jsonl") == []

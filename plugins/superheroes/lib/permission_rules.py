@@ -170,6 +170,21 @@ def _run_path(run_id, cwd, root, work_item=None):
     return os.path.join(_store_dir(cwd, root), "runs", "%s.json" % run_id)
 
 
+def _prefer_cwd_named(candidates, cwd):
+    """Disambiguate concurrent live leases by the work-item named in `cwd` — by LONGEST-UNIQUE
+    match (code-001). A plain substring test misattributes when one work-item name is a prefix
+    of another (`wi-abc` is a literal substring of a `wi-abc-task5` build-worktree path), so BOTH
+    would "match" and the preference would collapse to sorted-first (the wrong, shorter run). The
+    longer name is the more specific match, so among the `p[0] in cwd` candidates pick the single
+    longest; a tie (or no match) returns None -> caller falls back to deterministic sorted-first."""
+    named = [p for p in candidates if p[0] and str(p[0]) in str(cwd)]
+    if not named:
+        return None
+    longest = max(len(str(p[0])) for p in named)
+    winners = [p for p in named if len(str(p[0])) == longest]
+    return winners[0] if len(winners) == 1 else None
+
+
 def resolve_active_lease(cwd, run_id=None):
     """Resolve the live (non-stale) work-item lease for `cwd`'s clone — the ONE shared
     lease-resolution path behind `enforcer._active_run_id`, `enforcer._active_work_item`,
@@ -206,20 +221,21 @@ def resolve_active_lease(cwd, run_id=None):
         if run_id is not None:
             # "is THIS run live" — with two same-numbered generations (each work-item counts from
             # 1), prefer the lease whose work-item appears in cwd (the leaf's own build worktree
-            # embeds it), so attribution never lands on the wrong concurrent run when the cwd
+            # embeds it) by LONGEST-UNIQUE match (code-001: a shorter name can be a substring of a
+            # longer one), so attribution never lands on the wrong concurrent run when the cwd
             # disambiguates; else first match (sorted, deterministic).
             matches = [p for p in live if str(p[1]) == str(run_id)]
             if len(matches) > 1 and cwd:
-                named = [p for p in matches if p[0] in str(cwd)]
-                if len(named) == 1:
-                    return named[0]
+                pick = _prefer_cwd_named(matches, cwd)
+                if pick is not None:
+                    return pick
             return matches[0] if matches else (None, None)
         if len(live) > 1 and cwd:
-            # "what run is active here" with >1 live lease: prefer the unique work-item named in
-            # cwd; ambiguity falls back to sorted-first (deterministic, fail-safe).
-            named = [p for p in live if p[0] in str(cwd)]
-            if len(named) == 1:
-                return named[0]
+            # "what run is active here" with >1 live lease: prefer the work-item named in cwd by
+            # LONGEST-UNIQUE match (code-001); ambiguity falls back to sorted-first (deterministic).
+            pick = _prefer_cwd_named(live, cwd)
+            if pick is not None:
+                return pick
         return live[0] if live else (None, None)
     except Exception:
         return (None, None)

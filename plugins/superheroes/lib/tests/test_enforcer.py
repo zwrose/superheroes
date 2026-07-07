@@ -949,6 +949,31 @@ def test_resolve_active_lease_prefers_cwd_matching_work_item(tmp_path, monkeypat
     assert wi_first == "wi-alpha"
 
 
+def test_resolve_active_lease_prefers_longest_overlapping_work_item(tmp_path, monkeypatch):
+    # code-001: when one work-item name is a substring of another (`wi-abc` inside
+    # `wi-abc-task5`), a plain `p[0] in cwd` test matches BOTH and the preference collapses to
+    # the wrong (shorter, sorted-first) run. Longest-UNIQUE match must pick the more specific one.
+    import control_plane
+    import ref_lock
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    cwd = str(tmp_path / "checkout")
+    os.makedirs(cwd, exist_ok=True)
+    store = control_plane.ensure_store(cwd)
+    ok_short, _gs, _ = ref_lock.acquire(store, "wi-abc")
+    ok_long, _gl, _ = ref_lock.acquire(store, "wi-abc-task5")
+    assert ok_short and ok_long
+    monkeypatch.setattr(permission_rules.control_plane, "checkout_dir", lambda c: store)
+    # a build worktree whose path embeds the LONGER name (and therefore the shorter as a substring)
+    wt_long = str(tmp_path / "trees" / "wi-abc-task5-1234" / "sub")
+    wi_long, _ = permission_rules.resolve_active_lease(wt_long)
+    assert wi_long == "wi-abc-task5"                 # longest-unique wins over the embedded prefix
+    # a worktree whose path embeds ONLY the shorter name resolves to it
+    wt_short = str(tmp_path / "trees" / "wi-abc-9999" / "sub")
+    wi_short, _ = permission_rules.resolve_active_lease(wt_short)
+    assert wi_short == "wi-abc"
+
+
 def test_evaluate_uses_injected_gated_check_and_lazy_fallback(tmp_path, monkeypatch):
     # architecture-001: the enforcer injects its own gated_action (primary path — no upward
     # import); a caller that injects nothing still gets the lazy fail-closed fallback.

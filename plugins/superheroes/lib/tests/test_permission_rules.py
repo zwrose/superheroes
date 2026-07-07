@@ -175,6 +175,37 @@ def test_reap_keeps_stale_but_live(monkeypatch, tmp_path):
     assert os.path.exists(os.path.join(d, "NEW.json"))
 
 
+def test_reap_namespaced_stem_keys_liveness_on_generation(monkeypatch, tmp_path):
+    # test-002: the PRODUCTION run-file shape is "<work-item>--<generation>.json" (_run_path writes
+    # it whenever a work_item is threaded — the enforcer/showrunner path). _reap_stale must key
+    # liveness on the stem TAIL past the last "--" (the generation), not the whole stem or the
+    # work-item. Pins `rid = name[:-len('.json')].rsplit('--', 1)[-1]`.
+    import time
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    d = os.path.join(str(tmp_path), "projects", "KEY", "permission", "runs")
+    os.makedirs(d, exist_ok=True)
+    old = time.time() - 40 * 86400
+
+    # (a) a namespaced live run file -> kept, and _run_is_live consulted with generation '7'
+    kept = os.path.join(d, "wi-a--7.json"); open(kept, "w").write("{}")
+    os.utime(kept, (old, old))
+    seen = []
+    def _live_capture(rid, cwd, root):
+        seen.append(rid)
+        return True
+    monkeypatch.setattr(pr, "_run_is_live", _live_capture)
+    pr.freeze_run_rules("NEW", "/cwd", root=str(tmp_path))
+    assert "7" in seen, "liveness keyed on the generation (stem tail), not 'wi-a--7' or 'wi-a'"
+    assert os.path.exists(kept), "a stale-mtime BUT live namespaced run file is kept"
+
+    # (b) the same namespaced file is REAPED when its lease is not live
+    reaped = os.path.join(d, "wi-b--3.json"); open(reaped, "w").write("{}")
+    os.utime(reaped, (old, old))
+    monkeypatch.setattr(pr, "_run_is_live", lambda rid, cwd, root: False)
+    pr.freeze_run_rules("NEW2", "/cwd", root=str(tmp_path))
+    assert not os.path.exists(reaped), "a stale + not-live namespaced run file is reaped"
+
+
 # --- Task 4: evaluate — the pure allowance decision (FR-5/6/8, UFR-1, UFR-2) ---
 
 
