@@ -36,10 +36,18 @@ const fs = require('fs')
 // concurrently on one machine (each showrunner verify step runs the whole suite) reset and write the
 // SAME dir mid-panel and flip this smoke's terminals — reproduced 2026-07-06, two concurrent lanes
 // fail within a few iterations (see _final_review_probe.js for the sibling build_phase story).
+// pid-unique dirs would pile up in /tmp, so reap them on a PASSING exit — a failing run keeps
+// its dirs as post-mortem evidence (same posture as _final_review_probe.js).
 const SFX = `-pid${process.pid}`
+const madeRunDirs = new Set()
+process.on('exit', (code) => {
+  if (code !== 0) return
+  for (const d of madeRunDirs) { try { fs.rmSync(d, { recursive: true, force: true }) } catch (_) {} }
+})
 function freshRunDir(d) {
   fs.rmSync(d, { recursive: true, force: true })
   fs.mkdirSync(d, { recursive: true })
+  madeRunDirs.add(d)
   return d
 }
 

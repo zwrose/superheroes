@@ -13,7 +13,17 @@ global.log = () => {}
 // pid-unique work item: the outcome envelope stages machine-global payload files derived from
 // the work-item name (/tmp/showrunner-<wi>-fronthalf-*.json*), so a fixed name collides with a
 // concurrent pytest suite on this machine (see _final_review_probe.js for the flake story).
+// The pid-named files are reaped on a PASSING exit; a failing run keeps them as evidence.
 const WI = `wi-pid${process.pid}`
+process.on('exit', (code) => {
+  if (code !== 0) return
+  const fs = require('fs')
+  for (const f of [`/tmp/showrunner-${WI}-fronthalf-outcome.json`,
+                   `/tmp/showrunner-${WI}-fronthalf-outcome.json.payload`,
+                   `/tmp/showrunner-${WI}-fronthalf-readout-tmp.json`]) {
+    try { fs.rmSync(f, { force: true }) } catch (_) {}
+  }
+})
 
 const agentCalls = []
 global.agent = async (prompt, opts) => {

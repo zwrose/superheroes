@@ -12,8 +12,10 @@ function clean(wi) {
 ;(async () => {
   // pid-unique work item: reviewDocPhase derives its runDir as the machine-global
   // /tmp/showrunner-<wi>-review-plan, so a fixed name collides with a concurrent pytest
-  // suite on the same machine (see _final_review_probe.js for the flake story).
+  // suite on the same machine (see _final_review_probe.js for the flake story). The
+  // pid-named runDir is reaped on a PASSING exit; a failing run keeps it as evidence.
   const WI = `wi-round-state-pid${process.pid}`
+  process.on('exit', (code) => { if (code === 0) clean(WI) })
   clean(WI)
   const runDir = `/tmp/showrunner-${WI}-review-plan`
   fs.mkdirSync(runDir, { recursive: true })

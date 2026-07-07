@@ -92,6 +92,9 @@ async function partReviewRead() {
   try { fs.rmSync(`/tmp/showrunner-${WI_D}-review-plan`, { recursive: true, force: true }) } catch (_) {}
   try {
     await partReviewReadInner(resolved, legacy)
+    // pass path only — a failed run keeps the pid-named runDir as post-mortem evidence
+    // (the throw skips this line and the finally below leaves it in place).
+    try { fs.rmSync(`/tmp/showrunner-${WI_D}-review-plan`, { recursive: true, force: true }) } catch (_) {}
   } finally {
     try { fs.rmSync(resolved, { recursive: true, force: true }) } catch (_) {}
     try { fs.rmSync(legacy, { recursive: true, force: true }) } catch (_) {}
