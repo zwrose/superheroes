@@ -135,3 +135,57 @@ Substantive own-dimension recall is therefore **8/8 cells** across the eight fou
 **Tokens:** ~50–58k total tokens per dispatch (subagent total incl. reading agent file + rubric + fixture; ~536k across all 10).
 
 **Verdict: PASS** for the 0.10.0 benchmark instrument — no seeded regression anywhere the strict scorer OR hand-verification can see, zero false positives, both mechanical bars green on first attempt. The strict-scored misses are runner line-arithmetic noise (documented class), not agent regressions; absolute strict numbers remain non-comparable across runs per the 2026-06-11 caveat.
+
+---
+
+## 2026-07-07 — 0.11.0 release-eval benchmark run (single-variant, current tree)
+
+**Instrument:** the release-evidence benchmark leg for the **superheroes 0.11.0** release
+(release PR #284; release class `spine-carrying+reviewer-touching` — the rubric's
+severity closed-enum line landed in #278). Current-tree variant only, scored per
+§Scoring with strict `score.py` + hand verification, mirroring the 0.10.0 run.
+10 dispatches (4 agents × 2 fixtures + premortem × 2 single-variant), each an
+opus generic subagent reading the agent file + rubric + fixture from the release
+checkout at `f074f18` (agents/rubric byte-identical to `main` @ `44227d5`).
+
+**Date:** 2026-07-07.
+
+Own-dimension recall (strict `score.py`) + traps, per dispatch:
+
+| Agent | Fixture | Own-dim recall | Traps flagged | Net-new (inspected) |
+|---|---|---|---|---|
+| architecture-reviewer | web-handler | **1/1** (premature-abstraction) | 0 | 0 |
+| code-reviewer | web-handler | **1/1** (hardcoded-error-string) | 0 | 0 (its dual-filter finding lands on Security's BOLA seed — cross-dim true positive) |
+| security-reviewer | web-handler | **1/1** (BOLA, strict — no line slack needed this run) | 0 | 0 |
+| test-reviewer | web-handler | **1/1** (claim-test-mismatch, strict) | 0 | 2 (both real extra catches: weak update assertion, uncovered createNote) |
+| architecture-reviewer | refactor | **1/1** (AcyclicDependencies) | 0 | 0 |
+| code-reviewer | refactor | **1/1** (cognitive-complexity, strict) | 0 | 2 (cross-dim BFLA/BOPLA true positives) |
+| security-reviewer | refactor | **2/2 †** (BFLA strict; BOPLA hand-verified) | 0 | 1 († the BOPLA itself, strict-listed net-new) |
+| test-reviewer | refactor | **1/1** (mock-echo) | 0 | 1 (real coverage gap, not an FP) |
+| premortem-reviewer | failure-modes | **7/7** (all seven classes, strict, first run) | 0 | 1 (extra redeem.ts partial-failure — a real second instance in an already-seeded flow) |
+| premortem-reviewer | failure-modes-bait | n/a (**0 findings emitted**) | **0** | 0 |
+
+**Mechanical bars (README §Single-variant fixtures): both PASS** — `failure-modes`
+matched == total (7/7), `failure-modes-bait` traps_flagged == 0 (zero findings emitted).
+
+**† Line-arithmetic caveat (1 cell, the documented 2026-06-11/0.10.0 class):**
+security/refactor's BOPLA was emitted on exactly the seeded statement
+(`admin-orders.ts` `$set: { ...req.body }`, exact `BOPLA` taxonomy, right file) but
+cited the diff-file line (24) instead of the new-file line (~19) — outside the ±2
+line-scoped window, so strict scoring lists it as net-new. Hand verification is
+unambiguous; BOPLA is line-scoped so no taxonomy fallback applies.
+
+Substantive own-dimension recall is therefore **10/10 cells** — every seeded
+instance caught in its own dimension (web-handler 4 + refactor 5 + failure-modes 7,
+counting cross-dimension catches once). **Zero traps flagged in all 10 dispatches**
+— every precision guardrail held, and this run had zero strict misses outside the
+single † cell (an improvement over 0.10.0's three † cells).
+
+**Tokens:** ~52–60k total tokens per dispatch (~568k across all 10).
+
+**Verdict: PASS** for the 0.11.0 benchmark instrument — no seeded regression
+anywhere the strict scorer OR hand-verification can see, zero false positives,
+both mechanical bars green on first attempt. The severity closed-enum rubric line
+(#276/#278) did not degrade any reviewer's recall or precision on the frozen
+fixtures. Absolute strict numbers remain non-comparable across runs per the
+2026-06-11 caveat.
