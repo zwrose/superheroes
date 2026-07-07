@@ -90,6 +90,20 @@ def test_confirmation_followup_critical_at_cap_parks():
     assert out["atCap"] is True
 
 
+def test_confirmation_followup_miscased_critical_at_cap_parks():
+    # #291: a mis-cased `critical` at the cap MUST still park (was `"Critical" in sevs`, case-sensitive,
+    # so a lowercase Critical was resolved by scoped verify and certified — the fail-open this closes).
+    for sev in ("critical", "CRITICAL", "  Critical  "):
+        out = RP.confirmation_followup([sev], 2, False)
+        assert out["park"] is True, sev
+        assert out["rearm"] is False, sev
+
+
+def test_confirmation_followup_miscased_critical_under_cap_rearms():
+    out = RP.confirmation_followup(["critical"], 1, False)
+    assert out["rearm"] is True and out["park"] is False
+
+
 def test_confirmation_followup_non_critical_at_cap_certifies():
     # Req 3: at the cap, remaining non-Critical findings are resolved by scoped verify — no park,
     # no further panel.

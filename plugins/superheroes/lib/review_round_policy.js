@@ -1,4 +1,5 @@
 // plugins/superheroes/lib/review_round_policy.js
+const { isCritical } = require('./circuit_breaker.js')
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 // #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
@@ -147,7 +148,9 @@ function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting
   // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
   // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
   const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
-  const hasCritical = sevs.includes('Critical')
+  // #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap
+  // (was `sevs.includes('Critical')`, case-sensitive, so a lowercase Critical resolved by scoped verify).
+  const hasCritical = sevs.some((s) => isCritical(s))
   const trigger = hasCritical || !!crossCutting
   const atCap = confirmationsRun >= maxConfirmations
   if (!trigger) {

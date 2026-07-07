@@ -32,6 +32,13 @@ def is_blocking(severity):
     return str("" if severity is None else severity).strip().lower() not in _NON_BLOCKING
 
 
+def is_critical(severity):
+    # #291: the TIER-specific Critical match (case-normalized), single-sourced alongside is_blocking so
+    # the confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from is_blocking:
+    # Important is blocking but NOT critical.
+    return str("" if severity is None else severity).strip().lower() == "critical"
+
+
 def normalize_title(title):
     t = title.lower()
     t = _NON_WORD.sub("", t)

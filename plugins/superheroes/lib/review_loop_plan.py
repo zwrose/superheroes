@@ -63,7 +63,8 @@ import review_memory
 import review_round_policy
 
 SCHEMA_VERSION = 1
-BLOCKING = {"Critical", "Important"}
+# #276/#291: the blocking partition routes through circuit_breaker.is_blocking (case-normalized,
+# fail-closed) — no local blocking set to drift.
 _VERIFY_OK = {"pass", "skipped"}
 # The breaker's recurring-finding / challenged-principle detail joins ALL recurring blocking class
 # keys ("; ".join(sorted(keys))) — unbounded in the finding count. It rides both the answer's
@@ -133,8 +134,11 @@ def _surfaced_blocking_severities(record):
     findings = record.get("findings")
     if not isinstance(findings, list):
         return []
+    # #276/#291: route the blocking partition through the shared fail-closed predicate so a mis-cased
+    # blocker (e.g. lowercase `critical`) reaches the surfaced list — the confirmation gate's
+    # case-normalized Critical match then parks on it (was case-sensitive `in BLOCKING`, which dropped it).
     return [f.get("severity") for f in findings
-            if isinstance(f, dict) and f.get("severity") in BLOCKING]
+            if isinstance(f, dict) and circuit_breaker.is_blocking(f.get("severity"))]
 
 
 def _confirmation_qualifies(record):

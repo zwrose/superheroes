@@ -149,25 +149,21 @@ def test_severity_vocabulary_is_single_sourced():
     import loop_synthesis
     import loop_plan_common
     import panel_tally
-    import review_loop_plan
     import review_memory
     import review_telemetry
 
-    # Python copy-holders (read at runtime) — every BLOCKING constant. #276 consolidated the blocking
-    # PARTITION decision into one predicate (circuit_breaker.is_blocking); circuit_breaker._blocking,
-    # task_review, panel_tally (the panel gate), loop_state (review-code's continuation gate),
-    # loop_synthesis and review_panel_shell all route through it now. The remaining sets below are the
-    # drift-guarded canonical vocabulary declarations. NOTE (#276 follow-up, out of this PR's scope):
-    # review_loop_plan._surfaced_blocking_severities + review_round_policy.confirmation_followup's
-    # `"Critical" in sevs` (the confirmation re-arm/park gate), and review_memory / review_telemetry,
-    # still compare severities case-sensitively — the confirmation gate is a live gating path (a
-    # tier-specific Critical match, a different normalization than this blocking partition), tracked for
-    # a follow-up rather than widened into here.
+    # Python copy-holders (read at runtime) — every BLOCKING constant. #276/#291 consolidated the
+    # blocking + Critical PARTITION decisions into two predicates (circuit_breaker.is_blocking /
+    # is_critical); circuit_breaker._blocking, task_review, panel_tally (the panel gate), loop_state
+    # (review-code's continuation gate), loop_synthesis, review_panel_shell, review_loop_plan and
+    # loop_plan_common (the confirmation re-arm/park feeders + gate) all route through them now. The
+    # remaining sets below are the drift-guarded canonical vocabulary declarations. review_memory /
+    # review_telemetry keep a case-sensitive set BY DESIGN — non-gating recurrence/telemetry consumers
+    # (a case mismatch there mis-counts a stat, it does not pass a defect through a gate).
     py_blocking = {
         "circuit_breaker.BLOCKING": set(circuit_breaker.BLOCKING),
         "loop_plan_common.BLOCKING": set(loop_plan_common.BLOCKING),
         "panel_tally.BLOCKING": set(panel_tally.BLOCKING),
-        "review_loop_plan.BLOCKING": set(review_loop_plan.BLOCKING),
         "review_memory.BLOCKING": set(review_memory.BLOCKING),
         "review_telemetry._BLOCKING": set(review_telemetry._BLOCKING),
     }
@@ -188,6 +184,13 @@ def test_severity_vocabulary_is_single_sourced():
     assert circuit_breaker.is_blocking("Critical") and circuit_breaker.is_blocking("Important")
     assert not circuit_breaker.is_blocking("Minor") and not circuit_breaker.is_blocking("Nit")
     assert circuit_breaker.is_blocking("blocker") and circuit_breaker.is_blocking(None)  # fail closed
+
+    # #291: the shared TIER-specific Critical predicate (case-normalized) — the confirmation re-arm/park
+    # gate reads it. Distinct from is_blocking: Important blocks but is not Critical. Cross-language
+    # behavior is pinned by the isCritical parity twin; here we assert it exists and case-normalizes.
+    assert circuit_breaker.is_critical("Critical") and circuit_breaker.is_critical("critical")
+    assert not circuit_breaker.is_critical("Important") and not circuit_breaker.is_critical("blocker")
+    assert not circuit_breaker.is_critical(None) and not circuit_breaker.is_critical("")
 
     # JS copy-holders (regex-extracted, fail-closed).
     cb = _read(os.path.join("lib", "circuit_breaker.js"))

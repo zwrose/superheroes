@@ -13,6 +13,12 @@ const _NON_BLOCKING = new Set(['minor', 'nit'])
 function isBlocking(severity) {
   return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
 }
+// #291: the TIER-specific Critical match (case-normalized), single-sourced alongside isBlocking so the
+// confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from isBlocking: Important
+// is blocking but NOT critical.
+function isCritical(severity) {
+  return String(severity == null ? '' : severity).trim().toLowerCase() === 'critical'
+}
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
 const _NON_WORD = /[^A-Za-z0-9_ \t\n\r\f\v]/g
@@ -136,4 +142,4 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING, isBlocking }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING, isBlocking, isCritical }
