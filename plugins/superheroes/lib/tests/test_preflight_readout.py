@@ -23,6 +23,28 @@ def test_build_phase_yields_four_roles():
     assert kinds == ["build", "review", "fix", "review-deep"]  # builder, per-task reviewer, fixer, final reviewer
 
 
+def test_builder_row_model_matches_dispatch_tier():
+    # NFR-Accuracy: the builder row must render exactly what build_phase.js's native builder dispatches.
+    # The dispatch pins model_tier.resolve_model('builder') (a smart leaf -> opus by owner policy). The
+    # readout row derives its model through the SAME resolver on the SAME 'builder' tier role, so the two
+    # can never drift. Regression guard: the builder row used to carry the 'mechanical' tier (haiku),
+    # disagreeing with the dispatch's __safeSmartDefault() Opus fall — this pins the aligned truth.
+    import model_tier
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {})
+    builder = [r for r in rows if r["phase"] == "workhorse" and r["kind"] == "build"][0]
+    assert builder["role"] == "builder"  # the tier role, shared with the dispatch's resolveModel key
+    assert builder["model"] == model_tier.resolve_model("builder", {}, None) == "opus"
+
+
+def test_builder_row_honors_a_tier_override():
+    # A per-role model-tier override on 'builder' re-marks the row configured + carries the override
+    # value — the readout half of the same override that now reaches the dispatch.
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {"builder": "sonnet"})
+    builder = [r for r in rows if r["phase"] == "workhorse" and r["kind"] == "build"][0]
+    assert builder["model"] == "sonnet"
+    assert builder["configuredOrDefault"] == "configured"
+
+
 def test_each_row_carries_engine_model_effort():
     rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {})
     for r in rows:

@@ -9,6 +9,7 @@ const DEFAULT_TIERS = {
   synthesis: 'opus',
   fixer: 'sonnet',
   author: 'opus',
+  builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
 }
 
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }

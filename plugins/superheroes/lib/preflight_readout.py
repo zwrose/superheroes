@@ -33,7 +33,7 @@ _PHASE_ROLES = {
     "review-plan":  [("reviewer", "reviewer", "review", "review")],
     "tasks":        [("author", "author", None, "author")],
     "review-tasks": [("reviewer", "reviewer", "review", "review")],
-    "workhorse":    [("builder", "mechanical", "build", "build"),
+    "workhorse":    [("builder", "builder", "build", "build"),
                      ("per-task reviewer", "reviewer", "review", "review"),
                      ("fixer", "fixer", "fix", "fix"),
                      ("final reviewer", "reviewer-deep", "review", "review-deep")],
