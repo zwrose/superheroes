@@ -104,7 +104,7 @@ async function main() {
   res = await runVerifyCase({ directPass: true })
   assert.strictEqual(res.verdict.terminal, 'halted',
     'a direct courier {"result":"pass"} without a process-written file must not certify clean')
-  assert.match(res.verdict.reason || '', /verify command failed/)
+  assert.match(res.verdict.reason || '', /verify failed/)
 
   // A THROWN verify courier must be treated exactly like an unusable answer, not collapsed to 'fail'
   // before the file read-back runs (live wf_1ed21465-6f3, harness-run 26). With the round-stamped file
@@ -119,19 +119,19 @@ async function main() {
   res = await runVerifyCase({ throwNoFile: true })
   assert.strictEqual(res.verdict.terminal, 'halted',
     'a thrown verify courier with no read-back file still fails closed')
-  assert.match(res.verdict.reason || '', /verify command failed/)
-  assert.strictEqual(res.verifyCalls(), 2,
-    'a thrown courier with no file gets the one bounded retry before failing closed')
+  assert.match(res.verdict.reason || '', /verify failed/)
+  assert.strictEqual(res.verifyCalls(), 4,
+    '#279: verifyAgent internal retry (2 courier calls) x the shell bounded corrective re-run (a 2nd verifyAgent on a zero-blocking fail) = 4 before failing closed')
 
   res = await runVerifyCase()
   assert.strictEqual(res.verdict.terminal, 'halted',
     'malformed verify courier answer with no read-back file still fails closed')
-  assert.match(res.verdict.reason || '', /verify command failed/)
+  assert.match(res.verdict.reason || '', /verify failed/)
 
   res = await runVerifyCase({ staleResult: true })
   assert.strictEqual(res.verdict.terminal, 'halted',
     'loop-entry sweep must remove stale verify-result.json before a new verify round')
-  assert.match(res.verdict.reason || '', /verify command failed/)
+  assert.match(res.verdict.reason || '', /verify failed/)
 
   {
     const dir = freshDir()
@@ -151,7 +151,7 @@ async function main() {
     const verdict = await reviewPanel(base(dir))
     assert.strictEqual(verdict.terminal, 'halted',
       'round 2 must not certify from round 1 verify-result after a fix changes the tree')
-    assert.match(verdict.reason || '', /verify command failed/)
+    assert.match(verdict.reason || '', /verify failed/)
     assert.ok(verifyCalls >= 2, 'the cross-round case must reach the second verify attempt')
   }
 
@@ -191,8 +191,9 @@ async function main() {
     const verdict = await reviewPanel(base(dir))
     assert.strictEqual(verdict.terminal, 'halted',
       'a second unusable verify courier answer with no read-back file still fails closed')
-    assert.match(verdict.reason || '', /verify command failed/)
-    assert.strictEqual(verifyCalls, 2, 'verify read-back recovery is bounded to one retry')
+    assert.match(verdict.reason || '', /verify failed/)
+    assert.strictEqual(verifyCalls, 4,
+      '#279: verify read-back recovery (2 courier calls) x the shell bounded corrective re-run (2) = 4 on a zero-blocking fail')
   }
 
   console.log('ok: verify courier read-back is round-scoped and file-authoritative')

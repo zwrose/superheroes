@@ -30,7 +30,7 @@ function makeAgent({ reviewerFindings, verifyResult }) {
     const payload = result === 'pass' ? { result: 'pass', code: 0, tail: '' }
       : result === 'skipped' ? { result: 'skipped', code: null, tail: '' }
       : result === 'timeout' ? { result: 'timeout', code: null, tail: '' }
-      : { result: 'fail', code: 1, tail: '' }
+      : { result: 'fail', code: 1, tail: 'Failed to resolve import "next/server" in route.test.ts' }
     fs.writeFileSync(m[1], JSON.stringify(payload))
   }
   return async (prompt, opts) => {
@@ -65,6 +65,10 @@ const bp = require('../build_phase.js')
   r = await bp.runFinalReview('wi', 5, 'superheroes/wi-abc',
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
   assert.strictEqual(r.terminal, 'halted')
+  // #279: the halted verdict carries an honest reason naming the failing stage + the verify error
+  // head, so the caller's park says WHY (verify, with the resolve error) rather than a bare 'halted'.
+  assert.ok(/verify failed r\d+/.test(r.reason || ''), '#279: final-review reason names the verify stage')
+  assert.ok(/Failed to resolve import/.test(r.reason || ''), '#279: final-review reason carries the verify error head')
 
   // 3. FIX 2 (#115 final review): a GARBLED verify leaf that DROPS its `command` echo but reports a
   //    real failure (returncode 1) under a REAL verifyCommand must NOT be misclassified 'skipped'

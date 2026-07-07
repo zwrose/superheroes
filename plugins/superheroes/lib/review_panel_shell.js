@@ -566,6 +566,18 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (legKind.code) {
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
+      // #279 bounded corrective re-run: when verify is the SOLE blocker — a 'fail' with zero blocking
+      // findings this round — the fix loop has nothing to resolve and so can never earn a re-verify,
+      // and one transient infra flake (a module-resolution error in an untouched file, node_modules
+      // still settling after an in-branch install, a shared vite-cache collision) becomes a terminal
+      // halt on a branch that found nothing to fix. Re-run verify exactly once (serialized, same round
+      // file). Two consecutive fails reproduce today's fail-closed halt exactly — no loop, cap 1
+      // (precedent: #212 corrective retry / fix-before-park). A round with blocking findings takes the
+      // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
+      if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        catch (e) { verifyResult = 'fail' }
+      }
     }
 
     const tokenUsage = collectRoundUsage(roundFindings, round, synthesized)

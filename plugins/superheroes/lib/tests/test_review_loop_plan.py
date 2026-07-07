@@ -322,6 +322,43 @@ def test_tally_verify_fail_halts_a_clean_round(tmp_path):
     ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
     assert ans["terminal"] == "halted"
     assert "verify" in ans["reason"]
+    # #279: with no verify-result file beside the records, the reason still names the failing stage.
+    assert "verify failed r1" in ans["reason"]
+
+
+def test_tally_verify_fail_reason_carries_clamped_error_head(tmp_path):
+    # #279 honest park reason: when the round's verify-result-r{N}.json sits beside the records, its
+    # `tail` head rides into the reason so the owner sees WHY verify failed, not a bare "halted".
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    (tmp_path / "verify-result-r1.json").write_text(json.dumps(
+        {"result": "fail", "code": 1,
+         "tail": 'Failed to resolve import "next/server" in route.test.ts'}))
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
+    assert ans["terminal"] == "halted"
+    assert "verify failed r1:" in ans["reason"]
+    assert "Failed to resolve import" in ans["reason"]
+
+
+def test_tally_verify_fail_reason_clamps_a_long_tail(tmp_path):
+    # #279 the untrusted tail is clamped at the sink (the reason flows into journals + readouts).
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    (tmp_path / "verify-result-r1.json").write_text(json.dumps(
+        {"result": "fail", "code": 1, "tail": "x" * 5000}))
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
+    assert ans["terminal"] == "halted"
+    # stage prefix + clamped tail (<=160) + ellipsis — well under the reason bound.
+    assert len(ans["reason"]) < 220
+    assert ans["reason"].endswith("…")
+
+
+def test_tally_verify_timeout_reason_names_the_stage(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="timeout")
+    assert ans["terminal"] == "halted"
+    assert "verify timed out r1" in ans["reason"]
 
 
 def test_tally_empty_roster_cannot_certify(tmp_path):
