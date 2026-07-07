@@ -92,6 +92,26 @@ def test_cli_breaker_halt(capsys):
     assert out["action"] == "halt" and out["mandatory"] is True
 
 
+# #276: review-code's continuation gate counts blockers via _count_blocking / _skipped, now routed
+# through the shared FAIL-CLOSED predicate. A foreign / mis-cased blocking severity must still count —
+# otherwise a fixed blocker reads as blocking_fixed=0 and the loop exits clean, skipping the mandatory
+# re-review (the exact escape class). Canonical-only tests miss a revert to case-sensitive `in BLOCKING`.
+def test_cli_foreign_scale_blocker_in_fix_batch_mandates_review(tmp_path, capsys):
+    fb = tmp_path / "fix-batch.json"
+    fb.write_text(json.dumps([{"severity": "blocker"}]), encoding="utf-8")  # foreign scale
+    rc, out = _run(capsys, "--round", "1", "--fix-batch", str(fb))
+    assert out["action"] == "review" and out["mandatory"] is True
+
+
+def test_cli_skipped_foreign_scale_blocker_never_exits_clean(tmp_path, capsys):
+    res = tmp_path / "res.json"
+    res.write_text(json.dumps({"resolutions": [
+        {"action": "skip", "severity": "critical"},  # lowercase blocker — must still count as skipped
+    ]}), encoding="utf-8")
+    rc, out = _run(capsys, "--round", "2", "--resolutions", str(res))
+    assert out["action"] == "exit_skipped"
+
+
 def test_cli_bad_artifact_fails_safe_to_review(tmp_path, capsys):
     rc, out = _run(capsys, "--round", "1", "--fix-batch", str(tmp_path / "does-not-exist.json"))
     assert rc == 0 and out["action"] == "review"  # fail SAFE toward review, never a silent exit

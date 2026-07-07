@@ -38,7 +38,7 @@ function agentFor(generation, releaseCalls) {
       return [{ ok: true, stdout: '{"ok":true,"reason":"lease released"}' }]
     }
     if (label === 'read startup state') {
-      return jsonOut({ ok: true, spec_gate: 'pending', model_overrides: {}, doc_dir: '' })
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'pending', model_overrides: {}, doc_dir: '' }) }]
     }
     throw new Error('unexpected agent: ' + label + ' ' + prompt.slice(0, 40))
   }

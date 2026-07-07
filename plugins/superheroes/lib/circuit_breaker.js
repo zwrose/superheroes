@@ -1,6 +1,24 @@
 // plugins/superheroes/lib/circuit_breaker.js
 const { clampTitle, canonicalClassKey, classKeyAliases } = require('./review_memory.js')
 const BLOCKING = new Set(['Critical', 'Important'])
+// The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
+// (Minor/Nit — SSOT §11, guarded by test_ssot_drift). `isBlocking` is the single, case-normalized,
+// FAIL-CLOSED blocking predicate every severity consumer routes through (#276): a foreign scale
+// (`blocker`/`high`/`medium`), an unknown tier, a mis-cased `critical`, or a missing severity is
+// treated as blocking — an unrecognized severity means blocking, never a silent demotion. Consumers
+// keep BLOCKING for rank/identity/"was-tagged-blocking" bookkeeping but ask `isBlocking` the
+// partition question, so _partition, the breaker's own stuck-detection, the panel gate, and the
+// build legs can never disagree on what blocks.
+const _NON_BLOCKING = new Set(['minor', 'nit'])
+function isBlocking(severity) {
+  return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
+}
+// #291: the TIER-specific Critical match (case-normalized), single-sourced alongside isBlocking so the
+// confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from isBlocking: Important
+// is blocking but NOT critical.
+function isCritical(severity) {
+  return String(severity == null ? '' : severity).trim().toLowerCase() === 'critical'
+}
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
 const _NON_WORD = /[^A-Za-z0-9_ \t\n\r\f\v]/g
@@ -34,7 +52,7 @@ function intersects(a, b) {
   for (const x of a) if (b.has(x)) return true
   return false
 }
-function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _blocking(round) { return round.findings.filter((f) => isBlocking(f.severity)) }
 function _roundRecordedFix(roundRec) {
   // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
   // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
@@ -124,4 +142,4 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING, isBlocking, isCritical }

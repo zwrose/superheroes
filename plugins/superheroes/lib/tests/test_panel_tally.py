@@ -96,6 +96,34 @@ def test_present_deferred_counts_same_identity_same_severity():
     assert PT.present_deferred([f], deferred) == 1
 
 
+# #276: the blocking partition routes through circuit_breaker.is_blocking (fail-closed). These pin the
+# panel-gate CONSUMER wiring — a revert to the pre-#276 case-sensitive `severity in BLOCKING` would let
+# a foreign / mis-cased blocking severity (the 2026-07-06 live-escape vocabulary) read as non-blocking,
+# minting a false clean. Canonical-only tests do not catch that revert; these do.
+def test_round_gate_blocks_on_foreign_scale_severity():
+    for sev in ("critical", "blocker", "high"):
+        gate, conf, missing = PT.round_gate([_f("a.py", 1, "bug", sev)], ["code"], ["code"])
+        assert gate == "blocking", sev
+
+
+def test_present_deferred_counts_foreign_scale_blocker():
+    f = _f("a.py", 1, "bug", "blocker")
+    deferred = {PT._identity(f): "blocker"}
+    assert PT.present_deferred([f], deferred) == 1
+
+
+def test_present_blocking_from_dimension_results_counts_foreign_scale():
+    results = {"code": {"status": "run", "dimension": "Code",
+                        "findings": [_f("a.py", 1, "bug", "critical")]}}
+    assert PT.present_blocking_from_dimension_results(results) == 1
+
+
+def test_minor_and_nit_still_do_not_block_case_insensitively():
+    for sev in ("Minor", "minor", "Nit", "nit"):
+        gate, conf, missing = PT.round_gate([_f("a.py", 1, "nit", sev)], ["code"], ["code"])
+        assert gate == "clean", sev
+
+
 def test_present_deferred_excludes_severity_escalation():
     # deferred at Important; re-flagged at Critical → NOT deferred (severity ceiling)
     f = _f("a.py", 1, "bug", "Critical")

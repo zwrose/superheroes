@@ -14,7 +14,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
-const BLOCKING = new Set(['Critical', 'Important'])
+// #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
+// — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
@@ -90,7 +91,7 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
     const result = roundFindings[name]
     if (!result || result.status !== 'run') continue
     for (const f of result.findings || []) {
-      if (!BLOCKING.has(f.severity)) continue
+      if (!circuitBreaker.isBlocking(f.severity)) continue
       const key = f.classKey || reviewMemory.classKey(f)
       if (!known.has(key)) continue
       const decision = byClass[key]
@@ -569,6 +570,22 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (legKind.code) {
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
+      // #279 bounded corrective re-run: when verify is the SOLE blocker — a 'fail' with zero blocking
+      // findings this round — the fix loop has nothing to resolve and so can never earn a re-verify,
+      // and one transient infra flake (a module-resolution error in an untouched file, node_modules
+      // still settling after an in-branch install, a shared vite-cache collision) becomes a terminal
+      // halt on a branch that found nothing to fix. Re-run verify exactly once (serialized, same round
+      // file). Two consecutive fails reproduce today's fail-closed halt exactly — no loop, cap 1
+      // (precedent: #212 corrective retry / fix-before-park). A round with blocking findings takes the
+      // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
+      if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
+        try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        catch (e) { verifyResult = 'fail' }
+        // Surface the flake vs the real regression: a fail→pass flip means the verify gate is flaky
+        // (worth investigating the infra cause); a fail→fail confirms a genuine failure (halts below).
+        try { log(`review-panel r${round}: corrective re-run verify → ${verifyResult}`) } catch (_) {}
+      }
     }
 
     const tokenUsage = collectRoundUsage(roundFindings, round, synthesized)

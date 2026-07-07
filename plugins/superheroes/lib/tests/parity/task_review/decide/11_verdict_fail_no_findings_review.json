@@ -1,0 +1,1 @@
+{"input": [{"spec_compliance": "fail", "code_quality": "pass"}, [], 1, 3, []], "expected": {"action": "review", "blocking": [], "minors": [], "cannot_verify": [], "reason": "verdict(s) spec_compliance are not 'pass' \u2014 the task is not compliant; a fix round is required before completion (FR-5/FR-6)."}}

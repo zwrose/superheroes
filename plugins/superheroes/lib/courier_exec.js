@@ -112,6 +112,28 @@ function extractJson(text) {
   return null
 }
 
+// extractJsonStrict: the fail-closed twin of extractJson for GATE-shaped reads whose parsed value
+// OPENS something (the UFR-1 tasks-gate read). The answer must BE the JSON: the whole trimmed
+// stdout parsing directly, or the whole answer being exactly ONE fenced block whose content
+// parses (the run-9 wf_b69571d9 courier shape — a correct answer wrapped in ```json fences).
+// Deliberately NO brace-slice, NO per-line pass, NO mid-prose fence: extractJson's permissive
+// candidates would let a courier answer that merely QUOTES the expected object in prose
+// ("...it would print {\"review\": \"passed\"}") open the gate — a false-PASS, the one direction
+// a gate read must never take. Prose answers land on the caller's fail-closed retry/park instead.
+function extractJsonStrict(text) {
+  const trimmed = String(text == null ? '' : text).trim()
+  const candidates = [trimmed]
+  const fenceOnly = trimmed.match(/^```(?:[a-zA-Z0-9]+)?\s*([\s\S]*?)```$/)
+  if (fenceOnly) candidates.push(fenceOnly[1].trim())
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed !== null && typeof parsed === 'object') return parsed
+    } catch (_e) { /* strict: no fallback slicing — fail closed */ }
+  }
+  return null
+}
+
 async function callOnce(label, command, promptOpts) {
   // `courier: true` marks this a dumb pipe for the bundle preamble's unconditional cheapest-model
   // pinning (same treatment as label 'exec'/'io'); the preamble strips it before the real agent().
@@ -265,7 +287,9 @@ async function runCourierJson(label, command, opts) {
       last = 'empty stdout'
       continue
     }
-    const parsed = extractJson(out)   // fence-tolerant (see extractJson) — bare parse alone parked live runs
+    // fence-tolerant (see extractJson) — bare parse alone parked live runs. opts.extract:'strict'
+    // narrows to extractJsonStrict for gate-shaped reads (whole-answer JSON only, no prose slicing).
+    const parsed = (options.extract === 'strict' ? extractJsonStrict : extractJson)(out)
     if (parsed == null) {
       last = 'unparseable JSON'
       continue
@@ -291,6 +315,7 @@ module.exports = {
   CourierTransportError,
   badCourierAnswer,
   extractJson,
+  extractJsonStrict,
   helperResult,
   markerSliceStdout,
   runCourierJson,

@@ -63,7 +63,8 @@ import review_memory
 import review_round_policy
 
 SCHEMA_VERSION = 1
-BLOCKING = {"Critical", "Important"}
+# #276/#291: the blocking partition routes through circuit_breaker.is_blocking (case-normalized,
+# fail-closed) — no local blocking set to drift.
 _VERIFY_OK = {"pass", "skipped"}
 # The breaker's recurring-finding / challenged-principle detail joins ALL recurring blocking class
 # keys ("; ".join(sorted(keys))) — unbounded in the finding count. It rides both the answer's
@@ -73,6 +74,9 @@ _VERIFY_OK = {"pass", "skipped"}
 # other legs read in memory): the machine-readable `breaker.reason` code stays intact; the full id
 # list stays on disk for the readout. The shell twin gets the matching clamp in PR-2 for parity.
 _MAX_REASON = 480
+# #279 honest verify-fail park reason: the untrusted verify-gate output head clamped at this sink
+# (the reason flows into journal entries + readouts, so the clamp lives where the tail enters them).
+_MAX_VERIFY_TAIL = 160
 
 
 def _clamp_reason(text):
@@ -80,6 +84,30 @@ def _clamp_reason(text):
     if len(s) <= _MAX_REASON:
         return s
     return s[:_MAX_REASON].rstrip() + " …(truncated)"
+
+
+def _verify_tail(records_path, round_no):
+    """A clamped, single-line head of the round's verify-gate output, for the #279 honest park reason.
+    `records_path` is round-records.json; the verify result sits beside it as verify-result-r{N}.json
+    ({"result","code","tail"}, written by verify_gate.py). The stored tail is already the LAST ~2000
+    chars of the run's output, and test runners (jest/vitest/pytest) print the failure summary + error
+    LAST — so keep the END of the tail, not the head (the head is lead-in progress noise). The tail is
+    untrusted subprocess output, so collapse whitespace and clamp to _MAX_VERIFY_TAIL here at the sink.
+    Fail-soft to '' — a missing or garbled verify file must never break the tally; the reason still
+    parks, just without the breadcrumb."""
+    try:
+        beside = os.path.join(os.path.dirname(records_path),
+                              "verify-result-r%d.json" % round_no)
+        with open(beside, encoding="utf-8") as fh:
+            tail = json.load(fh).get("tail")
+        if not isinstance(tail, str):
+            return ""
+        collapsed = " ".join(tail.split())
+        if len(collapsed) <= _MAX_VERIFY_TAIL:
+            return collapsed
+        return "…" + collapsed[-_MAX_VERIFY_TAIL:].lstrip()
+    except Exception:  # noqa: BLE001 — a missing/garbled verify file must not break the tally
+        return ""
 
 
 # ── faithful ports of the shell's in-memory record consumers (Phase-0 census) ──
@@ -133,8 +161,11 @@ def _surfaced_blocking_severities(record):
     findings = record.get("findings")
     if not isinstance(findings, list):
         return []
+    # #276/#291: route the blocking partition through the shared fail-closed predicate so a mis-cased
+    # blocker (e.g. lowercase `critical`) reaches the surfaced list — the confirmation gate's
+    # case-normalized Critical match then parks on it (was case-sensitive `in BLOCKING`, which dropped it).
     return [f.get("severity") for f in findings
-            if isinstance(f, dict) and f.get("severity") in BLOCKING]
+            if isinstance(f, dict) and circuit_breaker.is_blocking(f.get("severity"))]
 
 
 def _confirmation_qualifies(record):
@@ -515,9 +546,12 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         if terminal in ("clean", "clean-with-skips") and verify_result is not None \
                 and verify_result not in _VERIFY_OK:
             terminal = "halted"
-            reason = ("verify command timed out — cannot certify clean"
-                      if verify_result == "timeout"
-                      else "verify command failed — cannot certify clean")
+            # #279 honest reason: name the failing stage + round + the verify error head, so the park
+            # says WHICH gate failed (verify vs findings) and WHY, instead of a bare "halted".
+            stage = "verify timed out" if verify_result == "timeout" else "verify failed"
+            detail = _verify_tail(path, round_no)
+            reason = ("%s r%d: %s" % (stage, round_no, detail) if detail
+                      else "%s r%d — cannot certify clean" % (stage, round_no))
         if terminal == "cannot-certify":
             # #212 honest reason: the NAMED per-seat defect class (ridden down from the live results)
             # is preferred; the old missing-angle enrichment is the fallback when no seat classified.

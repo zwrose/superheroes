@@ -30,7 +30,7 @@ function makeAgent(routes, labels) {
       provenance: 'absent',
     }) }]],
     ['exec', (prompt) => {
-      if (prompt.includes('read-gate')) return [{ ok: true, stdout: 'passed' }]
+      if (prompt.includes('read-gate')) return [{ ok: true, stdout: '{"review": "passed"}' }]
       if (prompt.includes('build_entry.py')) return [{ ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
       if (prompt.includes('task_list_cli.py')) return [{ ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
       if (prompt.includes('fence_cli.py')) return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]

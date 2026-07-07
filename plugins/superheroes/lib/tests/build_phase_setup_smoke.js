@@ -2,7 +2,9 @@ require('./_smoke_checkout_root.js')
 // plugins/superheroes/lib/tests/build_phase_setup_smoke.js
 // #115 increment A: read-gate / build_entry.py / task_list_cli.py are ported to exec(raw)+parse.
 // They route through the single 'exec' label; the stub inspects the exec PROMPT (which lists the
-// command) to choose the stdout. read-gate returns a PLAIN STRING (not JSON).
+// command) to choose the stdout. read-gate rides `--json` ({"review": "..."}) so the answer takes
+// the fence-tolerant JSON leg — the plain-string mode parked live run 9 (wf_b69571d9) when the
+// courier fenced its verbatim answer.
 const assert = require('assert')
 const logs = []
 global.log = (m) => logs.push(m)
@@ -31,7 +33,16 @@ function gatherRoute(map) {
   // Zero-task: gate passed, setup returns a branch, task_list returns [] -> finish (UFR-8).
   global.agent = makeAgent([
     execRoute((p) => {
-      if (p.includes('read-gate')) return 'passed'               // PLAIN STRING leaf
+      // Run-9 adversarial shape: the courier FENCES its verbatim JSON answer. extractJson must
+      // still accept it (the old plain-string leg compared the fenced text and false-parked).
+      // Pin the COMMAND CONTRACT, not just the parser: without --json the real CLI prints the
+      // plain gate word, which strict extraction rejects — a --json-dropping mutation must
+      // fail HERE, not ship a permanent live false-park (codex review of PR #273).
+      if (p.includes('read-gate')) {
+        assert.ok(p.includes('read-gate --doc tasks') && p.includes(' --json'),
+          'buildPhase must call read-gate --doc tasks with --json')
+        return '```json\n{"review": "passed"}\n```'
+      }
       if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
       if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [] })
       return '{}'
@@ -41,21 +52,37 @@ function gatherRoute(map) {
   assert.strictEqual(r.confidence, 'high')
   assert.ok(logs.some((m) => /no tasks to build/i.test(m)), 'UFR-8 log')
 
-  // Un-passed tasks gate -> park (UFR-1), no branch.
-  global.agent = makeAgent([execRoute((p) => (p.includes('read-gate') ? 'pending' : '{}'))])
+  // FAIL-DIRECTION LOCK (PR #273 premortem): a courier answer that merely QUOTES the passed
+  // object in prose must NOT open the gate. Strict extraction rejects it -> retry -> transport
+  // fail -> the honest fail-closed park. (Under permissive extractJson the brace-slice would
+  // recover the object, the gate would read 'passed', and the run would proceed to build_entry —
+  // this assertion pins the park instead.)
+  global.agent = makeAgent([execRoute((p) => (
+    p.includes('read-gate')
+      ? 'The gate is pending; if it were passed the command would print {"review": "passed"}.'
+      : '{}'
+  ))])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low')
+  assert.ok(/could not read the tasks gate/i.test((r.assumptions || [])[0] || ''),
+    'a prose-embedded passed object must fail closed, never open the gate (UFR-1 fail direction)')
+
+  // Un-passed tasks gate -> park (UFR-1), no branch — the reason names the actual gate value.
+  global.agent = makeAgent([execRoute((p) => (p.includes('read-gate') ? '{"review": "pending"}' : '{}'))])
+  r = await bp.buildPhase('wi', 5)
+  assert.strictEqual(r.confidence, 'low')
+  assert.ok(/tasks gate not passed \(pending\)/.test((r.assumptions || [])[0] || ''), 'UFR-1 park names the gate value')
 
   // Gate leaf FAILS to run (ok:false) -> park (fail closed), not a silent build.
   global.agent = makeAgent([['exec', () => [{ index: 0, ok: false, stdout: 'leaf crashed' }]]])
   r = await bp.buildPhase('wi', 5)
   assert.strictEqual(r.confidence, 'low')
-  assert.ok(/tasks gate not passed/i.test((r.assumptions || [])[0] || ''), 'honest gate fail-closed reason')
+  assert.ok(/could not read the tasks gate/i.test((r.assumptions || [])[0] || ''), 'honest gate fail-closed reason')
 
   // Failed setup (no branch) -> park (UFR-2).
   global.agent = makeAgent([
     execRoute((p) => {
-      if (p.includes('read-gate')) return 'passed'
+      if (p.includes('read-gate')) return '{"review": "passed"}'
       if (p.includes('build_entry.py')) return JSON.stringify({ error: 'buildtree preserve_notify' })
       return '{}'
     }),
@@ -69,7 +96,7 @@ function gatherRoute(map) {
   const baseErr = "--base 'no-such-base' could not be resolved in /tmp/wt (tried local and origin/<branch>) — failing closed"
   global.agent = makeAgent([
     execRoute((p) => {
-      if (p.includes('read-gate')) return 'passed'
+      if (p.includes('read-gate')) return '{"review": "passed"}'
       if (p.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' })
       if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'One' }], raw_task_heading_count: 1 })
       return '{}'

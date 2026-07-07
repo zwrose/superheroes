@@ -42,7 +42,7 @@ sandbox.agent = async (prompt, opts) => {
     })
   }
   if (label === 'read startup state') {
-    return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} })
+    return markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} })
   }
   if (opts && opts.courier) {
     if (String(prompt).includes('definition_doc.py read-gate')) {
