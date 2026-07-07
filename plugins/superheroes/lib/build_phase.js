@@ -499,11 +499,14 @@ function buildRetryNote(task, docPath) {
   )
 }
 
-// #149 Task 11/12: object-arg composer for the permission smokes and any caller that wants the
-// spine's single-source leaf prompt without positional args. Delegates to buildTaskPrompt so the
-// frozen composed-exact set (FR-8) always matches the dispatched bytes.
-function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote }) {
-  return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '')
+// #149 Task 11/12: the SINGLE object-arg composer for the spine's leaf prompt — used by BOTH
+// production (buildOneTask, below) and the permission smokes, so the dispatched bytes and the bytes
+// tests reconstruct for the FR-8 composed-exact hash can never drift (one composer, zero re-encoding).
+// Delegates to buildTaskPrompt; threads `deniedNote` (FR-1 finality) through so the production caller's
+// denial-memory suffix rides the same source of truth. `deniedNote` defaults to '' — a smoke that omits
+// it composes byte-identically to a first-attempt dispatch.
+function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote, deniedNote }) {
+  return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '', deniedNote || '')
 }
 
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
@@ -523,7 +526,13 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
     // FR-1: also thread any prior-attempt denied actions so the fresh leaf works around them, never re-tries them.
-    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '', buildDeniedNote(deniedActions))
+    // Compose via buildLeafPrompt — the SINGLE source-of-truth composer the smokes also use — so the
+    // dispatched bytes provably equal what the FR-8 record_composed hash covers (no parallel inline path).
+    const prompt = buildLeafPrompt({
+      wt, branch, task, docPath,
+      retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
+      deniedNote: buildDeniedNote(deniedActions),
+    })
     // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
     // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
     // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
@@ -539,17 +548,32 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence —
     // record it via prov_entry's build-denial step (ship_gate.record_build_denial) so the ship gate
     // (ship_gate.decide) GATEs and the draft-hold path holds the PR a draft, REGARDLESS of whether the
-    // leaf still reports ok:true for the rest of the task. Best-effort + fail-open (UFR-2): a recording
-    // failure never derails the build (the honest report already happened in the leaf's JSON; this is
-    // the durable evidence trail, not the sole signal).
+    // leaf still reports ok:true for the rest of the task. For the ship gate this provenance entry is
+    // the SOLE draft-hold signal — nothing else carries the denial to ship_gate.decide — so the write
+    // is fail-CLOSED (record-before-advance): a dropped courier (null) or a durable-write failure
+    // (ok!==true) must PARK the task, never silently promote a tainted build to a ready PR.
     if (worker && worker.deniedAction) {
+      const denialRec = await execJson(
+        `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
+        + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(String(worker.deniedAction))}`,
+        'record build denial',
+      )
+      if (!(denialRec && denialRec.ok === true)) {
+        return { parked: true, reason: 'build-denial record write failed (record-before-advance) — park (UFR-6/UFR-8)' }
+      }
+      // UFR-3 disclosure (code-001): ALSO journal a `permission_denied` event (step `build:<task.id>`,
+      // detail = the denied action) so the readout's "Permission denials" section enumerates build-step
+      // denials alongside reviewer-probe denials — the channel run_readout._permission_denials reads.
+      // Best-effort + fail-open (mirrors the reviewer-side recorder): a journal failure NEVER derails
+      // the build and NEVER weakens the fail-CLOSED provenance draft-hold above (that already rode).
       try {
         await execJson(
-          `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
-          + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(String(worker.deniedAction))}`,
-          'record build denial',
+          `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+          + `--event-type permission_denied --step ${shq('build:' + task.id)} `
+          + `--detail ${shq(String(worker.deniedAction))}`,
+          'journal build denial',
         )
-      } catch (_e) { /* fail-open: never let a denial recording failure derail the build */ }
+      } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
       // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is
       // told the action is FINAL and must not be re-attempted. A reported denial is never lost — it is
       // both recorded durably (above) and carried into the next attempt's prompt.

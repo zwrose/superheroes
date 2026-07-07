@@ -53,9 +53,12 @@ def build_readout(ctx):
     smoke = ctx.get("smoke") or []
     if smoke:
         lines += ["", "### Spot-check"] + ["- [ ] %s" % s for s in smoke]
-    # UFR-3 disclosure: any run-time permission denial (a build step or reviewer probe the 15-min
-    # timeout denied) must be visible in the handoff, never silently absorbed. `detail` is free text a
-    # leaf/reviewer supplied, so it passes through the same scrub seam as every other free-text field.
+    # UFR-3 disclosure: any run-time permission denial (a build step or a reviewer probe the 15-min
+    # timeout denied) must be visible in the handoff, never silently absorbed. Both channels feed this
+    # section via a `permission_denied` journal event: the reviewer-side recorder tags `review:<reviewer>`,
+    # and buildOneTask's denial branch tags `build:<task.id>` (best-effort, alongside its fail-CLOSED
+    # provenance draft-hold). `detail` is free text a leaf/reviewer supplied, so it passes through the
+    # same scrub seam as every other free-text field.
     denials = ctx.get("permissionDenials") or []
     if denials:
         lines += ["", "### Permission denials (15-min timeout)"]

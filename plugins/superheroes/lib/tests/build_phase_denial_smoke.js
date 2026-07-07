@@ -104,5 +104,29 @@ function execRoute(captures) {
     'the reported denial is recorded EXACTLY once (per attempt that reported it) — never lost, never doubled')
   assert.ok(finalityCalls[0].includes('run the DB migration'), 'the recorded build-denial names the denied action')
 
-  console.log('ok: build leaf deniedAction is instructed + recorded via prov_entry build-denial + FR-1 finality memory threads a denied action into the re-dispatch (UFR-6/UFR-8, FR-1)')
+  // (5) premortem-001: the build-denial provenance write is fail-CLOSED. A durable-write failure
+  //     (stdout {ok:false}) — or a dropped courier — must PARK the task (record-before-advance), never
+  //     silently promote a tainted build to a ready PR (the ship gate reads ONLY provenance.buildDenials).
+  const failRoute = ['exec', (prompt) => {
+    if (prompt.includes('prov_entry.py --step build-denial')) {
+      return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, error: 'garbled provenance.json' }) }]
+    }
+    let stdout = '{}'
+    if (prompt.includes('build_state_cli.py gather')) stdout = JSON.stringify({ unmapped_commits: 0 })
+    else if (prompt.includes('fence_cli.py')) stdout = JSON.stringify({ ok: true })
+    else if (prompt.includes('journal_entry.py')) stdout = JSON.stringify({ ok: true })
+    return [{ index: 0, ok: true, stdout }]
+  }]
+  global.agent = makeAgent([
+    failRoute,
+    ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true }, deniedAction: 'could not run the migration script' }],
+    ['task-reviewer:r', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '9' }) }]],
+    ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '9' }) }]],
+  ])
+  const r4 = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '9', '/tmp/wt', 1)
+  assert.strictEqual(r4.parked, true, 'a failed build-denial provenance write PARKS the task (fail-closed, record-before-advance)')
+  assert.ok(/build-denial record write failed/.test(r4.reason), 'the park reason names the failed build-denial record write')
+
+  console.log('ok: build leaf deniedAction is instructed + recorded via prov_entry build-denial (fail-CLOSED on a failed write) + journaled for the readout + FR-1 finality memory threads a denied action into the re-dispatch (UFR-6/UFR-8, UFR-3, FR-1)')
 })()

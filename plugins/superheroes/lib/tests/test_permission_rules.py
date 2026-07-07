@@ -158,6 +158,23 @@ def test_reap_deletes_stale_keeps_recent(monkeypatch, tmp_path):
     assert os.path.exists(os.path.join(d, "NEW.json"))
 
 
+def test_reap_keeps_stale_but_live(monkeypatch, tmp_path):
+    # The third reap arm (uncovered before): a stale-mtime run file whose lease IS live must be KEPT
+    # (permission_rules._reap_stale's `if _run_is_live(...): continue` guard). A mutation dropping that
+    # guard would reap a live run's frozen snapshot — this pins the fail-safe keep-on-live branch.
+    import time
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    d = os.path.join(str(tmp_path), "projects", "KEY", "permission", "runs")
+    os.makedirs(d, exist_ok=True)
+    stale_live = os.path.join(d, "LIVE.json"); open(stale_live, "w").write("{}")
+    old = time.time() - 40 * 86400
+    os.utime(stale_live, (old, old))
+    monkeypatch.setattr(pr, "_run_is_live", lambda rid, cwd, root: True)  # a live lease
+    pr.freeze_run_rules("NEW", "/cwd", root=str(tmp_path))
+    assert os.path.exists(stale_live)                # stale-mtime BUT live -> kept (the guard branch)
+    assert os.path.exists(os.path.join(d, "NEW.json"))
+
+
 # --- Task 4: evaluate — the pure allowance decision (FR-5/6/8, UFR-1, UFR-2) ---
 
 
