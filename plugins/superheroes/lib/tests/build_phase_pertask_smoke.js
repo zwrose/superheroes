@@ -128,6 +128,18 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   assert.strictEqual(r.parked, true, 'a stringy ok:"false" refusal must NOT read as success — park (#275)')
   assert.ok(/plan\/task is wrong/i.test(r.reason || ''), 'stringy plan_wrong reaches the recovery twin, not the success branch (#275)')
 
+  // (2b) #275 other direction: a stringy ok:"true" is ALSO not a genuine boolean, so it must NOT
+  //      falsely advance either — worker.ok === true fails closed and routes it to the recovery twin.
+  //      A persistently stringy "true" (schema retries exhausted) then parks at the retry cap rather
+  //      than ever recording built:passed. Pins that the gate NEVER trusts a stringy success.
+  global.agent = makeAgent([
+    execRoute(),
+    ['implement-task', { ok: 'true', signal: 'ok' }],
+  ])
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
+  assert.strictEqual(r.parked, true, 'a stringy ok:"true" must NOT falsely advance — fail closed to bounded retry then park (#275)')
+  assert.ok(/fixed maximum/i.test(r.reason || ''), 'a persistent stringy success exhausts the retry budget and parks — never built:passed (#275)')
+
   // (3) Review never converges -> the task_review TWIN parks (UFR-4). No leaf: a persistent identical
   //     Important finding makes the real twin return 'review' (fix) on round 1, then 'park' on round 2
   //     when the circuit breaker sees the SAME blocking finding recur after a fix was committed. The
