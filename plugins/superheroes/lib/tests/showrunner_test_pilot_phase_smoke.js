@@ -442,6 +442,30 @@ async function appBugFailuresDispatchOneFixBatchAndRerunWholePlan() {
   assert.ok(finalStatus.fixBatchHistory[0].scrubbedSummary)
 }
 
+async function stringyOkFixBatchParksNotFalseProgress() {
+  // #275-class: the fix-batch leaf returns a STRINGY ok:'false' (a refusal — truthy in JS). The old
+  // gate `fixResult.ok === false` let it pass as success -> false progress recorded (empty shas,
+  // unchanged head), browser re-run against the unfixed app. The hardened gate `fixResult.ok !== true`
+  // parks BEFORE the post-fix clean/reconcile steps. `cleaned` staying false is the mutation-kill:
+  // under the old gate the flow reaches ensureCleanWorktreeAfterFix and flips it true.
+  let cleaned = false
+  const out = await testPilotPhase('wi', 3, applicableDeps({
+    budgetCheck: async () => ({ ok: true }),
+    runBrowserPass: async () => ({
+      source: 'browser',
+      baseUrl: 'http://localhost:3000',
+      steps: [{ id: 's1', status: 'failed', failureType: 'app_bug' }],
+    }),
+    retryDecide: async () => ({ action: 'fix_batch', failedStepIds: ['s1'], summary: 'Fix browser app failures' }),
+    dispatchFixBatch: async () => ({ ok: 'false', commitShas: [] }),  // stringy refusal
+    ensureCleanWorktreeAfterFix: async () => { cleaned = true; return { ok: true } },
+    reconcileCommittedMutations: async () => ({ ok: true, commitShas: [], head: 'x' }),
+  }))
+  assert.strictEqual(out.confidence, 'low', 'a stringy ok:"false" fix batch must park, not record false progress (#275)')
+  assert.strictEqual(cleaned, false, 'the stringy refusal must short-circuit at the gate, BEFORE the post-fix clean step (#275)')
+  assert.match(out.assumptions[0], /fix batch parked/)
+}
+
 async function knownDependencyRerunsFailedAndAffectedSubset() {
   const browserStepSets = []
   let pass = 0
@@ -788,6 +812,7 @@ async function unresolvableWorktreeParksNotSkips() {
   await nonBrowserEvidenceParksBeforeReadiness()
   await budgetExhaustedParksBeforeBrowser()
   await appBugFailuresDispatchOneFixBatchAndRerunWholePlan()
+  await stringyOkFixBatchParksNotFalseProgress()
   await knownDependencyRerunsFailedAndAffectedSubset()
   await dirtyFixLeftoversParkBehindInjectedWorktreeGuard()
   await threeFixBatchesParkIfFailuresRemain()

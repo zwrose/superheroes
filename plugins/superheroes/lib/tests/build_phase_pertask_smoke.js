@@ -140,6 +140,17 @@ function execRoute({ unmapped = 0, capture = null } = {}) {
   assert.strictEqual(r.parked, true, 'a stringy ok:"true" must NOT falsely advance — fail closed to bounded retry then park (#275)')
   assert.ok(/fixed maximum/i.test(r.reason || ''), 'a persistent stringy success exhausts the retry budget and parks — never built:passed (#275)')
 
+  // (2c) #275 null-worker guard: agent() returns null (dead/skipped subagent). The gate must NOT
+  //      deref null (`worker.ok` would throw and crash the run with no park record) — `worker &&
+  //      worker.ok === true` falls through to bounded recovery, which parks at the retry cap.
+  global.agent = makeAgent([
+    execRoute(),
+    ['implement-task', null],
+  ])
+  r = await bp.buildOneTask('wi', 5, TASK, 'superheroes/wi-abc', '1', '/tmp/wt', 1)
+  assert.strictEqual(r.parked, true, 'a null worker result must park via bounded recovery, not throw (#275)')
+  assert.ok(/fixed maximum/i.test(r.reason || ''), 'a persistent null worker exhausts the retry budget and parks — never a crash (#275)')
+
   // (3) Review never converges -> the task_review TWIN parks (UFR-4). No leaf: a persistent identical
   //     Important finding makes the real twin return 'review' (fix) on round 1, then 'park' on round 2
   //     when the circuit breaker sees the SAME blocking finding recur after a fix was committed. The
