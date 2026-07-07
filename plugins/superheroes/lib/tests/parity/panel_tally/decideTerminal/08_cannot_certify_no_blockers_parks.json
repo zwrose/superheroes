@@ -1,0 +1,1 @@
+{"input": ["cannot-certify", 0, 0, "completed", 1, 7, false], "expected": {"reason": "coverage not certified — a review seat did not certify after its retry", "terminal": "cannot-certify"}}

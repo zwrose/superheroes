@@ -70,6 +70,15 @@ function resetFinalReviewRunDir(workItem) {
   return d
 }
 
+function verifyGateStub(cmd, result = 'pass') {
+  const m = String(cmd || '').match(/--out '([^']+)'/)
+  const payload = result === 'pass' ? { result: 'pass', code: 0, tail: '' }
+    : result === 'timeout' ? { result: 'timeout', code: null, tail: '' }
+    : { result: 'fail', code: 1, tail: '' }
+  if (m) fs.writeFileSync(m[1], JSON.stringify(payload))
+  return { command: 'pytest -q', returncode: result === 'pass' ? 0 : 1, timedOut: result === 'timeout' }
+}
+
 // standardLeaf: the stdout for the common IO leaves on a clean build-then-verify run. `authzOk`
 // controls the UFR-4 engine_authz.py test-dispatch preflight verdict; `authzCalls` counts it (cached
 // per run -> must fire exactly once even across multiple dispatches in the same process instance).
@@ -146,12 +155,22 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     const engineDispatch = require('../engine_dispatch.js')
     const dispatchCalls = []
     let dispatchShouldFail = true
+    // #160: the per-task review is now engine-routed too, so the review branch fires for BOTH the
+    // per-task loop and the whole-branch final review (reviewer:codex in part (c) below). Round 1
+    // returns a blocker so the mixed reviewer=codex/impl=cursor case still drives a fix dispatch to
+    // cursor through the per-task loop; every later review (round 2 + the whole-branch review) is clean.
+    let reviewDispatchN = 0
     engineDispatch.dispatchExternal = async (o) => {
       dispatchCalls.push(o)
       if (dispatchShouldFail && (o.roleKind === 'build' || o.roleKind === 'fix')) {
         return { ok: false, reason: 'external-run-failed' }
       }
-      if (o.roleKind === 'review') return { findings: [] }
+      if (o.roleKind === 'review') {
+        reviewDispatchN += 1
+        return reviewDispatchN === 1
+          ? { findings: [{ severity: 'Critical', file: 'x.js', title: 'bug', cannot_verify_from_diff: false }] }
+          : { findings: [] }
+      }
       return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }
     }
     const bp = require('../build_phase.js')
@@ -180,7 +199,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       execRoute((p) => standardLeaf(p)),
       ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-      ['verify_gate.py', () => { verifyGateFired += 1; return { command: 'pytest -q', returncode: 0, timedOut: false } }],
+      ['verify_gate.py', (cmd) => { verifyGateFired += 1; return verifyGateStub(cmd, 'pass') }],
     ])
     resetFinalReviewRunDir('wi')
     const fr = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
@@ -195,34 +214,27 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       execRoute((p) => standardLeaf(p)),
       ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
       ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
-      ['verify_gate.py', () => { verifyGateFiredFail += 1; return { command: 'pytest -q', returncode: 1, timedOut: false } }],
+      ['verify_gate.py', (cmd) => { verifyGateFiredFail += 1; return verifyGateStub(cmd, 'fail') }],
     ])
     resetFinalReviewRunDir('wi')
     const frFail = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
     assert.strictEqual(frFail.terminal, 'halted', 'FIX 6: a failing verify command halts even on an otherwise-clean external-engine review')
     assert.ok(verifyGateFiredFail >= 1, 'the legKind.code verify path ran on the fail case too (verify_gate.py fired)')
 
-    // (c) mixed reviewer=codex / impl=cursor: the reviewer leaf dispatches roleKind:'review',engine:
-    // 'codex' while the fixer dispatches roleKind:'fix',engine:'cursor' (FR-15 split).
+    // (c) mixed reviewer=codex / impl=cursor: the per-task reviewer dispatches roleKind:'review',engine:
+    // 'codex' (#160) while the fixer dispatches roleKind:'fix',engine:'cursor' (FR-15 split). The
+    // per-task review is engine-routed now, so its blocker comes from the dispatchExternal review mock
+    // above (round 1) — the native 'review' agent route is no longer exercised for reviewer:codex.
     globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'cursor', effort: {} }
     dispatchCalls.length = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
-      // one blocking finding on round 1 to force a fix dispatch, clean on round 2.
-      ['review', (() => {
-        let n = 0
-        return () => {
-          n += 1
-          if (n === 1) {
-            return { verdicts: { spec_compliance: 'fail', code_quality: 'pass' },
-              findings: [{ severity: 'Critical', file: 'x.js', title: 'bug', cannot_verify_from_diff: false }] }
-          }
-          return { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }
-        }
-      })()],
     ])
     const r3 = await bp.reviewLoop('wi', 5, { id: '4', title: 'Four' }, 'br', '/tmp/wt')
     assert.strictEqual(r3.parked, false, 'mixed reviewer!=impl fix loop completes clean')
+    const perTaskReviewCall = dispatchCalls.find((o) => o.roleKind === 'review')
+    assert.ok(perTaskReviewCall, '#160: the per-task reviewer dispatched externally')
+    assert.strictEqual(perTaskReviewCall.engine, 'codex', '#160: the per-task reviewer routes to the reviewer engine (codex)')
     const fixCall = dispatchCalls.find((o) => o.roleKind === 'fix')
     assert.ok(fixCall, 'the fixer dispatched externally')
     assert.strictEqual(fixCall.engine, 'cursor', 'FR-15: the fixer routes to the implementation engine (cursor)')
@@ -230,7 +242,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
       ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
-      ['verify_gate.py', () => ({ command: 'pytest -q', returncode: 0, timedOut: false })],
+      ['verify_gate.py', (cmd) => verifyGateStub(cmd, 'pass')],
     ])
     resetFinalReviewRunDir('wi')
     const fr2 = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
@@ -322,7 +334,7 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
           return { findings: [] }
         }
       })()],
-      ['verify_gate.py', () => ({ command: 'pytest -q', returncode: 0, timedOut: false })],
+      ['verify_gate.py', (cmd) => verifyGateStub(cmd, 'pass')],
     ])
     const fr = await bp.runFinalReview('wi', 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
     assert.strictEqual(fr.terminal, 'clean',
@@ -375,6 +387,98 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(fixDispatches[0].taskId, '6', 'round 1 fix dispatch carries the task id')
     assert.strictEqual(fixDispatches[1].taskId, '6', 'round 2 fix dispatch carries the SAME task id')
     console.log('OK: per-round external fix dispatch (fold invariant boundary)')
+  }
+
+  // ===========================================================================
+  // Scenario 6 (#160): the PER-TASK reviewer honors enginePreferences.reviewer + the model tier.
+  // Before #160, reviewLoop's per-task review called agent() with NO model and NO engine resolution,
+  // so a project configured `reviewer: codex` never routed the per-task review to codex (it silently
+  // rode the bundle's Opus safety floor). It must now mirror the whole-branch final review beside it:
+  // dispatch to the reviewer engine at the LIGHTER `reviewer` tier / regular `review` effort (NOT the
+  // deep review-deep the whole-branch review uses), and on the native (claude) path pass an EXPLICIT
+  // reviewer model. The engine adapter's review parse yields {findings} only, so the two required
+  // verdicts are synthesized from the findings (the task_review twin uses them only as a completeness
+  // guard — the real decision rides the findings' blocking severities).
+  // ===========================================================================
+  {
+    delete require.cache[require.resolve('../build_phase.js')]
+    delete require.cache[require.resolve('../engine_dispatch.js')]
+    const engineDispatch = require('../engine_dispatch.js')
+    const modelTier = require('../model_tier.js')
+    const bp = require('../build_phase.js')
+
+    // (a) reviewer:codex -> the per-task review dispatches roleKind:'review',engine:'codex' at effort
+    //     'review' (regular/high, NOT 'review-deep'/xhigh); the native per-task reviewer agent() NEVER
+    //     fires; a clean external review (findings []) -> synthesized verdicts -> complete.
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'claude', effort: {} }
+    const reviewDispatches = []
+    engineDispatch.dispatchExternal = async (o) => {
+      if (o.roleKind === 'review') { reviewDispatches.push(o); return { findings: [] } }
+      return { ok: true, signal: 'ok', evidence: {} }
+    }
+    let nativeReviewFired = 0
+    global.agent = makeAgent([
+      execRoute((p) => standardLeaf(p)),
+      ['review', () => { nativeReviewFired += 1; return { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] } }],
+    ])
+    let r = await bp.reviewLoop('wi', 5, { id: '7', title: 'Seven' }, 'br', '/tmp/wt')
+    assert.strictEqual(r.parked, false, '#160: a clean external per-task review completes')
+    assert.strictEqual(reviewDispatches.length, 1, '#160: the per-task review dispatched exactly once to the external engine')
+    assert.strictEqual(reviewDispatches[0].engine, 'codex', '#160: the per-task review routes to the configured reviewer engine')
+    assert.strictEqual(reviewDispatches[0].roleKind, 'review', '#160: the per-task review dispatches the review role')
+    assert.strictEqual(reviewDispatches[0].effort, 'high', '#160: the per-task review runs at REGULAR review effort (high), not review-deep (xhigh)')
+    assert.strictEqual(reviewDispatches[0].cwd, '/tmp/wt', '#160: the per-task review reads git from the build worktree')
+    assert.strictEqual(reviewDispatches[0].taskId, '7', '#160: the per-task review carries the task id')
+    assert.strictEqual(nativeReviewFired, 0, '#160: the native per-task reviewer agent() does NOT fire when the reviewer engine is external')
+
+    // (b) an external review that returns a BLOCKING finding -> synthesized verdict drives a fix round,
+    //     then a clean round-2 external review -> complete. Proves the decision rides the FINDINGS.
+    let n = 0
+    engineDispatch.dispatchExternal = async (o) => {
+      if (o.roleKind === 'review') {
+        n += 1
+        return n === 1
+          ? { findings: [{ severity: 'Critical', file: 'x.js', title: 'bug', cannot_verify_from_diff: false }] }
+          : { findings: [] }
+      }
+      return { ok: true, signal: 'ok', evidence: {} }
+    }
+    global.agent = makeAgent([execRoute((p) => standardLeaf(p))])
+    r = await bp.reviewLoop('wi', 5, { id: '8', title: 'Eight' }, 'br', '/tmp/wt')
+    assert.strictEqual(r.parked, false, '#160: an external per-task review that finds then clears a blocker completes')
+    assert.strictEqual(n, 2, '#160: the synthesized-fail verdict drove a fix round then a clean re-review (findings decide, not verdict text)')
+
+    // (c) an UNREADABLE external review ({ok:false}, no findings array) falls OPEN to the native Claude
+    //     reviewer (UFR-7 parity) — which itself passes an EXPLICIT reviewer model on opts.
+    let capturedModel = 'UNSET'
+    engineDispatch.dispatchExternal = async (o) => (o.roleKind === 'review')
+      ? { ok: false, reason: 'unreadable' }
+      : { ok: true, signal: 'ok', evidence: {} }
+    global.agent = makeAgent([
+      execRoute((p) => standardLeaf(p)),
+      ['review', (_p, opts) => { capturedModel = opts && opts.model; return { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] } }],
+    ])
+    r = await bp.reviewLoop('wi', 5, { id: '9', title: 'Nine' }, 'br', '/tmp/wt')
+    assert.strictEqual(r.parked, false, '#160: an unreadable external review falls open to Claude and completes')
+    assert.strictEqual(capturedModel, modelTier.resolveModel('reviewer', null, null),
+      '#160: the fall-open native per-task reviewer passes the EXPLICIT reviewer model tier (never session-inherited)')
+
+    // (d) reviewer:claude (default) -> the per-task review does NOT dispatch externally; the native
+    //     reviewer fires WITH an explicit reviewer model (the model-resolution half of #160).
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', effort: {} }
+    let dispatchedForReview = 0
+    let capturedModelD = 'UNSET'
+    engineDispatch.dispatchExternal = async (o) => { if (o.roleKind === 'review') dispatchedForReview += 1; return { ok: true, signal: 'ok', evidence: {} } }
+    global.agent = makeAgent([
+      execRoute((p) => standardLeaf(p)),
+      ['review', (_p, opts) => { capturedModelD = opts && opts.model; return { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] } }],
+    ])
+    r = await bp.reviewLoop('wi', 5, { id: '10', title: 'Ten' }, 'br', '/tmp/wt')
+    assert.strictEqual(r.parked, false, '#160: the default (claude) per-task review completes')
+    assert.strictEqual(dispatchedForReview, 0, '#160: the default per-task review does NOT dispatch externally')
+    assert.strictEqual(capturedModelD, modelTier.resolveModel('reviewer', null, null),
+      '#160: the default native per-task reviewer resolves an EXPLICIT reviewer model tier (no silent session inheritance)')
+    console.log('OK: #160 per-task reviewer honors the reviewer engine + explicit model tier')
   }
 
   delete globalThis.__SR_ENGINE_PREFS

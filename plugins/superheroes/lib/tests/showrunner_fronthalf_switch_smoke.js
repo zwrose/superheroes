@@ -6,13 +6,14 @@
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const sr = require('../showrunner.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 global.log = () => {}
 global.agent = async (prompt, opts) => {
   const label = (opts && opts.label) || ''
   if (label === 'save phase progress') {
-    return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    return saveProgressOk()
   }
   if (label === 'exec') {
     // exec batches; return ok for any batch

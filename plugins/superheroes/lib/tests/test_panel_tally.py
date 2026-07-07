@@ -127,9 +127,26 @@ def _terminal(gate="blocking", present=0, deferred=0, fix="completed", rnd=1, mx
     return PT.decide_terminal(gate, present, deferred, fix, rnd, mx, brk)[0]
 
 
-def test_terminal_cannot_certify_wins_over_everything():
-    # coverage gap dominates even at the cap with a failed fix
-    assert _terminal(gate="cannot-certify", present=2, deferred=0, fix="failed", rnd=7, mx=7) == "cannot-certify"
+def test_terminal_cannot_certify_with_no_fixable_blocker_parks():
+    # #212 fix-before-park: cannot-certify parks IMMEDIATELY only when there is nothing to fix
+    # (no blocker, or every blocker already deferred) — coverage is then the sole gap.
+    assert _terminal(gate="cannot-certify", present=0, deferred=0) == "cannot-certify"
+    assert _terminal(gate="cannot-certify", present=2, deferred=2) == "cannot-certify"
+
+
+def test_terminal_cannot_certify_with_unresolved_blockers_routes_to_fix():
+    # #212: a cannot-certify round that STILL holds unresolved blockers routes to the fix leg like a
+    # blocking round — the findings are real regardless of the uncertified seat. Certification stays
+    # withheld (the next round's gate re-dooms the seat); it is NOT parked-without-fix here.
+    assert _terminal(gate="cannot-certify", present=2, deferred=0, rnd=1, mx=7) == "continue"
+
+
+def test_terminal_cannot_certify_blockers_still_halt_at_cap_and_on_fix_failure():
+    # routing to the fix leg never converts cannot-certify into a clean exit: it can only continue
+    # (under cap) or halt (cap / failed fix / breaker).
+    assert _terminal(gate="cannot-certify", present=2, deferred=0, rnd=7, mx=7) == "halted"
+    assert _terminal(gate="cannot-certify", present=2, deferred=0, fix="failed") == "halted"
+    assert _terminal(gate="cannot-certify", present=2, deferred=0, brk=True) == "halted"
 
 
 def test_terminal_fix_failed_is_halted_before_loop_state():
@@ -384,3 +401,35 @@ def test_carried_blocker_counts_but_is_marked_carried():
     compiled = PT.compile_dimension_results({"code": carried})
     assert compiled[0]["carried"] is True
     assert compiled[0]["sourceRound"] == 1
+
+
+# ── uncertified_reason: honest cannot-certify reason (#212) ──
+def test_uncertified_reason_names_receipt_missing_seat():
+    results = {"premortem-reviewer": {"status": "run", "confidence": "low", "receiptMissing": True, "findings": []}}
+    reason = PT.uncertified_reason(results, ["premortem-reviewer"])
+    assert reason == "premortem-reviewer returned no verification receipt after retry (receipt-missing — uncertifiable)"
+
+
+def test_uncertified_reason_distinguishes_the_defect_classes():
+    assert "receipt-stale" in PT.uncertified_reason({"s": {"status": "run", "confidence": "low", "receiptStale": True}}, ["s"])
+    assert "malformed" in PT.uncertified_reason({"s": {"status": "missing", "confidence": "low", "malformed": True}}, ["s"])
+    assert "genuinely-incomplete" in PT.uncertified_reason({"s": {"status": "run", "confidence": "low"}}, ["s"])
+    assert "coverage-gap" in PT.uncertified_reason({}, ["s"])  # seat absent entirely
+
+
+def test_uncertified_reason_none_when_every_seat_certified():
+    results = {"code": {"status": "run", "confidence": "high"},
+               "ext": {"status": "run", "confidence": "high", "externalReview": "codex"},
+               "carried": {"status": "skipped", "confidence": "high"}}
+    assert PT.uncertified_reason(results, ["code", "ext", "carried"]) is None
+
+
+def test_uncertified_reason_joins_multiple_uncertifiable_seats_and_skips_certified():
+    results = {"code": {"status": "run", "confidence": "high"},
+               "premortem-reviewer": {"status": "run", "confidence": "low", "receiptMissing": True},
+               "test-reviewer": {"status": "missing", "confidence": "low", "malformed": True}}
+    reason = PT.uncertified_reason(results, ["code", "premortem-reviewer", "test-reviewer"])
+    assert "code" not in reason.split("—")[0]  # the certified seat is not named
+    assert "premortem-reviewer returned no verification receipt" in reason
+    assert "test-reviewer did not return a usable result" in reason
+    assert "; " in reason

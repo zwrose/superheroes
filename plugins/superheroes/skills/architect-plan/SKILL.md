@@ -326,8 +326,12 @@ elif [ "$REVIEW_PLAN_RAN" = yes ]; then
   exit 1
 else
   # degraded mode: review-plan is not installed — self-certify after a clean self-review
+  DOC_PATH=$(python3 "$ROOT_DIR/lib/definition_doc.py" path \
+    --doc plan --work-item "$WORK_ITEM" --root "$ROOT")
+  HASH=$(python3 "$ROOT_DIR/lib/definition_doc.py" content-hash --path "$DOC_PATH")
   python3 "$ROOT_DIR/lib/definition_doc.py" set-gate \
-    --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT"
+    --doc plan --work-item "$WORK_ITEM" --review passed --root "$ROOT" \
+    --expected-hash "$HASH" --run-id "selfcert-$WORK_ITEM"
 fi
 ```
 

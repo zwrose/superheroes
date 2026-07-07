@@ -41,11 +41,11 @@ Set `LIB="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib"`. Resolve `ROOT=$(git rev-p
 --show-toplevel)` and `WORK_ITEM` (the work-item slug — from frontmatter or caller
 context).
 
-**Store bootstrap (startup lock).**
+**Store bootstrap.**
 `control_plane.ensure_store(ROOT)` → `None` ⇒ **park-GATE**:
-"durable store unusable — fail closed". Then acquire the startup lock:
-`ref_lock.acquire_startup(store)` → `(False, …)` ⇒ **fail closed**
-("another loop holds this checkout — will not start a parallel run").
+"durable store unusable — fail closed". The store is keyed off the git **common dir**, so
+it is shared across the clone's worktrees; the §0.1 work-item lease (the sole mutex) is the
+guard that refuses a duplicate launch of this work item from any worktree.
 
 ### 0.1 Work-item ref-lease
 
@@ -53,9 +53,8 @@ context).
 on `ok` (reason `created`/`stolen`) record the returned `generation` and emit
 `lease_acquired`/`lease_reclaimed`; on ANY non-ok result — `held`, or a
 `lost-create-cas`/`lost-steal-cas` CAS race — **GATE** (fail-closed: cannot confirm
-exclusive ownership; do not run two loops on one work-item).
-
-`control_plane.set_current(ROOT, WORK_ITEM)`.
+exclusive ownership; do not run two loops on one work-item). This live lease is also what
+the resume hooks and preflight read to identify the active work item — no separate pointer.
 
 ### 0.2 Re-arm the gate (bounded retry → parked-GATE)
 
@@ -250,6 +249,14 @@ Then `ship_gate.decide(provenance, review_result, head)`:
 the PR-action decision is a code gate, not free-form judgment. Reversible → **NOTIFY**
 (report the link in the readout). The enforcer permits `gh pr create`/`git push`
 (non-force); it refuses `gh pr merge`.
+
+**Ship-phase honesty (CONVENTIONS §10.7).** The PR body must carry two sections before it
+is handed back: a **Definition of done** disposition table (`superheroes:dod-table`) with one
+row per spec DoD bullet, each marked `done` (+ an evidence pointer) or `deferred` (+ a filed
+issue `#NNN` and a one-line reason); and a generated **Stubbed seams** section
+(`superheroes:stubbed-seams`) listing every `# STUB(#NNN): …` marker in the diff. Any
+deliberately-unwired seam **must** carry that marker (issue mandatory, CI-validated by
+`validate_stubs.py`) — a stub disclosed only in a docstring is a defect, not a shipped seam.
 
 Write `checkpoint.write(…, phase="verify", lastGoodStep=3, pr=<pr-object: {number, url, isDraft}>, lockGeneration=generation)`
 (a dict, not a bare number — `render_brief` reads `pr.get("url")` and the reconcile reads `pr.get("state")`/`number`).
@@ -475,9 +482,9 @@ the resilience substrate above). If a GATE fires and the owner is away, **park s
 2. Run step 6 reset (clean baseline). If a parking step fails (e.g. a held engine lock),
    **report the partial state honestly** rather than assert a baseline that doesn't hold.
 3. Leave the PR as **draft**.
-4. Release the startup lock: `ref_lock.release_startup(store)` — the ref-lease expires
-   naturally (do not release it; a future resume needs to re-evaluate `stolen` vs
-   `continue`).
+4. Release the work-item ref-lease: `ref_lock.release(store, WORK_ITEM, GENERATION)` — a
+   terminal park releases so a relaunch never waits out the TTL (a crash that skips this
+   still expires via the TTL + dead-pid path).
 5. Write the parked state to the journal via `journal.render_brief(…)` so any resume
    reconcile sees "parked" as the last known state, not an ambiguous cursor.
 
@@ -490,9 +497,9 @@ push never happens → no under-count.
 
 **SessionStart(compact)** is handled by the hook injecting context (the compact
 hook); the orchestrator, on its next turn, re-runs the step 0 reconcile + gate re-arm
-(the cold path is the gated invariant). The control-plane's `control_plane.get_current`
-gives the resumed work item; the journal brief gives the last step, so the reconcile
-can hand back the right `from_step`.
+(the cold path is the gated invariant). The store's live work-item lease
+(`ref_lock.active_work_items(store)`) names the resumed work item; the journal brief gives
+the last step, so the reconcile can hand back the right `from_step`.
 
 ## Applicability
 

@@ -101,6 +101,92 @@ def test_parse_result_cursor_review_stream_json_last_object():
     assert res["findings"][0]["severity"] == "Important"
 
 
+def test_parse_result_review_bare_array_is_tolerated_and_scrubbed():
+    # #196: engines commonly emit the findings list as a bare top-level JSON array instead of
+    # {"findings": [...]}. The live failure (PR #190) had five codex reviewers return clean bare
+    # arrays and all five slots parse "unreadable" — one step from UFR-7 re-running the whole panel
+    # on Claude. The tolerated shape is accepted AND scrubbed exactly like the canonical object.
+    stdout = json.dumps([
+        {"severity": "Important", "title": "leak",
+         "file": "a.py", "line": 7,
+         "body": "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+         "suggestion": "drop the header"}])
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    f = res["findings"][0]
+    assert f["severity"] == "Important" and f["title"] == "leak"
+    assert f["file"] == "a.py" and f["line"] == 7          # structural keys untouched
+    # scrubbing applied to the tolerated shape, not just passed through
+    assert "sk-EXAMPLEfakenotarealsecret0" not in f["body"]
+    assert "[REDACTED]" in f["body"]
+
+
+def test_parse_result_review_bare_empty_array_is_clean_zero_findings():
+    # An empty bare array is a clean review with nothing to flag — it must NOT be unreadable
+    # (that would forfeit the slot to a needless UFR-7 re-run), it is ok:true with no findings.
+    assert EA.parse_result("codex", "review", "[]") == {"ok": True, "findings": []}
+
+
+def test_parse_result_review_canonical_object_unchanged_by_tolerance():
+    # The object path is byte-identical to before the #196 tolerance was added.
+    stdout = json.dumps({"findings": [
+        {"severity": "Critical", "title": "t", "body": "b", "suggestion": "s"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["findings"] == [{"severity": "Critical", "title": "t", "body": "b", "suggestion": "s"}]
+
+
+def test_parse_result_review_bare_array_of_non_objects_is_unreadable():
+    # A bare array whose entries are not finding objects is noise, not findings — fail closed
+    # (never a silent empty pass), the same direction as garbage/empty stdout.
+    assert EA.parse_result("codex", "review", "[1, 2, 3]") == {"ok": False, "reason": "unreadable"}
+    assert EA.parse_result("codex", "review", '["a", "b"]') == {"ok": False, "reason": "unreadable"}
+    # a mixed array (some objects, some not) is also rejected — the tolerated shape is a clean
+    # array of finding objects, not a scrub-and-hope filter (that stays the object path's behavior).
+    assert EA.parse_result("codex", "review", '[{"severity":"Minor"}, 7]') == \
+        {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_bare_array_via_streaming_scan_is_tolerated_and_scrubbed():
+    # #196: the bare array need not be a clean whole-blob parse — the raw_decode scan path in
+    # _last_json_array (mirroring the tested object stream-scan) recovers it past leading stream
+    # noise. Exercises that branch (not just the whole-blob fast path) and confirms it still scrubs.
+    stream = ('codex: starting review\n'
+              '[{"severity":"Minor","title":"leak","file":"a.py","line":2,'
+              '"body":"log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"}]')
+    res = EA.parse_result("codex", "review", stream)
+    assert res["ok"] is True
+    f = res["findings"][0]
+    assert f["severity"] == "Minor" and f["file"] == "a.py"
+    assert "sk-EXAMPLEfakenotarealsecret0" not in f["body"]
+    assert "[REDACTED]" in f["body"]
+
+
+def test_parse_result_review_findingsless_object_is_not_rescued_by_a_stray_array():
+    # #196 premortem fix: the bare-array tolerance is gated on `obj is None` (no top-level object
+    # at all), NOT merely on a missing `findings` key. A present-but-findings-less result object
+    # (a crashed/errored reviewer) must stay unreadable and fall open to a Claude re-run — the
+    # stream must NOT be hunted for some other array to reinterpret as findings. Otherwise a
+    # crashed slot with a stray (esp. empty) array earlier in the stream would be silently
+    # certified as a clean, zero-finding review (a fail-OPEN — the exact hazard #196 fixes).
+    findingsless_then_stray = ('[{"severity":"Minor","title":"stray","body":"b"}]\n'
+                               '{"error":"reviewer crashed"}')
+    assert EA.parse_result("codex", "review", findingsless_then_stray) == \
+        {"ok": False, "reason": "unreadable"}
+    # the scariest variant: an EMPTY stray array must not become a false clean-zero pass
+    empty_stray_then_error = '[]\n{"type":"result","status":"error"}'
+    assert EA.parse_result("codex", "review", empty_stray_then_error) == \
+        {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_bare_array_tolerance_is_review_only():
+    # The tolerance is scoped to role_kind='review'. A bare array under build/fix/author-plan is
+    # not a valid result for those object-shaped contracts and stays unreadable/empty as before.
+    assert EA.parse_result("codex", "build", "[]").get("ok") is False
+    assert EA.parse_result("codex", "fix", '[{"evidence":{}}]').get("ok") is False
+    assert EA.parse_result("cursor", "author-plan", "[]").get("ok") is False
+
+
 def test_parse_result_review_empty_is_unreadable():
     assert EA.parse_result("codex", "review", "") == {"ok": False, "reason": "unreadable"}
     assert EA.parse_result("cursor", "review", "   ") == {"ok": False, "reason": "unreadable"}
@@ -170,3 +256,104 @@ def test_parse_result_cli(capsys):
         _sys.stdin = _old
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["signal"] == "ok"
+
+
+def test_build_argv_cursor_author_plan_maps_fable_model():
+    argv = EA.build_argv("cursor", "author-plan", "composer", {"cwd": "/wt", "model": "fable"})
+    assert argv[0] == "cursor-agent"
+    assert argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"
+    assert "-f" in argv                       # author writes the doc: workspace-write
+    assert "--mode" not in argv               # not the read-only plan mode
+
+
+def test_build_argv_cursor_author_plan_maps_opus_model():
+    argv = EA.build_argv("cursor", "author-plan", "composer", {"model": "opus"})
+    assert argv[argv.index("--model") + 1] == "claude-opus-4-8-thinking-high"
+
+
+def test_build_argv_cursor_unmapped_model_keeps_composer_default():
+    for model in (None, "", "bogus-tier"):
+        argv = EA.build_argv("cursor", "author-plan", "composer", {"model": model})
+        assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+    # non-author roles without a model override are unchanged
+    argv = EA.build_argv("cursor", "review", "composer", {})
+    assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+
+
+def test_build_argv_codex_author_plan_ignores_model_override():
+    argv = EA.build_argv("codex", "author-plan", "xhigh", {"cwd": "/wt", "model": "fable"})
+    assert argv[argv.index("-m") + 1] == "gpt-5.5"   # codex has no fable; pinned model stands
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert "model_reasoning_effort=xhigh" in argv
+
+
+def test_parse_result_author_plan_surfaces_scrubbed_notify():
+    stdout = json.dumps({"status": "ok", "notify": [
+        {"identity": "seed-choice",
+         "message": "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"}]})
+    res = EA.parse_result("cursor", "author-plan", stdout)
+    assert res["ok"] is True
+    n = res["notify"][0]
+    assert n["identity"] == "seed-choice"
+    assert "sk-EXAMPLEfakenotarealsecret0" not in n["message"]
+    assert "[REDACTED]" in n["message"]
+
+
+def test_parse_result_author_plan_scrubs_notify_identity():
+    stdout = json.dumps({"status": "ok", "notify": [
+        {"identity": "Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",
+         "message": "took a default"}]})
+    res = EA.parse_result("cursor", "author-plan", stdout)
+    assert res["ok"] is True
+    n = res["notify"][0]
+    assert "sk-EXAMPLEfakenotarealsecret0" not in n["identity"]
+    assert "[REDACTED]" in n["identity"]
+    assert n["message"] == "took a default"
+
+
+def test_parse_result_author_plan_no_notify_is_ok_empty():
+    # the doc's acceptance gate is the deterministic usableDraft post-check, not this parse
+    assert EA.parse_result("cursor", "author-plan", json.dumps({"type": "result"})) == \
+        {"ok": True, "notify": []}
+
+
+def test_parse_result_author_plan_empty_is_unreadable():
+    assert EA.parse_result("cursor", "author-plan", "").get("ok") is False
+
+
+def test_build_argv_cli_author_plan_model(capsys):
+    rc = EA.main(["build-argv", "--engine", "cursor", "--role", "author-plan",
+                  "--effort", "composer", "--model", "fable"])
+    argv = json.loads(capsys.readouterr().out)
+    assert rc == 0 and argv[argv.index("--model") + 1] == "claude-fable-5-thinking-xhigh"
+
+
+def test_engine_reviewer_stdout_contract_is_stated_in_dispatch_reference():
+    # #196: the stdout shape contract must live where orchestrators read it when composing the
+    # engine-dispatch prompt — not only in this parser's source. Structural pin so the prose
+    # contract can't silently vanish and let orchestrators re-guess the shape per run.
+    ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(ref, encoding="utf-8") as fh:
+        text = fh.read()
+    # the canonical required shape, verbatim
+    assert '{"findings": [...]}' in text
+    # and the tolerated bare-array note (kept in sync with parse_result's #196 tolerance)
+    assert "bare" in text and "array" in text
+
+
+def test_engine_dispatch_timeout_expiry_contract_is_stated_in_dispatch_reference():
+    # #202: a wedged engine dispatch is not fail-open (a hang, not a bounded cost). The timeout
+    # itself is structural (#204's PreToolUse Bash floor), so this reference does NOT prescribe a
+    # prompted watchdog — what it owns is the EXPIRY contract: a killed/timed-out dispatch parses
+    # `unreadable` → the reviewer takes UFR-7, the fixer falls open to Claude. Structural pin so
+    # that contract (and the "structural, not prompted" framing) can't silently vanish.
+    ref = os.path.join(_HERE, "..", "..", "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(ref, encoding="utf-8") as fh:
+        text = fh.read()
+    # the structural-floor mechanism is named (so no one re-adds a prompted-watchdog claim), with
+    # #204 cited as its source
+    assert "bash_timeout.py" in text and "#204" in text
+    # covers BOTH dispatch types — the fixer is the same hang class as the reviewer
+    assert "reviewer" in text and "fixer" in text
+    # the expiry contract: an expired slot is `unreadable`, routed to UFR-7
+    assert "unreadable" in text and "UFR-7" in text

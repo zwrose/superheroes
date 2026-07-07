@@ -1,0 +1,1 @@
+{"input": [[{"name": "unit", "bucket": "fail"}, {"name": "e2e", "bucket": "in_progress"}]], "expected": {"status": "red", "failing": ["unit"], "pending": ["e2e"]}}

@@ -2,6 +2,7 @@ require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const bp = require('../build_phase.js')
 const { testPilotPhase } = require('../test_pilot_phase.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 
 const exercised = [
   'read startup state', 'read plan draft', 'read tasks draft',
@@ -91,7 +92,7 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     if (label === 'prepare CI fix') return jsonOut({ action: 'revert_and_gate', ok: true, read_back: true })
     if (label === 'push CI fix + recheck') return jsonOut({ ok: true, pushed: true, read_back: true, checks: [] })
     if (label === 'post readout') return jsonOut({ posted: true, recorded: true })
-    if (label === 'save phase progress') return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    if (label === 'save phase progress') return saveProgressOk()
     if (label === 'save round state') return jsonOut({ ok: true })
     // generic dumb-pipe catch-all — AFTER all named courier branches (e.g. the per-task 'check
     // trailers' gather + any provenance/minor-rollup leaf that reaches here).

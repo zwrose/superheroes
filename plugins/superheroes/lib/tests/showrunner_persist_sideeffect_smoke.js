@@ -29,15 +29,15 @@ async function persistWith(answer) {
 }
 
 ;(async () => {
-  let res = await persistWith(SET_GATE + '\n' + SAVE)
+  let res = await persistWith(SET_GATE + '\n' + SAVE + '\n__SR_EXIT:0')
   assert.strictEqual(res.ok, true, 'a two-JSON-line answer must resolve to the SAVE result and confirm (not park)')
 
-  res = await persistWith('```\n' + SET_GATE + '\n' + SAVE + '\n```')
+  res = await persistWith('```\n' + SET_GATE + '\n' + SAVE + '\n```\n__SR_EXIT:0')
   assert.strictEqual(res.ok, true, 'a fenced two-JSON-line answer must confirm')
 
   // Side-effect failure: exit 1 -> `&&` stops -> only the ONE failure line comes back. require()
   // finds the save fields missing and the run parks naming the real reason (never a false confirm).
-  res = await persistWith(JSON.stringify({ ok: false, reason: 'stale' }))
+  res = await persistWith(JSON.stringify({ ok: false, reason: 'stale' }) + '\n__SR_EXIT:0')
   assert.strictEqual(res.ok, false, 'a lone side-effect failure line must surface (the chain stopped)')
   assert.ok(/stale/.test(res.error || ''), 'the real side-effect failure reason surfaces')
 

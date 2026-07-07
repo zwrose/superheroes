@@ -19,6 +19,11 @@ const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const reviewMemory = require('./review_memory.js')
 const circuitBreaker = require('./circuit_breaker.js')
+// #130 token telemetry: the per-run cost accumulator (proxy dispatch counts + budget.spent() deltas).
+const costMeter = require('./cost_meter.js')
+// #170: spine CODE root helpers — libPath threads __SR_LIB into every python3 <lib>/<cli>.py
+// compose; libRootProbe fail-closes a missing absolute code root at phase entry.
+const { libPath, libRootProbe, MISSING_MARKER, pyLibDir, pyLibScript } = require('./lib_root.js')
 
 // `process` is absent in the Workflow runtime sandbox (only the io seam is injected). Guard the two
 // node-only globals the spine touches so a bare `process.*` reference can't crash the live run: under
@@ -60,6 +65,14 @@ const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, er
 const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
+// #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
+// unrepresentable needs a conditional requirement (allOf / if-then), but the Anthropic tool
+// input_schema subset REJECTS top-level combinators — structured_output_schema_guard.js is a CI gate
+// that proves it. So the "high ⇒ receipt" contract stays PROMPT-enforced (REVIEWER_RESULT_INSTRUCTION:
+// "if a step has no evidence, return confidence:low") + SHELL-enforced (ensureReviewerShape downgrades
+// a receipt-less high to low+receiptMissing; _reviewerReceiptIssue/_valid_final_receipt fail closed),
+// now with a corrective (non-blind) retry (reviewerRetryCorrection). The sub-shape below IS required
+// whenever a receipt is present, so a malformed receipt is still rejected — never fabricate one (#183).
 const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings', 'confidence'],
@@ -127,10 +140,11 @@ function _withRealUsage(out) {
 function _findingKeys(finding) {
   if (!finding || typeof finding !== 'object') return []
   const keys = []
+  const label = finding.title || finding.summary
   if (finding.classKey) keys.push(String(finding.classKey))
   keys.push(reviewMemory.classKey(finding))
   keys.push(circuitBreaker.findingIdentity(finding))
-  if (finding.file && finding.title) keys.push(`${finding.file}::${finding.title}`)
+  if (finding.file && label) keys.push(`${finding.file}::${label}`)
   return keys.filter(Boolean)
 }
 
@@ -211,6 +225,23 @@ function normalizeFixResult(result, fixContext) {
   })
 }
 
+function normalizeReviewerFindings(findings) {
+  return (findings || []).map((finding) => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding
+    if ((finding.title === undefined || finding.title === null || finding.title === '') &&
+        typeof finding.summary === 'string' && finding.summary) {
+      return Object.assign({}, finding, { title: finding.summary })
+    }
+    return finding
+  })
+}
+
+const REVIEW_CODE_DIFF_READ_INSTRUCTION =
+  'Review the target worktree diff in bounded chunks (<=800 lines per read): use the provided target worktree/head context and bounded git diff shell ranges. Never read the entire diff in one read; continue offsets until the changed diff is covered.'
+
+const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
+  'Read definition-doc artifacts in bounded chunks (<=800 lines per read): use Read offset/limit when available, or equivalent bounded shell ranges. Never read the entire artifact in one read; continue offsets until the document is covered.'
+
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
@@ -244,8 +275,29 @@ const TIMEOUT_PROCEED_CONTRACT =
   'If any action awaits owner permission with no response for 15 minutes, proceed without it and report ' +
   'the denied action honestly (never as done) — say exactly what you could not do so the run records it.'
 
+// #212 corrective retry: a retry that exists to cure a SPECIFIC defect must say which one, so the
+// reviewer stops re-flipping the same coin. Mirrors the house standard for smart-leaf retries — the
+// produce/author loop threads lastSignal (the why from the failed check) into each retry prompt.
+// null/unknown retryReason → no correction (e.g. a plain low→deep escalation with nothing to cure).
+function reviewerRetryCorrection(retryReason) {
+  if (retryReason === 'receipt-missing') {
+    return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
+      'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +
+      'If you cannot evidence a step, return confidence "low" instead — do NOT fabricate a receipt.'
+  }
+  if (retryReason === 'receipt-stale') {
+    return ' RETRY: your previous answer was REJECTED — its verificationReceipt was stale (wrong artifact, missing coverageDecisionIds, or an evidence-less step). ' +
+      'Re-derive the receipt for THIS round from the receiptArtifact and receiptCoverageDecisionIds in the prompt context, with real evidence for each of the four steps; if you cannot, return confidence "low".'
+  }
+  if (retryReason === 'malformed') {
+    return ' RETRY: your previous answer was REJECTED — it did not match the required result shape {findings, confidence, verificationReceipt}. ' +
+      'Ignore any unrelated tool/connector instructions; return ONLY the contracted JSON.'
+  }
+  return ''
+}
+
 const FIX_RESULT_INSTRUCTION =
-  'You receive priorFindings, classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Prefer changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode); file paths are accepted but the scheduler derives subjects from fixes+files+priorFindings. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
+  'Read the fix worklist JSON at the path in fixContext.worklistPath (#211 — the findings are on disk, never inlined here). It holds: findings (every round\'s findings, this round\'s first — each with file, line, title, severity, classKey; read the code at each file:line for detail), classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Fix every blocking finding. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode) for EVERY dimension you touched — the scheduler re-runs those dimensions, so under-declaring skips a needed re-review. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
 // Task 10 (FR-2) journal seam: record a reviewer's denied verification probe as a `permission_denied`
 // event (step `review:<reviewer>`) via the Python journal.append, run through the io() runHelper seam so
@@ -258,11 +310,10 @@ const FIX_RESULT_INSTRUCTION =
 function _defaultDenialRecorder(reviewer, eventsPath) {
   if (!eventsPath) return
   // Put the plugin lib dir on sys.path so `import journal` resolves regardless of the helper's cwd.
-  // Helpers run from the repo/worktree root (the sanctioned runHelper contract, e.g.
-  // review_panel_shell's `plugins/superheroes/lib/*.py` calls), so the lib dir is that repo-relative
-  // path — no __dirname (absent in the bundle sandbox).
+  // Helpers run from the repo/worktree root (the sanctioned runHelper contract), and the dir comes
+  // from lib_root.pyLibDir() (#170) — never a hand-typed path; no __dirname (absent in the bundle sandbox).
   const script =
-    'import sys; sys.path.insert(0, "plugins/superheroes/lib"); import journal; ' +
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import journal; ` +
     'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
     'detail={"probe": "denied", "reviewer": sys.argv[2]})'
   try {
@@ -282,11 +333,12 @@ const _denialSeam = { record: _defaultDenialRecorder }
 // composed-exact check. Both are best-effort + fail-open (UFR-2): a freeze/record error is swallowed and
 // the run proceeds (the allowance simply won't fire for that command → the existing prompt path).
 //
-// The lib dir goes on sys.path with the SAME repo-relative path the denial recorder uses (helpers run
-// from the repo/worktree root — the sanctioned runHelper contract; no __dirname in the bundle sandbox).
+// The lib dir goes on sys.path via lib_root.pyLibDir() (#170), the same seam the denial recorder uses
+// (helpers run from the repo/worktree root — the sanctioned runHelper contract; no __dirname in the
+// bundle sandbox).
 function _permHelper(call, args) {
   const script =
-    'import sys; sys.path.insert(0, "plugins/superheroes/lib"); import permission_rules; ' +
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
     call
   try {
     const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
@@ -316,6 +368,7 @@ function ensureReviewerShape(out, opts = {}) {
     out = { findings: out, confidence: conf, legacyArray: true }
   }
   if (!out || !Array.isArray(out.findings)) return null
+  out = Object.assign({}, out, { findings: normalizeReviewerFindings(out.findings) })
   if (out.confidence !== 'high' && out.confidence !== 'low') {
     out = Object.assign({}, out, { confidence: 'high' })
   }
@@ -373,8 +426,7 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT} ${REVIEWER_DENIAL_FLAG}` +
-      `${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT} ${REVIEWER_DENIAL_FLAG}${reviewerRetryCorrection(opts.retryReason)}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
     // Task 10 (FR-2): thread the reviewer identity + the run's journal path so ensureReviewerShape can
     // tag a denied-probe permission_denied event to `review:<reviewer>`. eventsPath rides context when
     // the caller supplies it; absent, the denial degrades the dimension (low confidence) without a
@@ -413,11 +465,18 @@ function reviewCodeLeaves(tiers, opts) {
   // would always parse as unreadable. reviewerAgent (review) and fixStep (fix) are the only two
   // engine-routed leaves (#38).
   const synthesisLeaf = async (merged, context, rubric, runDir, round) => {
+    const contextTarget = (context && context.target && typeof context.target === 'object') ? context.target : {}
+    const verificationRoot = (context && context.synthesisVerificationRoot) || contextTarget.worktree || target.worktree || procCwd()
+    const promptContext = Object.assign({}, context || {}, { synthesisVerificationRoot: verificationRoot })
     const out = await agent(
       `You are the panel synthesis judge (eval/synthesis-leaf.md). For EACH merged finding below decide ` +
       `keep/drop + the rubric-justified severity (keep-on-uncertain; never decide the loop terminal). ` +
       `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} — one ` +
       `verdict per merged finding, keyed by its file::normalized-title identity.\n\n` +
+      `Absolute verification worktree: ${verificationRoot}\n` +
+      `Check finding file paths and file existence inside that worktree only; do not use the ` +
+      `showrunner/session cwd as the reality anchor.\n\n` +
+      `Prompt context: ${JSON.stringify(promptContext)}\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
       withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
     return out || null
@@ -426,7 +485,7 @@ function reviewCodeLeaves(tiers, opts) {
   // the code-fixer (fixStep): attempt every blocking finding, commit fixes, tag upstream-traced blockers.
   const fixStep = async (fixContext, verdict, runDir) => {
     const prompt =
-      `You are the code-fixer. ${FIX_RESULT_INSTRUCTION} Attempt every blocking finding from priorFindings, commit fixes, tag upstream-traced blockers. ` +
+      `You are the code-fixer. ${FIX_RESULT_INSTRUCTION} Attempt every blocking finding from the worklist, commit fixes, tag upstream-traced blockers. ` +
       `Never edit the review-loop machinery. Fix context:\n${JSON.stringify(fixContext)}${targetSuffix}`
     const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
     if (iEngine !== 'claude') {
@@ -448,7 +507,7 @@ function reviewCodeLeaves(tiers, opts) {
     // (frozen) appends the deferred identities to deferred-set.json — the channel the in-process tally
     // reads — and prints the readout-enrichment extras (fixes + accumulated parentOrigin) to stdout.
     const out = await exec([
-      `python3 plugins/superheroes/lib/record_deferred.py --run-dir ${shq(runDir)} ` +
+      `python3 ${libPath('record_deferred.py')} --run-dir ${shq(runDir)} ` +
       `--report ${shq(JSON.stringify(report || {}))}`,
     ], 'record deferred')
     // Attach the computed extras to the fix report so #104's shared shell threads it
@@ -529,7 +588,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
   })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEWER_RESULT_INSTRUCTION}\n\n` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
     Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null
@@ -574,7 +633,7 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
   await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
   const results = await exec([
-    `python3 plugins/superheroes/lib/front_half.py record-deferred --run-dir ${shq(runDir)} ` +
+    `python3 ${libPath('front_half.py')} record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
   ], 'record deferred')
   for (const item of (report && report.deferred) || []) {
@@ -641,12 +700,200 @@ function docDirFor(workItem) {
 function docPathFor(workItem, doc) { return `${docDirFor(workItem)}/${doc}.md` }
 function runDirFor(workItem, phase) { return `/tmp/showrunner-${workItem}-${phase}` }
 
+// UFR-2: a failed external author-plan may have edited the doc and/or stamped the completion
+// marker; discard both before falling open to the native author so an unaudited external draft
+// cannot pass the post-check usableDraft gate.
+async function _resetAuthorPlanDraft(workItem, doc) {
+  const dir = docDirFor(workItem)
+  const docPath = `${dir}/${doc}.md`
+  const markerPath = `${dir}/.${doc}.complete`
+  const root = checkoutRoot()
+  const cmd = (root && !String(dir).startsWith('/'))
+    ? selfContained(
+      `rm -f ${shq(markerPath)} && (git checkout -- ${shq(docPath)} 2>/dev/null || rm -f ${shq(docPath)})`)
+    : `rm -f ${shq(markerPath)} ${shq(docPath)}`
+  await exec([cmd], 'reset author-plan draft')
+}
+
+// author-plan confinement: snapshot git status --porcelain via the exec courier.
+async function _snapshotGitPorcelain() {
+  const results = await exec([selfContained('git status --porcelain')], 'author-plan git snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _parsePorcelain(text) {
+  const entries = new Map()
+  if (!text) return entries
+  for (const line of String(text).split('\n')) {
+    if (!line.trim()) continue
+    const code = line.slice(0, 2)
+    let path = line.slice(3).trim()
+    const arrow = path.indexOf(' -> ')
+    if (arrow >= 0) path = path.slice(arrow + 4)
+    if (path) entries.set(path, code)
+  }
+  return entries
+}
+
+// Normalize a porcelain or filesystem path to checkout-root-relative form for comparison.
+function _normalizeComparePath(path) {
+  let p = String(path).replace(/^\.\//, '')
+  const root = checkoutRoot()
+  if (root) {
+    const r = String(root).replace(/\/$/, '')
+    if (p === r) return ''
+    if (p.startsWith(r + '/')) return p.slice(r.length + 1)
+  }
+  return p
+}
+
+// author-plan confinement allowlist: only the plan doc's own artifacts (exact paths, not prefix).
+function _authorPlanArtifactPaths(workItem) {
+  const dir = _normalizeComparePath(docDirFor(workItem))
+  return [`${dir}/plan.md`, `${dir}/.plan.complete`]
+}
+
+function _pathIsAuthorPlanArtifact(path, workItem) {
+  return _authorPlanArtifactPaths(workItem).includes(_normalizeComparePath(path))
+}
+
+// Top-level checkout-relative docs tree for confinement scan (e.g. 'docs'). Skipped when the
+// work-item doc dir resolves outside the checkout (out-of-repo storage).
+function _docsScanRoot(workItem) {
+  const dir = docDirFor(workItem)
+  const root = checkoutRoot()
+  if (String(dir).startsWith('/')) {
+    if (!root) return null
+    const r = String(root).replace(/\/$/, '')
+    if (!String(dir).startsWith(r + '/')) return null
+  } else if (!root) {
+    return null
+  }
+  const rel = _normalizeComparePath(dir)
+  if (!rel) return null
+  const seg = rel.split('/')[0]
+  return seg || null
+}
+
+function _parseFileList(text) {
+  const set = new Set()
+  if (!text) return set
+  for (const line of String(text).split('\n')) {
+    const p = line.trim()
+    if (p) set.add(_normalizeComparePath(p))
+  }
+  return set
+}
+
+async function _snapshotDocsFileList(docsRoot) {
+  const results = await exec([selfContained(`find ${shq(docsRoot)} -type f | sort`)], 'author-plan docs snapshot')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+async function _snapshotDocsNewer(docsRoot, stampPath) {
+  const results = await exec(
+    [selfContained(`find ${shq(docsRoot)} -type f -newer ${shq(stampPath)} | sort`)],
+    'author-plan docs newer')
+  if (!results || !results[0] || !results[0].ok) return null
+  return results[0].stdout || ''
+}
+
+function _docsStampPath(workItem) {
+  return `/tmp/showrunner-docs-${safeRunKey(workItem)}.stamp`
+}
+
+// Gitignored docs-tree confinement: detect new/modified files under docsRoot that porcelain misses.
+async function _scanAndRevertDocsStrays(workItem, docsRoot, stampPath, beforeText) {
+  if (beforeText == null) return { strayPaths: [], unconfined: true }
+  const afterText = await _snapshotDocsFileList(docsRoot)
+  if (afterText == null) return { strayPaths: [], unconfined: true }
+  const newerText = await _snapshotDocsNewer(docsRoot, stampPath)
+  if (newerText == null) return { strayPaths: [], unconfined: true }
+  const before = _parseFileList(beforeText)
+  const after = _parseFileList(afterText)
+  const newer = _parseFileList(newerText)
+  const newStrays = []
+  const modifiedStrays = []
+  for (const p of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (!before.has(p)) newStrays.push(p)
+  }
+  for (const p of newer) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) modifiedStrays.push(p)
+  }
+  if (modifiedStrays.length > 0) {
+    return { strayPaths: [], unconfined: true, modifiedPaths: modifiedStrays }
+  }
+  if (newStrays.length === 0) return { strayPaths: [] }
+  const revertCmds = newStrays.map((p) => selfContained(`rm -f -- ${shq(p)}`))
+  const results = await exec(revertCmds, 'author-plan revert docs strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postText = await _snapshotDocsFileList(docsRoot)
+  if (postText == null) return { strayPaths: [], unconfined: true }
+  const post = _parseFileList(postText)
+  for (const p of newStrays) {
+    if (!before.has(p) && post.has(p)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: newStrays }
+}
+
+// After an external author-plan dispatch, revert checkout paths that newly dirtied outside the
+// work-item doc dir during the dispatch window. Pre-existing dirty paths are never touched.
+// A null snapshot (courier flake) on EITHER side makes strays indistinguishable from the user's
+// own pre-existing edits — revert NOTHING and report unconfined (the caller fails the dispatch
+// closed to the native author). Reverting against an empty "before" would checkout-revert the
+// user's own uncommitted work.
+async function _revertAuthorPlanStrays(workItem, beforeText, afterText) {
+  if (beforeText == null || afterText == null) return { strayPaths: [], unconfined: true }
+  const before = _parsePorcelain(beforeText)
+  const after = _parsePorcelain(afterText)
+  const strays = []
+  for (const [p, code] of after) {
+    if (_pathIsAuthorPlanArtifact(p, workItem)) continue
+    if (before.has(p)) continue
+    strays.push({ path: p, untracked: code === '??' || code[0] === '?' })
+  }
+  if (strays.length === 0) return { strayPaths: [] }
+  const revertCmds = strays.map(({ path, untracked }) =>
+    untracked ? selfContained(`rm -rf -- ${shq(path)}`) : selfContained(`git checkout -- ${shq(path)}`))
+  const results = await exec(revertCmds, 'author-plan revert strays')
+  if (!results || results.some((r) => !r || !r.ok)) return { strayPaths: [], unconfined: true }
+  const postSnap = await _snapshotGitPorcelain()
+  if (postSnap == null) return { strayPaths: [], unconfined: true }
+  const post = _parsePorcelain(postSnap)
+  for (const { path } of strays) {
+    if (!before.has(path) && post.has(path)) return { strayPaths: [], unconfined: true }
+  }
+  return { strayPaths: strays.map((s) => s.path) }
+}
+
+// Stamp the content-bound completion marker after external author-plan confinement passes.
+async function _stampAuthorPlanMarker(workItem, doc) {
+  const cmd = selfContained(
+    `python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
+    `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`)
+  const results = await exec([cmd], 'author-plan write marker')
+  if (!results || !results[0] || !results[0].ok) return false
+  try { return !!JSON.parse(results[0].stdout || '').wrote } catch (_) { return false }
+}
+
+function _draftContentReady(signals) {
+  if (!signals || !signals.expected) return false
+  const missing = Array.isArray(signals.missing_sections) ? signals.missing_sections : []
+  return missing.length === 0 && !signals.placeholder
+}
+
 // the produce phase: author the doc author-only (resume a usable draft; re-produce otherwise).
 // #115 Task 12: usableDraft uses exec+JS twin (front_half.isUsableDraft, no LLM agent).
 // authorModel is the in-process JS twin (model_tier.resolveModel, no agent dispatch).
-// The --write-marker stamp is FOLDED into the author agent (FR-4 fold): the author's prompt
-// instructs it to run front_half_usable.py --write-marker after authoring the doc, so there is
-// no separate cmdRunner call — the author leaf handles its own completion stamp.
+// The --write-marker stamp is FOLDED into the native author agent (FR-4 fold): the author's
+// prompt instructs it to run front_half_usable.py --write-marker after authoring the doc.
+// The EXTERNAL author-plan path omits --write-marker from the dispatch prompt; showrunner
+// stamps the marker via exec ONLY after confinement passes and doc content verifies, so a
+// crash before the stamp resumes into re-produce rather than accepting an unconfined draft.
 // Layer 2b: bounded repair loop (N=2 retries, 3 total attempts). On a failed post-check the
 // author is re-dispatched with a TARGETED gap hint derived from the --emit-signals why-signal
 // (missing_sections + placeholder). Only parks (confidence:'low') after all attempts exhausted.
@@ -657,19 +904,31 @@ async function producePhase(phase, workItem) {
   // resume vs re-produce: a usable draft (content-bound completion signal + complete content) is kept.
   const draft = await usableDraft(workItem, doc)
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
-  const model = authorModel()
+  const model = authorModel(doc)
+  // planAuthor engine route: ONLY the plan doc reads the enginePreferences.planAuthor key (tasks
+  // always authors native). The resolved model tier rides along so cursor can map it to its own
+  // model id (author-plan: fable + planAuthor: cursor = Fable via Cursor). External failure falls
+  // open to the native author within the same attempt — the usableDraft post-check is unchanged.
+  const aEngine = doc === 'plan'
+    ? enginePrefTwin.resolveEngine('author-plan', _enginePrefs())
+    : 'claude'
   // _authorPrompt: builds the author dispatch prompt. On a retry, appends a targeted gap hint so
   // the author knows precisely what to fix (Layer 2b). The hint is derived from the why-signal
   // (missing_sections + placeholder) returned by usableDraft on the previous failed check.
   // FR-8 sandbox: no banned tokens in this function body.
-  function _authorPrompt(gapSignal) {
-    const base =
+  function _authorPrompt(gapSignal, includeWriteMarker) {
+    let base =
       `You are the author-only produce leaf (plugins/superheroes/eval/produce-leaf.md). Author the ` +
       `${doc} definition-doc for work-item ${workItem} from its approved parent, every section ` +
-      `non-empty, no placeholder. After writing the doc, run the following command to stamp the ` +
-      `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
-      selfContained(`python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
-      `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n` +
+      `non-empty, no placeholder.`
+    if (includeWriteMarker !== false) {
+      base +=
+        ` After writing the doc, run the following command to stamp the ` +
+        `content-bound completion marker (deterministic — do NOT skip it):\n\n` +
+        selfContained(`python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
+        `--doc ${shq(doc)} --write-marker --root "$(git rev-parse --show-toplevel)"`) + `\n\n`
+    }
+    base +=
       `Do NOT run review or record the review gate. Return ` +
       `{ status, notify } where notify is an array of any NOTIFY-class defaults you took, each ` +
       `{ identity, message }.`
@@ -693,12 +952,65 @@ async function producePhase(phase, workItem) {
   // lastSignal carries the why-signal from the previous failed check for the gap hint.
   let lastSignal = null
   for (let attempt = 0; attempt <= _PRODUCE_MAX_RETRIES; attempt++) {
-    // FR-4 fold: the author leaf writes its own doc + stamps the completion marker (--write-marker) +
-    // returns notify. Single-author docs are NOT return-don't-write (the author IS the side effect's input).
-    const authored = await agent(
-      _authorPrompt(attempt > 0 ? lastSignal : null),
-      { label: `author-${doc}`, model,
-        schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    const gapSignal = attempt > 0 ? lastSignal : null
+    let authored = null
+    if (aEngine !== 'claude') {
+      // External author-plan: no --write-marker in the dispatch prompt; showrunner stamps after confinement.
+      const extPrompt = _authorPrompt(gapSignal, false)
+      const eff = enginePrefTwin.resolveEffort(aEngine, 'author-plan', _effortOverrides())
+      const beforeSnap = await _snapshotGitPorcelain()
+      const docsRoot = _docsScanRoot(workItem)
+      let beforeDocs = null
+      let docsStamp = null
+      if (docsRoot) {
+        docsStamp = _docsStampPath(workItem)
+        const stampRes = await exec([`touch ${shq(docsStamp)}`], 'author-plan docs stamp')
+        if (!stampRes || !stampRes[0] || !stampRes[0].ok) beforeDocs = null
+        else beforeDocs = await _snapshotDocsFileList(docsRoot)
+      }
+      const res = await engineDispatch.dispatchExternal({
+        workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
+        cwd: checkoutRoot() || procCwd(), model,
+      })
+      const afterSnap = await _snapshotGitPorcelain()
+      const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
+      const docsResult = (docsRoot && docsStamp)
+        ? await _scanAndRevertDocsStrays(workItem, docsRoot, docsStamp, beforeDocs)
+        : { strayPaths: [], unconfined: false }
+      const unconfined = porcelainResult.unconfined || docsResult.unconfined
+      const strayPaths = [...porcelainResult.strayPaths, ...docsResult.strayPaths]
+      if (strayPaths.length || unconfined) {
+        if (typeof globalThis.log === 'function') {
+          if (docsResult.modifiedPaths && docsResult.modifiedPaths.length) {
+            globalThis.log('author-plan: modified ignored docs (unconfined): ' + docsResult.modifiedPaths.join(', '))
+          }
+          globalThis.log(unconfined
+            ? 'author-plan: confinement snapshot unavailable — external draft discarded (nothing reverted)'
+            : 'author-plan: stray checkout edits reverted: ' + strayPaths.join(', '))
+        }
+        await _resetAuthorPlanDraft(workItem, doc) // confinement failure -> fall open to native
+      } else if (res && res.ok) {
+        const draftNow = await usableDraft(workItem, doc)
+        if (_draftContentReady(draftNow)) {
+          const stamped = await _stampAuthorPlanMarker(workItem, doc)
+          const afterStamp = stamped ? await usableDraft(workItem, doc) : { usable: false }
+          if (afterStamp.usable) authored = { status: 'ok', notify: res.notify || [] }
+          else await _resetAuthorPlanDraft(workItem, doc)
+        } else {
+          await _resetAuthorPlanDraft(workItem, doc) // unusable external draft -> fall open to native
+        }
+      } else {
+        await _resetAuthorPlanDraft(workItem, doc) // UFR-2: discard external draft before fall-open
+      }
+    }
+    if (authored == null) {
+      // FR-4 fold (native only): the author leaf writes its own doc + stamps the completion marker.
+      const nativePrompt = _authorPrompt(gapSignal, true)
+      authored = await agent(
+        nativePrompt,
+        { label: `author-${doc}`, model,
+          schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
+    }
     if (authored == null) {
       return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] } // UFR-4
     }
@@ -748,10 +1060,10 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
   const docPath = docPathFor(workItem, doc)
-  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + deferred-set seed + load-summary +
-  // entry coverage read. Seed runtimeDeferred from it and hand it to the panel as `preloaded`. A
-  // gather transport failure -> null: fall back to a plain mkdir and let the panel read its own
-  // entry state (correct, just unfolded).
+  // fold 2 (#141; #211 decision shape): ONE gather leaf does the run-dir mkdir + deferred-set seed +
+  // resume DECISION + round-1 plan + entry coverage read (no records ride up). Seed runtimeDeferred
+  // from it and hand it to the panel as `preloaded`. A gather transport failure -> null: fall back to
+  // a plain mkdir and let the panel read its own entry state (correct, just unfolded).
   const setup = await gatherReviewSetup({
     runDir, reviewerSet: DOC_REVIEWERS, context: { workItem, docType: doc, docPath },
     legKind: { panel: true, code: false }, ioApi: io(),
@@ -798,7 +1110,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   // (UFR-5 — the run never advances on an un-recorded gate).
   const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =
-    `python3 plugins/superheroes/lib/definition_doc.py set-gate --doc ${shq(doc)} ` +
+    `python3 ${libPath('definition_doc.py')} set-gate --doc ${shq(doc)} ` +
     `--work-item ${shq(workItem)} --review ${shq(gate)} --root "$(git rev-parse --show-toplevel)" ` +
     `--expected-hash ${shq(reviewedHash)} --run-id ${shq(runId)}${leaseArg}`
   const persist = {
@@ -837,8 +1149,15 @@ async function reviewDocPhase(doc, workItem, opts) {
       runtimeDeferredIds: Array.from(deferred.keys()),
     }
   }
+  // #212: on a non-passed gate, name the terminal + the panel's honest reason on parkDetail so the
+  // workflow park survives the phase-layer flatten (phase_step threads it into the changes-requested
+  // reason). A passed gate proceeds — no park detail.
+  const phaseResult = { confidence: 'high', assumptions: [] }
+  if (gate !== 'passed') {
+    phaseResult.parkDetail = `${(verdict && verdict.terminal) || 'cannot-certify'}: ${(verdict && verdict.reason) || 'review not certified'}`
+  }
   return {
-    phaseResult: { confidence: 'high', assumptions: [] },
+    phaseResult,
     gate,
     persist,
     runtimeDeferredIds: Array.from(deferred.keys()),
@@ -860,7 +1179,7 @@ function gateForTerminal(terminal) {
 // produce repair loop (producePhase) can craft a targeted gap hint for re-prompting.
 async function usableDraft(workItem, doc) {
   const results = await exec([
-    `python3 plugins/superheroes/lib/front_half_usable.py --work-item ${shq(workItem)} ` +
+    `python3 ${libPath('front_half_usable.py')} --work-item ${shq(workItem)} ` +
     `--doc ${shq(doc)} --root "$(git rev-parse --show-toplevel)" --emit-signals`,
   ], 'check draft')
   let signals = null
@@ -868,6 +1187,7 @@ async function usableDraft(workItem, doc) {
   if (!signals) return { usable: false }   // IO failure -> fail closed (re-produce)
   return {
     usable: !!signals.usable,
+    expected: signals.expected || '',
     missing_sections: Array.isArray(signals.missing_sections) ? signals.missing_sections : [],
     placeholder: !!signals.placeholder,
   }
@@ -875,9 +1195,11 @@ async function usableDraft(workItem, doc) {
 
 // authorModel: pure in-process JS twin. Reads overrides from globalThis.__SR_OVERRIDES (set by
 // Task 17 startup pipe; absent in test/throwaway runs -> null -> DEFAULT_TIERS.author = 'opus').
-function authorModel() {
+// The plan doc resolves the split `author-plan` role (own override, e.g. fable, else exactly
+// `author`); tasks stays on `author` — plan authoring alone can be raised without moving tasks.
+function authorModel(doc) {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
-  return modelTierTwin.resolveModel('author', overrides, null)
+  return modelTierTwin.resolveModel(doc === 'plan' ? 'author-plan' : 'author', overrides, null)
 }
 
 // #38: read globalThis.__SR_ENGINE_PREFS (planted once at startup — see showrunner()'s startup pipe).
@@ -899,7 +1221,7 @@ function notifyLedgerFor(workItem) { return `${docDirFor(workItem)}/.notify.json
 // appendNotify: IO accumulator write via exec (not cmdRunner). Returns false on failed durable write.
 async function appendNotify(workItem, entries) {
   const results = await exec([
-    `python3 plugins/superheroes/lib/front_half.py append-notify ` +
+    `python3 ${libPath('front_half.py')} append-notify ` +
     `--ledger ${shq(notifyLedgerFor(workItem))} --entries ${shq(JSON.stringify(entries || []))}`,
   ], 'append notify')
   let out = null
@@ -956,7 +1278,7 @@ async function frontHalfBoundary(workItem) {
     try {
       const text = await courier.runCourierText(
         'readout',
-        `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`)
+        `python3 ${libPath('loop_readout.py')} --record ${shq(recPath)}`)
       return typeof text === 'string' ? text : ''
     } catch (_e) {
       return ''
@@ -1012,7 +1334,7 @@ function checkoutRoot(explicit) {
 function fenceCliCmd(workItem, generation, root, extra) {
   const r = checkoutRoot(root)
   if (!r) return null
-  return `python3 plugins/superheroes/lib/fence_cli.py --work-item ${shq(workItem)} ` +
+  return `python3 ${libPath('fence_cli.py')} --work-item ${shq(workItem)} ` +
     `--generation ${shq(String(generation))} --root ${shq(r)}${extra || ''}`
 }
 
@@ -1144,27 +1466,60 @@ async function persistPhase(workItem, opts) {
   const side = journalOnly ? null : (opts.sideEffect || null)
   const sideArg = side ? ` --json ${shq(JSON.stringify(side))}` : ''
   const joArg = journalOnly ? ' --journal-only' : ''
+  // #130: fold this phase's cost telemetry into the SAME durable write (no new leaf — #118). The
+  // phase_cost event is written best-effort inside phase_progress_entry.py, only when the phase
+  // record is freshly applied (so a resume never double-counts). Absent when there's nothing to
+  // record (no dispatches, unmeasured) or when the caller did not opt in (recordCost).
+  const costBody = opts.recordCost ? phaseCostPayload(phase) : null
+  const costArg = costBody ? ` --cost-payload ${shq(JSON.stringify(costBody))}` : ''
+  // #130: on a park (journalOnly), fold a `parked` terminal marker into this same save so the run is
+  // classifiable as parked (parkFromPhases journals nothing) — carrying its already-folded cost.
+  const parkArg = (journalOnly && opts.parkReason) ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
   const saveCmd =
-    `python3 plugins/superheroes/lib/phase_progress_entry.py save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}`
+    `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
+  // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
+  // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
+  // file-not-found. In dev/dogfood (relative libRoot) libRootProbe() is empty, so this is byte-identical.
+  const probedCmd = `${libRootProbe()}${cmd}`
   const required = journalOnly
     ? ['ok', 'journal_confirmed']
     : ['ok', 'journal_confirmed', 'checkpoint_confirmed']
   try {
-    const res = await courier.runCourierJson(
+    const res = await courier.runCourierMarkedJson(
       'save phase progress',
-      cmd,
+      probedCmd,
       { require: required, retryRealFailure: false },
     )
+    // Map the libRoot-missing marker to the SAME named park reason reconcile uses, before the
+    // save-result read-back check — the back half fails closed with a descriptive cause, not a
+    // generic read-back mismatch.
+    if (res && typeof res.reason === 'string' && res.reason.indexOf(MISSING_MARKER) >= 0) {
+      return { ok: false, error: 'spine code root missing (libRoot)' }
+    }
     const confirmed = res && res.ok && res.journal_confirmed &&
       (journalOnly || res.checkpoint_confirmed)
     return confirmed
       ? { ok: true, recovered: false }
       : { ok: false, error: (res && res.reason) || 'phase progress read-back mismatch' }
-  } catch (_e) {
-    return { ok: false, error: 'phase progress read-back mismatch' }
+  } catch (e) {
+    if (e instanceof courier.CourierTransportError) {
+      return { ok: false, error: 'phase progress save transport failed (courier): ' + e.reason }
+    }
+    return { ok: false, error: 'phase progress save transport failed (courier)' }
   }
+}
+
+// #130: the phase_cost payload for a completed phase — the proxy dispatch counts (× resolved model)
+// + the budget-derived output-token delta. Folded into the phase's ONE durable write (the save leaf
+// for a normal phase, the readout_post hand-back for ship) so it rides no new courier leaf (#118).
+// Returns null when there is nothing worth recording (no dispatches, unmeasured).
+function phaseCostPayload(phase) {
+  try {
+    const body = costMeter.take(phase)
+    return costMeter.isEmpty(body) ? null : body
+  } catch (_e) { return null }
 }
 
 function inWorktree(cmd, worktree) {
@@ -1222,11 +1577,23 @@ async function cmdRunner(cmd, { schema, label }) {
 async function reconcile(workItem) {
   const preRoot = checkoutRoot()
   const rootFlag = preRoot ? ` --root ${shq(preRoot)}` : ''
-  const results = await exec([
-    `python3 plugins/superheroes/lib/recover_entry.py --work-item ${shq(workItem)} --snapshot${rootFlag}`,
-  ], 'gather snapshot')
+  const snapCmd =
+    `${libRootProbe()}python3 ${libPath('recover_entry.py')} --work-item ${shq(workItem)} --snapshot${rootFlag}`
+  let _snapStdout = ''
+  try {
+    _snapStdout = await courier.runCourierMarkedText('gather snapshot', snapCmd)
+  } catch (_e) {
+    return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
+  }
+  // #170 fail-closed probe: an ABSOLUTE spine code root that vanished mid-run (e.g. plugin-cache
+  // eviction) short-circuits the compose to MISSING_MARKER instead of a file-not-found python error —
+  // park with a NAMED reason so the readout says exactly what's wrong. Relative (dev) libRoot never
+  // emits the marker.
+  if (_snapStdout.indexOf(MISSING_MARKER) >= 0) {
+    return { action: 'park_gate', reason: 'spine code root missing (libRoot)', generation: null }
+  }
   let snap = null
-  try { snap = JSON.parse((results[0] && results[0].stdout) || '') } catch (_) {}
+  try { snap = JSON.parse(_snapStdout) } catch (_) {}
   if (!snap) {
     // A failed/empty snapshot (IO error, store unusable before lease) -> fail closed.
     return { action: 'park_gate', reason: 'recover_entry snapshot failed (IO error)', generation: null }
@@ -1278,6 +1645,86 @@ async function parkFromPhases(workItem, generation, root, phase, reason) {
   return { outcome: 'parked', phase, reason }
 }
 
+// #25 quick discovery — the showrunner's INTAKE contract. Discovery (the architect session) always
+// produces the run's input artifact; the ROUTE decides which one: full = spec (today), quick = the
+// tasks doc, built from `workhorse` on (plan/review-plan/tasks/review-tasks skipped). This is the
+// spine leg only — PR 2 owns the-architect's route recommendation, quick-mode task authoring, the
+// alignment probe, and the gate wiring that launches a quick run.
+//
+// resolveIntake: PURE decider over the startup facts (spec/tasks presence + gates) and the launch's
+// explicit route (globalThis.__SR_ROUTE, threaded from args.route). Returns the route plus, for the
+// quick route, either the tasks gate to check or a fail-closed REFUSE — a missing or malformed tasks
+// artifact never silently falls back to (or past) the full path. Byte-identical to today on the full
+// route: an absent explicit route with no tasks artifact resolves to 'full', so the spec-gate startup
+// path is unchanged.
+//   facts:    { spec_present, tasks_present, spec_gate, tasks_gate } (from readStartupState)
+//   explicit: the launch-declared route ('quick' | 'full' | null)
+//   returns:  { route:'full' }
+//           | { route:'quick', action:'gate', gate:<tasks_gate> }
+//           | { route:<declared|'quick'>, action:'refuse', reason:<why> }
+function resolveIntake(facts, explicit) {
+  facts = facts || {}
+  const specPresent = !!facts.spec_present
+  const tasksPresent = !!facts.tasks_present
+  // The route the on-disk artifacts SUPPORT: spec present ⇒ full (spec-anchored); else a tasks doc
+  // alone ⇒ quick; else neither ⇒ null (no input artifact resolved yet).
+  const derived = specPresent ? 'full' : (tasksPresent ? 'quick' : null)
+  const declared = (explicit === 'quick' || explicit === 'full') ? explicit : null
+  // A DECLARED route that conflicts with what the artifacts support is a fail-closed REFUSE — never
+  // silently overridden in EITHER direction. Declared 'quick' over a present spec would run the full
+  // route unattended (regenerating tasks.md over the architect's quick doc and building off a
+  // maybe-stale spec); declared 'full' over a spec-less tasks doc would skip the exact front half the
+  // launch asked for. Both are fail-open against the launch's stated intent — refuse and name what to
+  // reconcile, rather than pick a route the owner did not choose.
+  if (declared && derived && declared !== derived) {
+    const artifact = derived === 'full'
+      ? 'a spec is present on disk (the full route)'
+      : 'only a tasks doc — no spec — is present on disk (the quick route)'
+    return { route: declared, action: 'refuse',
+      reason: `launch declared the '${declared}' route but ${artifact} — refusing to launch ` +
+        `(fail-closed intake); reconcile the route with the on-disk artifact before relaunching` }
+  }
+  // No conflict below (the declared route agrees with the artifacts, or nothing was declared).
+  // Spec present ⇒ full route (spec-anchored, byte-identical to pre-#25).
+  if (specPresent) return { route: 'full' }
+  const declaredQuick = explicit === 'quick'
+  if (!tasksPresent) {
+    // No tasks artifact. A launch that DECLARED quick must refuse (fail-closed intake — never fall
+    // back to the full path, and never fall past tasks into an empty build). Otherwise this is the
+    // pre-#25 no-spec world: the full route parks at the spec startup gate (unreadable), unchanged.
+    if (declaredQuick) {
+      return { route: 'quick', action: 'refuse',
+        reason: 'quick-route launch declared, but no tasks artifact was found where the tasks phase writes it ' +
+          '— refusing to launch (fail-closed intake), never falling back to the full path' }
+    }
+    return { route: 'full' }
+  }
+  // Tasks artifact present, no spec ⇒ quick route. Validate it is well-formed BEFORE gating: a doc
+  // whose review gate can't be parsed (malformed frontmatter, missing gates line, or unreadable) is
+  // a fail-closed refuse — the run never builds off an artifact it can't verify the owner approved.
+  const g = facts.tasks_gate
+  if (g == null || g === 'malformed' || g === 'unreadable') {
+    return { route: 'quick', action: 'refuse',
+      reason: 'quick-route tasks artifact is malformed or missing its review gate (' + String(g) + ') ' +
+        '— refusing to launch (fail-closed intake)' }
+  }
+  return { route: 'quick', action: 'gate', gate: g }
+}
+
+// #25 quick discovery — record, DURABLY and honestly, the front-half phases the quick route skips so
+// they are never silently absent from the run's audit trail (journal) or its live readout (run_watch
+// renders the phases_skipped event). A structured, non-secret payload (fixed phase names + route),
+// written AS-IS via the generic journal_entry.py seam. Returns false on a failed durable write so the
+// caller fails closed — an unrecorded skip must not proceed (the run's durable-write discipline).
+async function recordSkippedPhases(workItem, skipped, entryPhase) {
+  const payload = { route: 'quick', skipped: skipped || [], entryPhase: entryPhase || 'workhorse' }
+  const out = await execJson(
+    `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} ` +
+    `--event-type phases_skipped --payload ${shq(JSON.stringify(payload))}`,
+    'record skipped phases')
+  return !!(out && out.ok)
+}
+
 async function showrunner({ workItem }) {
   // Progress-group the pre-loop leaves (reconcile / spec-gate / startup) under 'startup'; runPhases
   // re-stamps this per phase. Read by the bundle's agent wrapper (globalThis.__SR_PHASE).
@@ -1297,10 +1744,24 @@ async function showrunner({ workItem }) {
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
   _permissionSeam.freeze(r.generation, procCwd())
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
-  // UFR-1: refuse to run if the spec hasn't been approved.
+  // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
+  // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)
+  // and the launch-declared route; on the quick route it either hands back the tasks gate to check or
+  // fail-closes (missing/malformed tasks artifact ⇒ refuse, never a silent fall-back to/past full).
   const startupFacts = await readStartupState(workItem)
-  const specGate = (startupFacts && startupFacts.spec_gate) || 'unreadable'
-  const startup = await phaseStep({ confidence: 'high', assumptions: [] }, specGate)
+  const _explicitRoute = (typeof globalThis !== 'undefined' && globalThis.__SR_ROUTE) || null
+  const intake = resolveIntake(startupFacts || {}, _explicitRoute)
+  const route = intake.route
+  // A fail-closed refuse parks regardless of which route it carries — a declared-vs-artifact conflict
+  // refuses under the DECLARED route (which may be 'full'), so this is not gated on route === 'quick'.
+  if (intake.action === 'refuse') {
+    await releaseLease(workItem, r.generation, r.root)
+    return { outcome: 'parked', phase: 'startup', reason: intake.reason }
+  }
+  // Full route ⇒ the spec gate (byte-identical to pre-#25); quick route ⇒ the owner-approved tasks
+  // gate. The startup decider (phase_step) proceeds only on a `passed` gate; anything else parks.
+  const startupGate = route === 'quick' ? intake.gate : ((startupFacts && startupFacts.spec_gate) || 'unreadable')
+  const startup = await phaseStep({ confidence: 'high', assumptions: [] }, startupGate)
   if (startup.action !== 'proceed') {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
@@ -1322,21 +1783,31 @@ async function showrunner({ workItem }) {
   // Fail-safe: an absent/malformed (or courier-stringified) value yields both-"claude" + empty
   // effort map, so the review/build leaves take the byte-unchanged agent() path.
   const _epParsed = _coerceObj((startupFacts && startupFacts.engine_prefs) || null)
-  let _epMap = { reviewer: 'claude', implementation: 'claude', effort: {} }
+  let _epMap = { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} }
   if (_epParsed && typeof _epParsed === 'object' && !Array.isArray(_epParsed)) {
-    // Carry the whole object — reviewer/implementation AND the FR-9 effort sub-map (keyed by
-    // role_kind), so resolveEffort can source the owner's effort override from __SR_ENGINE_PREFS.effort
-    // (NOT from the model-tier __SR_OVERRIDES map, which is keyed by role->model).
+    // Carry the whole object — reviewer/implementation/planAuthor AND the FR-9 effort sub-map
+    // (keyed by role_kind), so resolveEffort can source the owner's effort override from
+    // __SR_ENGINE_PREFS.effort (NOT from the model-tier __SR_OVERRIDES map, which is keyed by
+    // role->model).
     _epMap = {
       reviewer: _epParsed.reviewer || 'claude',
       implementation: _epParsed.implementation || 'claude',
+      planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
   }
   if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
-  const fromStep = r.action === 'continue' && r.from_step != null ? Number(r.from_step) + 1 : 0
+  // #25: a FRESH quick run starts at `workhorse` (plan/review-plan/tasks/review-tasks skipped — the
+  // tasks doc IS the input artifact). A resume rides the durable cursor unchanged (it already points
+  // past the skipped phases, so route need not survive resume for the cursor); the full route's fresh
+  // start stays 0 (byte-identical).
+  const _resuming = r.action === 'continue' && r.from_step != null
+  const _workhorseStep = PHASES.indexOf('workhorse')
+  const fromStep = _resuming
+    ? Number(r.from_step) + 1
+    : (route === 'quick' ? _workhorseStep : 0)
   // UFR-10 (#107): thread the lease generation recover_entry acquired into the workhorse build phase,
   // so the build can fence (renew-then-fence) at every branch-mutating boundary.
   const deps = { gateRead: gateReadFor(workItem), generation: r.generation, root: r.root }
@@ -1348,12 +1819,29 @@ async function showrunner({ workItem }) {
   //     injects this globalThis flag instead.
   //   - SUPERHEROES_BUNDLE_FULL_RUN true (preamble default + full-run ENTRY): no boundary park,
   //     proceeds into the back-half.
+  // #25: the quick route skips the whole front half (fromStep starts at `workhorse`), so the native
+  // authoring/boundary deps are irrelevant — and the boundary MUST NOT be wired, or it would fire at
+  // `workhorse` and park a quick run immediately. The full route wires them exactly as pre-#25.
   const fullRun = !!globalThis.SUPERHEROES_BUNDLE_FULL_RUN
   const frontHalfNative = procEnv('SUPERHEROES_FRONT_HALF') === 'native' || !!globalThis.SUPERHEROES_FRONT_HALF_NATIVE
-  if (frontHalfNative || fullRun) {
+  if (route !== 'quick' && (frontHalfNative || fullRun)) {
     deps.produce = producePhase                  // plan / tasks authoring (author-only)
     deps.reviewDoc = reviewDocPhase              // review-plan / review-tasks -> panel-doc leg
     if (!fullRun) deps.frontHalfBoundary = frontHalfBoundary   // front-half-only keeps the boundary park
+  }
+  // #25: on a FRESH quick entry, durably record the skipped front-half phases before entering the
+  // loop — honest in the journal + readout, never silently absent. A failed durable write fails
+  // closed (park at startup) rather than proceed on an unrecorded skip (the run's durable-write
+  // discipline). A resume WITH a cursor does not re-record; a relaunch that re-enters the build from
+  // scratch (parked before its first checkpoint, so no cursor) re-asserts the skip — honest and
+  // harmless (no consumer counts these; run_readout reads the route from state, not the event tally).
+  if (route === 'quick' && !_resuming) {
+    const recorded = await recordSkippedPhases(workItem, PHASES.slice(0, _workhorseStep), 'workhorse')
+    if (!recorded) {
+      await releaseLease(workItem, r.generation, r.root)
+      return { outcome: 'parked', phase: 'startup',
+        reason: 'quick-route skipped-phase record could not be written durably — refusing to launch on an unrecorded skip' }
+    }
   }
   try {
     return await runPhases(workItem, fromStep, deps)
@@ -1370,7 +1858,7 @@ async function showrunner({ workItem }) {
 async function readGate(workItem, doc) {
   try {
     const results = await exec([
-      `python3 plugins/superheroes/lib/definition_doc.py read-gate --doc ${shq(doc)} ` +
+      `python3 ${libPath('definition_doc.py')} read-gate --doc ${shq(doc)} ` +
       `--work-item ${shq(workItem)} --root "$(git rev-parse --show-toplevel)" --json`,
     ], 'read gate')
     let out = null
@@ -1381,19 +1869,40 @@ async function readGate(workItem, doc) {
   }
 }
 
-async function readStartupState(workItem) {
-  const script = [
+// #221: the startup-state gather script, extracted so a Node smoke can run the REAL Python against an
+// out-of-repo fixture (the canned-answer smokes were blind to the actual engine-prefs resolution —
+// exactly how the load_engine_prefs store-base bug shipped). pyLibDir() is read at CALL time, so a
+// smoke can point sys.path at the real lib dir by planting an absolute __SR_LIB before calling this.
+function startupStateScript() {
+  return [
     'import json, os, sys',
-    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc, model_tier_overrides',
     'wi = sys.argv[1]',
     'root = sys.argv[2]',
     'spec_gate = "unreadable"',
     'doc_dir = ""',
+    // #25 intake facts: which input artifact discovery produced decides the route (spec ⇒ full,
+    // tasks ⇒ quick). Read presence + gate for BOTH from the SAME mode-aware, spec-anchored resolver
+    // the tasks phase writes through, so the showrunner reads exactly the doc a quick run built off.
+    'spec_present = False',
+    'tasks_present = False',
+    'tasks_gate = None',
     'try:',
     '    d = definition_doc.resolve_work_item_dir(wi, root=root, cwd=root)',
     '    doc_dir = d',   // the storage-mode-aware docs dir — planted on __SR_DOC_DIRS (docDirFor)
-    '    spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
+    '    spec_present = os.path.isfile(os.path.join(d, "spec.md"))',
+    '    tasks_present = os.path.isfile(os.path.join(d, "tasks.md"))',
+    '    if spec_present:',
+    '        try:',
+    '            spec_gate = definition_doc.read_gate(os.path.join(d, "spec.md"))',
+    '        except Exception:',   // present but unparseable — same "unreadable" the full path saw pre-#25
+    '            spec_gate = "unreadable"',
+    '    if tasks_present:',
+    '        try:',
+    '            tasks_gate = definition_doc.read_gate(os.path.join(d, "tasks.md"))',
+    '        except Exception:',   // present but its review gate can't be parsed — fail-closed marker
+    '            tasks_gate = "malformed"',
     'except Exception:',
     '    pass',
     'try:',
@@ -1408,13 +1917,21 @@ async function readStartupState(workItem) {
     '_ep_degenerate = {"reviewer": "claude", "implementation": "claude", "effort": {}}',
     'try:',
     '    import engine_pref',
-    '    engine_prefs = engine_pref.load_engine_prefs(root, root)',
+    // #221: the SECOND arg is the store-base override (the ~/.claude/superheroes test seam), NOT the
+    // repo root. `root` here IS the repo root — passing it resolves core.md to a nonexistent
+    // <repo>/projects/<key>/config/core.md, so the deliberate fail-open silently degraded every run
+    // to all-claude. Pass None so core.md resolves at the real store; the repo root rides `cwd` (arg 1).
+    '    engine_prefs = engine_pref.load_engine_prefs(root, None)',
     '    if not isinstance(engine_prefs, dict):',
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs}))',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
   ].join('\n')
+}
+
+async function readStartupState(workItem) {
+  const script = startupStateScript()
   try {
     return await courier.runCourierJson(
       'read startup state',
@@ -1436,7 +1953,7 @@ async function readDefinitionDraft(workItem, doc) {
   const label = doc === 'plan' ? 'read plan draft' : 'read tasks draft'
   const script = [
     'import json, os, sys',
-    'sys.path.insert(0, os.path.join(os.getcwd(), "plugins/superheroes/lib"))',
+    `sys.path.insert(0, ${pyLibDir()})`,
     'import definition_doc',
     'wi = sys.argv[1]',
     'doc = sys.argv[2]',
@@ -1526,7 +2043,7 @@ function testPilotDeps(workItem, generation) {
       const baseArg = _srBase ? ` --base ${shq(_srBase)}` : ''
       const raw = await courier.runCourierJson(
         'read test context',
-        `python3 plugins/superheroes/lib/test_pilot_context_cli.py resolve ` +
+        `python3 ${libPath('test_pilot_context_cli.py')} resolve ` +
         `--work-item ${shq(workItem)}${generation != null ? ` --generation ${shq(String(generation))}` : ''}` +
         `${wtArg}${baseArg}`,
         { require: ['head'] },
@@ -1560,17 +2077,17 @@ function testPilotDeps(workItem, generation) {
       const recordsPath = await writeJson('seed-records', records)
       const manifestPath = await writeJson('prepare-run-manifest', {
         artifacts: [
-          'python3', 'plugins/superheroes/lib/test_pilot_artifacts_cli.py', 'ensure',
+          'python3', libPath('test_pilot_artifacts_cli.py'), 'ensure',
           '--plan-json', planPath, '--results-json', resultsPath, '--pr', String(pr),
           '--key', keyFor(context.branch),
         ],
         server: [
-          'python3', 'plugins/superheroes/lib/test_pilot_server_config_cli.py', 'resolve',
+          'python3', libPath('test_pilot_server_config_cli.py'), 'resolve',
           '--profile-json', profilePath, '--detection-json', detectionPath,
           '--work-item', workItem,
         ],
         seed: [
-          'python3', 'plugins/superheroes/lib/test_pilot_seed_cli.py', 'prepare',
+          'python3', libPath('test_pilot_seed_cli.py'), 'prepare',
           '--records-json', recordsPath,
         ],
       })
@@ -1608,7 +2125,7 @@ function testPilotDeps(workItem, generation) {
       const planPath = await writeJson('plan-artifact', { key: keyFor(context.branch), records })
       const resultsPath = await writeJson('results-artifact-initial', { key: keyFor(context.branch), records: [], coverageRationale: plan.coverageRationale })
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `python3 ${libPath('test_pilot_artifacts_cli.py')} ensure ` +
         `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(context.branch))}`,
         { type: 'object' })
     },
@@ -1617,7 +2134,7 @@ function testPilotDeps(workItem, generation) {
       const profile = await writeJson('server-profile', context.profile || {})
       const detection = await writeJson('server-detection', context.detectors || {})
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py resolve ` +
+        `python3 ${libPath('test_pilot_server_config_cli.py')} resolve ` +
         `--profile-json ${shq(profile)} --detection-json ${shq(detection)} --work-item ${shq(workItem)}`,
         { type: 'object' })
     },
@@ -1625,7 +2142,7 @@ function testPilotDeps(workItem, generation) {
     withManagedServer: async (serverContext, run) => {
       const launchPath = await writeJson('server-launch-context', serverContext)
       const launched = await cli(
-        `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py launch ` +
+        `python3 ${libPath('test_pilot_server_config_cli.py')} launch ` +
         `--context-json ${shq(launchPath)}`,
         { type: 'object' })
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
@@ -1636,14 +2153,14 @@ function testPilotDeps(workItem, generation) {
         const contextPath = await writeJson('server-finish-context', launched)
         const outcomePath = await writeJson('server-finish-outcome', outcome || {})
         return cli(
-          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
       } catch (err) {
         const contextPath = await writeJson('server-finish-context', launched)
         const outcomePath = await writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
         await cli(
-          `python3 plugins/superheroes/lib/test_pilot_server_config_cli.py finish ` +
+          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
         throw err
@@ -1653,7 +2170,7 @@ function testPilotDeps(workItem, generation) {
     seedRecords: async (records) => {
       const recordsPath = await writeJson('seed-records', records)
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py prepare --records-json ${shq(recordsPath)}`,
+        `python3 ${libPath('test_pilot_seed_cli.py')} prepare --records-json ${shq(recordsPath)}`,
         { type: 'object' })
     },
 
@@ -1676,7 +2193,7 @@ function testPilotDeps(workItem, generation) {
     restoreBaseline: async (records, details) => {
       const recordsPath = await writeJson('restore-records', records)
       const out = await cli(
-        `python3 plugins/superheroes/lib/test_pilot_seed_cli.py restore-baseline --records-json ${shq(recordsPath)}`,
+        `python3 ${libPath('test_pilot_seed_cli.py')} restore-baseline --records-json ${shq(recordsPath)}`,
         { type: 'object' })
       if (out.action === 'park' || out.ok === false) return out
       return Object.assign({}, out, { baseline: { head: details.head, restored: true, status: out.status } })
@@ -1688,7 +2205,7 @@ function testPilotDeps(workItem, generation) {
       const planPath = await writeJson('final-plan-artifact', { key: keyFor(payload.context.branch), records: payload.records })
       const resultsPath = await writeJson('final-results-artifact', Object.assign({ key: keyFor(payload.context.branch) }, payload.aggregated || {}))
       return cli(
-        `python3 plugins/superheroes/lib/test_pilot_artifacts_cli.py ensure ` +
+        `python3 ${libPath('test_pilot_artifacts_cli.py')} ensure ` +
         `--plan-json ${shq(planPath)} --results-json ${shq(resultsPath)} --pr ${shq(String(pr))} --key ${shq(keyFor(payload.context.branch))}`,
         { type: 'object' })
     },
@@ -1703,7 +2220,7 @@ function testPilotDeps(workItem, generation) {
       const generationArg = generation ? ` --generation ${shq(String(generation))}` : ''
       return courier.runCourierJson(
         'publish tested head',
-        `python3 plugins/superheroes/lib/test_pilot_publish_cli.py publish --work-item ${shq(workItem)} ` +
+        `python3 ${libPath('test_pilot_publish_cli.py')} publish --work-item ${shq(workItem)} ` +
         `--head ${shq(head)} --status-json ${shq(statusPath)} --expected-branch ${shq(payload.context.branch)} ` +
         `${storeArg}${generationArg}`,
         { require: ['ok', 'read_back'], retryRealFailure: false },
@@ -1718,7 +2235,7 @@ function testPilotDeps(workItem, generation) {
       const statusPath = await writeJson('status-write', status)
       return courier.runCourierJson(
         'write test status',
-        `python3 plugins/superheroes/lib/test_pilot_status_cli.py write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
+        `python3 ${libPath('test_pilot_status_cli.py')} write --work-item ${shq(workItem)} --status-json ${shq(statusPath)}`,
         { require: ['ok', 'read_back'], retryRealFailure: false },
       )
     },
@@ -1732,6 +2249,9 @@ async function runPhases(workItem, fromStep, deps) {
     // Progress-group every leaf dispatched during this phase under the phase name (read by the
     // bundle's agent wrapper). Purely cosmetic — no control-flow effect.
     if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = phase
+    // #130: baseline the output-token cursor at the phase boundary; the phase's cost payload
+    // (folded into its persist / hand-back write) diffs the budget delta against this mark.
+    costMeter.mark(phase)
     // FR-7: the native front-half ends at its boundary — park before entering the back-half
     // (the 'workhorse' build phase, renamed from 'build' in #107), on a FRESH run AND on a RESUME
     // (a resume re-enters at the build cursor, so the boundary must be checked at that phase, not
@@ -1740,6 +2260,8 @@ async function runPhases(workItem, fromStep, deps) {
       return deps.frontHalfBoundary(workItem)
     }
     if (phase === 'ship') {                              // terminal: returns {outcome,phase,reason}
+      // #130: ship's cost + terminal marker fold into its hand-back readout_post leaf (park() /
+      // shipHandback take('ship') and pass --cost-payload + --terminal), so ship rides no new leaf.
       return (deps.ship || shipPhase)(workItem, await loadPr(workItem), deps.generation)
     }
     let phaseResult, gate, sideEffect = null, persist = null
@@ -1752,7 +2274,7 @@ async function runPhases(workItem, fromStep, deps) {
     } else if (phase === 'test-pilot') {
       phaseResult = await (deps.testPilot || defaultTestPilotPhase)(workItem, deps.generation); gate = null
     } else if (phase === 'mark-ready') {
-      const r = await (deps.markReady || markReadyPhase)(workItem); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
+      const r = await (deps.markReady || markReadyPhase)(workItem, deps.generation); phaseResult = r.phaseResult; gate = null; sideEffect = r.sideEffect
     } else if ((phase === 'review-plan' || phase === 'review-tasks') && deps.reviewDoc) {
       const doc = phase === 'review-plan' ? 'plan' : 'tasks'
       const r = await deps.reviewDoc(doc, workItem); phaseResult = r.phaseResult; gate = r.gate; persist = r.persist || null
@@ -1775,6 +2297,10 @@ async function runPhases(workItem, fromStep, deps) {
         { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
       step: i, phase, sideEffect,
       journalOnly: !proceed,
+      recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf
+      // #130: on a park, fold a `parked` terminal marker into the same save so token_trend/run_watch
+      // can classify the run (parkFromPhases journals nothing of its own).
+      parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
     })
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
@@ -1815,14 +2341,14 @@ async function renderAndPostReadout(workItem, runDir, verdict, opts) {
   try {
     text = await courier.runCourierText(
       'readout',
-      `python3 plugins/superheroes/lib/loop_readout.py --record ${shq(recPath)}`)
+      `python3 ${libPath('loop_readout.py')} --record ${shq(recPath)}`)
   } catch (_e) {
     text = ''   // transport drop: post the bare park reason path below (best-effort render)
   }
   try {
     await courier.runCourierJson(
       'post readout',
-      `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
+      `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(String(text))}`,
       { require: ['posted'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -1839,9 +2365,10 @@ async function reviewCodePhase(workItem, opts) {
   const runDir = opts.runDir || (opts.runDirSuffix
     ? `/tmp/showrunner-${workItem}-review-code-${safeRunKey(opts.runDirSuffix)}`
   : `/tmp/showrunner-${workItem}-review-code`)
-  // fold 2 (#141): ONE gather leaf does the run-dir mkdir + load-summary + entry coverage read (the
-  // code leg has no deferred-set seed — doc-only — but the round-1 tally still folds via the
-  // gathered deferredSet). Gather failure -> null: fall back to a plain mkdir + the panel's own reads.
+  // fold 2 (#141; #211 decision shape): ONE gather leaf does the run-dir mkdir + resume DECISION +
+  // round-1 plan + entry coverage read (no records ride up; the code leg has no deferred-set seed —
+  // doc-only — but the round-1 tally still folds via the gathered deferredSet). Gather failure ->
+  // null: fall back to a plain mkdir + the panel's own reads.
   const coverageDecisionPath = joinPath(runDir, 'review-coverage-decisions.json')
   const setup = await gatherReviewSetup({
     runDir, reviewerSet: REVIEW_CODE_REVIEWERS, context: { workItem, coverageDecisionPath },
@@ -1888,7 +2415,7 @@ async function reviewCodePhase(workItem, opts) {
   // gather just read the head itself, re-reading the same value is a redundant leaf (matrix fold).
   if (resolvedHead && !resolvedViaGather) {
     const actual = await resolveHead(resolvedWorktree || null, opts.ref || 'HEAD')
-    if (!actual || actual !== resolvedHead) {
+    if (!actual || !sameHead(actual, resolvedHead)) {
       return { phaseResult: { confidence: 'low', assumptions: [`review-code target head mismatch: expected ${resolvedHead}, got ${actual || 'unknown'}`] }, gate: 'changes-requested' }
     }
   }
@@ -1904,13 +2431,13 @@ async function reviewCodePhase(workItem, opts) {
   }
   const cfg = (resolvedConfig && typeof resolvedConfig === 'object') ? resolvedConfig
     : await execJson(
-        inWorktree(`python3 plugins/superheroes/lib/review_code_config.py --root "$(git rev-parse --show-toplevel)"`, targetWorktree), 'read review config')
+        inWorktree(`python3 ${libPath('review_code_config.py')} --root "$(git rev-parse --show-toplevel)"`, targetWorktree), 'read review config')
   const leaves = reviewCodeLeaves((cfg && cfg.tiers) || {}, {
     target: { worktree: resolvedWorktree, head: resolvedHead },
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, eventsPath: resolvedEventsPath },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, eventsPath: resolvedEventsPath, synthesisVerificationRoot: targetWorktree },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
     preloaded: setup || undefined,
@@ -1929,18 +2456,23 @@ async function reviewCodePhase(workItem, opts) {
       return {
         phaseResult: { confidence: 'low', assumptions: [`review-code readout failed: ${(readout && readout.reason) || 'unknown'}`] },
         gate: 'changes-requested', terminal, head: finalHead,
-        changed: !!(initialHead && finalHead && initialHead !== finalHead),
+        changed: !!(initialHead && finalHead && !sameHead(initialHead, finalHead)),
       }
     }
-    return { phaseResult: { confidence: 'high', assumptions: [`review-code ${terminal}`] }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && initialHead !== finalHead) }
+    // #212: name the terminal + the panel's honest reason on parkDetail so the workflow park reads
+    // e.g. "review requested changes — cannot-certify: premortem-reviewer returned no verification
+    // receipt after retry (receipt-missing — uncertifiable)" instead of the bare flatten. Empty
+    // assumptions → phase_step routes this to park_changes_requested (not park_assumption).
+    const parkDetail = `${terminal}: ${(verdict && verdict.reason) || 'review not certified'}`
+    return { phaseResult: { confidence: 'high', assumptions: [], parkDetail }, gate: 'changes-requested', terminal, head: finalHead, changed: !!(initialHead && finalHead && !sameHead(initialHead, finalHead)) }
   }
   // premortem-002 fail-closed: an advancing terminal means we're about to certify the target HEAD. If
   // the CWD advanced while the target HEAD did not, the fixer's commits landed outside the shipped tree
   // — refuse to advance/stamp rather than certify (and ship) code the fixes never touched.
   if (targetWorktree && resolvedHead) {
     const cwdHeadAfter = await resolveHead(null, opts.ref || 'HEAD')
-    const cwdMoved = cwdHeadBefore && cwdHeadAfter && cwdHeadBefore !== cwdHeadAfter
-    const targetMoved = initialHead && finalHead && initialHead !== finalHead
+    const cwdMoved = cwdHeadBefore && cwdHeadAfter && !sameHead(cwdHeadBefore, cwdHeadAfter)
+    const targetMoved = initialHead && finalHead && !sameHead(initialHead, finalHead)
     if (cwdMoved && !targetMoved) {
       return { phaseResult: { confidence: 'low', assumptions: ['review-code fixes landed outside the target worktree (cwd HEAD advanced, target HEAD did not) — refusing to stamp coverage'] }, gate: 'changes-requested', terminal, head: finalHead, changed: false }
     }
@@ -1955,7 +2487,7 @@ async function reviewCodePhase(workItem, opts) {
     try {
       prov = await courier.runCourierJson(
         'stamp review coverage',
-        `python3 plugins/superheroes/lib/prov_entry.py --step review --work-item ${shq(workItem)}${targetArgs}`,
+        `python3 ${libPath('prov_entry.py')} --step review --work-item ${shq(workItem)}${targetArgs}`,
         { require: ['ok'], retryRealFailure: false },
       )
     } catch (_) {
@@ -1971,7 +2503,7 @@ async function reviewCodePhase(workItem, opts) {
     gate: 'passed',
     terminal,
     head: finalHead,
-    changed: !!(initialHead && finalHead && initialHead !== finalHead),
+    changed: !!(initialHead && finalHead && !sameHead(initialHead, finalHead)),
     reviewCoverageHead: terminal === 'clean' ? (finalHead || undefined) : undefined,
     verifyPassedHead: finalHead || undefined,
   }
@@ -1986,10 +2518,37 @@ async function resolveHead(worktree, ref) {
     : `git rev-parse ${shq(ref || 'HEAD')}`
   try {
     const out = await execText(cmd, 'resolve head')
-    return out || null
+    // Boundary normalization (finding #15, run a743e55a): a terse courier ABBREVIATED
+    // rev-parse stdout to 7 chars in relay; the raw string then failed equality against
+    // a full-sha read of the SAME commit and the outside-worktree guard false-parked a
+    // clean run. Prefer the sha-shaped hex run (extracts the sha from fenced/prose
+    // answers too); fall back to the first token of the first non-empty line so
+    // non-hex refs still resolve. sameHead() below absorbs full-vs-abbreviated reads.
+    const raw = String(out || '').trim()
+    // Line-anchored: only a line that IS a hex token counts (review: first-hex-anywhere
+    // could manufacture a head from an error message's incidental hex — fail-open).
+    for (const l of raw.split('\n')) {
+      const t = l.trim().replace(/^`+|`+$/g, '')
+      if (/^[0-9a-f]{7,40}$/.test(t)) return t
+    }
+    const line = (raw.split('\n').find((l) => l.trim()) || '').trim()
+    return line ? line.split(/\s+/)[0] : null
   } catch (_) {
     return null
   }
+}
+
+// sameHead: prefix-tolerant head equality — two honest reads of one commit may differ
+// in LENGTH (full vs abbreviated relay, finding #15); a real move differs in CONTENT.
+// Null/empty never equals anything (fail-closed at the call sites).
+function sameHead(a, b) {
+  if (!a || !b) return false
+  const x = String(a), y = String(b)
+  if (x === y) return true
+  // Prefix tolerance is for sha ABBREVIATION only: require >=7 overlap (git's abbrev
+  // floor) so stray short fallback tokens never spuriously prefix-match (review nit).
+  if (Math.min(x.length, y.length) < 7) return false
+  return x.startsWith(y) || y.startsWith(x)
 }
 
 // the native "workhorse" build phase (#87) — implement the approved tasks doc task-by-task with a
@@ -2014,7 +2573,7 @@ async function resolveBuildTarget(workItem) {
     'setup = None',
     'for _ in range(2):',
     '    try:',
-    '        r = subprocess.run(["python3", "plugins/superheroes/lib/build_entry.py", "--work-item", wi], capture_output=True, text=True, timeout=120)',
+    `        r = subprocess.run(["python3", ${pyLibScript('build_entry.py')}, "--work-item", wi], capture_output=True, text=True, timeout=120)`,
     '    except subprocess.TimeoutExpired:',
     '        continue',
     '    if r.returncode != 0: continue',
@@ -2037,7 +2596,7 @@ async function resolveBuildTarget(workItem) {
     '    print(json.dumps({"ok": False, "error": "missing target head"})); raise SystemExit(0)',
     'cfg = None',
     'try:',
-    '    r = subprocess.run(["python3", "plugins/superheroes/lib/review_code_config.py", "--root", wt], capture_output=True, text=True, timeout=60, cwd=wt)',
+    `    r = subprocess.run(["python3", ${pyLibScript('review_code_config.py')}, "--root", wt], capture_output=True, text=True, timeout=60, cwd=wt)`,
     '    if r.returncode == 0:',
     '        cfg = json.loads((r.stdout or "").strip() or "null")',
     'except Exception:',
@@ -2055,7 +2614,7 @@ async function resolveBuildTarget(workItem) {
     // (the reviewer denial flag still degrades the dimension even with no journal line — fail-open).
     'events_path = None',
     'try:',
-    '    sys.path.insert(0, "plugins/superheroes/lib")',
+    `    sys.path.insert(0, ${pyLibDir()})`,
     '    import control_plane',
     '    events_path = control_plane.paths(os.getcwd(), wi)["events"]',
     'except Exception:',
@@ -2093,7 +2652,7 @@ module.exports.buildPhase = buildPhase
 // persistPhase tail; there is no separate checkpoint_entry write leaf anymore.
 async function loadPr(workItem) {
   const out = await execJson(
-    `python3 plugins/superheroes/lib/checkpoint_entry.py --work-item ${shq(workItem)} --read-pr`, 'read pr')
+    `python3 ${libPath('checkpoint_entry.py')} --work-item ${shq(workItem)} --read-pr`, 'read pr')
   return (out && out.pr !== undefined) ? out.pr : null
 }
 
@@ -2105,7 +2664,7 @@ async function draftPRPhase(workItem) {
   try {
     out = await courier.runCourierJson(
       'open draft PR',
-      `python3 plugins/superheroes/lib/pr_entry.py --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
+      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
@@ -2122,17 +2681,136 @@ async function draftPRPhase(workItem) {
   return { phaseResult: { confidence: 'high', assumptions: [] }, sideEffect: { pr: out.pr } }
 }
 
-// mark-ready: one folded courier leaf returning {ok, read_back, reason?}.
-async function markReadyPhase(workItem) {
-  let out = null
+// fill-dod: the "build/ship legs fill it" leg from issue #228's own design — the draft-PR
+// step seeds the disposition table skeleton; a MODEL leaf PROPOSES dispositions from the
+// run's real evidence, and the deterministic splice CLI (dod_fill_cli.py) holds the pen
+// (PR #251 review: a model rewriting the full body at a certification boundary risked
+// truncating the stubbed-seams disclosure, clobbering concurrent edits, and fabricating
+// evidence — the CLI touches only matching table cells, mechanically verifies deferred
+// issues resolve and path-shaped evidence exists, and read-back-confirms the write).
+// Honesty contract unchanged: a row the model cannot evidence is omitted, stays blank,
+// and the (unchanged, fail-closed) gate parks with the same honest reason.
+async function proposeDodDispositions(workItem, prNumber) {
+  const absRoot = checkoutRoot()
   try {
-    out = await courier.runCourierJson(
-      'mark PR ready',
-      `python3 plugins/superheroes/lib/pr_entry.py --step mark-ready --work-item ${shq(workItem)}`,
-      { require: ['ok', 'read_back'], retryRealFailure: false },
-    )
+    const raw = await agent(
+      `You are the DoD disposition-proposal leg for work-item ${workItem} (issue #228). ` +
+      `Draft PR #${prNumber} carries a "DoD dispositions" table seeded from the spec's ` +
+      `Definition-of-done section. Propose dispositions from REAL run evidence and return ` +
+      `them as JSON — you do NOT edit the PR yourself; a deterministic splice tool applies ` +
+      `your rows and mechanically verifies them.\n` +
+      `Work from the repo root at ${absRoot} (run every command from there).\n` +
+      `Steps:\n` +
+      `1. Spec: run python3 ${libPath('definition_doc.py')} path --work-item ${shq(workItem)} ` +
+      `--doc spec --root ${shq(absRoot)} and read the Definition-of-done bullets from that file.\n` +
+      `2. Current table: gh pr view ${shq(String(prNumber))} --json body.\n` +
+      `3. Evidence, per bullet — use only what actually exists: the PR diff ` +
+      `(gh pr diff ${shq(String(prNumber))}), the head branch (gh pr view ${shq(String(prNumber))} --json headRefName), ` +
+      `the build/final-review records (python3 ${libPath('build_state_cli.py')} gather ` +
+      `--work-item ${shq(workItem)} --branch <that headRefName>), the test-pilot status record ` +
+      `(test-pilot-status.json under the control-plane store for this work-item), and CI check state.\n` +
+      `4. For each bullet you can HONESTLY disposition: "done" needs a concrete evidence ` +
+      `pointer (command output, record path, diff line); "deferred" needs an ALREADY-FILED ` +
+      `issue number (#NNN) plus a one-line reason. NEVER invent evidence or issue numbers — ` +
+      `deferred issues are mechanically resolved against GitHub and path-shaped evidence is ` +
+      `existence-checked, so a fabricated row is rejected and the gate parks.\n` +
+      `COMPLETENESS IS THE JOB: propose a row for EVERY Definition-of-done bullet. The table ` +
+      `has one row per bullet and the gate parks on ANY undisposed bullet, so one bullet you ` +
+      `skip fails the entire run — do NOT stop after the first bullet you evidence.\n` +
+      `Structural bullets — a line-count claim ("exactly one additional line", "N lines added"), ` +
+      `a scope claim ("no file other than X is modified", "only these paths change") — are ` +
+      `ALWAYS evidenceable from the diff: gh pr diff ${shq(String(prNumber))} shows every hunk, ` +
+      `and gh pr diff ${shq(String(prNumber))} --name-only lists every changed path. Read the ` +
+      `diff and cite the exact hunk / path list; NEVER drop a structural bullet as "no evidence" ` +
+      `without having actually run the diff. Omission is a LAST RESORT after you have genuinely ` +
+      `checked the diff and records and found no honest evidence — it parks the run, so treat a ` +
+      `dropped bullet as a failure, not a shortcut.\n` +
+      `Return ONLY JSON {"ok": true, "rows": [{"bullet": "<bullet text exactly as it appears ` +
+      `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
+      `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
+      `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+    // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
+    // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
+    // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
+    const obj = _coerceObj(raw)
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+    const rows = _coerceObj(obj.rows)
+    return {
+      ok: obj.ok === true || obj.ok === 'true',
+      rows: Array.isArray(rows) ? rows : [],
+    }
   } catch (_e) {
-    out = null   // courier transport failure — park, never crash the run
+    return null   // proposal failure -> the gate re-run below is skipped; the original park stands
+  }
+}
+
+// mark-ready: gate courier leaf; on a DoD-table park (gate === 'dod', pr_entry's machine
+// field — never the reason string, CONVENTIONS §11): fence the lease (UFR-4 — the splice
+// is a PR-mutating boundary), ONE proposal leaf, ONE deterministic splice, ONE gate
+// re-decide. DoD-less runs (quick route, dispositions already filled) pay no extra leaf.
+async function markReadyPhase(workItem, generation) {
+  const gate = async () => {
+    try {
+      return await courier.runCourierJson(
+        'mark PR ready',
+        `python3 ${libPath('pr_entry.py')} --step mark-ready --work-item ${shq(workItem)}`,
+        { require: ['ok', 'read_back'], retryRealFailure: false },
+      )
+    } catch (_e) {
+      return null   // courier transport failure — park, never crash the run
+    }
+  }
+  let out = await gate()
+  if (out && !out.ok && out.gate === 'dod' && out.pr != null) {
+    // Settle CI BEFORE the proposal leaf (finding #12, run fdfad511: the fixture's
+    // "green CI" DoD bullet is undissposable while the draft PR's checks are still
+    // running — a fast spine reaches this gate ~2 min after opening the PR, the leaf
+    // honestly omits the bullet, and the run parks on a race, not a defect). Pending
+    // is WAIT, not FIX (#11); the settle CLI returns immediately when nothing is
+    // pending, so the common case costs one instant leaf. Best-effort: a settle
+    // transport failure or exhausted budget falls through to the proposal — the leaf
+    // then evidences what it can and the gate stays honest.
+    // The settle CLI reads the PR head's checks via ship_phase --emit-checks, whose
+    // stale guard compares the local head at cwd to the remote PR head — from the
+    // checkout root (base branch) that ALWAYS reads stale and short-circuits without
+    // waiting (PR #261 review finding). Resolve the build worktree first, exactly
+    // like the ship loop; if it cannot be resolved, skip the wait (best-effort).
+    try {
+      const target = await resolveBuildTarget(workItem).catch(() => null)
+      const wt = target && target.worktree
+      if (wt) {
+        await courier.runCourierJson(
+          'wait for CI to settle',
+          `python3 ${libPath('ci_settle_cli.py')} --work-item ${shq(workItem)} --worktree ${shq(wt)} --timeout-sec 540`,
+          { require: ['settled'], retryRealFailure: false },
+        )
+      }
+    } catch (_e) { /* best-effort wait — the propose leaf re-reads check state itself */ }
+    const proposed = await proposeDodDispositions(workItem, out.pr)
+    if (proposed && proposed.ok && Array.isArray(proposed.rows) && proposed.rows.length) {
+      // UFR-4: the splice mutates the PR — fence the lease generation first, park on loss.
+      const fenced = generation == null ? true : await shipFenceOrPark(workItem, generation, checkoutRoot())
+      if (!fenced) {
+        return { phaseResult: { confidence: 'low', assumptions: ['lease lost before the DoD disposition splice — park (UFR-4)'] }, sideEffect: null }
+      }
+      let spliced = null
+      try {
+        const rowsPath = joinPath(io().tmpdir(), `showrunner-${workItem}-dod-rows.json`)
+        await io().writeFile(rowsPath, JSON.stringify(proposed.rows))
+        spliced = await courier.runCourierJson(
+          'splice DoD dispositions',
+          `python3 ${libPath('dod_fill_cli.py')} --pr ${shq(String(out.pr))} --rows ${shq(rowsPath)} --root .`,
+          { require: ['ok'], retryRealFailure: false },
+        )
+      } catch (_e) {
+        spliced = null   // splice transport failure -> original honest park stands
+      }
+      if (spliced && spliced.ok) {
+        const retry = await gate()
+        out = retry || out   // a transport failure on the re-decide keeps the specific DoD park reason
+      }
+    }
   }
   if (!out || !out.ok || !out.read_back) {
     return { phaseResult: { confidence: 'low', assumptions: [(out && out.reason) || 'mark-ready gated'] }, sideEffect: null }
@@ -2174,7 +2852,7 @@ async function checkShipReadiness(workItem, worktree, baseName, generation, chec
   const rootArg = r ? ` --root ${shq(r)}` : ''
   return courier.runCourierJson(
     'check ship-readiness',
-    `python3 plugins/superheroes/lib/ship_phase.py --step ship-readiness --work-item ${shq(workItem)}` +
+    `python3 ${libPath('ship_phase.py')} --step ship-readiness --work-item ${shq(workItem)}` +
     `${baseArg}${wtArg}${genArg}${checksArg}${rootArg}`,
     { require: checksOnly ? ['checks'] : ['ok', 'reconcile', 'freshness', 'checks'] },
   )
@@ -2183,7 +2861,7 @@ async function checkShipReadiness(workItem, worktree, baseName, generation, chec
 async function prepareCiFix(workItem, failing) {
   return courier.runCourierJson(
     'prepare CI fix',
-    `python3 plugins/superheroes/lib/ship_phase.py --step prepare-ci-fix --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(failing || []))}`,
+    `python3 ${libPath('ship_phase.py')} --step prepare-ci-fix --work-item ${shq(workItem)} --failing ${shq(JSON.stringify(failing || []))}`,
     { require: ['action', 'read_back'], retryRealFailure: false },
   )
 }
@@ -2192,16 +2870,21 @@ async function pushCiFixRecheck(workItem, worktree) {
   const wtArg = worktree ? ` --worktree ${shq(worktree)}` : ''
   return courier.runCourierJson(
     'push CI fix + recheck',
-    `python3 plugins/superheroes/lib/ship_phase.py --step push-ci-fix-recheck --work-item ${shq(workItem)}${wtArg}`,
+    `python3 ${libPath('ship_phase.py')} --step push-ci-fix-recheck --work-item ${shq(workItem)}${wtArg}`,
     { require: ['read_back', 'checks'], retryRealFailure: false },
   )
 }
 
 async function postReadout(workItem, pr, args) {
   const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
+  // #130: the ship hand-back is the run's terminal leaf. Fold the terminal marker (completed vs
+  // parked — the durable signal token_trend.py buckets on) and ship's cost telemetry into it, so
+  // ship rides no new courier leaf (#118). Both are best-effort inside readout_post.py.
+  const termArg = args.terminal ? ` --terminal ${shq(args.terminal)}` : ''
+  const costArg = args.costBody ? ` --cost-payload ${shq(JSON.stringify(args.costBody))}` : ''
   const cmd = args.ctx
-    ? `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)}${prNum} --ctx ${shq(JSON.stringify(args.ctx))}`
-    : `python3 plugins/superheroes/lib/readout_post.py --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}`
+    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}`
   try {
     return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
   } catch (_e) {
@@ -2262,6 +2945,15 @@ async function shipPhase(workItem, pr, generation) {
   const integrated = !!ready.integrated
   let ciChecks = ready.checks
   const MAX_CI_PASSES = 6
+  // Consecutive settle-leaf budget: each leaf waits ≤540s (the bash_timeout hook floors the
+  // Bash tool at 600000ms, so ONE leaf can never outwait a long CI run), and real target
+  // projects (weekly-eats, loupe) have CI well past 10 minutes. 4 rounds ≈ 36 min of total
+  // patience (≥2x a 15-min run) — per consecutive streak, and only fully grantable while
+  // MAX_CI_PASSES budget remains (fix rounds spend from the same pass budget). The counter
+  // resets whenever checks actually settle or a fix is pushed (a new CI run deserves fresh
+  // patience); MAX_CI_PASSES still bounds the loop.
+  const MAX_SETTLE_ROUNDS = 4
+  let settleRounds = 0
   for (let pass = 0; pass < MAX_CI_PASSES; pass += 1) {
     const parsed = parseCiChecks(ciChecks)
     if (parsed.error) {
@@ -2283,6 +2975,40 @@ async function shipPhase(workItem, pr, generation) {
     if (ciRes.status === 'none') {
       return shipHandback(workItem, pr, { ready: true, ci: 'none', integrated, reason: 'merge-ready: no required checks ran on the ready PR — confirm checks before merging' })
     }
+    if (ciRes.status === 'pending') {
+      // The live-run settle-poll deferred from #120 (0.10.0 qualification finding: pending
+      // classified as red dispatched a CI fixer at checks that were merely running). CI
+      // re-runs are near-deterministic on spec-driven runs because the DoD fill leg edits
+      // the PR body and ci.yml's pull_request types include `edited` — pending is WAIT,
+      // not FIX. One bounded courier leaf does the whole wait (deterministic, journaled);
+      // its budget (540s) sits under the Bash tool ceiling the bash_timeout hook floors
+      // to 600000ms, so the CLI's own honest budget-exhausted return is always reachable.
+      settleRounds += 1
+      let settled = null
+      try {
+        settled = await courier.runCourierJson(
+          'wait for CI to settle',
+          `python3 ${libPath('ci_settle_cli.py')} --work-item ${shq(workItem)}${worktree ? ` --worktree ${shq(worktree)}` : ''} --timeout-sec 540`,
+          { require: ['settled'], retryRealFailure: false },
+        )
+      } catch (_e) {
+        return park(workItem, pr, 'CI status could not be read while waiting for checks to settle')
+      }
+      if (!settled || settled.settled !== true) {
+        if (settled && settled.checks && !Array.isArray(settled.checks) && settled.checks !== null) { ciChecks = settled.checks; continue }
+        if (settleRounds < MAX_SETTLE_ROUNDS && settled && Array.isArray(settled.checks)) {
+          ciChecks = settled.checks   // long CI run — another bounded round, budget above
+          continue
+        }
+        const stillPending = (settled && Array.isArray(settled.checks))
+          ? ciStatusTwin.classify(settled.checks).pending
+          : (ciRes.pending || [])
+        return park(workItem, pr, `CI checks still pending after the settle wait (${stillPending.join(', ')}) — confirm checks and re-run`)
+      }
+      settleRounds = 0
+      ciChecks = settled.checks
+      continue
+    }
     let decided = null
     try {
       decided = await prepareCiFix(workItem, ciRes.failing)
@@ -2292,7 +3018,7 @@ async function shipPhase(workItem, pr, generation) {
     if (!decided || decided.action === 'revert_and_gate') {
       if (!(await shipFenceOrPark(workItem, generation, storeRoot))) { return park(workItem, pr, 'lease lost before return-to-draft — park (UFR-4)') }
       const rd = await execJson(
-        `python3 plugins/superheroes/lib/ship_phase.py --step revert-draft --work-item ${shq(workItem)}`, 'revert draft')
+        `python3 ${libPath('ship_phase.py')} --step revert-draft --work-item ${shq(workItem)}`, 'revert draft')
       const reverted = !!(rd && rd.ok)
       return shipHandback(workItem, pr, { ready: false, ci: 'red', integrated, reverted,
         reason: reverted
@@ -2317,6 +3043,7 @@ async function shipPhase(workItem, pr, generation) {
       if (!pushed || !pushed.pushed || pushed.read_back === false) {
         return park(workItem, pr, `could not push the CI fix (${(pushed && pushed.reason) || 'unknown'}) — park, no false ready`)
       }
+      settleRounds = 0   // fresh CI run after the fix push — fresh settle patience
       ciChecks = pushed.checks
       continue
     }
@@ -2326,7 +3053,8 @@ async function shipPhase(workItem, pr, generation) {
 }
 
 async function park(workItem, pr, reason, mergeReady) {
-  const rPost = await postReadout(workItem, pr, { reason })
+  const rPost = await postReadout(workItem, pr,
+    { reason, terminal: mergeReady ? 'completed' : 'parked', costBody: phaseCostPayload('ship') })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered
     ? reason
@@ -2347,7 +3075,8 @@ async function shipHandback(workItem, pr, info) {
   if (info.integrated) {
     ctx.integration_note = 'the final commit carries base integration done after the code review (the merged-in base was check-vetted, not re-reviewed)'
   }
-  const rPost = await postReadout(workItem, pr, { ctx })
+  const rPost = await postReadout(workItem, pr,
+    { ctx, terminal: info.ready ? 'completed' : 'parked', costBody: phaseCostPayload('ship') })
   const delivered = rPost && (rPost.posted || rPost.recorded)
   const reasonOut = delivered ? info.reason
     : `${info.reason} [warning: hand-back could not be delivered (${(rPost && rPost.error) || 'unknown'})]`
@@ -2363,6 +3092,8 @@ async function defaultPhaseLeaf(_phase, _workItem) {
 }
 
 module.exports.showrunner = showrunner
+module.exports.resolveIntake = resolveIntake
+module.exports.recordSkippedPhases = recordSkippedPhases
 module.exports.cmdRunner = cmdRunner
 module.exports.reconcile = reconcile
 module.exports.checkoutRoot = checkoutRoot
@@ -2370,7 +3101,9 @@ module.exports.runPhases = runPhases
 module.exports.PHASES = PHASES
 module.exports.exec = exec
 module.exports.persistPhase = persistPhase
+module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
+module.exports.startupStateScript = startupStateScript
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained

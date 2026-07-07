@@ -12,6 +12,7 @@ require('./_smoke_checkout_root.js')
 const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
+const { saveProgressOk } = require('./_marked_stdout.js')
 const { io } = require('../io_seam.js')
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
@@ -32,6 +33,13 @@ const BIG_MINOR_FINDINGS = Array.from({ length: 24 }, (_, i) => ({
 // (journal_entry.py DurableWriteError prints {"ok":false} and exits 0). persistPhase must fail-CLOSE on it.
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
 
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
+
 // setGateFails / journalWriteFails: shape the save phase progress courier response.
 function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateFails, setGateStale, journalWriteFails }) {
   let panelRuns = 0
@@ -42,11 +50,9 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     if (label === 'save phase progress') {
       savePrompts.push(String(prompt))
       if (setGateFails || setGateStale || journalWriteFails) {
-        // setGateStale: the fenced set-gate refuses a stale snapshot (exits non-zero inside the
-        // batched sideEffectCmd) — the courier reports ok:false and persistPhase fails closed.
-        return jsonOut({ ok: false, reason: setGateFails ? 'set-gate failed' : (setGateStale ? 'stale' : 'durable write failed') })
+        return saveProgressOk({ ok: false, reason: setGateFails ? 'set-gate failed' : (setGateStale ? 'stale' : 'durable write failed') })
       }
-      return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+      return saveProgressOk()
     }
     if (label === 'save round state') return jsonOut({ ok: true })
     if (opts && opts.courier) {
@@ -61,7 +67,7 @@ function makeAgent({ gate, reviewerFindings = [], reviserFails = false, setGateF
     // fix downgrades it to confidence:low -> cannot-certify).
     if (label.endsWith('-reviewer')) {
       panelRuns += 1
-      return { findings: reviewerFindings, confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: reviewerFindings, confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     if (label.startsWith('synthesis')) return { verdicts: [] }         // keep all merged findings
     if (label === 'revise-doc') return reviserFails ? null : { fixes: [], deferred: [] }
@@ -135,16 +141,16 @@ async function main() {
   // matching all-{"ok":true} batch must return {ok:true}. Proves the parse fold (vs the pre-fix every(r.ok)).
   global.agent = async (_p, opts) => {
     if (opts && opts.label === 'save phase progress') {
-      return jsonOut({ ok: false, reason: 'durable write failed' })
+      return saveProgressOk({ ok: false, reason: 'durable write failed' })
     }
-    return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    return saveProgressOk()
   }
   let pp = await sr.persistPhase('wi-e2', { sideEffectCmd: 'echo set-gate', journalPayload: {}, step: 1, phase: 'p' })
   assert.deepStrictEqual(pp, { ok: false, error: 'durable write failed' },
     'persistPhase fails-close when save phase progress returns ok:false (C1)')
   global.agent = async (_p, opts) => {
     if (opts && opts.label === 'save phase progress') {
-      return jsonOut({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+      return saveProgressOk()
     }
     return jsonOut({ ok: true })
   }

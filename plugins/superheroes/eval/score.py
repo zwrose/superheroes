@@ -33,7 +33,8 @@ line's stripped text to its new-file line number, and look the lineHint up there
 - **Function-scoped taxonomies** (``cognitive-complexity``, ``mock-echo``,
   ``AcyclicDependencies``, ``premature-abstraction``, ``BFLA``, plus the
   Failure-Mode whole-flow classes ``concurrency/race``, ``partial-failure``,
-  ``dependency-failure``, ``resource-exhaustion``, ``migration-rollback``) —
+  ``dependency-failure``, ``resource-exhaustion``, ``migration-rollback``,
+  ``fail-direction``, ``transport-contract``) —
   reviewers legitimately cite the declaration, an inner branch, or an assertion
   anywhere in the symbol's body, and exact function-span extraction from a diff
   is fuzzy. So we use the README's documented generous rule: a finding matches
@@ -63,12 +64,15 @@ FUNCTION_SCOPED = {
     "premature-abstraction",
     "BFLA",
     # Failure-Mode whole-flow classes (premortem-reviewer): a correct finding
-    # legitimately cites any line of the multi-step flow.
+    # legitimately cites any line of the multi-step flow (or, for the last two,
+    # any line of the gate/transport it interrogates).
     "concurrency/race",
     "partial-failure",
     "dependency-failure",
     "resource-exhaustion",
     "migration-rollback",
+    "fail-direction",
+    "transport-contract",
 }
 
 LINE_SLACK = 2       # exact ±2 window for line-scoped taxonomies

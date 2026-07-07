@@ -36,6 +36,7 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { markedStdout } = require('./_marked_stdout.js')
 
 function sha256(text) { return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex') }
 
@@ -97,14 +98,41 @@ function runHelperResponse(cmdline) {
     }
   }
   if (script.endsWith('review_setup_gather.py')) {
-    // fold 2 (#141): the ONE pre-round gather leaf (mkdir + load-summary + deferred seed + coverage).
+    // #211: the ONE pre-round gather leaf rides DECISIONS (resume + round-1 plan + coverage + deferred).
     // A misbehaving courier fences this read helper too (mode 5, below) — the bundle must still parse it.
+    const dims = JSON.parse(args[args.indexOf('--dimensions') + 1] || '[]')
+    const schedule = {}
+    for (const d of dims) schedule[d] = { action: 'run', tier: 'reviewer-deep' }
     return JSON.stringify({
       ok: true,
-      memory: { ok: true, state: 'missing', records: [], contentHash: sha256(''), extras: null },
+      resume: { ok: true, state: 'missing', round: 1, contentHash: sha256(''), extras: null,
+        confirmationPending: false, markedRound: null, roundCount: 0 },
+      plan: { ok: true, round: 1, roundKind: 'baseline', enterConfirmation: false,
+        escalationPolicy: 'deep-only', dimensions: schedule, carried: {}, latestCoverageDecisionIds: [] },
       deferredSet: {},
       coverage: { ok: true, decisions: [], contentHash: sha256('') },
     })
+  }
+  if (script.endsWith('review_loop_plan.py')) {
+    // #211 deciders — small meaningful JSON. The canned run is one clean round per phase.
+    const dims = JSON.parse((args.indexOf('--dimensions') >= 0 && args[args.indexOf('--dimensions') + 1]) ||
+      (args.indexOf('--roster') >= 0 && args[args.indexOf('--roster') + 1]) || '[]')
+    const round = Number(args[args.indexOf('--round') + 1]) || 1
+    if (args[0] === 'plan-round') {
+      const schedule = {}
+      for (const d of dims) schedule[d] = { action: 'run', tier: 'reviewer-deep' }
+      return JSON.stringify({ ok: true, round, roundKind: 'intermediate', enterConfirmation: false,
+        escalationPolicy: 'deep-only', dimensions: schedule, carried: {}, latestCoverageDecisionIds: [],
+        coverage: { ok: true, decisions: [], contentHash: sha256('') } })
+    }
+    if (args[0] === 'tally-round') {
+      const gate = args[args.indexOf('--gate') + 1] || 'clean'
+      const terminal = gate === 'clean' ? 'clean' : (gate === 'blocking' ? 'continue' : 'cannot-certify')
+      const out = { ok: true, schemaVersion: 1, terminal, reason: 'clean', gate, confidence: 'high',
+        round, missing: [], presentBlocking: 0, presentDeferred: 0, breaker: { halt: false } }
+      if (terminal === 'clean') out.certification = { fullPanels: 0, lastPanelSurfacedResolved: false }
+      return JSON.stringify(out)
+    }
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
@@ -135,24 +163,26 @@ function shellResponse(cmd) {
   // is composed Python-side via compose-terminal, and the content-mangle regression moved to that
   // self-verified inline path (see the compose-terminal handler in runHelperResponse). Any remaining
   // fenced write decodes honestly, then answers the helper.
-  const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
+  // argv shape (finding #13): python3 -c '<writer>' '<path>' '<b64>' >/dev/null && helper
+  const cw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?$/)
   if (cw) {
-    const helper = cw[1]
-    const staged = JSON.parse(cw[2])
-    files[staged] = Buffer.from(cw[3], 'base64').toString('utf8')
+    const helper = cw[3]
+    const staged = cw[1]
+    files[staged] = Buffer.from(cw[2], 'base64').toString('utf8')
     const out = runHelperResponse(helper)
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
   // The OPAQUE write transport (base64 python heredoc) — for the remaining standalone io.writeFile
   // leaves (test-pilot artifacts, last-extras). The write's answer is a conversational ack (mode 2).
-  const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
   if (bw) {
-    const target = JSON.parse(bw[1])
+    const target = bw[1]
     files[target] = Buffer.from(bw[2], 'base64').toString('utf8')
     counters.chattyAcks += 1
     return CHATTY_ACK   // (2) the write's answer is conversational, never the command's stdout
   }
   if (cmd.startsWith('mkdir -p')) return ''
+  if (/^python3 -c '[^']*os\.makedirs[^']*' '[^']*'$/.test(cmd)) return ''   // argv-shape mkdirp
   const r = cmd.match(/^cat '([^']+)'/)
   if (r) {
     if (files[r[1]] == null) { counters.proseReads += 1; return PROSE }   // (1)
@@ -166,13 +196,15 @@ function shellResponse(cmd) {
     // write, round-memory load-summary). io.runHelper must locate the marker despite the trailing
     // fence; on the pre-fix bundle the end-anchored match misses -> status 1 -> the helper reads as
     // failed -> cannot-certify at review-plan.
-    if (/review_setup_gather\.py|review_memory\.py' 'load-summary'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
+    if (/review_setup_gather\.py|review_loop_plan\.py|review_memory\.py' 'load-summary'|coverage_decisions\.py|review_telemetry\.py/.test(cmd)) {
       counters.fencedHelpers += 1
       return '```\n' + body + '\n```'
     }
     return body
   }
-  if (cmd.includes('recover_entry.py')) return JSON.stringify({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
+  if (cmd.includes('recover_entry.py')) {
+    return markedStdout({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
+  }
   if (cmd.includes('front_half_usable.py')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
     usableCalls[doc] = (usableCalls[doc] || 0) + 1
@@ -182,7 +214,9 @@ function shellResponse(cmd) {
     return cmd.includes('--json') ? JSON.stringify({ review: 'pending' }) : 'passed'
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
-  if (cmd.includes('phase_progress_entry.py')) return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  if (cmd.includes('phase_progress_entry.py')) {
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  }
   if (cmd.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-x', path: '/tmp/wt', outcome: 'reused' })
   if (cmd.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 })
   if (cmd.includes('fence_cli.py')) return JSON.stringify({ ok: true })
@@ -221,7 +255,7 @@ const COURIER_JSON = {
     if (/set-gate/.test(prompt) && !/--expected-hash 'current'/.test(prompt)) {
       throw new Error('set-gate rode a runtime-computed hash — courier-read text entered a fence')
     }
-    return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
   },
   'save round state': () => JSON.stringify({ ok: true }),
   'gather build state': () => JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' }),
@@ -312,8 +346,15 @@ async function main() {
   assert.strictEqual(outcome.outcome, 'ready',
     `the run must survive the misbehaving courier and reach 'ready' (got ${JSON.stringify(outcome)})`)
 
-  // every misbehavior mode actually fired
-  assert.ok(counters.proseReads >= 1, 'the prose-for-missing-file read mode must be exercised')
+  // every misbehavior mode actually fired. NOTE (#211): the review loop's last prose-vulnerable JS
+  // read — the deferred-set cat — moved Python-side (the tally decider reads it via --deferred-path,
+  // fail-soft to {} on a missing/odd file), so the whole pipeline no longer does a missing-file JS
+  // cat and proseReads is 0. The prose shim stays as a defensive net (a future JS read that cats a
+  // missing file would return prose and the "reaches ready" + terminal-record checks would catch any
+  // poisoning). The decider answers are instead stress-tested by the FENCED-answer mode below (now
+  // covering review_loop_plan.py) and by showrunner_reviewloop_adversarial_smoke.js (fail-closed).
+  assert.strictEqual(counters.proseReads, 0,
+    '#211: the review loop no longer does a prose-vulnerable JS missing-file read (deferred read is Python-side)')
   assert.ok(counters.chattyAcks >= 1, 'the chatty-write-ack mode must be exercised')
   assert.strictEqual(counters.sabotagedWrites, 1, 'the content-mangled compose-terminal verdict must fire exactly once')
   assert.ok(counters.mangledAnswers >= 2, 'the mangled persist answer must be retried (>=2 helper calls)')

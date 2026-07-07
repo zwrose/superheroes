@@ -244,10 +244,10 @@ a work-item), NOT code and NOT a diff.
 
 ## Your assignment
 Review the plan at $SESSION_DIR/plan.md for your dimension. Its parent
-requirements `spec` is at $SESSION_DIR/spec.md (if present) — the plan must
-satisfy it; cross-check against it. Read the base rubric (absolute path below)
-for severity calibration, verification rules, and the findings output format.
-Read core calibration + review-crew layer and CLAUDE.md for threat model, scope, focus hints, and conventions.
+requirements `spec` is at $SESSION_DIR/spec.md (if present). Read those session
+artifacts in bounded chunks (<=800 lines): use Read offset/limit when available,
+or an equivalent bounded shell range; never one whole-file read. The plan must satisfy the spec. Read the base rubric (absolute path below)
+for severity calibration, verification rules, and the findings output format; read core + layer and CLAUDE.md for calibration.
 
 ## Context files
 - Plan (the doc under review): $SESSION_DIR/plan.md

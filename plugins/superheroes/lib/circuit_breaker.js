@@ -1,5 +1,5 @@
 // plugins/superheroes/lib/circuit_breaker.js
-const { classKey } = require('./review_memory.js')
+const { clampTitle, canonicalClassKey, classKeyAliases } = require('./review_memory.js')
 const BLOCKING = new Set(['Critical', 'Important'])
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
@@ -11,16 +11,39 @@ function normalizeTitle(title) {
   t = t.replace(_WS, ' ')
   return t.trim()
 }
+function findingLabel(finding) {
+  if (!finding || typeof finding !== 'object') return ''
+  return finding.title || finding.summary || ''
+}
 function findingIdentity(finding) {
-  return `${(finding && finding.file) || ''}::${normalizeTitle((finding && finding.title) || '')}`
+  return `${(finding && finding.file) || ''}::${normalizeTitle(clampTitle(findingLabel(finding)))}`
 }
 function recurrenceKey(finding) {
+  if (finding && (finding.dimension || finding.taxonomy)) return canonicalClassKey(finding)
   if (finding && finding.classKey) return finding.classKey
-  const key = classKey(finding)
-  if (finding && (finding.dimension || finding.taxonomy)) return key
   return findingIdentity(finding)
 }
+function recurrenceAliases(finding) {
+  const aliases = new Set([recurrenceKey(finding)])
+  if (finding && (finding.dimension || finding.taxonomy)) {
+    for (const alias of classKeyAliases(finding)) aliases.add(alias)
+  }
+  return aliases
+}
+function intersects(a, b) {
+  for (const x of a) if (b.has(x)) return true
+  return false
+}
 function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _roundRecordedFix(roundRec) {
+  // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
+  // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
+  // usually carries no fix — keeps the max-iterations detail honest instead of always claiming one.
+  const fix = roundRec && roundRec.fix
+  if (!fix || typeof fix !== 'object') return false
+  const fixes = fix.fixes
+  return Array.isArray(fixes) ? fixes.length > 0 : !!fixes
+}
 function _generalizeKeys(roundRec) {
   return new Set((roundRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
 }
@@ -28,7 +51,7 @@ function _blockingCountExcludingGeneralize(roundRec) {
   const generalize = _generalizeKeys(roundRec)
   const blocking = _blocking(roundRec)
   if (!generalize.size) return blocking.length
-  return blocking.filter((f) => !generalize.has(recurrenceKey(f))).length
+  return blocking.filter((f) => !intersects(recurrenceAliases(f), generalize)).length
 }
 function _roundReviewed(roundRec) {
   const dims = roundRec && roundRec.dimensions
@@ -45,8 +68,22 @@ function checkCircuitBreaker(rounds, maxRounds) {
   if (n === 0) return { halt: false, reason: null, detail: 'no rounds yet' }
   const latest = _blocking(rounds[n - 1])
   if (n >= maxRounds && latest.length > 0) {
+    // Honest halt detail (#212 class): name the ACTUAL round reached (n) alongside the cap — a resume
+    // can run past the cap, so n may exceed maxRounds — and only claim "fixes committed" when the final
+    // round actually recorded a fix. The cap-halt fires right after a review and before that round's
+    // fixer runs, so the latest round usually carries no fix; saying otherwise misreads a park that
+    // needs a fix-then-relaunch as one that only needs a re-review.
+    const tail = _roundRecordedFix(rounds[n - 1])
+      ? "the final round's fixes are committed but not yet re-reviewed"
+      : 'no fix was applied this round — the finding(s) remain unaddressed'
+    // Don't overstate how many REAL reviews ran: n counts every recorded round (the gate uses it),
+    // but a transport-failed / all-missing round inflates it. When fewer rounds were actually reviewed
+    // than recorded, say so (same honesty _reviewedRounds gives criteria 1-2).
+    let capNote = `cap ${maxRounds}`
+    const reviewedN = _reviewedRounds(rounds).length
+    if (reviewedN < n) capNote += `, ${reviewedN} reviewed`
     return { halt: true, reason: 'max-iterations',
-      detail: `Reached ${maxRounds} rounds; the latest review still showed ${latest.length} blocking finding(s) (the final round's fixes are committed but not yet re-reviewed).` }
+      detail: `Reached round ${n} (${capNote}); the latest review still showed ${latest.length} blocking finding(s) (${tail}).` }
   }
   const reviewed = _reviewedRounds(rounds)
   const rn = reviewed.length
@@ -64,9 +101,10 @@ function checkCircuitBreaker(rounds, maxRounds) {
     const latestGeneralize = new Set((latestRec.generalizeRequired || []).filter((g) => g && g.classKey).map((g) => g.classKey))
     const challenged = new Set((latestRec.coverageDecisions || []).filter((d) => d && d.classKey && d.challengedBy).map((d) => d.classKey))
     const latestBlocking = _blocking(latestRec)
-    const prevIds = new Set(_blocking(reviewed[rn - 2]).map(recurrenceKey))
-    const recurring = latestBlocking.filter((f) => prevIds.has(recurrenceKey(f)))
-    const challengedRecurring = recurring.filter((f) => challenged.has(recurrenceKey(f)))
+    const prevIds = new Set()
+    for (const f of _blocking(reviewed[rn - 2])) for (const alias of recurrenceAliases(f)) prevIds.add(alias)
+    const recurring = latestBlocking.filter((f) => intersects(recurrenceAliases(f), prevIds))
+    const challengedRecurring = recurring.filter((f) => intersects(recurrenceAliases(f), challenged))
     if (challengedRecurring.length) {
       const ids = challengedRecurring.map(recurrenceKey).join('; ')
       return { halt: true, reason: 'challenged-principle-recurring',
@@ -86,4 +124,4 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, checkCircuitBreaker, BLOCKING }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING }

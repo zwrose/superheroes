@@ -89,7 +89,9 @@ Two things make it more than a clever prompt:
   also run the panel on a **different model family** — set the reviewer engine to
   Codex or Cursor in `configure` — for a cross-family safety net; findings flow
   through the same auto-fix loop unchanged, and the fix is written by the
-  implementation engine.
+  implementation engine. Plan authoring alone can use a third **`planAuthor` engine**
+  (tasks always authors on Claude); pair it with an **`author-plan` model tier** when
+  you want a stronger plan model via an external host.
 - **Measured, not vibes.** The reviewer agents ship with a frozen eval harness
   (planted findings + decoy traps, a deterministic scorer) and a non-regression
   gate: a change has to prove it catches real issues without inflating false
@@ -206,6 +208,7 @@ run for you; pick manual and the existing hand-off is unchanged.
 | --- | --- |
 | `/superheroes:showrunner` | Run an approved work-item end-to-end to a ready-for-review PR (pre-flight → bundle → ship). |
 | `python3 plugins/superheroes/lib/run_watch.py --work-item <work-item> --root "$(git rev-parse --show-toplevel)" --follow` | Watch a showrunner run from on-disk state without spending model tokens. |
+| `python3 plugins/superheroes/lib/token_trend.py --root "$(git rev-parse --show-toplevel)"` | See the token/dispatch cost trend across this checkout's runs — tokens-per-completed-work-item and tokens-per-park. |
 
 Once a spec is approved (the-architect offers this automatically):
 

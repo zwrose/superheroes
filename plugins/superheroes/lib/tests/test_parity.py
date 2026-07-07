@@ -35,6 +35,7 @@ PARITY_TWINS = [
     ("panel_tally", "roundGate", "panel_tally", "round_gate"),
     ("panel_tally", "presentDeferred", "panel_tally", "present_deferred"),
     ("panel_tally", "decideTerminal", "panel_tally", "decide_terminal"),
+    ("panel_tally", "uncertifiedReason", "panel_tally", "uncertified_reason"),
     ("panel_tally", "compileDimensionResults", "panel_tally", "compile_dimension_results"),
     ("panel_tally", "roundGateFromDimensionResults", "panel_tally", "round_gate_from_dimension_results"),
     ("panel_tally", "presentBlockingFromDimensionResults", "panel_tally", "present_blocking_from_dimension_results"),
@@ -53,6 +54,9 @@ PARITY_TWINS = [
     ("test_pilot_deciders", "aggregateResults", "test_pilot_results", "aggregate_browser_results"),
     ("test_pilot_deciders", "retryDecisionFromFacts", "test_pilot_retry", "decide"),
     ("review_round_policy", "planRound", "review_round_policy", "plan_round"),
+    ("review_round_policy", "isCrossCutting", "review_round_policy", "is_cross_cutting"),
+    ("review_round_policy", "confirmationFollowup", "review_round_policy", "confirmation_followup"),
+    ("review_memory", "clampTitle", "review_memory", "clamp_title"),
     ("review_memory", "classKey", "review_memory", "class_key"),
     ("review_memory", "recurrentClasses", "review_memory", "recurrent_classes"),
     ("review_memory", "promoteRecord", "review_memory", "promote_record"),
@@ -87,6 +91,14 @@ BUNDLED_NON_TWINS = {
     "pr_comment_scrub.js",
     "fenced_json.js",
     "engine_dispatch.js",
+    # #277: a JS-only Buffer-less base64/utf8 encoder shared by the preamble + engine_dispatch; its
+    # correctness is pinned by bytes_smoke.js (against Node's Buffer), not a Python decider oracle.
+    "bytes.js",
+    # #170: a JS-only compose-path helper (reads globalThis.__SR_LIB); no Python counterpart.
+    "lib_root.js",
+    # #130: a JS-only in-memory cost accumulator (globalThis.__SR_COST); the durable Python side is
+    # the journal/cost_report/token_trend projection, not a line-by-line twin of this module.
+    "cost_meter.js",
 }
 
 # ---------------------------------------------------------------------------

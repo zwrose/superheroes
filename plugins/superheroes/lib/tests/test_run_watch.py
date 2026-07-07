@@ -331,6 +331,23 @@ def test_format_journal_event_interesting_types():
         "ts": "2026-07-03T14:43:22Z",
         "type": "run_completed",
     }) == "14:43:22  ✓ run completed"
+    # #25: the quick route's skipped front-half phases surface in the live readout, never silently.
+    assert run_watch.format_journal_event({
+        "ts": "2026-07-03T14:30:00Z",
+        "type": "phases_skipped",
+        "payload": {"route": "quick", "skipped": ["plan", "review-plan", "tasks", "review-tasks"]},
+    }) == "14:30:00  ⏭ quick route — skipped plan, review-plan, tasks, review-tasks"
+
+
+def test_phases_skipped_counts_as_active_state(tmp_path):
+    # #25: a run observed right at intake (its last event is phases_skipped) reads as active, not
+    # unknown — the skip record is part of a live run, not a terminal marker. No lease store under
+    # tmp_path, so _read_run falls through to the event-type classification.
+    got = run_watch._read_run(str(tmp_path), "wi", [
+        {"seq": 1, "type": "phases_skipped",
+         "payload": {"route": "quick", "skipped": ["plan"]}},
+    ])
+    assert got["state"] == "active"
 
 
 def test_watch_command_resolves_absolute_paths_and_quotes(tmp_path):

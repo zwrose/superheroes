@@ -625,3 +625,106 @@ def test_selfcheck_matrix_holds_with_allowance(monkeypatch):
     assert enforcer.selfcheck() == 0   # the added assertions pass on a correct build
 
 
+
+# --- Task 8: deny-only marker (UFR-6) — the acceptance-harness never-merge floor ---
+MARKER = "SUPERHEROES_ACCEPTANCE_DENY_ONLY"
+
+
+def _with_marker(monkeypatch, on):
+    if on:
+        monkeypatch.setenv(MARKER, "1")
+    else:
+        monkeypatch.delenv(MARKER, raising=False)
+
+
+def test_deny_only_marker_turns_claude_ask_into_deny(monkeypatch):
+    _with_marker(monkeypatch, True)
+    # without the marker, claude in-scope gets ask; with it, deny.
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "deny"
+
+
+def test_deny_only_marker_covers_full_owner_authority_set(monkeypatch):
+    _with_marker(monkeypatch, True)
+    for cmd in ["gh pr merge 1", "gh release create v1", "gh workflow run ci",
+                "git push --force origin b", "git push origin main"]:
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "deny", cmd
+
+
+def test_without_marker_claude_still_asks(monkeypatch):
+    _with_marker(monkeypatch, False)
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "ask"
+
+
+def test_marker_does_not_change_ordinary_commands(monkeypatch):
+    _with_marker(monkeypatch, True)
+    assert enforcer.classify_command("git commit -m x", host="claude", in_scope=True)[0] == "allow"
+
+
+def test_deny_only_marker_denies_out_of_scope_from_build_worktree(monkeypatch):
+    # UFR-6 security floor: the showrunner child's Build phase runs from a build worktree
+    # whose fresh checkout has no docs/superheroes/ (gitignored), so in_scope resolves False.
+    # Without the marker, out-of-scope owner-authority is allowed; UNDER the marker it MUST
+    # still deny — the marker deny is evaluated before the `if not in_scope: allow` short-circuit.
+    _with_marker(monkeypatch, True)
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=False)[0] == "deny"
+    for cmd in ["gh release create v1", "gh workflow run ci",
+                "git push --force origin b", "git push origin main"]:
+        assert enforcer.classify_command(cmd, host="claude", in_scope=False)[0] == "deny", cmd
+    # the marker does NOT widen non-gated commands: ordinary out-of-scope stays allow.
+    assert enforcer.classify_command("git commit -m x", host="claude", in_scope=False)[0] == "allow"
+
+
+def test_without_marker_out_of_scope_owner_authority_still_allowed(monkeypatch):
+    # regression guard: default (marker unset) out-of-repo behavior is byte-identical to today.
+    _with_marker(monkeypatch, False)
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=False)[0] == "allow"
+
+
+def test_allowance_overlay_not_honored_under_marker(monkeypatch):
+    # The allowance overlay lives in `hook()` and only fires on the deny-only (non-claude) host
+    # path (enforcer gates it on `host != "claude"`). Under the marker, the `and not _deny_only()`
+    # guard must stop `hook()` from consuming an allowance to flip a denied owner-authority action
+    # — exercised on the reachable (host="codex") path so this is a real test of the guard, not a
+    # no-op. We assert the hook does NOT emit an allow even when a matching allowance is mintable.
+    import json as _json
+    _with_marker(monkeypatch, True)
+    consumed = {"called": False}
+    monkeypatch.setattr(enforcer.allowance, "consume",
+                        lambda *a, **k: consumed.__setitem__("called", True) or True)
+    emitted = {}
+    monkeypatch.setattr(enforcer, "_emit",
+                        lambda decision, reason: emitted.__setitem__("d", decision))
+    # a superheroes-repo cwd so in_scope is True on this deny-only host path:
+    payload = _json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"},
+                           "cwd": os.getcwd()})
+    enforcer.hook(payload, host="codex")
+    assert emitted.get("d") == "deny"            # denied despite a mintable allowance
+    assert consumed["called"] is False           # the overlay was NOT consulted under the marker
+
+
+def test_deny_only_floor_holds_on_claude_host_without_allowance_path(monkeypatch):
+    # On the claude host the allowance overlay never runs at all; the floor is purely the
+    # marker deny in classify_command, so this documents the load-bearing UFR-6 path directly.
+    _with_marker(monkeypatch, True)
+    assert enforcer.classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "deny"
+
+
+
+
+def test_dod_filler_command_surface_stays_non_gated(monkeypatch):
+    """PR #251 regression pin: the mark-ready DoD fill leg's whole command surface must
+    stay OUT of the owner-authority gated set — on BOTH floors. A future gated-set
+    expansion (e.g. a broad `gh pr` pattern) would silently park every spec-driven
+    acceptance run at mark-ready, reintroducing the 0.10.0 mutual-deadlock class."""
+    surface = [
+        "gh pr edit 42 --body-file /tmp/x.md",
+        "gh pr view 42 --json body",
+        "gh pr diff 42",
+        "gh issue view 7 --json state",
+    ]
+    for cmd in surface:
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "allow", cmd
+    monkeypatch.setenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", "1")
+    for cmd in surface:
+        assert enforcer.classify_command(cmd, host="claude", in_scope=True)[0] == "allow", (
+            "deny-only floor must not gate the fill leg: %s" % cmd)

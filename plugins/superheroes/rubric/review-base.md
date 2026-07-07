@@ -1,4 +1,4 @@
-<!-- rubric-version: 3 -->
+<!-- rubric-version: 5 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -44,6 +44,15 @@ Minor and Nit findings never change the verdict regardless of strictness.
    checked for reachability, but under the strict posture, flag when in doubt.)
 5. **Docs/spec changes:** spot-check factual claims (signatures, paths, error
    types) against source, not just prose.
+6. **Single source of truth for cross-boundary facts.** A fact consumed across a
+   module or language boundary (phase lists, event/verb names, schema field sets,
+   verdict/reason tokens, path layouts, reviewer rosters) must have one
+   authoritative home; every other copy reads it at runtime or is guarded by a
+   drift test that reads the home and asserts equality. **Two hand-maintained
+   copies with no drift test is review-blocking** — and a contract test that
+   restates the constant instead of reading the home proves nothing. (In this repo
+   the rule is formalized as **CONVENTIONS §11**, with the phase-list drift test as
+   its worked example; cite it by number.)
 
 ## Findings output format (the single schema — agents reference this, never restate it)
 
@@ -118,11 +127,26 @@ Form it from a small targeted read of the cited code — not a re-review.
 
 ## In-pass Chain-of-Verification & single-pass discipline
 
-Each specialist runs **once** per review. Do NOT dispatch a verifier agent or
-re-run a specialist — multi-turn agentic review degrades F1 and fabricates
-findings as real ones are exhausted. Instead, within its single pass, the agent
-runs an ordered **Chain-of-Verification** on each candidate finding before
-emitting it, dropping (or downgrading) failures in order:
+Each **finder** (specialist) runs **once** per review. Do NOT re-run a finder or
+chain a second finder pass over the same artifact: a finder that has exhausted the
+real issues starts fabricating, so a repeat search buys false positives, not
+coverage. (Re-reviewing from scratch on the *next* round's fresh diff, after a fix,
+is a different thing — that is how the loop converges.)
+
+This is a ban on re-**finding**, not on **verifying**. A distinct judgment stage
+run over the *already-emitted* findings — deciding per finding whether it holds
+against the artifact (keep/drop + severity) and never searching for new ones — is
+**not** a second finder pass. It is the documented low-noise production pattern and
+is band policy: the panel **synthesis** pass (`loop_synthesis`) applies it with
+fail-closed guarantees — a model's silence never drops a finding, every drop carries
+a reason, and a dropped Critical/Important is flagged for human scrutiny. Verifying
+findings lowers false positives without hunting for more, so it does not trigger the
+finding-exhaustion failure mode above; the earlier blanket "any multi-turn review
+degrades F1" ban conflated the two, but only re-finding is forbidden.
+
+Within its single pass, each finder still runs an ordered **Chain-of-Verification**
+on each candidate finding before emitting it, dropping (or downgrading) failures in
+order:
 
 1. **Citation in scope** — `file:line` is present; in diff modes it lands on a
    `+`/`-` line (context/unchanged lines are pre-existing → drop).

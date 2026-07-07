@@ -1,6 +1,6 @@
 // plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js
-// #115 Task 12: reconcile() now calls recover_entry.py --snapshot via exec (label='exec'),
-// parses the snapshot JSON from stdout, then calls the JS twin recover.reconcile() in-process.
+// #115 Task 12: reconcile() gathers the world snapshot via runCourierMarkedText (label='gather
+// snapshot', #218 __SR_EXIT marker protocol), parses stdout JSON, then calls the JS twin in-process.
 // The LLM-dispatched cmdRunner (label='lib') for recover_entry is GONE.
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
@@ -33,8 +33,12 @@ const snapshots = {
   }),
 }
 
+function marked(stdout) {
+  return String(stdout) + (String(stdout).includes('__SR_EXIT') ? '' : '\n__SR_EXIT:0')
+}
+
 global.agent = async (prompt, opts) => {
-  throw new Error('unexpected agent call (reconcile must use exec, not cmdRunner): ' + prompt.slice(0, 60))
+  throw new Error('unexpected agent call (reconcile must use marked courier, not cmdRunner): ' + prompt.slice(0, 60))
 }
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 
@@ -43,8 +47,7 @@ const { reconcile } = require('../showrunner.js')
 ;(async () => {
   // (a) store unusable -> park_gate via twin (world.store_ok === false)
   global.agent = async (prompt, opts) => {
-    // exec arrives with label='exec'; return the store-unusable snapshot
-    return [{ index: 0, ok: true, stdout: snapshots.park_gate }]
+    return marked(snapshots.park_gate)
   }
   const r1 = await reconcile('wi')
   assert.strictEqual(r1.action, 'park_gate', 'store unusable -> park_gate (twin decided)')
@@ -52,7 +55,7 @@ const { reconcile } = require('../showrunner.js')
 
   // (b) no checkpoint -> world_derive (twin decides)
   global.agent = async (prompt, opts) => {
-    return [{ index: 0, ok: true, stdout: snapshots.world_derive }]
+    return marked(snapshots.world_derive)
   }
   const r2 = await reconcile('wi')
   assert.strictEqual(r2.action, 'world_derive', 'no checkpoint -> world_derive (twin decided)')
@@ -61,7 +64,7 @@ const { reconcile } = require('../showrunner.js')
 
   // (c) valid checkpoint -> continue (twin decides)
   global.agent = async (prompt, opts) => {
-    return [{ index: 0, ok: true, stdout: snapshots.continue }]
+    return marked(snapshots.continue)
   }
   const r3 = await reconcile('wi')
   assert.strictEqual(r3.action, 'continue', 'valid checkpoint -> continue (twin decided)')
@@ -70,24 +73,38 @@ const { reconcile } = require('../showrunner.js')
   assert.strictEqual(r3.root, CHECKOUT_ROOT, 'checkout root threaded from snapshot')
 
   // (d) missing checkout root in snapshot -> park_gate (fail closed)
-  global.agent = async () => [{ index: 0, ok: true, stdout: snapshots.missing_root }]
+  global.agent = async () => marked(snapshots.missing_root)
   const rMissing = await reconcile('wi')
   assert.strictEqual(rMissing.action, 'park_gate')
   assert.ok(/missing checkout root/.test(rMissing.reason))
 
-  // (e) reconcile must ride the dumb-pipe exec courier (descriptive label 'gather snapshot' +
-  // courier:true), NOT a cmdRunner 'lib' leaf. The courier marker is what pins it to the cheapest
-  // model; the label is the cosmetic display purpose.
+  // (e) reconcile must ride the dumb-pipe marked courier (descriptive label 'gather snapshot' +
+  // courier:true + agentType superheroes:courier), NOT a cmdRunner 'lib' leaf.
   let agentLabel = null
   let agentCourier = null
+  let agentType = null
   global.agent = async (prompt, opts) => {
     agentLabel = (opts && opts.label) || ''
     agentCourier = !!(opts && opts.courier)
-    return [{ index: 0, ok: true, stdout: snapshots.world_derive }]
+    agentType = (opts && opts.agentType) || null
+    return marked(snapshots.world_derive)
   }
   await reconcile('wi')
-  assert.strictEqual(agentLabel, 'gather snapshot', "reconcile's exec leaf carries the descriptive 'gather snapshot' label, NOT 'lib'")
+  assert.strictEqual(agentLabel, 'gather snapshot', "reconcile's gather leaf carries the descriptive 'gather snapshot' label, NOT 'lib'")
   assert.strictEqual(agentCourier, true, 'reconcile rides the dumb-pipe courier (courier:true -> cheapest model)')
+  assert.strictEqual(agentType, 'superheroes:courier', 'reconcile gather snapshot rides the lean courier agent (#218)')
 
-  console.log('OK: reconcile uses exec+JS twin, not cmdRunner; generation threaded correctly')
+  // (f) marker-less courier transport exhaustion -> generic IO park (not libRoot-named).
+  let transportCalls = 0
+  global.agent = async () => {
+    transportCalls += 1
+    return snapshots.world_derive
+  }
+  const rTransport = await reconcile('wi')
+  assert.strictEqual(rTransport.action, 'park_gate', 'missing marker fails closed to park_gate')
+  assert.strictEqual(rTransport.reason, 'recover_entry snapshot failed (IO error)',
+    'marker-less transport exhaustion maps to generic IO error, not libRoot park')
+  assert.strictEqual(transportCalls, 6, 'reconcile exhausts 2 attempts × 3 dispatchMarked tries')
+
+  console.log('OK: reconcile uses marked courier+JS twin, not cmdRunner; generation threaded correctly')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

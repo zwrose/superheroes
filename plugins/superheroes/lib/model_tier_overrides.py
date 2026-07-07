@@ -24,7 +24,8 @@ if _LIB_DIR not in sys.path:
 
 # Mirrors the core's DEFAULT_TIERS keys (the-architect/lib/model_tier.py); a role not in
 # this set is an owner typo and is dropped (fail-open to the default).
-KNOWN_ROLES = ("orchestrator", "reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer", "author")
+KNOWN_ROLES = ("orchestrator", "reviewer", "reviewer-deep", "mechanical", "synthesis", "fixer",
+               "author", "author-plan")
 KNOWN_MODELS = ("haiku", "sonnet", "opus", "fable")
 
 _HEADING = re.compile(r"^\s*##\s+[Mm]odel tiers\s*$")

@@ -1,0 +1,20 @@
+{
+  "name": "confirmation-postscoped-rework-rearms",
+  "_note": "#174 finding 1: rework responding to a confirmation can span MULTIPLE scoped rounds. Narrow fix at the confirmation (R3) + broad fix at a later scoped round (R4) = cross-cutting rework since the panel -> must re-arm exactly one more full confirmation. The follow-up must union changedSubjects across the panel and every later round, not read the panel record alone.",
+  "reviewerSet": ["security-reviewer", "test-reviewer"],
+  "fixEvents": [
+    {"afterRound": 1, "changedSubjects": ["Test"]},
+    {"afterRound": 3, "changedSubjects": ["Test"]},
+    {"afterRound": 4, "changedSubjects": ["Code", "Security", "Architecture"]}
+  ],
+  "reviewerEvents": [
+    {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension":"Test","title":"Missing test","severity":"Important"}], "usageTotal": 1000},
+    {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 1000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension":"Security","title":"Secret A","severity":"Important"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000},
+    {"round": 4, "reviewer": "security-reviewer", "findings": [{"dimension":"Security","title":"Secret B","severity":"Important"}], "usageTotal": 1000}
+  ],
+  "expectedTerminal": "clean",
+  "maxRounds": 12
+}

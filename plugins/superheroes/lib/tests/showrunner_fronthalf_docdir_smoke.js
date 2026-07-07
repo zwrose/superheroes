@@ -12,9 +12,17 @@ const assert = require('assert')
 const fs = require('fs')
 const sr = require('../showrunner.js')
 const { io } = require('../io_seam.js')
+const { markedStdout, saveProgressOk } = require('./_marked_stdout.js')
 
 globalThis.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 globalThis.log = () => {}
+
+function receiptFromPrompt(prompt) {
+  let ctx = { receiptArtifact: 'stub', receiptCoverageDecisionIds: [] }
+  const m = String(prompt || '').match(/Prompt context: (\{.*\})/s)
+  if (m) { try { ctx = JSON.parse(m[1]) } catch (_) {} }
+  return { artifact: ctx.receiptArtifact || 'stub', chain: [{ step: 'citation', evidence: 'reviewed citations' }, { step: 'reachability', evidence: 'validated call path' }, { step: 'missing-check', evidence: 'checked missing FRs' }, { step: 'tooling', evidence: 'smoke passed' }], coverageDecisionIds: ctx.receiptCoverageDecisionIds || [] }
+}
 
 // (a) fallback: nothing planted -> legacy in-repo relative paths (unchanged behavior).
 function partFallback() {
@@ -89,7 +97,7 @@ async function partReviewReadInner(resolved, legacy) {
     if (label === 'resume') return '1'
     if (label === 'save phase progress') {
       persistPrompts.push(prompt)
-      return [{ ok: true, stdout: JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }) }]
+      return saveProgressOk()
     }
     if (label === 'save round state') return [{ ok: true, stdout: JSON.stringify({ ok: true }) }]
     if (opts && opts.courier) {
@@ -99,7 +107,7 @@ async function partReviewReadInner(resolved, legacy) {
     // a genuinely clean review needs a real verificationReceipt (else the receipt-fabrication fix
     // downgrades it to confidence:low -> cannot-certify).
     if (label.endsWith('-reviewer')) {
-      return { findings: [], confidence: 'high', verificationReceipt: { artifact: 'stub', chain: [], coverageDecisionIds: [] } }
+      return { findings: [], confidence: 'high', verificationReceipt: receiptFromPrompt(prompt) }
     }
     if (label.startsWith('synthesis')) return { verdicts: [] }
     if (label === 'revise-doc') return { fixes: [], deferred: [] }
@@ -137,12 +145,12 @@ async function partStartupPlants() {
         doc_dir: '/abs/proj-store/docs/wi-s' }) }]
     }
     if (opts && opts.courier) {
-      if (prompt.includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+      if (prompt.includes('recover_entry.py')) return markedStdout({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
         generation: 1,
         root: globalThis.__SR_ROOT,
-      }) }]
+      })
       if (prompt.includes('definition_doc.py read-gate')) return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
@@ -164,12 +172,12 @@ async function partStartupPlants() {
       return [{ ok: true, stdout: JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '' }) }]
     }
     if (opts && opts.courier) {
-      if (String(prompt).includes('recover_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({
+      if (String(prompt).includes('recover_entry.py')) return markedStdout({
         checkpoint: null,
         world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
         generation: 1,
         root: globalThis.__SR_ROOT,
-      }) }]
+      })
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     return null

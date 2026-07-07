@@ -53,6 +53,32 @@ def test_dimension_counts_record_run_skip_and_tiers():
     assert record["dimensionCounts"]["security-reviewer"]["escalated"] == 1
 
 
+def test_finding_outcomes_per_dimension_from_round_records():
+    # #130 spike scope-add: per-reviewer finding-outcome counts computed from the durable round
+    # records (no new threading), so tokens-per-finding per reviewer becomes computable.
+    rounds = [
+        {"round": 1, "dimensions": {
+            "code-reviewer": {"status": "run", "findings": [
+                {"dimension": "code-reviewer", "classKey": "k1", "severity": "Critical", "title": "A"},
+                {"dimension": "code-reviewer", "classKey": "k2", "severity": "Minor", "title": "B"}]},
+            "security-reviewer": {"status": "run", "findings": []}}},
+        {"round": 2, "dimensions": {
+            "code-reviewer": {"status": "run", "findings": [
+                {"dimension": "code-reviewer", "classKey": "k1", "severity": "Critical", "title": "A", "carried": True}]}}},
+    ]
+    fo = RT.build_record(rounds=rounds, expected_leaves=[], usage={})["findingOutcomes"]
+    assert fo["code-reviewer"]["raised"] == 2      # k1 + k2; k1 not double-counted across rounds
+    assert fo["code-reviewer"]["blocking"] == 1    # k1 is Critical
+    assert fo["code-reviewer"]["carried"] == 1     # k1 carried into round 2
+    assert "security-reviewer" not in fo           # raised nothing -> no row
+
+
+def test_finding_outcomes_empty_when_no_findings():
+    rec = RT.build_record(rounds=[{"round": 1, "dimensions": {"code-reviewer": {"status": "run"}}}],
+                          expected_leaves=[], usage={})
+    assert rec["findingOutcomes"] == {}
+
+
 def test_write_failure_does_not_change_terminal(tmp_path, monkeypatch):
     path = tmp_path / "review-telemetry.json"
     record = RT.build_record(rounds=[], expected_leaves=[], usage={}, benchmark=False, terminal="clean")

@@ -4,7 +4,9 @@
 Renders ONE readout, the same structure for every leg, from a run's terminal record: the
 terminal + reason, the fixes made, the findings dropped (each with its reason), the non-blocking
 findings deferred (each with its reason), and — distinctly — any dropped finding a reviewer had
-tagged blocking (UFR-10, flagged for human scrutiny). When an escalated blocking finding traces
+tagged blocking (UFR-10, flagged for human scrutiny) plus any finding synthesis re-tiered from
+blocking to non-blocking (#186, same scrutiny — a silent downgrade is a silent-drop equivalent).
+When an escalated blocking finding traces
 to an upstream phase, the readout names it (FR-21) and the loop never re-enters it. A record whose
 `schemaVersion` the renderer does not understand is surfaced as "unknown record format" rather
 than rendered partially. stdlib only; never raises.
@@ -61,7 +63,28 @@ def render(record):
             missing = usage.get("missing") or []
             if missing:
                 lines.append("Missing token usage: " + ", ".join(str(x) for x in missing))
+        # #130: per-reviewer finding outcomes (raised/blocking/carried) — the denominator for
+        # tokens-per-finding; rendered independent of token completeness.
+        outcomes = telemetry.get("findingOutcomes") or {}
+        if outcomes:
+            lines.append("")
+            lines.append("Findings by reviewer:")
+            for name, o in sorted(outcomes.items()):
+                lines.append("%s: raised %d, blocking %d, carried %d"
+                             % (name, o.get("raised", 0), o.get("blocking", 0), o.get("carried", 0)))
         lines.append("")
+    # #174 req 4 (honest readout): state what certification actually established — how many FULL
+    # confirmation panels ran and, when the last one surfaced findings, that they were resolved by a
+    # scoped verify (never implying a pristine fresh pass occurred).
+    certification = record.get("certification")
+    if isinstance(certification, dict) and isinstance(certification.get("fullPanels"), int):
+        panels = certification["fullPanels"]
+        cert_line = "Certification: %d full confirmation panel%s ran" % (
+            panels, "" if panels == 1 else "s")
+        if certification.get("lastPanelSurfacedResolved"):
+            cert_line += ("; the last panel surfaced findings that were resolved with scoped "
+                          "verification (not a pristine fresh pass)")
+        lines += [cert_line + ".", ""]
     fixes = record.get("fixes") or []
     lines += ["### Fixes made"] + (["- %s" % f for f in fixes] if fixes else ["- (none)"]) + [""]
     deferred = record.get("deferred") or []
@@ -81,6 +104,22 @@ def render(record):
                   "_A reviewer marked these Critical/Important; synthesis dropped them. Confirm the "
                   "loop did not discard a real blocker._"]
         lines += [_row(d) for d in blocking] + [""]
+    # #186: a survivor the synthesis judge re-tiered from blocking to non-blocking is a silent-drop
+    # equivalent (it no longer counts as blocking). Surface it in its own scrutiny section — the
+    # severity outcome is unchanged; this is visibility for the owner, sibling to the blocking-drop
+    # section above.
+    downgrades = [d for d in (record.get("downgrades") or []) if isinstance(d, dict)]
+    if downgrades:
+        lines += ["### ⚠️ Findings synthesis DOWNGRADED from blocking to non-blocking — review these",
+                  "_A reviewer had tagged these Critical/Important; synthesis kept them at a "
+                  "non-blocking tier, so they no longer block. Confirm a real blocker was not "
+                  "quietly demoted._"]
+        for d in downgrades:
+            row = "- %s (%s → %s)" % (d.get("title", "?"), d.get("from", "?"), d.get("to", "?"))
+            if d.get("reason"):
+                row += " — %s" % d.get("reason")
+            lines.append(row)
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

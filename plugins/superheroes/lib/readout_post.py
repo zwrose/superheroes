@@ -11,7 +11,14 @@ ap.add_argument("--work-item", required=True)
 ap.add_argument("--reason", default=None)
 ap.add_argument("--pr", default=None)             # the run's PR number, when one exists
 ap.add_argument("--ctx", default=None, help="JSON context for readout.build_readout (structured hand-back)")
+# #130: the run's terminal state. A ready hand-back journals run_completed (not parked — the pre-#130
+# bug where every hand-back journaled 'parked', so run_watch/token_trend could not tell them apart);
+# every other terminal stays parked. --cost-payload folds ship's cost telemetry into this same leaf.
+ap.add_argument("--terminal", choices=["parked", "completed"], default="parked")
+ap.add_argument("--cost-payload", default=None, help="#130: JSON phase_cost telemetry (best-effort)")
 a = ap.parse_args()
+
+_TERMINAL_EVENT = {"parked": "parked", "completed": "run_completed"}
 if not a.ctx and a.reason is None:
     print(json.dumps({"posted": False, "recorded": False,
                       "error": "readout_post requires --ctx or --reason"}))
@@ -55,12 +62,19 @@ def _record_brief(t):
 # must NOT crash the leaf with empty stdout (cmdRunner fails closed on empty stdout): fall back to the
 # store record + a surfaced error, so the readout is never silently dropped (UFR-4).
 try:
-    journal.append(paths["events"], "parked", detail=text, root=os.getcwd())
+    journal.append(paths["events"], _TERMINAL_EVENT[a.terminal], detail=text, root=os.getcwd())
 except journal.DurableWriteError as e:
     rec = _record_brief(text)
     print(json.dumps({"posted": False, "recorded": rec,
                       "error": "durable journal write failed: %s" % e}))
     sys.exit(0)
+# #130: fold ship's phase_cost into this same hand-back leaf (no new courier leaf — #118). Best-effort;
+# a malformed or failing cost write never affects the hand-back.
+if a.cost_payload:
+    try:
+        journal.append(paths["events"], "phase_cost", payload=json.loads(a.cost_payload), root=os.getcwd())
+    except Exception:   # noqa: BLE001 — telemetry is best-effort
+        pass
 if not a.pr:                                       # parked before a PR exists (FR-13 no-PR branch)
     rec = _record_brief(text)
     print(json.dumps({"posted": False, "recorded": rec}))

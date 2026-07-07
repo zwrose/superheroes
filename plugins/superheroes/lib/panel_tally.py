@@ -243,6 +243,54 @@ def round_gate_from_dimension_results(results, expected_roster, final_confirmati
     return gate, confidence, missing
 
 
+# ── honest cannot-certify reason (FR-5/UFR-2, #212) ──
+# The defect-class phrasing that names WHY a seat could not certify. Each class is a DISTINCT string
+# so a park diagnoses the failure instead of anonymizing it ("a reviewer did not complete").
+_SEAT_PHRASE = {
+    "receipt-missing": "%s returned no verification receipt after retry (receipt-missing — uncertifiable)",
+    "receipt-stale": "%s returned a stale verification receipt after retry (receipt-stale — uncertifiable)",
+    "malformed": "%s did not return a usable result after retry (malformed — uncertifiable)",
+    "genuinely-incomplete": "%s reported low confidence after retry (genuinely-incomplete — uncertifiable)",
+    "coverage-gap": "%s did not complete after its retry (coverage-gap — uncertifiable)",
+}
+
+
+def _seat_defect_class(result):
+    """Classify a single seat's certification defect (or None when it certified). A high-confidence
+    seat, or an externally-reviewed seat (its own honestly-labeled confirmation path), certifies."""
+    if not isinstance(result, dict):
+        return "coverage-gap"                       # seat absent entirely
+    if result.get("externalReview"):
+        return None
+    if result.get("confidence") == "high":
+        return None
+    if result.get("receiptMissing"):
+        return "receipt-missing"
+    if result.get("receiptStale"):
+        return "receipt-stale"
+    if result.get("status") not in ("run", "skipped") or result.get("malformed"):
+        return "malformed"
+    if result.get("status") == "skipped":
+        return "coverage-gap"                       # carried forward without a certified prior
+    return "genuinely-incomplete"                   # ran, honest low confidence, no receipt defect
+
+
+def uncertified_reason(results, expected_roster):
+    """The honest cannot-certify reason: name every seat that blocks certification AND why (#212).
+    A round is cannot-certify when a seat did not certify — receipt-missing/stale after retry, a
+    malformed/absent seat, or an honest low-confidence answer. Returns a `;`-joined phrase naming
+    each uncertifiable seat + its DISTINCT defect class, or None when every seat certified (the
+    caller then keeps the generic terminal reason). Pure; both twins operate on the same results
+    map so the parity fixtures pin the phrasing."""
+    results = results or {}
+    parts = []
+    for name in expected_roster or []:
+        cls = _seat_defect_class(results.get(name))
+        if cls:
+            parts.append(_SEAT_PHRASE[cls] % name)
+    return "; ".join(parts) if parts else None
+
+
 # ── deferral accounting (FR-10) ──
 def present_deferred(compiled, deferred_set):
     """present-∩-deferred: count present BLOCKING findings whose identity was deferred and whose
@@ -285,14 +333,27 @@ def _terminal_to_action(terminal):
 
 
 def decide_terminal(gate, present_blocking, present_deferred_count, fix_status, rnd, max_rounds, breaker_halt):
-    """FR-9 precedence (first match wins): (1) cannot-certify; (2) halted on a failed fix step;
-    (3) loop_state's cap-halt / clean-with-skips / clean / continue. Never returns `clean` while
-    coverage is incomplete or a non-deferred blocker is unresolved."""
-    if gate == "cannot-certify":
-        return "cannot-certify", "a reviewer did not complete after its retry — coverage not certified"
+    """FR-9 precedence (first match wins):
+      (1) cannot-certify with NO fixable blocking finding → PARK immediately (coverage is the sole
+          gap; there is nothing to fix). This is the ONLY cannot-certify path that parks here.
+      (1b/#212 fix-before-park) A cannot-certify round that STILL holds unresolved blockers is NOT
+          parked: its findings are real regardless of the uncertified seat, so it routes to the fix
+          leg exactly like a `blocking` round (falling through to steps 2-3). This is gate-based, so
+          it covers EVERY entrance to cannot-certify uniformly — receipt-missing/stale seats, a seat
+          that ended `missing` (malformed after both retries), and coverage-gap rounds that hold
+          blockers from the seats that DID run. Certification stays WITHHELD: the next round's gate
+          re-dooms the still-uncertified seat, so exit_clean is unreachable until a fully-certified
+          clean panel (the #174 confirmation bar is untouched).
+      (2) halted on a failed fix step.
+      (3) loop_state's cap-halt / clean-with-skips / clean / continue.
+    Never returns `clean` while coverage is incomplete or a non-deferred blocker is unresolved. When
+    routed to the fix leg (1b) loop_state can only return `review` (under cap) or `halt` (cap/breaker)
+    — never a clean exit — because blocking_fixed > 0 there."""
+    blocking_fixed = max(0, present_blocking - present_deferred_count)
+    if gate == "cannot-certify" and blocking_fixed == 0:
+        return "cannot-certify", "coverage not certified — a review seat did not certify after its retry"
     if fix_status == "failed":
         return "halted", "the fix step did not complete (failed or timed out)"
-    blocking_fixed = max(0, present_blocking - present_deferred_count)
     action, _mandatory, reason = loop_state.decide(
         blocking_fixed, present_deferred_count, rnd, max_rounds, bool(breaker_halt))
     return _ACTION_TO_TERMINAL[action], reason

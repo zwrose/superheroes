@@ -1,11 +1,11 @@
-"""Tests for review_setup_gather.py — the fold-2 (#141) pre-round setup gather.
+"""Tests for review_setup_gather.py — the fold-2 (#141) pre-round setup gather (#211 decision shape).
 
-The gather folds the review loop's four decision-free entry seam calls (run-dir mkdir, deferred-set
-seed read, review_memory load-summary, coverage_decisions load) into ONE Python-side leaf. Its
-output must be BYTE-PARITY with what review_memory load-summary and coverage_decisions load would
-have returned separately, so the shell can drop them straight into memoryState / coverageState /
-the deferred seed. It must also create the run dir (the mkdir fold) and stay all-Python-side (no
-courier prose in any integrity field)."""
+The gather folds the review loop's entry seam calls (run-dir mkdir, deferred-set seed, the resume
+DECISION, the round-1 plan, coverage_decisions load) into ONE Python-side leaf. Under #211 it rides
+DECISIONS, not records: `resume` must be byte-parity with review_loop_plan entry-bootstrap and `plan`
+with plan-round, `coverage` with coverage_decisions load, so the shell can drop them straight into its
+resume/plan/coverage/deferred state. It must also create the run dir (the mkdir fold) and stay
+all-Python-side (no courier prose in any integrity field), with NO finding ever riding the answer."""
 
 import json
 import os
@@ -23,11 +23,11 @@ def gather(args):
     return json.loads(proc.stdout)
 
 
-def load_summary(records_path, dimensions, extras_path):
+def resume_decider(records_path, dimensions, extras_path):
     proc = subprocess.run(
-        [sys.executable, os.path.join(LIB, "review_memory.py"), "load-summary",
+        [sys.executable, os.path.join(LIB, "review_loop_plan.py"), "entry-bootstrap",
          "--path", records_path, "--dimensions", json.dumps(dimensions),
-         "--extras-path", extras_path, "--sweep-stale-staging"],
+         "--extras-path", extras_path],
         capture_output=True, text=True)
     return json.loads(proc.stdout)
 
@@ -64,9 +64,12 @@ def test_gather_creates_the_run_dir(tmp_path):
 def test_fresh_run_returns_empty_bounded_state(tmp_path):
     run_dir = tmp_path / "run"
     out = gather(_args(run_dir))
-    assert out["memory"]["ok"] is True
-    assert out["memory"]["records"] == []
-    assert out["memory"]["extras"] is None
+    assert out["resume"]["ok"] is True
+    assert out["resume"]["round"] == 1
+    assert out["resume"]["extras"] is None
+    assert "records" not in out and "records" not in out["resume"], "#211: no records ride the gather"
+    assert out["plan"]["ok"] is True and out["plan"]["roundKind"] == "baseline"
+    assert out["plan"]["dimensions"]["code"]["action"] == "run"
     assert out["deferredSet"] == {}
     assert out["coverage"]["ok"] is True
     assert out["coverage"]["decisions"] == []
@@ -91,14 +94,17 @@ def test_gather_is_byte_parity_with_separate_helpers(tmp_path):
         json.dumps([{"id": "RCD-1", "classKey": "Code::bug::x", "sourceRound": 1}]), encoding="utf-8")
 
     out = gather(_args(run_dir))
-    mem = load_summary(str(run_dir / "round-records.json"), ["code"], str(run_dir / "last-extras.json"))
+    resume = resume_decider(str(run_dir / "round-records.json"), ["code"], str(run_dir / "last-extras.json"))
     cov = load_coverage(str(run_dir / "review-coverage-decisions.json"), "code")
 
-    assert out["memory"] == mem, "memory field must be byte-parity with review_memory load-summary"
+    assert out["resume"] == resume, "resume field must be byte-parity with review_loop_plan entry-bootstrap"
     assert out["coverage"] == cov, "coverage field must be byte-parity with coverage_decisions load"
     assert out["deferredSet"] == {"a.py::bug": "Critical"}, "the deferred-set seed rides the gather"
-    # the durable bodies never ride back through the gather (the load-summary skeleton contract)
-    assert "y" * 500 not in json.dumps(out["memory"]), "evidence bodies must not ride the gather stdout"
+    assert out["resume"]["round"] == 2, "the resume DECISION reports the next round"
+    # #211: NO finding — blocking or not — and no records ride the gather answer.
+    assert "y" * 500 not in json.dumps(out), "evidence bodies must not ride the gather stdout"
+    assert "bug" not in json.dumps(out["resume"]), "no finding rides the resume answer"
+    assert "records" not in out["resume"], "the resume answer ships a decision, not records"
 
 
 def test_doc_mode_coverage_parses_from_the_doc(tmp_path):

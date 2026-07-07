@@ -89,6 +89,27 @@ python3 .github/scripts/validate_skills.py
 python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
 ```
 
+## Review discipline — no unreviewed PRs
+
+Every PR that touches `plugins/superheroes/**` gets a real review before handback,
+no matter how small the diff or how it was built (direct build, external engine,
+fix PR, fast-follow):
+
+- Work driven through the pipeline reviews itself (the spine's panels).
+- **A direct build ends with `/superheroes:review-code`** (or an explicit
+  owner/owner-agent review) before the PR is handed back. The loop is cheap on
+  small diffs (scoped rounds, capped confirmations) — "too small to review" is
+  exactly how past escapes shipped (see issue #183: the worst defects in this
+  repo's history came from the handful of PRs that skipped review).
+- A review that **halts with an open blocker** (circuit breaker, park) is resolved
+  or explicitly owner-accepted in the PR body — never quietly merged.
+
+The convention also ships to plugin users: the canonical statement lives in
+`plugins/superheroes/rubric/review-discipline.md`, the SessionStart bootstrap injects
+a compact note into every session on a superheroes-calibrated project (both storage
+modes, zero repo traces), and `configure` offers an in-repo project a durable
+`CLAUDE.md` copy (see CONVENTIONS §7.4).
+
 ## Branch protection
 
 `main` requires a PR with passing CI. The repo owner may bypass when needed —

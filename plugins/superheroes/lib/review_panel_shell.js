@@ -10,12 +10,63 @@ const loopSynthesis = require('./loop_synthesis.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
-const roundPolicy = require('./review_round_policy.js')
 const reviewMemory = require('./review_memory.js')
+const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
 const BLOCKING = new Set(['Critical', 'Important'])
-const _VERIFY_OK = new Set(['pass', 'skipped'])
+const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
+
+// ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
+// small meaningful JSON — never findings. Each reads the durable round-records.json from disk; the
+// scalars the durable skeleton can't hold (gate/present-blocking/uncertified reason) ride DOWN as
+// args. A mangled/unparseable answer returns null → the caller fails closed (the decider's
+// documented direction). Cheap tier (`courier: true`); the answers carry no oversized payload.
+function _jsonAnswer(out) {
+  try { const p = JSON.parse((out && out.stdout) || ''); return (p && typeof p === 'object') ? p : null }
+  catch (_) { return null }
+}
+
+async function planRoundDecider({ runDir, round, roster, changedSubjects, justMarked, coverageTarget, ioApi }) {
+  const args = [libPath('review_loop_plan.py'), 'plan-round',
+    '--path', ioApi.join(runDir, 'round-records.json'),
+    '--round', String(round),
+    '--dimensions', JSON.stringify(roster || [])]
+  if (coverageTarget) args.push('--coverage-path', coverageTarget.path, '--coverage-mode', coverageTarget.mode)
+  if (changedSubjects !== null && changedSubjects !== undefined) args.push('--changed-subjects', JSON.stringify(changedSubjects))
+  if (justMarked) args.push('--just-marked')
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'plan review round', courier: true }))
+    if (ans && ans.ok) return ans
+  }
+  return null
+}
+
+async function tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+  presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
+  worklistOutPath, ioApi }) {
+  const args = [libPath('review_loop_plan.py'), 'tally-round',
+    '--path', ioApi.join(runDir, 'round-records.json'),
+    '--round', String(round),
+    '--roster', JSON.stringify(roster || []),
+    '--max-rounds', String(maxRounds),
+    '--gate', gate,
+    '--confidence', confidence,
+    '--missing', JSON.stringify(missing || []),
+    '--present-blocking', String(presentBlocking || 0),
+    '--deferred-path', deferredSetPath(runDir),
+    '--fix-status', fixStatus || 'completed']
+  if (coverageTarget) args.push('--coverage-path', coverageTarget.path, '--coverage-mode', coverageTarget.mode)
+  if (worklistOutPath) args.push('--worklist-out-path', worklistOutPath)
+  if (verifyResult !== null && verifyResult !== undefined) args.push('--verify-result', String(verifyResult))
+  if (enterConfirmation) args.push('--enter-confirmation')
+  if (uncertifiedReason) args.push('--uncertified-reason', uncertifiedReason)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'tally review round', courier: true }))
+    if (ans && typeof ans.terminal === 'string') return ans
+  }
+  return null
+}
 
 function _usable(v) { return v && typeof v.terminal === 'string' }
 function _failClosed() {
@@ -24,92 +75,11 @@ function _failClosed() {
 }
 
 function deferredSetPath(runDir) { return `${runDir}/deferred-set.json` }
-
-async function loadDeferredSet(runDir) {
-  // Deliberate degrade: a courier prose-flake on a missing/corrupt deferred-set reads as {}.
-  // Worst case a deferred finding re-blocks or gets re-reviewed (waste, not corruption) — the
-  // tally's skip-set is advisory; record_deferred.py is the authoritative write path.
-  const set = await io().readJson(deferredSetPath(runDir), {})
-  return (set && typeof set === 'object' && !Array.isArray(set)) ? set : {}
-}
-
-function resumeRound(records) {
-  let best = 0
-  for (const r of records) {
-    const n = r && Number(r.round)
-    if (Number.isFinite(n) && n > best) best = n
-  }
-  return best + 1
-}
-
-function assembleRounds(records, deferredSet) {
-  const skip = new Set(Object.keys(deferredSet || {}))
-  const out = []
-  for (const rec of records) {
-    if (!rec || typeof rec !== 'object') continue
-    const findings = (rec.findings || []).filter((f) => !skip.has(circuitBreaker.findingIdentity(f)))
-    out.push({
-      round: Number(rec.round),
-      findings,
-      dimensions: rec.dimensions,
-      coverageDecisions: rec.coverageDecisions,
-    })
-  }
-  out.sort((a, b) => a.round - b.round)
-  return out
-}
-
-function _breakerRoundDimensions(roundFindings) {
-  const dims = {}
-  for (const [name, result] of Object.entries(roundFindings || {})) {
-    if (!result || typeof result !== 'object') continue
-    dims[name] = { status: result.status || 'run' }
-  }
-  return dims
-}
-
-function buildPreviousDimensionState(records) {
-  const previous = {}
-  for (const rec of records || []) {
-    for (const [name, dim] of Object.entries((rec && rec.dimensions) || {})) previous[name] = dim
-  }
-  return previous
-}
-
-function carryForwardDimension(records, name, sched) {
-  for (let i = (records || []).length - 1; i >= 0; i -= 1) {
-    const dim = records[i].dimensions && records[i].dimensions[name]
-    if (dim) return Object.assign({}, dim, { status: 'skipped', carriedFromRound: sched.carriedFromRound })
-  }
-  return { status: 'skipped', findings: [], confidence: 'low', carriedFromRound: sched.carriedFromRound }
-}
-
-function buildFixContext(records, coverageDecisions) {
-  const priorFindings = []
-  const changedSubjects = []
-  for (const rec of records || []) {
-    priorFindings.push(...((rec && rec.findings) || []))
-    if (Array.isArray(rec && rec.changedSubjects)) changedSubjects.push(...rec.changedSubjects)
-  }
-  return {
-    priorFindings,
-    classKeys: priorFindings.map((f) => f.classKey || reviewMemory.classKey(f)),
-    generalizeRequired: reviewMemory.recurrentClasses(records, coverageDecisions),
-    changedSubjects: Array.from(new Set(changedSubjects)),
-    coverageDecisions: coverageDecisions || [],
-  }
-}
+// (#211: the JS loadDeferredSet is gone — the tally decider reads deferred-set.json Python-side via
+// --deferred-path, fail-soft to {}. This retired the review loop's last prose-vulnerable JS read.)
 
 function reviewerContext(context, coverageDecisions, receiptContext) {
   return Object.assign({}, context || {}, { coverageDecisions: coverageDecisions || [], receiptContext })
-}
-
-function wouldOtherwiseCertify(roundFindings, reviewerSet) {
-  for (const name of reviewerSet || []) {
-    const result = roundFindings[name]
-    if (!result || result.confidence !== 'high' || (result.findings || []).length > 0) return false
-  }
-  return true
 }
 
 function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSet) {
@@ -130,62 +100,58 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
   return out
 }
 
-function confirmationReady(records, round, justMarked) {
-  if (justMarked) return false
-  const marked = (records || []).filter((r) => r && r.confirmationPending)
-  if (!marked.length) return false
-  const markedRound = Math.max(...marked.map((r) => Number(r.round) || 0))
-  const hasIntermediateAfterMarker = (records || []).some((r) => Number(r.round) > markedRound)
-  if (!hasIntermediateAfterMarker) return true
-  return round > markedRound + 1
+// #211: the entry read (gatherReviewSetup) rides DECISIONS, so its answer is normally a small direct
+// blob. The receipt+chunk transport survives as the EMERGENCY FALLBACK only — an answer that
+// unexpectedly outgrows the receipt bound (e.g. a coverage-decision list that has grown large): the
+// helper writes the blob to disk Python-side and answers a small receipt, and the shell reassembles it
+// via read-chunk. Each chunk ships as RAW TEXT (a readable JSON fragment), not base64 — run-5 evidence
+// showed the API safety layer REFUSES an opaque base64-shaped blob as a model answer, and an earlier
+// run showed a courier decoding a b64 payload (decode-bait). The reader verifies each chunk's
+// chunkHash (over the text exactly as shipped) plus the reconstructed content hash before parsing, so
+// any retype still fails closed.
+const _SUMMARY_RECEIPT_BOUND = 4000
+const _READ_CHUNK_CHARS = 4000
+
+function _jsonFromStdout(out) {
+  try { return JSON.parse((out && out.stdout) || '') } catch (_) { return null }
 }
 
-// load-summary is the read twin of persist-skeleton: the resume seed comes back as BOUNDED
-// per-round summaries (finding skeletons + per-dimension status — everything the breaker,
-// recurrence, policy, and fix-context need in memory), never full findings bodies —
-// echoing a multi-round evidence-laden file through the courier stdout is the same
-// mega-payload defect as the write side (live 2026-07-02), in reverse. --extras-path folds
-// the loop's second entry read (last-extras.json) into the same leaf; it comes back as
-// `extras` (null when missing/corrupt — the old readJson-default parity).
-async function _loadRoundRecordsOnce(runDir, reviewerSet, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'load-summary', '--path', ioApi.join(runDir, 'round-records.json'), '--dimensions', JSON.stringify(reviewerSet), '--extras-path', ioApi.join(runDir, 'last-extras.json'), '--sweep-stale-staging'])
-  try {
-    const parsed = JSON.parse(out.stdout || '{}')
-    return parsed.ok ? parsed : Object.assign({ ok: false }, parsed)
-  } catch (_) {
-    return { ok: false, reason: 'round-memory-helper-failed' }
+// #211: each chunk ships as RAW TEXT (`text`, the on-disk slice verbatim), not a reversed-base64
+// blob. run-5 evidence showed the API safety layer refuses an opaque base64-shaped answer, and an
+// earlier run showed a courier decoding a b64 payload (decode-bait) — a readable JSON fragment has
+// nothing to unwrap and pattern-matches as benign. The chunkHash covers the text exactly as shipped,
+// so a courier that retypes or "fixes" the slice breaks the hash and the read fails closed, and the
+// reconstructed-content-hash check at the end still guards the full reassembly.
+async function _readReceiptText(ioApi, receipt, expectedReceipt, corruptReason) {
+  if (!receipt || receipt.receipt !== expectedReceipt || !receipt.path || !receipt.contentHash) return { ok: false, reason: corruptReason }
+  const chunkSize = receipt.chunkSize || _READ_CHUNK_CHARS
+  let index = 0
+  let text = ''
+  for (let guard = 0; guard < 10000; guard += 1) {
+    let parsed = null
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // payload marker: chunk answers are ~2KB relay payloads — they ride the copy-faithful
+      // payload tier, not the cheapest courier tier (#191 gap: the read leg missed the pin).
+      const out = await ioApi.runHelper('python3', [libPath('review_memory.py'), 'read-chunk', '--path', receipt.path, '--index', String(index), '--chunk-size', String(chunkSize)], { payload: true })
+      parsed = _jsonFromStdout(out)
+      if (!parsed || !parsed.ok || parsed.index !== index) { parsed = null; continue }
+      if (parsed.contentHash !== receipt.contentHash) { parsed = null; continue }
+      if (typeof parsed.text !== 'string' || parsed.chunkHash !== ioApi.contentHash(parsed.text)) { parsed = null; continue }
+      break
+    }
+    if (!parsed) return { ok: false, reason: corruptReason }
+    text += parsed.text
+    if (parsed.eof) break
+    index = Number(parsed.nextIndex)
+    if (!Number.isFinite(index)) return { ok: false, reason: corruptReason }
   }
+  if (ioApi.contentHash(text) !== receipt.contentHash) return { ok: false, reason: corruptReason }
+  return { ok: true, text }
 }
 
-async function probeRoundRecords(runDir, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/review_memory.py', 'probe', '--path', ioApi.join(runDir, 'round-records.json')])
-  try {
-    const parsed = JSON.parse((out && out.stdout) || '')
-    if (parsed && typeof parsed === 'object') return parsed
-  } catch (_) { /* fall through */ }
-  return { ok: false, exists: true, state: 'unreadable', reason: 'round-memory-probe-failed' }
-}
-
-async function loadRoundRecords(runDir, reviewerSet, ioApi) {
-  const first = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
-  if (first.ok) return first
-  const second = await _loadRoundRecordsOnce(runDir, reviewerSet, ioApi)
-  if (second.ok) return second
-  const probed = await probeRoundRecords(runDir, ioApi)
-  if (probed && probed.ok && probed.exists === false) {
-    return { ok: true, state: 'missing', records: [], contentHash: ioApi.contentHash(''), extras: null }
-  }
-  return {
-    ok: false,
-    state: 'unreadable',
-    reason: 'round-memory-unreadable',
-    records: [],
-    contentHash: (probed && probed.contentHash) || first.contentHash || second.contentHash,
-  }
-}
-
-// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — exactly
-// what load-summary seeds a resume with), persisted in ONE verified CAS leaf for the typical
+// D3: the DURABLE round record is the bounded SKELETON (review_memory.skeletonRecord — evidence
+// bodies and receipts stripped, finding identity/class/severity kept), persisted in ONE verified
+// CAS leaf for the typical
 // round: the skeleton rides the courier args inline, self-verified by --record-hash =
 // sha256(record-json) — a courier that mangles the JSON cannot also recompute its hash, so
 // corruption fails closed as record-corrupt (one retry, then cannot-certify upstream) instead
@@ -205,16 +171,20 @@ const _INLINE_RECORD_BOUND = 6000
 // converges instead of dying 'stale'.
 async function _selfVerifiedHelper(ioApi, args, stagedPath, stagedText, corruptReason) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    let out
     if (stagedPath) {
-      try { await ioApi.writeFile(stagedPath, stagedText) } catch (_) {
+      try {
+        out = await ioApi.stageAndRunHelper(stagedPath, stagedText, 'python3', args)
+      } catch (_) {
         // a missing parent dir is the common first-attempt failure (fresh run dir); create it
         // and let the retry re-stage.
         const dir = String(stagedPath).slice(0, String(stagedPath).lastIndexOf('/'))
         if (dir) { try { await ioApi.mkdirp(dir) } catch (_e) { /* the retry fails closed */ } }
         continue
       }
+    } else {
+      out = await ioApi.runHelper('python3', args)
     }
-    const out = await ioApi.runHelper('python3', args)
     let parsed = null
     try { parsed = JSON.parse((out && out.stdout) || '') } catch (_) { parsed = null }
     if (parsed && parsed.ok) return parsed
@@ -227,7 +197,7 @@ async function persistRoundRecord(runDir, reviewerSet, record, expectedHash, run
   const recordJson = JSON.stringify(reviewMemory.skeletonRecord(record))
   const inline = recordJson.length <= _INLINE_RECORD_BOUND
   const stagedPath = inline ? null : ioApi.join(runDir, `round-skeleton-r${record.round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'persist-skeleton',
+  const args = [libPath('review_memory.py'), 'persist-skeleton',
     '--path', ioApi.join(runDir, 'round-records.json')]
   args.push(...(inline ? ['--record-json', recordJson] : ['--record-path', stagedPath]))
   args.push('--record-hash', ioApi.contentHash(recordJson),
@@ -252,16 +222,8 @@ async function dumpRoundBodiesBestEffort(runDir, round, verdict, fixReport, ioAp
   } catch (_) { /* best-effort by contract */ }
 }
 
-// mergeRoundRecords: the in-memory twin of persist_record's merge (dedupe the round, sort) —
-// persist-skeleton never echoes the merged records back through the pipe, and the in-memory
-// copy keeps the CURRENT session's full-bodied record (richer fix context than the durable
-// skeleton; a resume gets the skeletons, same as before D3).
-function mergeRoundRecords(records, record) {
-  const merged = (records || []).filter((r) => r && r.round !== record.round)
-  merged.push(record)
-  merged.sort((a, b) => (Number(a.round) || 0) - (Number(b.round) || 0))
-  return merged
-}
+// (#211: mergeRoundRecords is gone — the shell no longer keeps an in-memory records copy; the
+// durable skeleton on disk is the single source of truth the deciders read.)
 
 // The post-fix update ships only the SMALL delta (confirmation marker, changed subjects,
 // coverage decisions, fix summary) — never the round body — via review_memory.py update-round,
@@ -269,7 +231,7 @@ function mergeRoundRecords(records, record) {
 // the safe inline size — the delta is usually small but coverageDecisions/fixes are unbounded).
 // Deferred entries ride slimmed (identity/severity/reason + skeleton finding): their full
 // bodies go to the round-bodies dump, not through this pipe or into round-records.json.
-async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
+async function persistPostFixRecord(runDir, reviewerSet, round, fixResult, recordedCoverageDecisions, expectedHash, runId, lease, ioApi, legKind) {
   const updates = {
     changedSubjects: fixResult.changedSubjects || [],
     coverageDecisions: reviewMemory.skeletonCoverageDecisions(recordedCoverageDecisions || []),
@@ -283,7 +245,7 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   const updatesJson = JSON.stringify(updates)
   const inline = updatesJson.length <= _INLINE_RECORD_BOUND
   const stagedPath = inline ? null : ioApi.join(runDir, `round-updates-r${round}.json`)
-  const args = ['plugins/superheroes/lib/review_memory.py', 'update-round',
+  const args = [libPath('review_memory.py'), 'update-round',
     '--path', ioApi.join(runDir, 'round-records.json'), '--round', String(round)]
   args.push(...(inline ? ['--updates-json', updatesJson] : ['--updates-path', stagedPath]))
   args.push('--updates-hash', ioApi.contentHash(updatesJson),
@@ -291,8 +253,9 @@ async function persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, f
   if (lease) args.push('--lease', lease)
   const parsed = await _selfVerifiedHelper(ioApi, args, stagedPath, updatesJson, 'updates-corrupt')
   if (!parsed.ok) return { ok: false, reason: parsed.reason || 'helper-failed' }
-  const records = (recordsForFix || []).map((r) => (r && r.round === round) ? Object.assign({}, r, updates) : r)
-  return { ok: true, contentHash: parsed.contentHash, records }
+  // #211: only the CAS hash rides back — the shell keeps no in-memory record copy (the durable
+  // skeleton on disk is the source of truth the deciders read next round).
+  return { ok: true, contentHash: parsed.contentHash }
 }
 
 async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
@@ -308,12 +271,21 @@ async function coverageDecisionTarget(runDir, context, legKind, ioApi) {
 // 'stale' park — courier text must never enter an integrity decision. A mangled helper
 // ANSWER fails JSON.parse and parks fail-closed (never silently-empty decisions).
 async function loadCoverageDecisions(target, ioApi) {
-  const out = await ioApi.runHelper('python3', ['plugins/superheroes/lib/coverage_decisions.py', 'load',
+  const out = await ioApi.runHelper('python3', [libPath('coverage_decisions.py'), 'load',
     '--path', target.path, '--mode', target.mode === 'doc' ? 'doc' : 'code'])
+  const stdout = String((out && out.stdout) || '')
   try {
-    const parsed = JSON.parse((out && out.stdout) || '')
+    const parsed = JSON.parse(stdout)
     if (parsed && typeof parsed === 'object') return parsed
   } catch (_) { /* fall through to fail-closed */ }
+  const firstBrace = stdout.indexOf('{')
+  const lastBrace = stdout.lastIndexOf('}')
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      const parsed = JSON.parse(stdout.slice(firstBrace, lastBrace + 1))
+      if (parsed && typeof parsed === 'object') return parsed
+    } catch (_) { /* fall through to fail-closed */ }
+  }
   return { ok: false, state: 'unreadable', reason: 'coverage-load-helper-failed' }
 }
 
@@ -350,6 +322,55 @@ function _stripZeroUsage(out) {
   return cleaned
 }
 
+function _expectedReceiptIds(opts) {
+  opts = opts || {}
+  if (Array.isArray(opts.receiptCoverageDecisionIds)) return opts.receiptCoverageDecisionIds.filter(Boolean)
+  return (opts.coverageDecisions || []).map((d) => d && d.id).filter(Boolean)
+}
+
+function _reviewerReceiptIssue(result, opts) {
+  if (!result || result.confidence !== 'high' || result.externalReview) return null
+  const receipt = result.verificationReceipt
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return 'missing'
+  if (opts && opts.receiptArtifact && receipt.artifact !== opts.receiptArtifact) return 'stale'
+  if (!Array.isArray(receipt.coverageDecisionIds)) return 'stale'
+  const gotIds = new Set(receipt.coverageDecisionIds || [])
+  for (const id of _expectedReceiptIds(opts)) if (!gotIds.has(id)) return 'stale'
+  const neededSteps = new Set(['citation', 'reachability', 'missing-check', 'tooling'])
+  for (const step of Array.isArray(receipt.chain) ? receipt.chain : []) {
+    if (step && typeof step === 'object' && step.evidence) neededSteps.delete(step.step)
+  }
+  return neededSteps.size ? 'stale' : null
+}
+
+function _withReceiptFreshness(shaped, opts) {
+  if (!shaped || !Array.isArray(shaped.findings) || shaped.confidence !== 'high' || shaped.externalReview) return shaped
+  const issue = _reviewerReceiptIssue(shaped, opts || {})
+  if (!issue) return shaped
+  const out = Object.assign({}, shaped, { confidence: 'low' })
+  if (issue === 'missing') out.receiptMissing = true
+  else {
+    out.receiptStale = true
+    out.findings = []
+  }
+  return out
+}
+
+function _retryableReviewerIssue(out) {
+  return !_validReviewerResult(out) || !!(out && (out.receiptMissing || out.receiptStale))
+}
+
+// #212: a retry that exists to cure a SPECIFIC defect must say which one, so reviewerAgent can add a
+// corrective instruction (a blind re-dispatch of the identical prompt just re-flips the same coin).
+// Covers every retryable cause, not only receipts: `malformed` catches a schema-failing/off-task
+// answer (live precedent: a reviewer glitched onto an unrelated MCP connector and returned nonsense).
+function _retryReason(out) {
+  if (out && out.receiptMissing) return 'receipt-missing'
+  if (out && out.receiptStale) return 'receipt-stale'
+  if (!_validReviewerResult(out)) return 'malformed'
+  return null
+}
+
 function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
   const leaves = (reviewerSet || []).map((name) => `${name}:r${round}`)
   if (legKind && legKind.panel) leaves.push(`synthesis:r${round}`)
@@ -365,7 +386,7 @@ function expectedUsageLeaves(reviewerSet, round, legKind, fixRan) {
 // No expected-hash: the telemetry file is a single-writer run artifact written once at the
 // terminal — the old pre-read + CAS pair cost a leaf and protected nothing the lease doesn't.
 async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, lease, ioApi) {
-  const args = ['plugins/superheroes/lib/review_telemetry.py', 'write-from-records',
+  const args = [libPath('review_telemetry.py'), 'write-from-records',
     '--path', ioApi.join(runDir, 'review-telemetry.json'),
     '--records-path', ioApi.join(runDir, 'round-records.json'),
     '--expected-leaves-json', JSON.stringify(expectedLeaves || []),
@@ -383,7 +404,7 @@ async function writeTelemetry(runDir, expectedLeaves, usage, terminal, runId, le
 
 async function recordCoverageDecision(targetPath, decision, expectedHash, mode, runId, lease, ioApi) {
   const cmd = mode === 'code' ? 'record-code' : 'record-doc'
-  const args = ['plugins/superheroes/lib/coverage_decisions.py', cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
+  const args = [libPath('coverage_decisions.py'), cmd, '--path', targetPath, '--decision-json', JSON.stringify(decision), '--expected-hash', expectedHash, '--run-id', runId]
   if (lease) args.push('--lease', lease)
   const out = await ioApi.runHelper('python3', args)
   try {
@@ -394,7 +415,7 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 }
 
 // gatherReviewSetup: fold 2 (#141) — run the review loop's decision-free entry stretch (run-dir
-// mkdir + deferred-set seed read + load-summary + coverage load) as ONE review_setup_gather.py leaf,
+// mkdir + deferred-set seed read + entry-bootstrap + coverage load) as ONE review_setup_gather.py leaf,
 // all Python-side. Returns the combined blob { ok, memory, deferredSet, coverage } for the caller to
 // hand reviewPanel as `preloaded` (and, on the doc leg, to seed runtimeDeferred). Returns null on a
 // gather transport failure — the caller then falls back to a plain mkdir + reviewPanel's own reads
@@ -403,22 +424,27 @@ async function recordCoverageDecision(targetPath, decision, expectedHash, mode, 
 async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi }) {
   const api = ioApi || io()
   const target = await coverageDecisionTarget(runDir, context, legKind || {}, api)
-  const args = ['plugins/superheroes/lib/review_setup_gather.py', 'gather',
+  const args = [libPath('review_setup_gather.py'), 'gather',
     '--run-dir', runDir,
     '--records-path', api.join(runDir, 'round-records.json'),
     '--dimensions', JSON.stringify(reviewerSet || []),
     '--extras-path', api.join(runDir, 'last-extras.json'),
     '--deferred-path', api.join(runDir, 'deferred-set.json'),
     '--coverage-path', target.path,
-    '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code']
-  const out = await api.runHelper('python3', args)
-  try {
-    const parsed = JSON.parse((out && out.stdout) || '')
-    if (parsed && parsed.ok && parsed.memory && parsed.coverage) {
-      if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
-      return parsed
-    }
-  } catch (_) { /* fall through — caller uses the unfolded path */ }
+    '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code',
+    '--out-path', api.join(runDir, 'review-setup-gather.json'),
+    '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)]
+  const out = await api.runHelper('python3', args, { payload: true })
+  let parsed = _jsonFromStdout(out)
+  if (parsed && parsed.receipt === 'review-setup-gather') {
+    const read = await _readReceiptText(api, parsed, 'review-setup-gather', 'review-setup-gather-unreadable')
+    if (!read.ok) return null
+    try { parsed = JSON.parse(read.text) } catch (_) { parsed = null }
+  }
+  if (parsed && parsed.ok && parsed.resume && parsed.coverage) {
+    if (!parsed.deferredSet || typeof parsed.deferredSet !== 'object') parsed.deferredSet = {}
+    return parsed
+  }
   return null
 }
 
@@ -429,82 +455,96 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
   const runId = runKey || runDir
   const lease = legKind && legKind.lease
   const ioApi = io()
-  // fold 2 (#141): the doc/code leg may hand us a PRELOADED setup gather — the run-dir mkdir,
-  // load-summary (+extras), deferred-set seed, and entry coverage read folded into ONE upstream
-  // leaf (gatherReviewSetup). When present we skip our own entry reads; when absent (the standalone
-  // shell + its smokes) we fall back to reading each ourselves, unchanged. The coverage + deferred
-  // set are consumed on the FIRST round only — later rounds re-read (both change after a fix).
-  let memoryState = (preloaded && preloaded.memory) ? preloaded.memory
-    : await loadRoundRecords(runDir, reviewerSet || [], ioApi)
-  let entryCoverage = (preloaded && preloaded.coverage) ? preloaded.coverage : null
-  let entryDeferredSet = preloaded ? preloaded.deferredSet : undefined
-  let records = memoryState.ok ? memoryState.records : []
-  let round = resumeRound(records)
-  let lastExtras = memoryState.extras !== undefined ? memoryState.extras : null
-  let justMarkedForConfirmation = false
-  let fixRanThisRun = false
-  const allUsage = {}
-
-  if (!memoryState.ok) {
-    return await finalizeVerdict(
-      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-unreadable', round },
-      records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  // #211: the entry read rides DECISIONS, not records. The doc/code leg hands us a PRELOADED gather
+  // (resume decision + round-1 plan + coverage + deferred, folded into ONE leaf); standalone (the
+  // smokes) we self-gather. The shell holds NO findings — only decisions + the CAS hash. One retry,
+  // then a mangled/unreadable entry parks cannot-certify (never a fresh round on an unverifiable seed).
+  let setup = (preloaded && preloaded.resume) ? preloaded
+    : await gatherReviewSetup({ runDir, reviewerSet: reviewerSet || [], context, legKind, ioApi })
+  if (!setup || !setup.resume) {
+    setup = await gatherReviewSetup({ runDir, reviewerSet: reviewerSet || [], context, legKind, ioApi })
   }
+  const resume = setup && setup.resume
+  let round = (resume && resume.round) || 1
+  const allUsage = {}
+  let fixRanThisRun = false
+  if (!resume || !resume.ok) {
+    // a stable machine-readable park reason (round-memory-<state>), never a raw loader exception —
+    // a mangled gather (resume null) is 'round-memory-unreadable', a corrupt file 'round-memory-corrupt'.
+    const reason = (resume && resume.state) ? 'round-memory-' + resume.state
+      : 'round-memory-unreadable'
+    return await finalizeVerdict(
+      { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason, round },
+      reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+  }
+  let memoryContentHash = resume.contentHash
+  let lastExtras = resume.extras !== undefined ? resume.extras : null
+  let entryPlan = setup.plan || null
+  let entryCoverage = setup.coverage || null
+  let justMarkedForConfirmation = false
 
   if (!reviewerSet || reviewerSet.length === 0) {
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
-                                   roundFindings: {}, records, legKind, verifyResult: null,
+                                   roundFindings: {}, legKind, verifyResult: null,
                                    policy: { roundKind: 'baseline' }, coverageDecisions: [],
-                                   runId, extras: lastExtras })
-    return _usable(v) ? await finalizeVerdict(v, records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
+                                   coverageTarget: null, runId, extras: lastExtras, ioApi })
+    return _usable(v) ? await finalizeVerdict(v, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
   }
 
   while (true) {
-    const recoveringCorruptMemory = !memoryState.ok
-    records = memoryState.ok ? memoryState.records : []
-    const enterConfirmation = !recoveringCorruptMemory && confirmationReady(records, round, justMarkedForConfirmation)
-    justMarkedForConfirmation = false
-
     const coverageTarget = await coverageDecisionTarget(runDir, context, legKind, ioApi)
-    // fold 2 (#141): consume the gathered entry coverage on the first round; every later round
-    // re-reads (a fix can record new coverage decisions mid-loop — lines below already re-read).
-    let coverageState
-    if (entryCoverage) { coverageState = entryCoverage; entryCoverage = null }
-    else coverageState = await loadCoverageDecisions(coverageTarget, ioApi)
-    if (!coverageState.ok) {
+    // The PLAN decision (schedule + carried + enterConfirmation) and the per-round coverage read.
+    // Round 1: both came from the entry gather (consume once). Later rounds: the plan-round decider
+    // with the coverage read FOLDED in (one round-entry leaf, #118). A mangled plan answer parks.
+    let plan, coverageState
+    if (entryPlan) {
+      plan = entryPlan; entryPlan = null
+      coverageState = entryCoverage; entryCoverage = null
+    } else {
+      plan = await planRoundDecider({ runDir, round, roster: reviewerSet,
+        changedSubjects: (lastExtras && lastExtras.changedSubjects),
+        justMarked: justMarkedForConfirmation, coverageTarget, ioApi })
+      if (!plan) {
+        return await finalizeVerdict(
+          { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-plan-unreadable', round },
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      }
+      coverageState = plan.coverage || null
+    }
+    justMarkedForConfirmation = false
+    if (!coverageState || !coverageState.ok) {
       return await finalizeVerdict(
-        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (coverageState.state || coverageState.reason || 'unreadable'), round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + ((coverageState && (coverageState.state || coverageState.reason)) || 'unreadable'), round },
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
     const coverageDecisions = coverageState.decisions
     let coverageContentHash = coverageState.contentHash
+    const enterConfirmation = !!plan.enterConfirmation
+    const roundKind = plan.roundKind
 
-    if (enterConfirmation && records.length) {
-      const latest = records[records.length - 1]
-      const ids = ((latest && latest.coverageDecisions) || []).map((d) => d.id).filter(Boolean)
+    // #174 confirmation coverage-marker check: every coverage id the latest record marked (the plan
+    // decider surfaces them from disk) must still be visible in the live coverage — a decision lost
+    // between marking and confirmation parks rather than certifies over a missing principle.
+    if (enterConfirmation && Array.isArray(plan.latestCoverageDecisionIds) && plan.latestCoverageDecisionIds.length) {
       const visible = new Set(coverageDecisions.map((d) => d.id))
-      if (ids.some((id) => !visible.has(id))) {
+      if (plan.latestCoverageDecisionIds.some((id) => !visible.has(id))) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decision-marker-missing', round },
-          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
       }
     }
 
-    const policy = roundPolicy.planRound({
-      round,
-      dimensions: reviewerSet,
-      changedSubjects: recoveringCorruptMemory ? null : (lastExtras && lastExtras.changedSubjects),
-      previous: buildPreviousDimensionState(records),
-      confirmation: enterConfirmation,
-    })
-    const scheduled = policy.dimensions || {}
+    const scheduled = plan.dimensions || {}
     const roundFindings = {}
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: coverageDecisions.map((d) => d.id).filter(Boolean) }
     await parallel(reviewerSet
       .filter((r) => (scheduled[r] || {}).action !== 'skip')
-      .map((r) => () => dispatchReviewer(r, reviewerContext(context, coverageDecisions, receiptContext), rubric, runDir, round, roundFindings, Object.assign({}, scheduled[r], { roundKind: policy.roundKind, coverageDecisions, receiptContext, receiptArtifact: receiptContext.artifact }))))
+      .map((r) => () => dispatchReviewer(r, reviewerContext(context, coverageDecisions, receiptContext), rubric, runDir, round, roundFindings, Object.assign({}, scheduled[r], { roundKind, coverageDecisions, receiptContext, receiptArtifact: receiptContext.artifact }))))
     for (const [name, sched] of Object.entries(scheduled)) {
-      if (sched.action === 'skip') roundFindings[name] = carryForwardDimension(records, name, sched)
+      // the carried (skipped-dimension) state comes from the plan decider (structurally clean —
+      // findings empty by construction); a defensive fallback covers a missing carried entry.
+      if (sched.action === 'skip') roundFindings[name] = (plan.carried && plan.carried[name]) ||
+        { status: 'skipped', findings: [], confidence: 'low', carriedFromRound: sched && sched.carriedFromRound }
     }
 
     let synthesized = null
@@ -518,11 +558,12 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       if (!synthesized) {
         try { log(`review-panel r${round}: synthesis produced no result — falling back to raw compile (no findings dropped)`) } catch (_) {}
       }
+      graftSynthesizedFindings(roundFindings, synthesized)
     }
 
     let verifyResult = null
     if (legKind.code) {
-      try { verifyResult = await verifyAgent(verifyCommand, runDir, round) }
+      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
     }
 
@@ -530,34 +571,27 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     Object.assign(allUsage, tokenUsage)
 
     const roundCoverageDecisions = annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSet)
-    const record = reviewMemory.recordFromDimensionResults(round, policy.roundKind, roundFindings, lastExtras && lastExtras.changedSubjects, roundCoverageDecisions, tokenUsage, enterConfirmation && policy.roundKind === 'confirmation')
-    const persisted = await persistRoundRecord(runDir, reviewerSet, record, memoryState.contentHash, runId, lease, ioApi)
+    const record = reviewMemory.recordFromDimensionResults(round, roundKind, roundFindings, lastExtras && lastExtras.changedSubjects, roundCoverageDecisions, tokenUsage, enterConfirmation && roundKind === 'confirmation')
+    // persist the SKELETON down (the verified CAS write, unchanged) — then discard it: the tally
+    // decider reads the just-persisted disk state, so the shell keeps no record copy in memory.
+    const persisted = await persistRoundRecord(runDir, reviewerSet, record, memoryContentHash, runId, lease, ioApi)
     if (!persisted.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
-    const recordsForFix = Array.isArray(persisted.records) ? persisted.records : mergeRoundRecords(records, record)
-    records = recordsForFix
-    memoryState = { ok: true, records: recordsForFix, contentHash: persisted.contentHash }
+    memoryContentHash = persisted.contentHash
 
-    if (recoveringCorruptMemory && wouldOtherwiseCertify(roundFindings, reviewerSet)) {
-      return await finalizeVerdict(
-        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-corrupt-recovery', round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
-    }
-
-    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set (no fix has run between the
-    // entry gather and this tally, so it is byte-identical to a fresh disk read). It is consumed
-    // once — every later round re-reads (a fix may defer findings in between).
+    // the tally reads the just-persisted rounds from disk (breaker + terminal + confirmation
+    // economics + certification) and, on a continue, writes the fixer worklist to the SAME leaf and
+    // rides only its pointer back. gate / present-blocking / uncertified-reason ride DOWN (below).
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
-      roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions: roundCoverageDecisions,
-      runId, extras: lastExtras, enterConfirmation, preloadedDeferredSet: entryDeferredSet })
-    entryDeferredSet = undefined
+      roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
+      coverageTarget, runId, extras: lastExtras, enterConfirmation, ioApi })
     if (!_usable(verdict)) return _failClosed()
 
     if (verdict.terminal !== 'continue') {
-      return await finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+      return await finalizeVerdict(verdict, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
 
     if (verdict.reason === 'awaiting final confirmation round') {
@@ -566,15 +600,22 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
 
     fixRanThisRun = true
-    const fixContext = buildFixContext(recordsForFix, coverageDecisions)
-    const fixResult = await runFixStep(fixStep, fixContext, verdict, runDir)
+    // #211 pointers-down: the fixer receives the worklist PATH (the tally leaf wrote it), never
+    // inlined findings. A continue with no worklist pointer means the fold write failed — park.
+    const worklistPath = verdict.worklistPath
+    if (!worklistPath) {
+      return await finalizeVerdict(
+        { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'fix-context-' + (verdict.worklistReason || 'write-failed'), round },
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+    }
+    const fixResult = await runFixStep(fixStep, { worklistPath, round }, verdict, runDir)
     if (!fixResult.ok) {
       const failVerdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
-        roundFindings, records, legKind, synthesized, verifyResult, policy, coverageDecisions,
-        runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation })
+        roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
+        coverageTarget, runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation, ioApi })
       return await finalizeVerdict(
         _usable(failVerdict) ? failVerdict : _failClosed(),
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
 
     lastExtras = fixResult.extras || { changedSubjects: (fixResult.fixResult && fixResult.fixResult.changedSubjects) || [], needsConfirmation: true }
@@ -586,13 +627,13 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       if (!res.ok) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decision-write-failed', round },
-          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
       }
       const reloaded = await loadCoverageDecisions(target, ioApi)
       if (!reloaded.ok) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'coverage-decisions-' + (reloaded.state || 'unreadable'), round },
-          records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+          reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
       }
       recordedCoverageDecisions = reloaded.decisions
       expectedCovHash = reloaded.contentHash
@@ -603,21 +644,20 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     // anyway, and this ordering shrinks the crash window in which the audit bodies are
     // lost while the delta survives (or vice versa) at zero protocol cost.
     await dumpRoundBodiesBestEffort(runDir, round, verdict, fixResult.fixResult || {}, ioApi)
-    const postFix = await persistPostFixRecord(runDir, reviewerSet, recordsForFix, round, fixResult.fixResult || {}, recordedCoverageDecisions, persisted.contentHash, runId, lease, ioApi, legKind)
+    const postFix = await persistPostFixRecord(runDir, reviewerSet, round, fixResult.fixResult || {}, recordedCoverageDecisions, memoryContentHash, runId, lease, ioApi, legKind)
     if (!postFix.ok) {
       return await finalizeVerdict(
         { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-memory-write-failed', round },
-        records, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
+        reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
     }
-    records = postFix.records || recordsForFix
-    memoryState = { ok: true, records, contentHash: postFix.contentHash }
+    memoryContentHash = postFix.contentHash
     justMarkedForConfirmation = true
     try { await ioApi.writeFile(`${runDir}/last-extras.json`, JSON.stringify(lastExtras)) } catch (_) {}
     round += 1
   }
 }
 
-async function finalizeVerdict(verdict, records, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
+async function finalizeVerdict(verdict, reviewerSet, round, legKind, fixRan, allUsage, runDir, runId, lease, ioApi) {
   const expectedLeaves = []
   for (let r = 1; r <= round; r += 1) expectedLeaves.push(...expectedUsageLeaves(reviewerSet, r, legKind, fixRan && r === round))
   const telemWrite = await writeTelemetry(runDir, expectedLeaves, allUsage, verdict.terminal, runId, lease, ioApi)
@@ -637,27 +677,42 @@ function _validReviewerResult(out) {
   return !!out && Array.isArray(out.findings) && (out.confidence === 'high' || out.confidence === 'low')
 }
 
+function normalizeReviewerFindings(findings) {
+  return (findings || []).map((finding) => {
+    if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding
+    if ((finding.title === undefined || finding.title === null || finding.title === '') &&
+        typeof finding.summary === 'string' && finding.summary) {
+      return Object.assign({}, finding, { title: finding.summary })
+    }
+    return finding
+  })
+}
+
 function _shapeReviewerResult(out, opts) {
   if (Array.isArray(out)) {
     const conf = ((opts || {}).tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
-    return { findings: out, confidence: conf, legacyArray: true }
+    return { findings: normalizeReviewerFindings(out), confidence: conf, legacyArray: true }
   }
-  return _stripZeroUsage(out)
+  const shaped = _stripZeroUsage(out)
+  if (!shaped || !Array.isArray(shaped.findings)) return shaped
+  return _withReceiptFreshness(Object.assign({}, shaped, { findings: normalizeReviewerFindings(shaped.findings) }), opts || {})
 }
 
 async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundFindings, opts) {
   const baseOpts = opts || {}
   let out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, baseOpts), baseOpts)
   let escalated = false
-  if (baseOpts.tier === 'reviewer' && (!_validReviewerResult(out) || out.confidence !== 'high')) {
+  if (baseOpts.tier === 'reviewer' && (_retryableReviewerIssue(out) || out.confidence !== 'high')) {
     escalated = true
-    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer' })
+    // #212: the escalation to reviewer-deep IS a re-dispatch — carry the corrective retryReason when
+    // the shallow answer had a curable defect (null when it was just an honest low, nothing to correct).
+    const deepOpts = Object.assign({}, baseOpts, { tier: 'reviewer-deep', escalatedFrom: 'reviewer', retryReason: _retryReason(out) })
     out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, deepOpts), deepOpts)
-    if (!_validReviewerResult(out) || out.receiptMissing) {
-      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep' })), deepOpts)
+    if (_retryableReviewerIssue(out)) {
+      out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, deepOpts, { retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), deepOpts)
     }
-  } else if (baseOpts.tier === 'reviewer-deep' && (!_validReviewerResult(out) || out.receiptMissing)) {
-    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep' })), baseOpts)
+  } else if (baseOpts.tier === 'reviewer-deep' && _retryableReviewerIssue(out)) {
+    out = _shapeReviewerResult(await reviewerAgent(reviewer, context, rubric, runDir, round, Object.assign({}, baseOpts, { tier: 'reviewer-deep', retryFrom: 'reviewer-deep', retryReason: _retryReason(out) })), baseOpts)
   }
   if (!_validReviewerResult(out)) {
     roundFindings[reviewer] = { status: 'missing', dimension: reviewer, findings: [], confidence: 'low', malformed: true, legacyArray: !!(out && out.legacyArray), escalated }
@@ -673,22 +728,128 @@ async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 
-async function verifyAgent(verifyCommand, runDir, round) {
+function graftSynthesizedFindings(roundFindings, synthesized) {
+  if (!synthesized || typeof synthesized !== 'object' || !Array.isArray(synthesized.findings)) return
+  const keptById = Object.create(null)
+  for (const kept of synthesized.findings) {
+    if (!kept || typeof kept !== 'object' || Array.isArray(kept)) continue
+    keptById[circuitBreaker.findingIdentity(kept)] = kept
+  }
+  for (const [name, result] of Object.entries(roundFindings || {})) {
+    if (!result || typeof result !== 'object' || !Array.isArray(result.findings)) continue
+    const findings = []
+    for (const finding of result.findings) {
+      if (!finding || typeof finding !== 'object' || Array.isArray(finding)) continue
+      const kept = keptById[circuitBreaker.findingIdentity(finding)]
+      if (!kept) {
+        if (finding.file === null || finding.file === undefined || finding.line === null || finding.line === undefined) {
+          // synthesis could not verify this no-location finding (no keep verdict) but we keep it so
+          // it still counts for the gate. Flag it `synthesisUnverified` so the tally decider can
+          // reproduce the OLD `compiled` view: the CURRENT round's breaker findings + present-deferred
+          // EXCLUDE it (synthesis dropped it), while recurrence/generalize over prior rounds still
+          // see it (#211 parity — this preserves the #174 generalize-grace, which relied on exactly
+          // this current=compiled / prior=record asymmetry).
+          findings.push(Object.assign({}, finding, { synthesisUnverified: true }))
+        }
+        continue
+      }
+      const enriched = Object.assign({}, finding)
+      if ((enriched.title === undefined || enriched.title === null || enriched.title === '') &&
+          kept.title !== undefined && kept.title !== null && kept.title !== '') {
+        enriched.title = kept.title
+      }
+      if (kept.severity !== undefined && kept.severity !== null && kept.severity !== '') enriched.severity = kept.severity
+      if (!enriched.classKey && kept.classKey) enriched.classKey = kept.classKey
+      findings.push(enriched)
+    }
+    roundFindings[name] = Object.assign({}, result, { findings })
+  }
+}
+
+async function verifyAgent(verifyCommand, runDir, round, ioApi) {
   // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
   // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
   // session model). The preamble strips the marker before the real agent().
-  const out = await agent(
-    `Run exactly this and return ONLY its stdout JSON, unchanged:\n\n` +
-    `python3 plugins/superheroes/lib/verify_gate.py --command ${shq(verifyCommand || 'none')} --emit-run`,
-    { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
-  if (!out) return 'fail'
-  return verifyGateTwin.classify({ command: verifyCommand || 'none', returncode: out.returncode, timedOut: out.timedOut })
+  ioApi = ioApi || io()
+  const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
+  const command = `python3 ${libPath('verify_gate.py')} --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
+  const prompt =
+    `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
+    `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
+    `(the Bash tool accepts a timeout parameter up to 600000 ms). Do NOT background it. ` +
+    `Do NOT answer until the command prints its final JSON. Your structured output fields must be the JSON object's own fields ` +
+    `(result/code/tail); do not nest the JSON as a string.\n\n` +
+    command
+  const runCourier = () => agent(prompt, { label: 'run verify', schema: VERIFY_SCHEMA, courier: true })
+  // A THROWN verify courier must be treated EXACTLY like an unusable answer — never collapsed to 'fail'
+  // before the file read-back runs. Live (harness-run 26, wf_1ed21465-6f3): the haiku courier ran
+  // verify_gate.py correctly (round-stamped file written, result PASS) but never called its
+  // StructuredOutput tool (emitted the tag as literal text), so agent() THREW; the call-site catch
+  // then collapsed a clean round to 'fail' with the pass evidence sitting on disk. Swallowing the throw
+  // to null here keeps the round-stamped file authoritative in BOTH directions: it is still REQUIRED to
+  // grant pass (anti-fabrication, unchanged) AND is now consulted before we ever conclude fail. The
+  // call-site catch remains only as a last-resort backstop.
+  const tryCourier = async () => { try { return await runCourier() } catch (_) { return null } }
+  const out = await tryCourier()
+  const commandSkipped = !verifyCommand || String(verifyCommand).trim().toLowerCase() === 'none'
+  if (commandSkipped) return verifyResultFromPayload(verifyCommand, out, { allowPass: false }) || 'fail'
+  const readBack = await ioApi.readJson(outPath, null)
+  const fromFile = verifyResultFromPayload(verifyCommand, readBack, { allowPass: true })
+  if (fromFile) return fromFile
+  const fromDirect = verifyResultFromPayload(verifyCommand, out, { allowPass: false })
+  if (fromDirect) return fromDirect
+  const retryOut = await tryCourier()
+  const retryReadBack = await ioApi.readJson(outPath, null)
+  const fromRetryFile = verifyResultFromPayload(verifyCommand, retryReadBack, { allowPass: true })
+  if (fromRetryFile) return fromRetryFile
+  // Both couriers AND both read-backs yielded nothing usable -> the anti-fabrication fail-closed default.
+  return verifyResultFromPayload(verifyCommand, retryOut, { allowPass: false }) || 'fail'
 }
 
-async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}, records = [],
+function own(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+function _integerString(value) {
+  const s = String(value).trim()
+  return /^-?\d+$/.test(s) ? s : null
+}
+
+function verifyResultFromPayload(verifyCommand, payload, opts) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  opts = opts || {}
+  if (typeof payload.result === 'string') {
+    try {
+      const nested = JSON.parse(payload.result)
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        return verifyResultFromPayload(verifyCommand, nested, opts)
+      }
+    } catch (_) { /* fall through to normal result handling */ }
+  }
+  const command = verifyCommand || (own(payload, 'command') ? payload.command : 'none')
+  const commandSkipped = !command || String(command).trim().toLowerCase() === 'none'
+  if (payload.result === 'pass') return opts.allowPass ? 'pass' : null
+  if (payload.result === 'skipped') return commandSkipped ? 'skipped' : null
+  if (payload.result === 'fail' || payload.result === 'timeout') return payload.result
+  if (commandSkipped) return 'skipped'
+  const timedOut = payload.timedOut === true || String(payload.timedOut).toLowerCase() === 'true'
+  if (timedOut) return 'timeout'
+  const rc = own(payload, 'returncode') ? payload.returncode : (own(payload, 'code') ? payload.code : undefined)
+  const rcStr = _integerString(rc)
+  if (!rcStr) return null
+  const classified = verifyGateTwin.classify({ command, returncode: rcStr, timedOut: false })
+  return classified === 'pass' && !opts.allowPass ? null : classified
+}
+
+// The LIVE tally: compute the answer-time facts from the round's own reviewer answers, ride the
+// scalars the durable skeleton can't hold DOWN to the tally-round decider (which owns the terminal
+// from disk + writes the fix worklist on a continue), and assemble the verdict — this round's
+// findings/drops/downgrades for the readout, the decider's decisions for control flow.
+async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {},
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
-                           runId, enterConfirmation = false, preloadedDeferredSet = undefined }) {
+                           coverageTarget = null, runId, enterConfirmation = false, ioApi }) {
+  const api = ioApi || io()
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
     for (const k of ['fixes', 'deferred', 'parentOrigin']) if (k in extras) safeExtras[k] = extras[k]
@@ -696,67 +857,56 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
   try {
     if (!roster || roster.length === 0) {
       return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
-        findings: [], missing: [], drops: [], terminal: 'cannot-certify', round,
+        findings: [], missing: [], drops: [], downgrades: [], terminal: 'cannot-certify', round,
         reason: 'empty reviewer set — nothing to certify' }, safeExtras)
     }
+    // answer-time facts from the LIVE reviewer answers (the durable skeleton strips the receipts
+    // these need): gate/confidence/missing, present-blocking, and the #212 named uncertified reason.
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: (coverageDecisions || []).map((d) => d.id).filter(Boolean) }
     const gateOut = panelTally.roundGateFromDimensionResults(
       roundFindings, roster, policy.roundKind === 'confirmation', receiptContext)
     const gate = gateOut.gate
     const confidence = gateOut.confidence
     const missing = gateOut.incomplete
-    let compiled, drops
+    let compiled, drops, downgrades
     if (synthesized && typeof synthesized === 'object') {
       compiled = synthesized.findings || []
       drops = synthesized.drops || []
+      // #186: blocking→non-blocking severity downgrades ride alongside drops for the readout's
+      // owner-scrutiny section (visibility only; the severity change itself already applied).
+      downgrades = synthesized.downgrades || []
     } else {
       compiled = panelTally.compileDimensionResults(roundFindings)
       drops = []
+      downgrades = []
     }
-    // fold 2 (#141): the round-1 tally reuses the gathered deferred-set; every later round reads it
-    // fresh (a fix may have deferred findings since the gather).
-    const deferredSet = (preloadedDeferredSet && typeof preloadedDeferredSet === 'object')
-      ? preloadedDeferredSet : await loadDeferredSet(runDir)
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
-    const pdef = panelTally.presentDeferred(compiled, deferredSet)
-    const skip = new Set(Object.keys(deferredSet))
-    const prior = assembleRounds(records, deferredSet).filter((r) => r.round !== round)
-    const priorRecords = (records || []).filter((r) => r && Number(r.round) !== round)
-    const thisRound = {
-      round,
-      findings: compiled.filter((f) => !skip.has(circuitBreaker.findingIdentity(f))),
-      dimensions: _breakerRoundDimensions(roundFindings),
-      coverageDecisions: coverageDecisions || [],
-      generalizeRequired: reviewMemory.recurrentClasses(priorRecords, coverageDecisions || []),
-    }
-    const brk = circuitBreaker.checkCircuitBreaker(prior.concat([thisRound]), maxRounds)
-    const breakerHalt = !!brk.halt
-    let { terminal, reason } = panelTally.decideTerminal(
-      gate, presentBlocking, pdef, fixStatus, round, maxRounds, breakerHalt)
-    if (terminal === 'halted' && breakerHalt && brk.detail) reason = brk.detail
-    if ((terminal === 'clean' || terminal === 'clean-with-skips') &&
-        verifyResult !== null && !_VERIFY_OK.has(verifyResult)) {
-      terminal = 'halted'
-      reason = verifyResult === 'timeout'
-        ? 'verify command timed out — cannot certify clean'
-        : 'verify command failed — cannot certify clean'
-    }
-    if (terminal === 'cannot-certify' && missing.length) {
-      reason = 'coverage incomplete — missing review angle(s): ' + missing.join(', ')
-    }
-    const markedPending = (records || []).some((r) => r && r.confirmationPending)
-    if ((terminal === 'clean' || terminal === 'clean-with-skips') && markedPending && !enterConfirmation) {
-      terminal = 'continue'
-      reason = 'awaiting final confirmation round'
-    }
-    if ((terminal === 'clean' || terminal === 'clean-with-skips') && policy.roundKind === 'confirmation') {
-      // confirmation round succeeded — clear marker on persisted record handled next round
-    }
-    return Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
-      missing, drops, terminal, reason, round }, safeExtras)
+    // #212 named reason only matters on a cannot-certify GATE — compute it from the live per-seat
+    // results and ride it DOWN (the decider can't recompute it: the skeleton strips the receipts).
+    const uncertifiedReason = (gate === 'cannot-certify') ? panelTally.uncertifiedReason(roundFindings, roster) : null
+
+    // the decider owns the terminal (breaker + decideTerminal + #174 economics + certification) from
+    // disk; on a continue it writes the fixer worklist to the SAME leaf and rides only its pointer.
+    const decided = await tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+      presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
+      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), ioApi: api })
+    // a mangled/unparseable decider answer fails closed — never a silent clean (the #211 adversarial
+    // invariant): the shell's _failClosed sentinel halts + flags recordMissing.
+    if (!decided || typeof decided.terminal !== 'string') return _failClosed()
+
+    const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
+      missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
+    // #212 uncertified flag (from the decider — set on a cannot-certify gate, even routing to fix).
+    if (decided.uncertified) verdictOut.uncertified = true
+    // #174 req 4 honest certification summary rides on a certifying terminal (from the decider).
+    if (decided.certification) verdictOut.certification = decided.certification
+    // #211 fix-context pointer (written by the folded decider on a continue) — never inlined findings.
+    if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
+    if (own(decided, 'worklistReason')) verdictOut.worklistReason = decided.worklistReason
+    return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
-      findings: [], missing: [], drops: [], terminal: 'halted', round,
+      findings: [], missing: [], drops: [], downgrades: [], terminal: 'halted', round,
       reason: 'tally failed: ' + (exc && exc.message ? exc.message : exc) }, safeExtras)
   }
 }
@@ -765,12 +915,35 @@ async function runFixStep(fixStep, fixContext, verdict, runDir) {
   try {
     const fixResult = await fixStep(fixContext, verdict, runDir)
     if (!fixResult) return { ok: false, extras: null, fixResult: null }
+    const schedulingExtras = fixSchedulingExtras(fixResult)
     await recordDeferred(fixResult, verdict, runDir)
-    return { ok: true, extras: fixResult.extras || null, fixResult }
+    const detailExtras = plainExtras(fixResult.extras)
+    const extras = Object.assign({}, detailExtras || {}, schedulingExtras || {})
+    return { ok: true, extras: Object.keys(extras).length ? extras : null, fixResult }
   } catch (e) {
     try { log(`review-panel: fix step failed, treating as fix failure -> halted: ${e && e.message ? e.message : e}`) } catch (_) {}
     return { ok: false, extras: null, fixResult: null }
   }
+}
+
+function plainExtras(value) {
+  return (value && typeof value === 'object' && !Array.isArray(value)) ? value : null
+}
+
+function fixSchedulingExtras(fixResult) {
+  if (!fixResult || typeof fixResult !== 'object' || Array.isArray(fixResult)) return null
+  const out = {}
+  if (Array.isArray(fixResult.changedSubjects)) {
+    out.changedSubjects = fixResult.changedSubjects.filter((s) => POLICY_SUBJECTS.has(s))
+    out.needsConfirmation = true
+  }
+  if (Array.isArray(fixResult.changedSubjectDetails)) out.changedSubjectDetails = fixResult.changedSubjectDetails
+  else if (Array.isArray(fixResult.changedSubjects)) out.changedSubjectDetails = fixResult.changedSubjects
+  const extras = plainExtras(fixResult.extras)
+  if (extras && Object.prototype.hasOwnProperty.call(extras, 'needsConfirmation')) {
+    out.needsConfirmation = extras.needsConfirmation
+  }
+  return Object.keys(out).length ? out : null
 }
 
 const VERDICT_SCHEMA = {
@@ -782,15 +955,17 @@ const VERDICT_SCHEMA = {
     confidence: { enum: ['high', 'low'] },
     findings: { type: 'array' },
     drops: { type: 'array' },
+    downgrades: { type: 'array' },
     terminal: { enum: ['continue', 'clean', 'clean-with-skips', 'cannot-certify', 'halted'] },
     reason: { type: 'string' },
     recordMissing: { type: 'boolean' },
+    uncertified: { type: 'boolean' },
   },
 }
 const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
   properties: { findings: { type: 'array' }, drops: { type: 'array' } } }
-const VERIFY_SCHEMA = { type: 'object', required: ['command'],
-  properties: { command: {}, returncode: {}, timedOut: {} } }
+const VERIFY_SCHEMA = { type: 'object', required: ['result'],
+  properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 

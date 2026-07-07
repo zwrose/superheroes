@@ -18,7 +18,9 @@ function currentAgent() {
 }
 
 // FR-5 cwd-rooting: mirror showrunner's selfContained() — when __SR_ROOT is set (throwaway/live-eval
-// runs), root every courier command at the repo root so `python3 plugins/superheroes/lib/...` resolves.
+// runs), root every courier command at the TARGET repo so git/build/docs paths resolve. The lib
+// interpreter path itself comes from `${libPath(...)}` (#170: an absolute plugin-cache path in
+// production, the repo-relative default in dev), so it resolves independent of this cwd.
 // Already-rooted commands (a leading `cd `) are left untouched; without __SR_ROOT this is a no-op.
 function rootedCommand(command) {
   const root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null
@@ -116,6 +118,122 @@ async function callOnce(label, command, promptOpts) {
   return currentAgent()(promptFor(command, promptOpts), { label, courier: true })
 }
 
+// badCourierAnswer: TRUE when a marker-carrying command's answer signals the shell DID NOT run.
+// Single source of truth for both courier_exec and the bundle preamble (__sh / #194). Detects:
+//   (a) a missing __SR_EXIT marker (bare payload / echo shape); and
+//   (b) the literal unexpanded '__SR_EXIT:$?' from an echoed command (live wf_1494a8fa-e28).
+// This proves marker-SHAPE, not execution. A courier simulating the full embedded failure branch
+// (payload + __SR_EXIT:0, as libRootProbe now embeds) would still pass — #218 bounds that residual
+// via runCourierMarked*'s 2 outer attempts × dispatchMarked's 3-dispatch retry/fallback chain.
+// Do NOT add proof-of-execution here: the Workflow sandbox has no crypto/wall-clock/RNG primitives.
+function badCourierAnswer(a) {
+  const s = String(a == null ? '' : a)
+  return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
+}
+
+// markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
+// helperResult wraps this for the bundle __runHelperCommand / stageAndRunHelper result shape.
+function markerSliceStdout(s) {
+  s = String(s || '')
+  const re = /__SR_EXIT:(\d+)/g
+  let m, last = null
+  while ((m = re.exec(s)) !== null) last = m
+  const status = last ? Number(last[1]) : 1
+  let stdout = last ? s.slice(0, last.index) : s
+  const markerTail = last ? s.slice(last.index + last[0].length) : ''
+  stdout = stdout.replace(/^\s*```[a-zA-Z0-9]*\n?/, '').replace(/\n?```\s*$/, '').replace(/\n$/, '')
+  if (/^\s*`/.test(stdout) && (/`\s*$/.test(stdout) || /^\s*`\s*$/.test(markerTail))) {
+    stdout = stdout.replace(/^\s*`/, '').replace(/`\s*$/, '')
+  }
+  return { status, stdout }
+}
+
+function helperResult(s) {
+  const sliced = markerSliceStdout(s)
+  return { ok: sliced.status === 0, status: sliced.status, stdout: sliced.stdout, stderr: '' }
+}
+
+function markedPromptFor(command) {
+  return 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. ' +
+    'Do not echo, fence, summarize, or describe the command:\n\n' + rootedCommand(command)
+}
+
+function wrapMarkedCommand(command) {
+  return String(command) + ' 2>&1; echo __SR_EXIT:$?'
+}
+
+// dispatchMarked: the #194/__sh courier protocol — lean superheroes:courier agent, marker guard with
+// retry + default-dispatch fallback. Shared by runCourierMarkedText/Json (#218: libRoot probe sites).
+// Each outer attempt calls dispatchMarked once; dispatchMarked itself retries up to 3 dispatches
+// (courier agent → courier agent → default agent) when badCourierAnswer fires — 2×3 total before
+// CourierTransportError. That chain bounds residual simulation (see badCourierAnswer / libRootProbe).
+async function dispatchMarked(label, markedCmd) {
+  const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
+  const prompt = markedPromptFor(markedCmd)
+  let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
+  if (badCourierAnswer(ans)) {
+    ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
+    if (badCourierAnswer(ans)) {
+      const fo = Object.assign({}, baseOpts)
+      delete fo.agentType
+      ans = stdoutOf(await currentAgent()(prompt, fo))
+    }
+  }
+  return ans
+}
+
+// runCourierMarkedText: dumb-pipe a shell command through the __SR_EXIT marker protocol and return
+// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218).
+async function runCourierMarkedText(label, command) {
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const sliced = markerSliceStdout(ans)
+    if (sliced.stdout.trim() !== '') return sliced.stdout
+    last = 'empty stdout'
+  }
+  throw new CourierTransportError(label, last)
+}
+
+// runCourierMarkedJson: runCourierJson semantics over the __SR_EXIT marker protocol — execution is
+// proven before a probe's embedded ok:false (e.g. __SR_LIBROOT_MISSING__) is accepted, so a lazy
+// courier that parrots the failure branch from the prompt cannot park the run (#218).
+async function runCourierMarkedJson(label, command, opts) {
+  const options = opts || {}
+  const markedCmd = wrapMarkedCommand(command)
+  let last = 'empty stdout'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd)
+    if (badCourierAnswer(ans)) {
+      last = 'missing execution marker'
+      continue
+    }
+    const out = markerSliceStdout(ans).stdout
+    if (out.trim() === '') {
+      last = 'empty stdout'
+      continue
+    }
+    const parsed = extractJson(out)
+    if (parsed == null) {
+      last = 'unparseable JSON'
+      continue
+    }
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    const missing = missingRequired(parsed, options.require || [])
+    if (missing) {
+      last = `missing required field ${missing}`
+      continue
+    }
+    return parsed
+  }
+  throw new CourierTransportError(label, last)
+}
+
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
 // legitimate content may itself contain ``` fences — unfencing here would corrupt it. JSON
 // couriers get the fence-tolerant treatment in runCourierJson (extractJson) instead.
@@ -171,8 +289,13 @@ async function runCourierBatchJson(label, commands, opts) {
 
 module.exports = {
   CourierTransportError,
+  badCourierAnswer,
   extractJson,
+  helperResult,
+  markerSliceStdout,
   runCourierJson,
+  runCourierMarkedJson,
+  runCourierMarkedText,
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,

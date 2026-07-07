@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import os
 import subprocess
+import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,3 +50,14 @@ def test_execution_error_fails_closed():
         raise OSError("no such command")
     res = VG.run_verify("pytest", runner=_raise)
     assert res["result"] == "fail"  # never silently passes
+
+
+def test_cli_writes_out_file_atomically(tmp_path):
+    out_path = tmp_path / "verify-result.json"
+    proc = subprocess.run(
+        [sys.executable, os.path.join(_HERE, "..", "verify_gate.py"),
+         "--command", "none", "--out", str(out_path)],
+        text=True, capture_output=True, check=True)
+    stdout = json.loads(proc.stdout)
+    written = json.loads(out_path.read_text())
+    assert stdout == written == {"code": None, "result": "skipped", "tail": ""}

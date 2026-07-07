@@ -32,6 +32,10 @@ def test_finding_identity_combines_file_and_title():
     assert finding_identity({"file": "src/a.ts", "title": "Missing Filter"}) == "src/a.ts::missing filter"
 
 
+def test_finding_identity_falls_back_to_summary_when_title_missing():
+    assert finding_identity({"file": "src/a.ts", "summary": "Missing Filter"}) == "src/a.ts::missing filter"
+
+
 def test_finding_identity_null_file_is_empty_string():
     assert finding_identity({"file": None, "title": "X"}) == "::x"
 
@@ -78,6 +82,67 @@ def test_halts_at_max_iterations_with_blocking():
     res = check_circuit_breaker(r, 2)
     assert res["halt"] is True
     assert res["reason"] == "max-iterations"
+
+
+def test_max_iterations_detail_reports_actual_round_and_no_fix():
+    # The cap-halt fires right after a review, before the fix leg — the latest round carries no
+    # recorded fix, so the detail must not claim any were committed (the #212 honest-reason class).
+    r = [rnd(1, [imp("a")]), rnd(2, [imp("a")])]
+    res = check_circuit_breaker(r, 2)
+    assert res["detail"] == (
+        "Reached round 2 (cap 2); the latest review still showed 1 blocking finding(s) "
+        "(no fix was applied this round — the finding(s) remain unaddressed)."
+    )
+
+
+def test_max_iterations_detail_reports_round_past_cap_on_resume():
+    # A resume can run past the cap: n (actual round) must appear, not the cap value (the round-count
+    # bug — the message used to print the cap even when the loop was several rounds beyond it).
+    r = [rnd(1, [imp("a")]), rnd(2, [imp("b")]), rnd(3, [imp("c")])]
+    res = check_circuit_breaker(r, 2)
+    assert res["halt"] is True
+    assert res["reason"] == "max-iterations"
+    assert res["detail"].startswith("Reached round 3 (cap 2);")
+    assert "no fix was applied this round" in res["detail"]
+
+
+def test_max_iterations_detail_claims_fix_only_when_round_recorded_one():
+    # When the final round DID record applied fixes, the "committed but not re-reviewed" wording is
+    # truthful and is emitted; the signal is rec['fix']['fixes'] on the latest round.
+    latest = rnd(2, [imp("a")])
+    latest["fix"] = {"fixes": [{"title": "a", "file": "src/a.ts"}]}
+    r = [rnd(1, [imp("a")]), latest]
+    res = check_circuit_breaker(r, 2)
+    assert res["detail"] == (
+        "Reached round 2 (cap 2); the latest review still showed 1 blocking finding(s) "
+        "(the final round's fixes are committed but not yet re-reviewed)."
+    )
+
+
+def test_max_iterations_empty_fix_list_is_not_treated_as_a_recorded_fix():
+    latest = rnd(2, [imp("a")])
+    latest["fix"] = {"fixes": []}  # fix leg ran but recorded nothing → still "no fix applied"
+    r = [rnd(1, [imp("a")]), latest]
+    res = check_circuit_breaker(r, 2)
+    assert "no fix was applied this round" in res["detail"]
+
+
+def test_max_iterations_detail_does_not_overstate_reviews_when_a_round_was_unreviewed():
+    # A transport-failed / all-missing round inflates n (which the gate uses), but the honest message
+    # must not imply it was a real review — it names how many of the recorded rounds were reviewed.
+    unreviewed = {"round": 1, "findings": [], "dimensions": {"code-reviewer": {"status": "missing"}}}
+    r = [unreviewed, rnd(2, [imp("a")])]
+    res = check_circuit_breaker(r, 2)
+    assert res["reason"] == "max-iterations"
+    assert res["detail"].startswith("Reached round 2 (cap 2, 1 reviewed);")
+
+
+def test_max_iterations_detail_omits_reviewed_note_when_all_rounds_were_reviewed():
+    # The qualifier only appears when it adds information; the common all-reviewed case stays clean.
+    r = [rnd(1, [imp("a")]), rnd(2, [imp("a")])]
+    res = check_circuit_breaker(r, 2)
+    assert "reviewed)" not in res["detail"]
+    assert res["detail"].startswith("Reached round 2 (cap 2);")
 
 
 def test_no_halt_at_max_iterations_once_resolved():

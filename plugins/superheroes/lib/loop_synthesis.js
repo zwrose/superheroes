@@ -2,6 +2,16 @@
 const { findingIdentity } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
 const _BLOCKING = new Set(['Critical', 'Important'])
+const _NON_BLOCKING = new Set(['Minor', 'Nit'])
+const _DEFAULT_BLOCKING_SEVERITY = 'Important'
+
+function _keptSeverity(f, v) {
+  const verdictSeverity = (v && typeof v === 'object') ? v.severity : null
+  if (_TIERS.has(verdictSeverity)) return verdictSeverity
+  if (_TIERS.has(f && f.severity)) return f.severity
+  return _DEFAULT_BLOCKING_SEVERITY
+}
+
 function consume(merged, leafVerdicts) {
   const byId = Object.create(null)   // null-proto: byId[identity] tests own keys only (Python dict parity)
   if (Array.isArray(leafVerdicts)) {
@@ -9,10 +19,11 @@ function consume(merged, leafVerdicts) {
       if (v && typeof v === 'object' && typeof v.id === 'string') byId[v.id] = v
     }
   }
-  const survivors = []; const drops = []
+  const survivors = []; const drops = []; const downgrades = []
   for (const f of merged) {
     const id = findingIdentity(f)
-    const v = byId[id]
+    let v = byId[id]
+    if (!v && f && typeof f.id === 'string') v = byId[f.id]
     const action = (v && typeof v === 'object') ? v.action : null
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
@@ -21,10 +32,18 @@ function consume(merged, leafVerdicts) {
       continue
     }
     const kept = Object.assign({}, f)
-    const sev = (v && typeof v === 'object') ? v.severity : null
-    if (_TIERS.has(sev)) kept.severity = sev
+    kept.severity = _keptSeverity(f, v)
     survivors.push(kept)
+    // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
+    // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
+    const fromSeverity = f && f.severity
+    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+      const entry = { id, file: f.file === undefined ? null : f.file,
+        title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
+      if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()
+      downgrades.push(entry)
+    }
   }
-  return { findings: survivors, drops }
+  return { findings: survivors, drops, downgrades }
 }
 module.exports = { consume }

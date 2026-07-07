@@ -59,6 +59,20 @@ def test_resolve_effort_override_wins_else_default():
     assert EP.resolve_effort("codex", "review", ["review"]) == "high"         # list (non-dict) → default
 
 
+def test_resolve_engine_author_plan_reads_own_key():
+    prefs = {"reviewer": "codex", "implementation": "cursor", "planAuthor": "cursor"}
+    assert EP.resolve_engine("author-plan", prefs) == "cursor"
+    # planAuthor is its own axis: absent -> claude even with other engines set
+    assert EP.resolve_engine("author-plan", {"reviewer": "codex", "implementation": "cursor"}) == "claude"
+    assert EP.resolve_engine("author-plan", {"planAuthor": "bogus"}) == "claude"
+
+
+def test_resolve_effort_author_plan():
+    assert EP.resolve_effort("codex", "author-plan") == "xhigh"
+    assert EP.resolve_effort("cursor", "author-plan") == "composer"
+    assert EP.resolve_effort("codex", "author-plan", {"author-plan": "medium"}) == "medium"
+
+
 def test_resolve_timeout_default_and_override():
     assert EP.resolve_timeout() == EP.DEFAULT_STALL_LIMIT_SECONDS == 300
     assert EP.resolve_timeout({"timeout": 5}) == 5
@@ -80,41 +94,69 @@ import sys
 _LIB = os.path.join(_HERE, "..")
 
 
-def _write_core_with_prefs(repo, prefs):
+def _write_core_with_prefs_at(repo, store, prefs):
     import importlib.util as _u
     spec = _u.spec_from_file_location("core_md", os.path.join(_LIB, "core_md.py"))
     cm = _u.module_from_spec(spec)
     spec.loader.exec_module(cm)
     cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
                     "patterns": "", "enginePreferences": prefs}, "confirmed",
-             root=os.path.join(repo, "store"), now="2026-06-30")
+             root=store, now="2026-06-30")
+
+
+def _write_core_with_prefs(repo, prefs):
+    _write_core_with_prefs_at(repo, os.path.join(repo, "store"), prefs)
 
 
 def test_load_engine_prefs_reads_core_md(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "cursor"})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-    assert got == {"reviewer": "codex", "implementation": "cursor", "effort": {}}
+    assert got == {"reviewer": "codex", "implementation": "cursor",
+                   "planAuthor": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_absent_is_both_claude(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {})   # core.md exists but no engine prefs
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "claude", "effort": {}}
+        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_greenfield_is_both_claude(tmp_path):
     # no core.md at all → both claude (fail-open, never raises)
     assert EP.load_engine_prefs(str(tmp_path), root=str(tmp_path / "store")) == \
-        {"reviewer": "claude", "implementation": "claude", "effort": {}}
+        {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude", "effort": {}}
+
+
+def test_load_engine_prefs_store_base_none_vs_repo_root_regression(tmp_path, monkeypatch):
+    """#221 regression: the startup gather passed the repo ROOT into load_engine_prefs's SECOND arg —
+    the store-base override (the ~/.claude/superheroes test seam) — instead of None. For an OUT-OF-REPO
+    core.md that resolves core.md to a nonexistent <repo>/projects/<key>/config/core.md, so the deliberate
+    fail-open silently degraded EVERY run to all-claude. This pins BOTH sides of the fix: store-base=None
+    (the default store, via the SUPERHEROES_STORE_ROOT seam) round-trips the owner's prefs, while passing
+    the repo root degrades to all-claude. A fresh repo with no calibration evidence resolves to GLOBAL
+    (out-of-repo) mode, so the write lands in the store — the copy only reachable via the default store."""
+    repo = str(tmp_path / "repo")
+    store = str(tmp_path / "store")
+    os.makedirs(repo)
+    subprocess.run(["git", "init", "-q", repo], check=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
+    _write_core_with_prefs_at(repo, store, {"reviewer": "codex", "implementation": "cursor"})
+    # The FIXED gather call: store-base=None -> the default store (the env seam) -> round-trips.
+    fixed = EP.load_engine_prefs(repo, None)
+    assert (fixed["reviewer"], fixed["implementation"]) == ("codex", "cursor")
+    # The BUG: the repo root in the store-base slot -> <repo>/projects/<key>/config/core.md (absent) ->
+    # OSError -> the fail-open degenerate all-claude map.
+    degraded = EP.load_engine_prefs(repo, repo)
+    assert (degraded["reviewer"], degraded["implementation"]) == ("claude", "claude")
 
 
 def test_load_engine_prefs_normalizes_bad_values(tmp_path):
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"reviewer": "bogus", "implementation": "cursor"})
     assert EP.load_engine_prefs(repo, root=os.path.join(repo, "store")) == \
-        {"reviewer": "claude", "implementation": "cursor", "effort": {}}
+        {"reviewer": "claude", "implementation": "cursor", "planAuthor": "claude", "effort": {}}
 
 
 def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(tmp_path):
@@ -129,6 +171,18 @@ def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(t
     assert EP.resolve_effort("codex", "review", got["effort"]) == "medium"   # override wins
     assert EP.resolve_effort("codex", "fix", got["effort"]) == "high"        # override wins
     assert EP.resolve_effort("codex", "build", got["effort"]) == "high"      # no override -> default
+
+
+def test_load_engine_prefs_surfaces_plan_author(tmp_path):
+    repo = str(tmp_path / "a")
+    _write_core_with_prefs(repo, {"reviewer": "claude", "implementation": "claude",
+                                  "planAuthor": "cursor"})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got["planAuthor"] == "cursor"
+    repo2 = str(tmp_path / "b")
+    _write_core_with_prefs(repo2, {"planAuthor": "bogus"})
+    got = EP.load_engine_prefs(repo2, root=os.path.join(repo2, "store"))
+    assert got["planAuthor"] == "claude"   # normalized fail-open
 
 
 def test_load_engine_prefs_effort_non_dict_normalizes_to_empty(tmp_path):
@@ -148,4 +202,4 @@ def test_cli_engine_pref_load_emits_json(tmp_path):
         capture_output=True, text=True)
     assert out.returncode == 0
     assert json.loads(out.stdout) == {"reviewer": "codex", "implementation": "claude",
-                                      "effort": {"build": "low"}}
+                                      "planAuthor": "claude", "effort": {"build": "low"}}

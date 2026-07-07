@@ -29,8 +29,19 @@ const crypto = require('crypto')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { markedStdout } = require('./_marked_stdout.js')
 
 const CHEAPEST = require('../model_tier.js').DEFAULT_TIERS.mechanical
+const PAYLOAD_TIER = require('../model_tier.js').DEFAULT_TIERS.fixer
+
+// #191: payload-carrying couriers (receipt-emitting entry loads + chunk relays) ride the
+// copy-faithful fixer tier — plain-cheapest couriers regenerate/transform large relay answers.
+// The payload marker is preamble-only (stripped before the runtime call), so the smoke
+// recognizes the sanctioned exception by label + tier.
+const PAYLOAD_COURIERS = [/^review_setup_gather\.py$/, /^review_memory\.py$/]
+function isPayloadCourier(label, model) {
+  return model === PAYLOAD_TIER && PAYLOAD_COURIERS.some((re) => re.test(label))
+}
 
 // ── The #118 Labels matrix, as the fixture ─────────────────────────────────────────────────────
 // Genuine-model agents (spec "Genuine-model agents (judgment)") — never pinned to the cheapest tier.
@@ -108,29 +119,29 @@ const PHASE_BUDGETS = {
   // read draft signals (pre-author) + post-author marker verify + save phase progress
   plan: 3,
   tasks: 3,
-  // read-gate exec (1) + fold 2 (#141) pre-round SETUP GATHER (1 — the run-dir mkdir + deferred-set
-  // seed + load-summary+extras + coverage load, folded Python-side by review_setup_gather.py; the
-  // round-1 deferred-set tally reuses the gathered set, no extra leaf) + persist-skeleton (1) +
-  // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE
-  // leaf (1 — composed Python-side from on-disk state; the 2-leaf stage+verify fenced write was the
-  // payload-stage-failed park, run wf_94c879e0-747) + save phase progress (1). Was 12 post-D3
-  // (4 separate entry reads + a 2-leaf fenced write), 35 pre-D3, 14 pre-courier-hardening.
-  'review-plan': 7,
-  'review-tasks': 7,
+  // read-gate exec (1) + #211 pre-round SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1
+  // plan + deferred seed + coverage, folded Python-side by review_setup_gather.py) + persist-skeleton
+  // (1) + #211 tally-round DECIDER (1 — breaker + terminal + certification from disk; the ONE new
+  // decider leaf per round, plan folds into the gather, compose-fix-context folds into tally) +
+  // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE leaf
+  // (1) + save phase progress (1). Was 7 pre-#211 (in-memory tally), 12 post-D3, 35 pre-D3.
+  'review-plan': 8,
+  'review-tasks': 8,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
-  // per-task record-built/record-reviewed + verify+minors + final-review round mkdir +
-  // (load-summary+extras, coverage read, run verify, persist-skeleton, deferred read,
-  // telemetry write) + stamp build coverage + prov exec + save phase progress. Was 24 pre-D3, 19
-  // pre-Task-12. Task 12 (FR-8): +1 per built task — the record_composed 'io' leaf that freezes the
+  // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
+  // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
+  // decider + telemetry write + stamp build coverage + prov exec + save phase progress. Was 19
+  // pre-#211 (separate load-summary + coverage + deferred reads, in-memory tally), 24 pre-D3.
+  // Task 12 (FR-8, #149): +1 per built task — the record_composed 'io' leaf that freezes the
   // spine-composed leaf command into this run's composed-exact allow set (1 task in this canned run).
-  workhorse: 20,
-  // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + fold 2
-  // (#141) pre-round SETUP GATHER (1 — run-dir mkdir + load-summary + coverage, folded Python-side;
-  // the round-1 deferred tally reuses it, no extra leaf) + one panel round (run verify,
-  // persist-skeleton, telemetry write = 3) + final/cwd head reads (2 exec) + stamp review coverage +
-  // save phase progress. Was 12 post-D3, 29 pre-D3. (The clean green path parks nothing, so
+  workhorse: 19,
+  // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + #211 pre-round
+  // SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1 plan + coverage, folded Python-side) +
+  // one panel round (run verify, persist-skeleton, #211 tally-round decider, telemetry write = 4) +
+  // final/cwd head reads (2 exec) + stamp review coverage + save phase progress. Was 9 pre-#211
+  // (in-memory tally), 12 post-D3, 29 pre-D3. (The clean green path parks nothing, so
   // renderAndPostReadout's terminal-record compose-terminal write does not fire here.)
-  'review-code': 9,
+  'review-code': 10,
   // open draft PR + save phase progress
   'draft-PR': 2,
   // resolve review target (build-worktree pin) + read test context + plan/results/server/seed
@@ -225,14 +236,42 @@ function runHelperResponse(cmdline) {
     }
   }
   if (script.endsWith('review_setup_gather.py')) {
-    // fold 2 (#141): the ONE pre-round gather leaf — mkdir + load-summary + deferred seed + coverage
-    // folded Python-side. A fresh canned run has no prior records/coverage/deferrals.
+    // #211: the ONE pre-round gather leaf rides DECISIONS — resume + round-1 plan + coverage +
+    // deferred, folded Python-side. A fresh canned run has no prior records/coverage/deferrals.
+    const dims = JSON.parse(args[args.indexOf('--dimensions') + 1] || '[]')
+    const schedule = {}
+    for (const d of dims) schedule[d] = { action: 'run', tier: 'reviewer-deep' }
     return JSON.stringify({
       ok: true,
-      memory: { ok: true, state: 'missing', records: [], contentHash: sha256(''), extras: null },
+      resume: { ok: true, state: 'missing', round: 1, contentHash: sha256(''), extras: null,
+        confirmationPending: false, markedRound: null, roundCount: 0 },
+      plan: { ok: true, round: 1, roundKind: 'baseline', enterConfirmation: false,
+        escalationPolicy: 'deep-only', dimensions: schedule, carried: {}, latestCoverageDecisionIds: [] },
       deferredSet: {},
       coverage: { ok: true, decisions: [], contentHash: sha256('') },
     })
+  }
+  if (script.endsWith('review_loop_plan.py')) {
+    // #211 deciders — small meaningful JSON, never findings. The canned green run is one clean round
+    // per phase, so tally answers `clean` (the gate the shell computed from clean reviewers rides down).
+    const dims = JSON.parse((args.indexOf('--dimensions') >= 0 && args[args.indexOf('--dimensions') + 1]) ||
+      (args.indexOf('--roster') >= 0 && args[args.indexOf('--roster') + 1]) || '[]')
+    const round = Number(args[args.indexOf('--round') + 1]) || 1
+    if (args[0] === 'plan-round') {
+      const schedule = {}
+      for (const d of dims) schedule[d] = { action: 'run', tier: 'reviewer-deep' }
+      return JSON.stringify({ ok: true, round, roundKind: 'intermediate', enterConfirmation: false,
+        escalationPolicy: 'deep-only', dimensions: schedule, carried: {}, latestCoverageDecisionIds: [],
+        coverage: { ok: true, decisions: [], contentHash: sha256('') } })
+    }
+    if (args[0] === 'tally-round') {
+      const gate = args[args.indexOf('--gate') + 1] || 'clean'
+      const terminal = gate === 'clean' ? 'clean' : (gate === 'blocking' ? 'continue' : 'cannot-certify')
+      const out = { ok: true, schemaVersion: 1, terminal, reason: 'clean', gate, confidence: 'high',
+        round, missing: [], presentBlocking: 0, presentDeferred: 0, breaker: { halt: false } }
+      if (terminal === 'clean') out.certification = { fullPanels: 0, lastPanelSurfacedResolved: false }
+      return JSON.stringify(out)
+    }
   }
   if (script.endsWith('review_telemetry.py')) return JSON.stringify({ ok: true, benchmarkValid: true })
   if (script.endsWith('fenced_json.py')) {
@@ -268,20 +307,21 @@ function shellResponse(cmd) {
   // fold 1 (#141): the CHAINED stage+verify write — [mkdir &&] opaque base64 stage-write (stdout to
   // /dev/null) && the fenced_json.py helper, all one leaf. Decode the payload into the in-memory FS
   // FIRST so the helper's --payload-hash check sees the real staged bytes, then answer the helper.
-  const cw = cmd.match(/python3 - <<'__SR_EOF__' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n {4}fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\n__SR_EOF__$/)
+  const cw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' >\/dev\/null && ([\s\S]*?) 2>&1; echo __SR_EXIT:\$\?$/)
   if (cw) {
-    files[JSON.parse(cw[2])] = Buffer.from(cw[3], 'base64').toString('utf8')
-    const out = runHelperResponse(cw[1])
+    files[cw[1]] = Buffer.from(cw[2], 'base64').toString('utf8')
+    const out = runHelperResponse(cw[3])
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
   // The OPAQUE write transport: base64 payload in a python heredoc, decoded byte-exact.
-  const bw = cmd.match(/python3 - <<'__SR_EOF__'\nimport base64\nwith open\((".*?"), 'wb'\) as fh:\n    fh\.write\(base64\.b64decode\('([A-Za-z0-9+/=]*)'\)\)\nprint\('ok'\)\n__SR_EOF__$/)
-  if (bw) { files[JSON.parse(bw[1])] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
+  if (bw) { files[bw[1]] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
   // Legacy cat-heredoc write (pre-opaque bundles): body+'\n' lands on disk — model that
   // faithfully; the staged-hash checks tolerate exactly the one transport-appended newline.
   const w = cmd.match(/cat > '([^']+)' <<'__SR_EOF__'\n([\s\S]*)\n__SR_EOF__$/)
   if (w) { files[w[1]] = w[2] + '\n'; return '' }
   if (cmd.startsWith('mkdir -p')) return ''
+  if (/^python3 -c '[^']*os\.makedirs[^']*' '[^']*'$/.test(cmd)) return ''   // argv-shape mkdirp
   const r = cmd.match(/^cat '([^']+)'/)
   if (r) return files[r[1]] != null ? files[r[1]] : ''
   if (cmd.includes("'python3'")) {
@@ -291,8 +331,7 @@ function shellResponse(cmd) {
   }
   // single-command exec/courier pipes, routed by content:
   if (cmd.includes('recover_entry.py')) {
-    // world_derive from step 0, carrying the acquired lease generation (the ship fences renew it)
-    return JSON.stringify({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
+    return markedStdout({ checkpoint: null, world: {}, generation: 5, root: process.cwd() })
   }
   if (cmd.includes('front_half_usable.py')) {
     const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
@@ -310,7 +349,9 @@ function shellResponse(cmd) {
     throw new Error('checkpoint_entry.py write rode its own leaf (#118 every-phase tail)')
   }
   if (cmd.includes('checkpoint_entry.py')) return JSON.stringify({ pr: PR })
-  if (cmd.includes('phase_progress_entry.py')) return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  if (cmd.includes('phase_progress_entry.py')) {
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  }
   if (cmd.includes('build_entry.py')) return JSON.stringify({ branch: 'superheroes/wi-x', path: '/tmp/wt', outcome: 'reused' })
   if (cmd.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 })
   if (cmd.includes('fence_cli.py')) return JSON.stringify({ ok: true })
@@ -345,7 +386,7 @@ function answerCommandPrompt(prompt) {
 
 const COURIER_JSON = {
   'read startup state': () => JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
-  'save phase progress': () => JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }),
+  'save phase progress': () => markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }),
   'save round state': () => JSON.stringify({ ok: true }),
   'gather build state': () => JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' }),
   'record task built': () => JSON.stringify({ ok: true, read_back: true, task: '1' }),
@@ -441,7 +482,7 @@ async function main() {
 
   // (1) MODEL PIN: every non-genuine leaf resolves to the cheapest (mechanical) tier; no genuine
   // agent is ever pinned there.
-  const unpinned = calls.filter((c) => !isGenuine(c.label) && c.model !== CHEAPEST)
+  const unpinned = calls.filter((c) => !isGenuine(c.label) && c.model !== CHEAPEST && !isPayloadCourier(c.label, c.model))
   assert.deepStrictEqual(
     unpinned.map((c) => `${c.phase}/${c.label}=${c.model}`), [],
     'every dumb-pipe leaf must resolve to the mechanical (cheapest) model tier')

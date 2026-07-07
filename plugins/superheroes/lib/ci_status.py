@@ -1,11 +1,16 @@
-"""Pure CI-status classifier for the ship phase (green / red / none). Fail-CLOSED:
-a check that is not unambiguously a pass (fail/cancel/error/pending/unknown) is
-treated as not-green, so the run never certifies green it cannot substantiate.
+"""Pure CI-status classifier for the ship phase (green / red / pending / none).
+Fail-CLOSED for certification: only an unambiguous pass set is green — a check that is
+failing/errored/unknown is red, and a check that is still RUNNING is "pending", its own
+status (0.10.0 qualification finding: pending folded into red made the ship loop dispatch
+a CI fixer against checks that were merely in flight; the fixer had nothing to fix and the
+run parked. Pending means WAIT, red means FIX — neither ever certifies green).
 """
 
 _PASS = {"pass", "success", "skipping", "skipped", "neutral"}
-_BAD = {"fail", "failure", "cancel", "cancelled", "error", "timed_out", "action_required",
-        "pending", "queued", "in_progress", "expected", "stale", "startup_failure"}
+# The pending vocabulary is single-homed here: classify() is its sole consumer, and the
+# harness verifier reaches it by normalizing its rollup and calling classify() (finding #18),
+# never by forking a second pending-state list (CONVENTIONS §11).
+_PENDING = {"pending", "queued", "in_progress", "expected", "waiting", "requested"}
 
 
 def _bucket(item):
@@ -15,15 +20,19 @@ def _bucket(item):
 
 
 def classify(checks):
-    """({"status": "green"|"red"|"none", "failing": [name...]}).
+    """({"status": "green"|"red"|"pending"|"none", "failing": [name...], "pending": [name...]}).
 
-    none  = no checks gate the PR (empty/None input).
-    green = at least one check and every non-skipped check is a pass.
-    red   = any check is not a pass (failing, errored, or still pending).
+    none    = no checks gate the PR (empty/None input).
+    green   = at least one gating check and every one is a pass.
+    pending = nothing hard-failed but at least one check is still running.
+    red     = any check hard-failed (or is an unknown non-pass state — fail closed);
+              `failing` names ONLY those, never the still-running ones, so a CI-fix
+              leg is aimed at real failures and a settle-wait at the rest.
     """
     if not isinstance(checks, (list, tuple)) or not checks:
-        return {"status": "none", "failing": []}
+        return {"status": "none", "failing": [], "pending": []}
     failing = []
+    pending = []
     saw_gating = False
     for item in checks:
         b = _bucket(item)
@@ -31,10 +40,16 @@ def classify(checks):
         if b in ("skipping", "skipped", "neutral"):
             continue
         saw_gating = True
-        if b not in _PASS:
+        if b in _PASS:
+            continue
+        if b in _PENDING:
+            pending.append(name or "unknown")
+        else:
             failing.append(name or "unknown")
     if failing:
-        return {"status": "red", "failing": failing}
+        return {"status": "red", "failing": failing, "pending": pending}
+    if pending:
+        return {"status": "pending", "failing": [], "pending": pending}
     if not saw_gating:
-        return {"status": "none", "failing": []}
-    return {"status": "green", "failing": []}
+        return {"status": "none", "failing": [], "pending": []}
+    return {"status": "green", "failing": [], "pending": []}

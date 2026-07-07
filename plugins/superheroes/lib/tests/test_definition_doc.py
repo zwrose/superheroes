@@ -125,6 +125,54 @@ def test_frontmatter_with_issue_validates():
     assert fm["issue"] == 42
 
 
+# --- #25: quick discovery's orphan tasks doc (null parent, opt-in) ---------
+
+def test_tasks_orphan_frontmatter_allows_null_parent():
+    # Quick discovery authors a tasks doc with no plan/spec ancestor — it IS the root input
+    # artifact, so a null parent is correct (schema-valid) exactly as a spec's is.
+    fm = DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
+                        created="2026-06-14", updated="2026-06-14")
+    jsonschema.validate(fm, SCHEMA)
+    assert fm["parent"] is None
+
+
+def test_tasks_orphan_is_opt_in_only():
+    # Without allow_orphan a parent-less tasks doc still fails closed (the full path is unchanged),
+    # and allow_orphan never loosens spec/plan nor a tasks doc that WAS given a parent.
+    with pytest.raises(ValueError):
+        DD.frontmatter("tasks", "tasks-x-bbb222", size="small")
+    with pytest.raises(ValueError):
+        DD.frontmatter("plan", "plan-x-aaa111", size="small", allow_orphan=True)
+    with pytest.raises(ValueError):  # tasks given a spec parent is still rejected
+        DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
+                       parent={"workItem": WI, "docType": "spec"})
+
+
+def test_tasks_orphan_content_hash_is_present_and_deterministic(tmp_path):
+    # §6.3 content-hash (the deterministic build-branch key) requires the `parent` stable field to
+    # be PRESENT — a null parent renders + reads back as the literal "null" (present, not missing),
+    # so the hash never raises and is stable across reads (a stable quick-route build branch).
+    import identifiers
+    fm = DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
+                        created="2026-06-14", updated="2026-06-14")
+    p = tmp_path / "tasks.md"
+    p.write_text(DD.render_frontmatter(fm) + "\n# t\n### Task 1: go\n", encoding="utf-8")
+    fm1, body1 = DD.read_frontmatter(str(p))
+    fm2, body2 = DD.read_frontmatter(str(p))
+    assert fm1.get("parent") == "null"  # present as the literal, not absent
+    assert identifiers.content_hash(fm1, body1) == identifiers.content_hash(fm2, body2)
+
+
+def test_cli_frontmatter_orphan_tasks_renders_null_parent(capsys):
+    rc, out = _run_main(["frontmatter", "--doc", "tasks", "--work-item", "tasks-x-bbb222",
+                         "--size", "small", "--orphan",
+                         "--created", "2026-06-14", "--updated", "2026-06-14"], capsys)
+    assert rc == 0
+    parsed = _parse_frontmatter(out)
+    jsonschema.validate(parsed, SCHEMA)
+    assert parsed["parent"] is None and parsed["docType"] == "tasks"
+
+
 # --- render: parse with a REAL YAML reader and re-validate -----------------
 
 ROUNDTRIP_CASES = [
@@ -409,6 +457,22 @@ def test_resolve_write_halts_on_unknown_schema(tmp_path):
 def test_default_location_matches_architect_config():
     import architect_config
     assert DD.DEFAULT_LOCATION == architect_config.DEFAULT_LOCATION
+
+
+def test_default_location_matches_showrunner_js_template():
+    # CONVENTIONS §11 (single source of truth): the showrunner's JS doc-dir fallback
+    # restates the Python DEFAULT_LOCATION as a template literal. Guard the JS copy
+    # against the Python home so a rename of the default doc location breaks CI in both.
+    with open(os.path.join(_REPO_ROOT, "plugins/superheroes/lib/showrunner.js"),
+              encoding="utf-8") as fh:
+        text = fh.read()
+    matches = re.findall(r"`(docs/[A-Za-z0-9_-]+)/\$\{workItem\}`", text)
+    assert len(matches) == 1, (
+        "showrunner.js: expected exactly one `docs/<loc>/${workItem}` doc-dir template, "
+        "found %d" % len(matches))
+    assert matches[0] == DD.DEFAULT_LOCATION, (
+        "showrunner.js doc-dir template %r drifted from definition_doc.DEFAULT_LOCATION %r"
+        % (matches[0], DD.DEFAULT_LOCATION))
 
 
 def test_resolve_write_path_inrepo_returns_md(tmp_path):

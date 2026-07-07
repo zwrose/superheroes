@@ -68,13 +68,47 @@ action that owns it, leaving the rest of the calibration untouched:
   `reference/permission.md`. The full allow set is already on the view's **Permission posture**
   section; edits go only through `permission_rules.set_rule` / `remove_rule` (the one sanctioned
   change path, FR-9).
+- **Write the review-discipline section into the project's `CLAUDE.md`** — offered ONLY when
+  the storage mode is **in-repo** (out-of-repo mode exists to keep the repo free of superheroes
+  traces; there the SessionStart bootstrap note is the sole carrier). Owner-gated like every
+  write: show the section text (source of truth:
+  `$ROOT_DIR/rubric/review-discipline.md`), and on explicit confirm
+  append it under a `## Review discipline` heading. Idempotent — if a `Review discipline`
+  heading already exists in the project's `CLAUDE.md`, report that and change nothing.
+- **Authorize the spine's courier transport (project-level allow-rules)** — offered when the
+  owner reports runtime-classifier blocks on showrunner runs (issue #255 class: courier
+  dispatches denied as suspected oversight-evasion). Project-scoped, never user-wide; the
+  target follows the storage mode — **in-repo** → `.claude/settings.json` (committed,
+  team-shared; rules embed this checkout's absolute paths, collaborators re-run this offer),
+  **out-of-repo** → `.claude/settings.local.json` (machine-local, git-ignored, zero committed
+  traces). Owner-gated like every write: show the exact rules first (`emit`), and on explicit
+  confirm apply them (idempotent merge; never clobbers unrelated settings):
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  python3 "$ROOT_DIR/lib/courier_allow_rules.py" emit --root .
+  # show the owner the rules; on their explicit confirm (mode per the storage mode above):
+  python3 "$ROOT_DIR/lib/courier_allow_rules.py" apply --root . --mode local   # or --mode in-repo
+  ```
+
+  The rules stay scoped — rooted at this project, its managed worktrees, the plugin-cache lib
+  path, or the spine's own `__SR_EOF__` write marker; never blanket verb grants. The enforcer
+  hooks still deny gated verbs (merge/release/force-push) regardless of any allow rule. When
+  the CLI creates `settings.local.json` fresh, confirm it is git-ignored (Claude Code only
+  auto-ignores the file when it creates it itself).
 - **Switch the storage mode** → the confirmed switch below.
-- **Change the per-role engine** (reviewer engine / implementation engine) → the engine step in
-  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch), writing
-  `enginePreferences` through `core_md`. Set a role back to `claude` (or clear it) to fall fully open.
-- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/author)
-  → show the effective map first, then write only the `## Model tiers` block in the resolved
-  review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+- **Change the per-role engine** (reviewer engine / implementation engine / plan-author engine) → the
+  engine step in `reference/set-up.md` §4.5 (availability → preference → show-authorization →
+  test-dispatch), writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`,
+  `planAuthor`). Set a role back to `claude` (or clear it) to fall fully open. `planAuthor` routes ONLY
+  the showrunner's plan-author leaf; tasks authoring always runs native.
+- **Change the per-role model tier** (orchestrator/reviewer/reviewer-deep/mechanical/synthesis/fixer/
+  author/author-plan) → show the effective map first, then write only the `## Model tiers` block in the
+  resolved review-crew profile. This is an optional tune action: if the owner declines, change nothing.
+  `author-plan` is a split role: unset, it resolves exactly as `author`; set (e.g. `author-plan: fable`,
+  only on explicit owner ask) it moves plan authoring alone. Fable-via-Cursor plan authoring = both
+  `author-plan: fable` and `planAuthor: cursor` (the cursor adapter maps the tier to its own fable
+  model id).
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

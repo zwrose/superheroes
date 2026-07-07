@@ -16,14 +16,18 @@ _MISSING = object()
 
 ENGINES = ("claude", "codex", "cursor")
 
-# role_kind -> the enginePreferences key it reads.
-_ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementation"}
+# role_kind -> the enginePreferences key it reads. `author-plan` (the front-half plan-author
+# leaf) reads its OWN key — plan authoring routes independently of review/build; tasks
+# authoring has no key on purpose and always runs native.
+_ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementation",
+             "author-plan": "planAuthor"}
 
 # effort defaults per engine. codex is effort-tiered; cursor is one composer model
 # (FR-10, exempt); claude defers to model_tier (None). Depth-aware review: the deep reviewers
 # (security/architecture — the reviewer-deep model tier) dispatch at 'review-deep' -> xhigh;
 # regular review -> high. gpt-5.5 efforts: none/low/medium/high/xhigh.
-_CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low"}
+_CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low",
+                 "author-plan": "xhigh"}
 _CURSOR_EFFORT = "composer"
 
 DEFAULT_STALL_LIMIT_SECONDS = 300
@@ -79,7 +83,8 @@ def load_engine_prefs(cwd, root=None):
     """Read core.md's enginePreferences via core_md.read; normalize each role to a valid engine
     (else 'claude'); surface the optional FR-9 `effort` sub-map (a dict, else {}); absent block /
     None / any error → both 'claude' + empty effort. Never raises."""
-    degenerate = {"reviewer": "claude", "implementation": "claude", "effort": {}}
+    degenerate = {"reviewer": "claude", "implementation": "claude", "planAuthor": "claude",
+                  "effort": {}}
     try:
         import core_md
         rec = core_md.read(cwd, root)
@@ -93,4 +98,5 @@ def load_engine_prefs(cwd, root=None):
     effort = prefs.get("effort")
     return {"reviewer": _normalize(prefs.get("reviewer")),
             "implementation": _normalize(prefs.get("implementation")),
+            "planAuthor": _normalize(prefs.get("planAuthor")),
             "effort": dict(effort) if isinstance(effort, dict) else {}}

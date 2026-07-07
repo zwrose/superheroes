@@ -12,6 +12,7 @@
 // Run: node plugins/superheroes/lib/tests/showrunner_permission_freeze_smoke.js
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
+const { markedStdout } = require('./_marked_stdout.js')
 const sr = require('../showrunner.js')
 
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
@@ -29,9 +30,10 @@ async function freezeOnceAtRunStart() {
     const label = (opts && opts.label) || ''
     // reconcile()'s 'gather snapshot' exec -> a fresh world_derive snapshot with a generation.
     if (label === 'gather snapshot') {
-      return [{ index: 0, ok: true, stdout: JSON.stringify({
-        root: '/repo', generation: 'GEN9', checkpoint: null, world: {},
-      }) }]
+      return markedStdout({
+        root: '/repo', generation: 'GEN9', checkpoint: null,
+        world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+      })
     }
     // readStartupState()'s courier -> spec NOT yet approved, so the run parks at the startup gate
     // immediately AFTER the run-start freeze has fired (freeze is threaded off the reconcile
@@ -71,7 +73,7 @@ async function buildRecordsComposedLeafCommands() {
   // the record must have fired by the time the dispatch returns. Stub the fence (needs __SR_ROOT +
   // a 'fence lease' ok) and the dispatch; let the task park on a later unstubbed sub-step (fine).
   const task = { id: '7', title: 'Do the thing' }
-  const expectedPrompt = bp.buildLeafPrompt({ wt: '/some/wt', branch: 'feat/x', task })
+  const expectedPrompt = bp.buildLeafPrompt({ wt: '/some/wt', branch: 'feat/x', task, workItem: 'wi-rec' })
 
   const savedRoot = globalThis.__SR_ROOT
   globalThis.__SR_ROOT = '/repo'

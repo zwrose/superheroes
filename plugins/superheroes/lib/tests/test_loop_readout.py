@@ -30,6 +30,21 @@ def test_non_dict_record_is_safe():
     assert "unreadable" in LR.render(None).lower()
 
 
+def test_certification_states_panel_count_and_scoped_resolution():
+    # #174 req 4: the certification record states what was established — how many full confirmation
+    # panels ran and, honestly, that the last panel's findings were resolved by a scoped verify
+    # (never implying a pristine fresh pass).
+    out = LR.render(_record(certification={"fullPanels": 1, "lastPanelSurfacedResolved": True}))
+    assert "1 full confirmation panel" in out
+    assert "scoped verification" in out.lower()
+
+
+def test_certification_pristine_panel_does_not_claim_scoped_resolution():
+    out = LR.render(_record(certification={"fullPanels": 1, "lastPanelSurfacedResolved": False}))
+    assert "1 full confirmation panel" in out
+    assert "scoped verification" not in out.lower()
+
+
 def test_names_fixes_drops_and_deferrals():
     out = LR.render(_record(
         terminal="clean-with-skips",
@@ -41,6 +56,16 @@ def test_names_fixes_drops_and_deferrals():
     assert "phantom" in out and "not in the diff" in out
 
 
+def test_renders_per_reviewer_finding_outcomes():
+    # #130: findingOutcomes from the telemetry record renders even when token usage is incomplete.
+    out = LR.render(_record(telemetry={
+        "roundCount": 2,
+        "tokenUsage": {"complete": False, "total": 0, "missing": ["code-reviewer:r1"]},
+        "findingOutcomes": {"code-reviewer": {"raised": 3, "blocking": 1, "carried": 2}}}))
+    assert "Findings by reviewer" in out
+    assert "code-reviewer: raised 3, blocking 1, carried 2" in out
+
+
 def test_dropped_blocker_flagged_distinctly_ufr10():
     out = LR.render(_record(
         drops=[{"title": "real bug", "reason": "stale", "was_blocking_tagged": True},
@@ -48,6 +73,23 @@ def test_dropped_blocker_flagged_distinctly_ufr10():
     # the blocking-tagged drop is in its own scrutiny section, not the ordinary list
     scrutiny = out.split("tagged BLOCKING")[1]
     assert "real bug" in scrutiny and "nit" not in scrutiny
+
+
+def test_blocking_downgrade_surfaced_distinctly_186():
+    out = LR.render(_record(
+        downgrades=[{"title": "overstated race", "from": "Critical", "to": "Nit",
+                     "reason": "single-threaded path"}]))
+    # its own scrutiny section, naming the from→to and the reason
+    assert "DOWNGRADED from blocking" in out
+    scrutiny = out.split("DOWNGRADED from blocking")[1]
+    assert "overstated race" in scrutiny
+    assert "Critical" in scrutiny and "Nit" in scrutiny
+    assert "single-threaded path" in scrutiny
+
+
+def test_no_downgrade_section_when_none():
+    out = LR.render(_record(drops=[{"title": "x", "reason": "y", "was_blocking_tagged": False}]))
+    assert "DOWNGRADED" not in out
 
 
 def test_parent_origin_named_fr21():

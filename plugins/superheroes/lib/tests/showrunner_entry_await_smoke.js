@@ -17,6 +17,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const { markedStdout } = require('./_marked_stdout.js')
 
 const SENTINEL = 'SR_ENTRY_AWAIT_SENTINEL'
 const bundlePath = path.join(__dirname, '..', 'showrunner.bundle.js')
@@ -28,9 +29,32 @@ let text = fs.readFileSync(bundlePath, 'utf8').replace(/export\s+const\s+meta/, 
 const sandbox = { console, args: JSON.stringify({ workItem: 'entry-await-probe' }), process: { env: {}, cwd: () => '/' } }
 sandbox.globalThis = sandbox
 sandbox.global = sandbox
-// First leaf call (reconcile -> cmdRunner) throws the sentinel; its rejection must propagate out
-// through the entry's returned promise iff the entry awaited/returned it.
-sandbox.agent = async () => { throw new Error(SENTINEL) }
+// First leaf call after reconcile's gather snapshot throws the sentinel; its rejection must
+// propagate out through the entry's returned promise iff the entry awaited/returned it.
+sandbox.agent = async (prompt, opts) => {
+  const label = (opts && opts.label) || ''
+  if (label === 'gather snapshot' || String(prompt).includes('recover_entry.py')) {
+    return markedStdout({
+      checkpoint: null,
+      world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
+      generation: 1,
+      root: process.cwd(),
+    })
+  }
+  if (label === 'read startup state') {
+    return JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} })
+  }
+  if (opts && opts.courier) {
+    if (String(prompt).includes('definition_doc.py read-gate')) {
+      return JSON.stringify({ review: 'passed' })
+    }
+    if (String(prompt).includes('front_half_usable.py')) {
+      return JSON.stringify({ usable: true, recorded: 'x', expected: 'x', missing_sections: [], placeholder: false })
+    }
+    return '{}'
+  }
+  throw new Error(SENTINEL)
+}
 sandbox.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
 sandbox.log = () => {}
 vm.createContext(sandbox)

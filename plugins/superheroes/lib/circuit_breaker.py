@@ -11,7 +11,7 @@ import os
 import re
 import sys
 
-from review_memory import class_key
+from review_memory import clamp_title, canonical_class_key, class_key_aliases
 
 BLOCKING = {"Critical", "Important"}
 
@@ -26,21 +26,42 @@ def normalize_title(title):
     return t.strip()
 
 
+def finding_label(finding):
+    return finding.get("title") or finding.get("summary") or ""
+
+
 def finding_identity(finding):
-    return f"{finding.get('file') or ''}::{normalize_title(finding.get('title') or '')}"
+    return f"{finding.get('file') or ''}::{normalize_title(clamp_title(finding_label(finding)))}"
 
 
 def recurrence_key(finding):
+    if finding.get("dimension") or finding.get("taxonomy"):
+        return canonical_class_key(finding)
     if finding.get("classKey"):
         return finding["classKey"]
-    key = class_key(finding)
-    if finding.get("dimension") or finding.get("taxonomy"):
-        return key
     return finding_identity(finding)
+
+
+def recurrence_aliases(finding):
+    aliases = {recurrence_key(finding)}
+    if finding.get("dimension") or finding.get("taxonomy"):
+        aliases |= class_key_aliases(finding)
+    return aliases
 
 
 def _blocking(round_findings):
     return [f for f in round_findings["findings"] if f["severity"] in BLOCKING]
+
+
+def _round_recorded_fix(round_rec):
+    """True when this round's fixer actually recorded applied fixes (rec['fix']['fixes']).
+    The cap-halt is evaluated right after a review round and BEFORE that round's fix leg, so the
+    latest round normally carries no fix — its findings are still unaddressed. Used to keep the
+    max-iterations detail honest instead of always claiming the fixes were committed."""
+    fix = round_rec.get("fix")
+    if not isinstance(fix, dict):
+        return False
+    return bool(fix.get("fixes"))
 
 
 def _generalize_keys(round_rec):
@@ -54,7 +75,7 @@ def _blocking_count_excluding_generalize(round_rec):
     blocking = _blocking(round_rec)
     if not generalize:
         return len(blocking)
-    return len([f for f in blocking if recurrence_key(f) not in generalize])
+    return len([f for f in blocking if not (recurrence_aliases(f) & generalize)])
 
 
 def _round_reviewed(round_rec):
@@ -77,12 +98,27 @@ def check_circuit_breaker(rounds, max_rounds):
 
     # Criterion 3: max iterations (only halts while blocking findings remain).
     if n >= max_rounds and len(latest_blocking) > 0:
+        # Honest halt detail (#212 class): name the ACTUAL round reached (n) alongside the cap — a
+        # resume can run past the cap, so n may exceed max_rounds — and only claim "fixes committed"
+        # when the final round actually recorded a fix. The cap-halt fires right after a review and
+        # before that round's fixer runs, so the latest round usually carries no fix; saying otherwise
+        # misreads a park that needs a fix-then-relaunch as one that only needs a re-review.
+        if _round_recorded_fix(rounds[n - 1]):
+            tail = "the final round's fixes are committed but not yet re-reviewed"
+        else:
+            tail = "no fix was applied this round — the finding(s) remain unaddressed"
+        # Don't overstate how many REAL reviews ran: n counts every recorded round (the gate uses it),
+        # but a transport-failed / all-missing round inflates it. When fewer rounds were actually
+        # reviewed than recorded, say so — the same honesty `_reviewed_rounds` gives criteria 1-2.
+        cap_note = f"cap {max_rounds}"
+        reviewed_n = len(_reviewed_rounds(rounds))
+        if reviewed_n < n:
+            cap_note += f", {reviewed_n} reviewed"
         return {
             "halt": True,
             "reason": "max-iterations",
-            "detail": (f"Reached {max_rounds} rounds; the latest review still showed "
-                       f"{len(latest_blocking)} blocking finding(s) (the final round's "
-                       f"fixes are committed but not yet re-reviewed)."),
+            "detail": (f"Reached round {n} ({cap_note}); the latest review still showed "
+                       f"{len(latest_blocking)} blocking finding(s) ({tail})."),
         }
 
     # Criterion 2: no net progress across two consecutive round-transitions.
@@ -107,9 +143,11 @@ def check_circuit_breaker(rounds, max_rounds):
         latest_generalize = {g.get("classKey") for g in latest_rec.get("generalizeRequired", []) if isinstance(g, dict)}
         challenged = {d.get("classKey") for d in latest_rec.get("coverageDecisions", []) if isinstance(d, dict) and d.get("challengedBy")}
         latest_blocking = _blocking(latest_rec)
-        prev_ids = {recurrence_key(f) for f in _blocking(reviewed[rn - 2])}
-        recurring = [f for f in latest_blocking if recurrence_key(f) in prev_ids]
-        challenged_recurring = [f for f in recurring if recurrence_key(f) in challenged]
+        prev_ids = set()
+        for f in _blocking(reviewed[rn - 2]):
+            prev_ids |= recurrence_aliases(f)
+        recurring = [f for f in latest_blocking if recurrence_aliases(f) & prev_ids]
+        challenged_recurring = [f for f in recurring if recurrence_aliases(f) & challenged]
         if challenged_recurring:
             ids = "; ".join(recurrence_key(f) for f in challenged_recurring)
             return {"halt": True, "reason": "challenged-principle-recurring", "detail": f"{len(challenged_recurring)} challenged coverage decision class recurred after being recorded: {ids}"}

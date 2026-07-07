@@ -1,22 +1,23 @@
 {
   "name": "skipped-dimension-regression",
+  "_note": "#174: a dimension skipped in an intermediate round is still caught by the full confirmation panel. Under the confirmation-bar economics a surfaced Important would be scope-verified and certified (the deliberate trade), so the fail-safe worth pinning is a recurring CRITICAL in the skipped dimension — it re-arms one more confirmation and, still unresolved at the cap, PARKS rather than slipping through.",
   "reviewerSet": ["security-reviewer", "test-reviewer"],
   "fixEvents": [{"afterRound": 1, "changedSubjects": ["Test"], "coverageDecisions": []}],
   "reviewerEvents": [
     {"round": 1, "reviewer": "security-reviewer", "findings": [], "usageTotal": 1000},
     {"round": 1, "reviewer": "test-reviewer", "findings": [{"dimension": "Test", "taxonomy": "coverage", "title": "Missing test", "severity": "Important"}], "usageTotal": 1000},
     {"round": 2, "reviewer": "test-reviewer", "tier": "reviewer", "findings": [], "usageTotal": 1000},
-    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Important", "title": "Secret leaked in readout"}], "usageTotal": 1000},
+    {"round": 3, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout"}], "usageTotal": 1000},
     {"round": 3, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000},
-    {"round": 5, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Important", "title": "Secret leaked in readout"}], "usageTotal": 1000},
+    {"round": 5, "reviewer": "security-reviewer", "tier": "reviewer-deep", "findings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout"}], "usageTotal": 1000},
     {"round": 5, "reviewer": "test-reviewer", "tier": "reviewer-deep", "findings": [], "usageTotal": 1000}
   ],
   "rounds": [
     {"security": {"confidence": "high", "findings": []}, "test": {"confidence": "high", "findings": [{"severity": "Important", "title": "Missing test"}]}},
     {"changedSubjects": ["Test"], "securitySkipped": true},
-    {"confirmationFindings": [{"dimension": "Security", "severity": "Important", "title": "Secret leaked in readout"}]}
+    {"confirmationFindings": [{"dimension": "Security", "severity": "Critical", "title": "Secret leaked in readout"}]}
   ],
-  "expectedTerminal": "continue",
+  "expectedTerminal": "halted",
   "mustNotPass": true,
   "maxRounds": 5
 }

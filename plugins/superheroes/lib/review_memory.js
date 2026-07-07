@@ -5,10 +5,42 @@ function _norm(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+const _MAX_TITLE = 160
+const _TITLE_ELLIPSIS = '...'
+function clampTitle(title) {
+  if (typeof title !== 'string') return title
+  if (title.length <= _MAX_TITLE) return title
+  const limit = _MAX_TITLE - _TITLE_ELLIPSIS.length
+  let prefix = title.slice(0, limit).replace(/[ \t\n\r\f\v]+$/, '')
+  let boundary = -1
+  for (const ch of [' ', '\t', '\n', '\r', '\f', '\v']) boundary = Math.max(boundary, prefix.lastIndexOf(ch))
+  if (boundary > 0) prefix = prefix.slice(0, boundary).replace(/[ \t\n\r\f\v]+$/, '')
+  if (!prefix) prefix = title.slice(0, limit).replace(/[ \t\n\r\f\v]+$/, '')
+  return prefix + _TITLE_ELLIPSIS
+}
+
+function _titleText(finding) {
+  if (!finding || typeof finding !== 'object') return ''
+  return finding.title || finding.summary || ''
+}
+
 function classKey(finding) {
   finding = finding || {}
-  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(finding.title)}`
+  return `${finding.dimension || ''}::${finding.taxonomy || ''}::${_norm(clampTitle(_titleText(finding)))}`
 }
+
+function canonicalClassKey(finding) {
+  if (!finding || typeof finding !== 'object') return classKey({})
+  if (finding.title || finding.summary || finding.dimension || finding.taxonomy) return classKey(finding)
+  return finding.classKey || classKey(finding)
+}
+
+function classKeyAliases(finding) {
+  const aliases = new Set([canonicalClassKey(finding)])
+  if (finding && typeof finding === 'object' && finding.classKey) aliases.add(finding.classKey)
+  return aliases
+}
+
 
 function recurrentClasses(records, coverageDecisions) {
   const covered = new Set((coverageDecisions || []).map((d) => d && d.classKey).filter(Boolean))
@@ -17,8 +49,10 @@ function recurrentClasses(records, coverageDecisions) {
     for (const finding of (rec && rec.findings) || []) {
       if (finding.carried) continue
       if (!BLOCKING.has(finding.severity)) continue
-      const key = finding.classKey || classKey(finding)
-      if (covered.has(key)) continue
+      const key = canonicalClassKey(finding)
+      let isCovered = false
+      for (const alias of classKeyAliases(finding)) if (covered.has(alias)) isCovered = true
+      if (isCovered) continue
       if (!seen[key]) seen[key] = new Set()
       seen[key].add(rec.round)
     }
@@ -93,19 +127,21 @@ function recordFromDimensionResults(roundNo, kind, dimensions, changedSubjects, 
 }
 
 // skeletonRecord: the JS twin of review_memory.py summarize_record — the bounded durable form
-// of a round record (D3). Findings keep only identity/class/severity (title<=300); dimension
+// of a round record (D3). Findings keep only identity/class/severity (title<=160); dimension
 // records keep their scheduling scalars + skeleton findings. This is what persist-skeleton
 // ships inline (Python re-applies summarize_record on arrival, so a drift here can widen the
 // leaf payload but can never widen the on-disk contract).
 const _SKELETON_FIELDS = ['file', 'line', 'title', 'severity', 'taxonomy', 'dimension',
-                          'classKey', 'carried', 'sourceRound']
-const _MAX_TITLE = 300
-
+                          'classKey', 'carried', 'sourceRound', 'synthesisUnverified']
 function _skeletonFinding(finding) {
   if (!finding || typeof finding !== 'object') return {}
   const out = {}
   for (const k of _SKELETON_FIELDS) if (k in finding) out[k] = finding[k]
-  if (typeof out.title === 'string' && out.title.length > _MAX_TITLE) out.title = out.title.slice(0, _MAX_TITLE)
+  if (typeof out.title === 'string') out.title = clampTitle(out.title)
+  // A stored classKey is preserved verbatim (legacy unclamped-title keys must survive
+  // skeletonization for classKeyAliases to match legacy coverage decisions); only a
+  // key-less finding gets the canonical stamp.
+  if (!('classKey' in out) && (finding.dimension || finding.taxonomy)) out.classKey = canonicalClassKey(finding)
   return out
 }
 
@@ -113,8 +149,11 @@ function _summarizeDimension(dim) {
   if (!dim || typeof dim !== 'object') return {}
   const findings = Array.isArray(dim.findings) ? dim.findings : []
   const out = {}
+  // `usage` is a small scalar object ({total,input,output}); the skeleton keeps it so a carried
+  // (skipped) dimension carries its prior round's usage forward and the telemetry stays complete
+  // (#211: the loop reads the carried dim from the durable skeleton, not an in-memory copy).
   for (const k of ['dimension', 'status', 'confidence', 'round', 'subjects',
-                   'carriedFromRound', 'escalated', 'tier']) if (k in dim) out[k] = dim[k]
+                   'carriedFromRound', 'escalated', 'tier', 'usage']) if (k in dim) out[k] = dim[k]
   out.findings = findings.map(_skeletonFinding)
   out.hasFindings = findings.length > 0 || !!dim.hasFindings
   out.blockingCount = findings.filter((f) => f && typeof f === 'object' && BLOCKING.has(f.severity)).length
@@ -177,4 +216,4 @@ function skeletonRecord(record) {
   }
 }
 
-module.exports = { classKey, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred, skeletonCoverageDecisions }
+module.exports = { clampTitle, classKey, canonicalClassKey, classKeyAliases, recurrentClasses, promoteRecord, recordFromDimensionResults, skeletonRecord, skeletonDeferred, skeletonCoverageDecisions }

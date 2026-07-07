@@ -4,6 +4,7 @@
 // exec courier (checkpoint_entry --read-pr). ship-phase IO is folded into courier leaves.
 require('./_smoke_checkout_root.js')
 const assert = require('assert')
+const { saveProgressOk } = require('./_marked_stdout.js')
 const PR = { number: 1, url: 'https://github.com/o/r/pull/1', isDraft: true }
 
 function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
@@ -28,7 +29,7 @@ global.agent = async (p, opts) => {
     if (p.includes('journal_entry') || p.includes('checkpoint_entry')) {
       throw new Error('phase tail must ride phase_progress_entry.py save, not journal_entry/checkpoint_entry')
     }
-    return JSON.stringify({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+    return saveProgressOk()
   }
   if (opts && opts.courier) {
     if (p.includes('emit-checks')) {

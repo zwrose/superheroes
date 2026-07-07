@@ -1,0 +1,12 @@
+{
+  "should_fire": [
+    "run the acceptance harness against the showrunner",
+    "acceptance-test the showrunner end-to-end on the canned fixture",
+    "verify the showrunner pipeline works using the throwaway fixture work-item",
+    "kick off the standalone acceptance harness and give me one pass/fail verdict"
+  ],
+  "should_not_fire": [
+    "launch the showrunner on this approved work-item and take it to a ready-for-review PR",
+    "the tasks doc is approved, build it and ship to a ready-for-review PR"
+  ]
+}

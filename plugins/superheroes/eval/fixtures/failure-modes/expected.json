@@ -1,6 +1,6 @@
 {
   "fixture": "failure-modes",
-  "description": "Recall fixture for the premortem-reviewer (dimension Failure-Mode). Five seeded whole-flow failure bugs, one per diff-mode taxonomy class. Premortem-only dispatch; acceptance bar: matched == total (zero misses). Every seeded flow fits within +/-15 lines of its lineHint.",
+  "description": "Recall fixture for the premortem-reviewer (dimension Failure-Mode). Seven seeded whole-flow failure bugs, one per diff-mode taxonomy class. Premortem-only dispatch; acceptance bar: matched == total (zero misses). Every seeded flow fits within +/-15 lines of its lineHint.",
   "seeds": [
     {
       "dimension": "Failure-Mode",
@@ -41,6 +41,22 @@
       "file": "src/migrations/2026-06-add-balance-cents.ts",
       "lineHint": "await db.accounts.updateMany({}, { $unset: { balance: 1 } });",
       "why": "The migration unsets the old balance field in the SAME pass that writes balanceCents (CLAUDE.md: destructive steps belong in a later migration) and exports no down(). A mid-loop failure leaves mixed-format rows; a deploy rollback leaves old code reading a field that no longer exists."
+    },
+    {
+      "dimension": "Failure-Mode",
+      "severity": "Critical",
+      "taxonomy": "fail-direction",
+      "file": "src/services/risk-gate.ts",
+      "lineHint": "if (score === undefined) {",
+      "why": "isTransferAllowed is a safety gate whose unknown-state path fails OPEN: when fetchRiskScore returns undefined (risk service unavailable / no signal) it returns true = permit, instead of blocking. CLAUDE.md requires safety gates to fail closed. Trigger: the risk client returns undefined (an ordinary outage/timeout). Impact: a transfer that should be blocked as high-risk proceeds unchecked."
+    },
+    {
+      "dimension": "Failure-Mode",
+      "severity": "Critical",
+      "taxonomy": "transport-contract",
+      "file": "src/workers/transfer-consumer.ts",
+      "lineHint": "const job = JSON.parse(raw);",
+      "why": "onTransferMessage JSON-parses a re-serialized queue payload with no schema, no bounds, and no fidelity verification, then applies a balance mutation from its fields. CLAUDE.md requires queue payloads to be validated and bounded and a malformed/partial message to fail closed. Trigger: the producer drops or retypes a field (amount missing/undefined, toId absent). Impact: $inc applies NaN / mutates the wrong account = balance corruption, and the consumer reports applied:true instead of rejecting."
     }
   ],
   "traps": []

@@ -127,6 +127,11 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
   deref, off-by-one, error-swallowing, a single unreleased resource); the
   flow-level chain is theirs, so the two agents never report the same flow
   twice.
+- A permissive default, dishonest fail-closed reason, or LLM-courier
+  payload-fidelity issue in gating/certification/verification/safety machinery
+  is `premortem-reviewer`'s (`fail-direction` / `transport-contract`), even on a
+  single line — your single-line defects are the ones with no such systemic
+  dimension.
 - Comments / doc additions, unless the project's conventions require them — default to no comment-style nits unless CLAUDE.md says otherwise.
 - Style/formatting/lint/typecheck issues — automated tooling handles these (per the base rubric's global exclusions).
 - Anything else excluded by the base rubric's global "Do NOT Flag" list or the profile's scope exclusions.

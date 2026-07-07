@@ -103,7 +103,7 @@ band-wide storage mode**.
   (`init` / the profile-management skill) — not `the-architect` (which owns definition-docs).
   Because `core.md` is project-keyed and shared across a project's checkouts (§4.2), the
   writer **serializes its writes under the project-scoped config lock** (§4.4) — a
-  machine-local lock distinct from the per-checkout runtime locks; the "applied only on
+  machine-local lock distinct from the per-clone runtime lease refs; the "applied only on
   confirmation" rule (§2.4) gates *intent*, not concurrent physical writes. (In in-repo
   mode, cross-machine config writes are additionally git-mediated, since config is
   committed.)
@@ -178,8 +178,9 @@ would strand every already-written calibration file and definition-doc.)
   sharing needs (see §4.2 and §6.2):
   - **Config key = per-project** (`<config-key>`, §6.2), with self-healing pointers —
     deliberately unifies a project's clones/worktrees so they share calibration.
-  - **Control-plane key = per-checkout** (`<absolute-git-dir-key>`, §6.2), **without**
-    the remote-keyed self-healing — so parallel loops stay isolated (§4.2).
+  - **Control-plane key = per-clone** (`<common-dir-key>`, §6.2), **without** the
+    remote-keyed self-healing — shared identically across a clone's worktrees so the
+    one-live-run-per-work-item lease coordinates them, never unified across clones (§4.2, #170).
 - **No-remote repositories.** When `git remote get-url origin` is empty (common for the
   owner *before the first push*, while Discovery is already producing definition-docs), the
   config key is `<common-dir-key>` rather than `<remote-key>` (§6.2), which makes config
@@ -214,7 +215,7 @@ schemaVersion: 1
 docType: spec | plan | tasks
 workItem: <work-item>                 # the frozen identity from §6.1
 issue: <github-issue-number | null>   # linked once an issue exists; NOT the path segment
-parent: { workItem: <id>, docType: spec | plan }   # plan→spec, tasks→plan; null for spec
+parent: { workItem: <id>, docType: spec | plan }   # plan→spec, tasks→plan; null for spec (and for a quick-discovery tasks doc)
 size: small | medium | large          # work-item sizing (see §6.4); "tier" is reserved for state substrates
 status: draft | in-review | approved  # DERIVED, human-facing: approved iff gates.review == passed
 gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review state for THIS doc
@@ -229,7 +230,9 @@ updated: <date>
   humans. Code reads `gates.review`.
 - **`parent`** is a resolver-relative reference (`{workItem, docType}`), **not** a file
   path — paths differ between storage modes (§2.3), so a path-based link would break on
-  a mode switch. The referent is fixed: `plan`→`spec`, `tasks`→`plan`, `null` for `spec`.
+  a mode switch. The referent is fixed: `plan`→`spec`, `tasks`→`plan`, `null` for `spec` —
+  **and `null` for a `tasks` doc authored directly by quick discovery** (§3.4), which has no
+  plan (or spec) ancestor: it is itself the showrunner's root input artifact.
 - The per-doc `gates.review` here is **aggregated** by `checkpoint.json` into a
   doc-type-keyed roll-up (§4.3); the frontmatter is the source of truth, the checkpoint
   is the projection.
@@ -290,6 +293,24 @@ updated: <date>
   `plan↔plan.md`, `tasks↔tasks.md`); an actual converter is built only if something
   needs it.
 
+### 3.4 Discovery routes: full and quick
+
+Discovery (the-architect session) is the single front door for all work, and it always
+produces **the showrunner's input artifact**; the **route** decides which one:
+
+- **full** (default) — the-architect writes the **`spec`**, and the showrunner runs the
+  whole front half (plan → review-plan → tasks → review-tasks) before build.
+- **quick** — the-architect writes the **`tasks`** doc directly (a spec-less chore path), and
+  the showrunner starts at build, skipping the front half.
+
+The invariant: **spec present ⇒ full; else tasks present ⇒ quick** — the route is derivable
+from the on-disk input artifact (the showrunner's `resolveIntake` and the pre-flight both
+derive it this way), and a launch that *declares* a route must **agree** with that artifact or
+it is refused (fail-closed intake). Quick is **spec-less but never review-less**: the
+review-code panel, the verify gate, and the back-half are never skipped. A quick `tasks` doc
+has a **`null` parent** (§3.1) — it is the root input artifact, with no plan or spec ancestor —
+and its review gate is the owner's plain-language **direction** sign-off recorded at intake.
+
 ---
 
 ## 4. State tiers and the disk-state layout
@@ -318,11 +339,11 @@ config-vs-state line, because the two have opposite sharing needs:
   a project's worktrees and clones on a machine (same project ⇒ same
   threat-model/patterns, one mode record). Holds calibration, global-mode definition-docs,
   the authoritative `registry.json`, and the config lock.
-- **Control-plane store = per-checkout**, keyed by `<absolute-git-dir-key>` (§6.2) —
-  **distinct per linked worktree and per clone**. Holds the runtime: queue, checkpoints,
-  per-issue state. Each checkout gets its **own** control-plane store.
+- **Control-plane store = per-clone**, keyed by `<common-dir-key>` (§6.2) — **shared
+  identically across a clone's main checkout and every linked worktree**, distinct across
+  clones. Holds the runtime: checkpoints, per-issue state, and the work-item lease refs.
 
-> **Implemented by the resilience slice** (workhorse `control_plane.py`). The control-plane key must differ from the config key: `store_core` uses `--git-common-dir` for the config key (shared across a clone's linked worktrees — correct for config) and `--absolute-git-dir` for the control-plane key (distinct per worktree — correct for state). The control-plane resolver therefore (a) derives its key from raw `--absolute-git-dir`, and (b) does **not** route through the remote-keyed self-healing pointer — remote-key healing deliberately unifies a project's checkouts (right for config), which would funnel two parallel loops onto one queue/state dir: exactly the uncoordinated-write hazard the vision forbids.
+> **Implemented by the resilience slice** (workhorse `control_plane.py`). Coordination MUST be shared across a clone's worktrees: the one-live-run-per-work-item lease refs (§4.4) live in this store, so keying it to the git **common dir** (`--path-format=absolute --git-common-dir`, identical from all of a clone's worktrees) is what refuses a duplicate launch of the same work item from any worktree — a per-worktree `--absolute-git-dir` key would let it run twice = split-brain on one branch/PR (#170). State isolation is per-work-item WITHIN the store (`issues/<work-item>/…`), not per-worktree. The resolver still does **not** route through the remote-keyed self-healing pointer (that unifies distinct clones — right for config, wrong for machine-local runtime). Zero-migration: for the main checkout the common dir IS the absolute git dir, so existing stores keep their key.
 
 ```
 <global-store>/
@@ -333,7 +354,7 @@ config-vs-state line, because the two have opposite sharing needs:
     config.lock                         # the project-scoped config-write lock (§4.4)
     config/                             # core.md, <plugin>.md, patterns.md, review-decisions.json   (global mode only; in-repo → in the repo)
     docs/<work-item>/{spec,plan,tasks}.md   # definition-docs                          (global mode only; in-repo → in the repo)
-  checkouts/<absolute-git-dir-key>/     # CONTROL-PLANE STORE — a git repo; ONE per worktree/clone
+  checkouts/<common-dir-key>/           # CONTROL-PLANE STORE — a git repo; ONE per clone, shared across its worktrees
     .git/
     meta.json                           # { schemaVersion, sourcePath }  (mode lives in registry.json, not here — §6.3)
     queue.json                          # producer-owned ordered work-list (schema in §4.3)
@@ -347,7 +368,7 @@ config-vs-state line, because the two have opposite sharing needs:
 
 The project store exists in **both** modes (it is the machine-local home of
 `registry.json` and `config.lock`); in in-repo mode its `config/` and `docs/` content
-lives in the repo instead. (`<config-key>` and `<absolute-git-dir-key>` derivations are
+lives in the repo instead. (`<config-key>` and `<common-dir-key>` derivations are
 in §6.2.)
 
 ### 4.3 Runtime schemas
@@ -398,7 +419,8 @@ explicit (`order`), not array position. Item lifecycle is
 ### 4.4 Coordination = git refs and a config lock, not file polling
 
 **Work-item lock — a leased git ref**, `refs/superheroes/locks/<work-item>`, valued
-`{ holder, host, acquiredAt, generation }`, in the per-checkout control-plane store:
+`{ holder, host, acquiredAt, generation }`, in the per-clone control-plane store (so the
+lease is visible identically from every worktree of the clone, §4.2):
 
 - The holder **renews** the ref (bumps `acquiredAt`) on a heartbeat interval **≪ TTL**
   while it works.
@@ -415,11 +437,11 @@ explicit (`order`), not array position. Item lifecycle is
   or a slept laptop, would be stolen from while still holding live state.)
 - **TTL** is an implementation parameter chosen against the longest expected phase (a
   full build/verify) with heartbeat ≪ TTL; default on the order of tens of minutes.
-- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/ref_lock.py`, §4.5 adds the startup per-checkout lock). The file-based `lib/file_lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
+- **Implemented by the resilience slice.** The ref-lease above is the cross-session / cross-host primitive (`lib/ref_lock.py`) and the **sole** work-item mutex — the old §4.5 per-checkout `startup.lock` was removed in #170 (it never serialized anything: its holder pid was the ephemeral acquiring leaf, dead seconds after acquire). The file-based `lib/file_lock.py` — a *narrower, same-host* engine lock — carries TTL + host-boot-id staleness in `acquire()`, superseding the old pid-only `is_stale()`.
 
 **Project-scoped config lock.** Calibration (`core.md`/`<plugin>.md`/`patterns.md`) is
-shared across a project's checkouts (§4.2), so it is **not** guarded by the per-checkout
-locks above. Config writes acquire an advisory **`flock` on `projects/<config-key>/config.lock`**
+shared across a project's checkouts (§4.2), so it is **not** guarded by the per-clone
+lease refs above. Config writes acquire an advisory **`flock` on `projects/<config-key>/config.lock`**
 in the machine-local project store (present in both modes), which serializes them across
 the project's checkouts on that machine. In in-repo mode, cross-machine config writes are
 additionally mediated by git (config is committed). Config write cadence is owner-driven
@@ -443,13 +465,15 @@ it is only at-least-once under `gh` eventual consistency.)
 
 ### 4.5 Concurrency model (two layers)
 
-- **Per-checkout isolation (local).** Each worktree/clone loop has its own control-plane
-  store, queue, and lock refs. **`init`/the producer acquires a per-checkout lock at
-  startup**, so a second loop launched in the *same* checkout **fails closed** — turning
-  "one active loop per checkout" from an assumption into an enforced gate. (atomic file
-  writes prevent torn files, not lost updates; the startup lock is what prevents the
-  within-checkout read-modify-write race on `queue.json`/`checkpoint.json`.) **Parallelism
-  = more checkouts.**
+- **Per-clone coordination (local).** A clone's worktrees **share** one common-dir
+  control-plane store and its lock refs (§4.2). The hard rule is **one live run per work
+  item per clone**, enforced by the per-work-item ref-lease (§4.4): a duplicate launch of an
+  in-flight work item — from *any* worktree — is refused with the lease reason. (The old
+  per-checkout `startup.lock` was removed in #170: its holder pid was an ephemeral leaf, so
+  it never serialized anything — the lease is the real mutex.) Read-modify-write of the shared
+  `worktrees.json` build-registry is guarded by an `fcntl.flock` sidecar (atomic writes prevent
+  torn files; the flock prevents lost updates). **Parallelism = more worktrees running
+  different work items.**
 - **Cross-loop backstop = the target repo's remote.** The genuinely shared write targets
   are: the target code repo on GitHub (guarded by the exactly-once machinery, §4.4) and the
   shared **config store** (serialized by the project-scoped config lock, §4.4, and
@@ -457,13 +481,14 @@ it is only at-least-once under `gh` eventual consistency.)
   machinery lives on the target remote, so it is inherently cross-process and
   cross-machine.
 
-**Residual edge (named, not fixed now):** per-checkout work-item locks won't stop two
-*different* checkout-loops from both grabbing the *same* work-item if it is mis-queued
-into both. Worst case is **wasted duplicate work, not corruption** — the target-remote
-backstop (§4.4) still prevents a double-merge, and shared config writes are serialized by
-the config lock. If cross-loop work-item overlap ever becomes a real pattern, the
-escalation is to host the work-item lock ref on the *shared target remote* instead of
-the per-checkout store (correct, but a network round-trip per lock — so not the default).
+**Residual edge (named, not fixed now):** the common-dir lease coordinates a clone's
+worktrees, but two *different clones* (or machines) of one repo won't see each other's
+per-work-item lease if the same work item is launched in both. Worst case is **wasted
+duplicate work, not corruption** — the target-remote backstop (§4.4) still prevents a
+double-merge, and shared config writes are serialized by the config lock. If cross-clone
+overlap ever becomes a real pattern, the escalation is to host the work-item lock ref on
+the *shared target remote* (a network round-trip per lock — so not the default).
+Cross-machine coordination is explicitly out of scope for #170.
 
 ### 4.6 `events.jsonl` and `resume-brief.md` schemas (authored — resilience slice)
 
@@ -475,7 +500,7 @@ JSON object per line, written under the single-writer model (§4.5) via an atomi
 - `seq` — monotonic, 1-based.
 - `type` — one of `run_started`, `step_entered`, `step_completed`, `notify`, `gate`,
   `error`, `resumed`, `lease_acquired`, `lease_reclaimed`, `ci_fix_attempt`, `parked`,
-  `run_completed`.
+  `run_completed`, `phase_record`, `external_dispatch`, `phase_cost`.
 - optional `step` — the step number (0–9) the event belongs to.
 - optional `detail` — free-text, **scrubbed fail-closed** (`readout.scrub`) before write.
 - optional `world` — a dict of reality facts; string values scrubbed fail-closed.
@@ -487,6 +512,27 @@ is reconstructed by replaying `ci_fix_attempt` events, written **write-ahead** (
 the fix push); a torn trailing line counts **+1** — a conservative over-count, so the
 bound trips earlier and is never bypassed by a crash-loop (it never under-counts). A
 failed durable append raises `DurableWriteError` and the orchestrator parks (fail-closed).
+
+**Token telemetry** (`phase_cost`, #130) — an additive extension of this vocabulary (no
+schemaVersion; the schema is versionless). Each `phase_cost` `payload` carries one phase's
+`{phase, dispatches: {total, byModel}, tokens: {output, input, measured, source}}`: the
+dispatch count × resolved model tier is the always-exact **proxy**; `tokens.output` is the
+budget-derived (`budget.spent()`) output-token delta over the phase, present only when the
+runtime surfaced it (`measured: true`) and **never fabricated**. It is written best-effort,
+**folded into the phase's existing durable write** — the per-phase `phase_progress_entry.py`
+save leaf, and `readout_post.py` for the terminal `ship` phase — so it rides no new courier
+leaf (§ the #118 one-leaf-per-phase budget). A ready hand-back journals `run_completed`;
+a park journals `parked` — including a mid-phase park, which folds the `parked` marker into
+its journal-only save (`parkFromPhases` itself journals nothing), so `token_trend`/`run_watch`
+classify it as parked rather than `other`. `cost_report.py` projects the run total + top
+phases into the readout, and `token_trend.py` renders tokens-per-completed-work-item and
+tokens-per-park across runs.
+
+Two counts are **excluded by design** (both inherent to the no-new-leaf fold, not bugs): (a) a
+phase's own persist leaf — dispatched after the snapshot, so its tokens fall between the phase's
+delta endpoint and the next phase's baseline; and (b) the pre-loop startup leaves — recorded
+under a `startup` bucket that is never snapshotted. So the per-phase counts run slightly below a
+raw `/workflows` agent count; don't reconcile them one-to-one.
 
 **`resume-brief.md`** — the rehydration brief (workhorse `journal.render_brief`),
 refreshed at the compaction boundary (the PreCompact hook) and on every park. Required
@@ -569,7 +615,7 @@ recorded — remains deferred to §7, Phase 2a-plus.)
 | Calibration (`core`/`<plugin>`/`patterns`) | `.claude/superheroes/` (committed) | project store `config/` | project (`<config-key>`) |
 | Definition-docs (`spec`/`plan`/`tasks`) | `docs/superheroes/<work-item>/` (committed) | project store `docs/` | project (`<config-key>`) |
 | `registry.json` + `config.lock` | machine-local project store | machine-local project store | project (`<config-key>`) |
-| Runtime (queue, checkpoints, briefs, events) | machine-local control-plane store | machine-local control-plane store | checkout (`<absolute-git-dir-key>`) |
+| Runtime (checkpoints, briefs, events, lease refs) | machine-local control-plane store | machine-local control-plane store | clone (`<common-dir-key>`) |
 | Work items + rendered index | GitHub issues | GitHub issues | — |
 
 ---
@@ -604,14 +650,19 @@ The normative spec is implemented in `lib/store_core.py`. **Hash:** `sha256(...)
 - **`<remote-key>`** = `short_hash(normalize_remote(origin))`, where `normalize_remote`
   lowercases the host and strips scheme/userinfo/port and a trailing `.git`.
 - **`<common-dir-key>`** = `short_hash(realpath(git rev-parse --path-format=absolute --git-common-dir))`
-  — shared across a clone's linked worktrees; the no-remote fallback (§2.4).
+  — shared across a clone's linked worktrees. Serves as **both** the no-remote config
+  fallback (§2.4) **and** the control-plane key (§4.2, #170). `--path-format=absolute` is
+  required: a bare `--git-common-dir` is a relative `.git` from the main checkout, which
+  `realpath` would resolve against the process cwd; the fallback for git < 2.31 joins the
+  relative result onto the target cwd, else `--absolute-git-dir`, else `realpath(cwd)`.
 - **`<config-key>`** (the project-store key) = `<remote-key>` when a remote exists,
   else `<common-dir-key>`. On first push, `init` rebinds `<common-dir-key>` →
   `<remote-key>` (§2.4).
-- **`<absolute-git-dir-key>`** (the control-plane key) =
-  `short_hash(realpath(git rev-parse --absolute-git-dir))` — distinct per linked
-  worktree and per clone (§4.2). Note `--absolute-git-dir` ≠ `--git-common-dir` for a
-  linked worktree, so this is **never** equal to `<common-dir-key>`.
+- **`<absolute-git-dir-key>`** = `short_hash(realpath(git rev-parse --absolute-git-dir))` —
+  distinct per linked worktree. **Retired as the control-plane key in #170** (the control
+  plane now uses `<common-dir-key>` so a clone's worktrees coordinate); still the identity a
+  per-worktree derivation would produce, kept here for reference. For the **main checkout**
+  it equals `<common-dir-key>` (common dir == absolute git dir) — the zero-migration hinge.
 
 ### 6.3 `<content-hash>` — the exactly-once key
 
@@ -731,6 +782,16 @@ best-effort bootstrap block assembled by `lib/session_context.py`:
 - the project `CLAUDE.md` chain, the user `~/.claude/CLAUDE.md`, an env block (date + git
   email), and the auto-memory `MEMORY.md` head (keyed to the **main** repo, shared across
   worktrees) — parity with a native start.
+- a compact **review-discipline note** — ONLY when the project is superheroes-calibrated
+  (and, like this whole bootstrap, only on Claude Code — Codex wires no `SessionStart`
+  hook, so on that host the `configure`-written in-repo CLAUDE.md copy is the only carrier)
+  (a storage-mode registry entry or hero calibration evidence; the probe is strictly
+  read-only — never `mode_registry.resolve()`, which can backfill-write). It states the
+  no-unreviewed-PRs convention and points at the canonical
+  `rubric/review-discipline.md`. This is the storage-mode-respecting carrier: it reaches
+  every session (including ad-hoc direct builds) with zero repo traces, in both storage
+  modes. `configure` can additionally write a durable copy into an **in-repo** project's
+  `CLAUDE.md` (owner-gated, idempotent); it never offers that in out-of-repo mode.
 
 It is **fail-soft**: each source is gathered independently; a missing/erroring one is omitted
 with a one-line stderr breadcrumb (never the file contents) and the hook always exits 0, never
@@ -748,7 +809,7 @@ layer that context injection cannot fix; it is tracked separately
 
 The **host** is the harness the plugin *runs on* (§7.1–§7.2 — Claude Code or Codex). The **engine** is
 the agent a working role is *dispatched to* — `claude` (the default, unchanged), `codex`, or `cursor` —
-chosen per role (reviewer engine, implementation engine) by the owner in `configure`. These are
+chosen per role (reviewer engine, implementation engine, **planAuthor engine**) by the owner in `configure`. These are
 orthogonal axes: the host is where the plugin executes; the engine is which model family does a role's
 work. An engine is selected *below* the host, at the dispatch leaf.
 
@@ -765,6 +826,13 @@ worker, fixer, and final-review-fix leaves route to the implementation engine, a
 review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_adapter.py`. The engine
 axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
 engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
+
+**Plan-author contract.** Showrunner's produce phase routes ONLY the **plan** doc through
+`enginePreferences.planAuthor` (the **`author-plan`** role kind). Tasks authoring always stays native
+(`claude`). The split **`author-plan` model tier** (in `## Model tiers`) lets plan authoring alone move
+to a stronger model (e.g. `author-plan: fable`) without moving tasks authoring; unset, it resolves exactly
+as `author`. A failed external author-plan dispatch falls open to the native author after UFR-2 cleanup
+(clear the completion marker and discard the external draft) within the same attempt.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run workspace-write,
 confined to the managed build worktree, with **no remote authority** — the band owns every push / PR /
@@ -913,11 +981,35 @@ unverified premise*, not a status note.
 **Courier stretch contract (#118).** Deterministic showrunner stretches use **at most one
 courier leaf by default**; genuine model work (authoring, review panels, fixers) remains
 separate leaves. The lease/reconcile **world snapshot** at startup is the named exception —
-it may batch multiple reads in one courier call. Every **advancing durable write** must be
+it may batch multiple reads in one courier call.
+
+**Lean courier agent (#194).** Every dumb-pipe courier leaf dispatches on the restricted
+`superheroes:courier` agent (`tools: Bash` only), not the default full-surface worker. A
+Bash-only agent has neither ToolSearch nor the Skill tool, so it carries **no
+`deferred_tools_delta` / `skill_listing` attachments** (~13.9k tokens/leaf, measured) and only
+a tiny tool-schema prefix — cutting the fixed per-leaf context ~2.6× (≈33k → ≈13k tokens).
+This is orthogonal to the cheapest-model pin (§ the model wrapper). A **prompt-drop guard**
+covers the known plugin-subagent failure where a dispatch starts without the task prompt: for
+a command that echoes `__SR_EXIT`, an answer that either omits the marker **or** echoes the
+command back with the literal unexpanded `__SR_EXIT:$?` (both did-not-run shapes) triggers one
+retry on the courier agent, then a fall-back to the default dispatch — so a courier-agent
+dispatch bug degrades to today's cost instead of parking the run. Every **advancing durable write** must be
 **idempotent** and **read-back confirmed** before the run advances past that step; a failed
 read-back parks fail-closed. **Best-effort** writes (round-state snapshots, deferred-finding
 backups, readout posting) must be explicitly named and must **not** gate advancement on their
 delivery alone.
+
+**Leaf Bash timeout floor.** The Bash tool's 120s default kills long spine commands
+(verify_gate wrapping a full test gate) when a courier omits the prompt-requested `timeout`
+parameter — prompt compliance is stochastic. On Claude Code the plugin makes the floor
+structural: a `PreToolUse(Bash)` hook (`hooks/bash_timeout.py`, wired in `hooks.json` after
+the fail-closed enforcer entry) injects `timeout: 600000` via `updatedInput` **only when the
+call carries no explicit timeout** (an explicit value is never touched; a `null` counts as
+omitted). It matches `verify_gate.py`'s own 600s bound, so the gate reports `timeout` cleanly
+instead of being killed underneath. The hook is **fail-open** (parse error → no output, exit 0,
+`|| true` at the wiring) — worst case is the pre-hook default, never a broken Bash call — and
+it fires inside subagent leaves, so every consumer project gets the floor from the plugin
+alone, with no repo-side settings trace.
 
 The `superheroes:showrunner` skill turns the merged spine **on** for one approved work-item.
 The launch path is **pre-flight → bundle → Workflow tool**:
@@ -970,3 +1062,131 @@ keeps its superpowers dependency, untouched.) Full superpowers removal across th
 tracked by [#111](https://github.com/zwrose/superheroes/issues/111); the durable repeatable
 agentic acceptance of the live run by
 [#112](https://github.com/zwrose/superheroes/issues/112).
+
+### 10.7 Ship-phase honesty gates (DoD disposition + stub markers)
+
+The ship phase gates on CI-green + branch-current, but a PR can be internally consistent and
+still **silently incomplete** — a Definition-of-done bullet dropped with no trace, or a
+deliberately-unwired seam disclosed only in a docstring nobody reads (the class
+[#228](https://github.com/zwrose/superheroes/issues/228) closes). Two deterministic,
+fail-closed gates operate on the PR body at draft/mark-ready time.
+
+**DoD disposition gate.** The draft-PR step seeds a **Definition of done** disposition table
+into the PR body — one row per spec DoD bullet (parsed from the spec's `## Definition of done`
+section), anchored on the machine-readable `superheroes:dod-table` marker. The build/ship legs
+**fill** each row: `done` (with an evidence pointer — test name, quoted record, link) or
+`deferred` (with a filed issue `#NNN` **and** a one-line reason). Before the ready flip,
+`lib/dod_gate.py` (pure `decide()`, house decider style) re-reads the table and **parks** the
+run — naming the unaddressed bullet — if any bullet has no row, a `done` with no evidence, or a
+`deferred` with no issue. It verifies *presence and shape*, not quality (a weak pointer passes):
+it converts a silent omission into a visible claim the owner judges at review. A spec-less quick
+route (§3.4, [#25](https://github.com/zwrose/superheroes/issues/25)) returns `not-applicable`;
+a spec-driven run with a missing/empty DoD section **parks** (never silently skips).
+
+There is **no automated filler** — dispositioning each bullet is deliberate work, not something a
+leg fabricates (a fabricated `done` is exactly the silent-completion this gate exists to prevent).
+So a spec-driven run whose table is still blank **parks at mark-ready by design**: it is a
+supervised park (§ review-discipline) the owner resolves by dispositioning the rows and resuming,
+never a defect to auto-clear.
+
+**No-silent-stubs marker.** Any deliberately-unwired seam (a placeholder function, a hardcoded
+default standing in for a real source) **must** carry a machine-findable marker on or above it:
+
+    # STUB(#NNN): <one-line description of what is unwired and the live effect>
+
+The issue number is **mandatory** — a stub without a tracked follow-up is a violation.
+`.github/scripts/validate_stubs.py` (CI) greps the plugin source for `STUB(…)` markers and fails
+any missing a valid issue reference (it does **not** hunt unmarked stubs — that is out of scope
+by design; it catches only stubs the author already flagged but under-specified). The literal
+`#NNN` is the reserved documentation placeholder. At draft-PR time the pipeline greps the PR
+*diff* for markers and writes a **generated** "Stubbed seams" section (anchored on
+`superheroes:stubbed-seams`) — one line per marker (file, issue, description). Generated, not
+authored, so it cannot be omitted; an empty section is omitted entirely. The grammar lives in
+`lib/stub_markers.py` (single source of truth, shared by the validator and the body generator).
+
+**Where each gate bites.** The **stub-marker validator runs in CI on every PR — both paths**, since
+it scans source, not the run. The **DoD disposition gate is code-enforced only on the showrunner
+path** (`lib/pr_entry.py` seeds the table at draft and parks the mark-ready flip). On the
+**standalone review/ship path** the `workhorse` skill authors both sections per this convention and
+the review-discipline rubric cites this section, so the **review seat — not a code gate — is the
+backstop** there. Wiring a deterministic DoD gate into the standalone path is deferred (there is no
+single ship seam to hook the way `pr_entry.py` gives the showrunner).
+
+---
+
+## 11. One home per cross-boundary fact (single source of truth)
+
+> **This is a repo-specific convention for us as builders of superheroes** — not (yet) a
+> portable band contract like §1–§10. It earns its place here because superheroes' own
+> source spans two languages (Workflow JS + Python libs), skill markdown, and fixtures, so
+> the same fact is easy to re-type in four places. If it proves out, it can graduate into
+> the portable rubric later, the way `review-discipline.md` did. Provenance: the PR #205
+> phase-list defect ([#226](https://github.com/zwrose/superheroes/issues/226)), whose
+> structural enabler was exactly this — two hand-maintained copies of the pipeline phase
+> list in two languages, with no link between them ([#231](https://github.com/zwrose/superheroes/issues/231)).
+
+**One home per cross-boundary fact.** A fact consumed across a **module or language
+boundary** (phase lists, event/verb names, schema field sets, verdict/reason tokens, path
+layouts, reviewer rosters) has **exactly one authoritative definition**. Every other
+consumer either **reads that home at runtime**, or keeps a **copy guarded by a drift test**
+that reads the authoritative home and asserts equality — so a change to the truth **breaks
+CI in every copy-holder**. **Two hand-maintained copies with no drift test is a
+review-blocking violation, citable by name (this §).** A reviewer seeing a bare
+`PIPELINE_PHASES = [...]` re-typed from JS now has a rule to object with; without one it
+looks like an ordinary constant, which is how #205 shipped.
+
+**Scope — what counts.** The boundary is what matters, not the value. A constant with a
+single owner and only same-module callers is not in scope (that is ordinary code). A fact
+becomes cross-boundary when a **second language, module, skill doc, or fixture restates it**
+so that the two can silently disagree. When in doubt, ask: *if I renamed the authoritative
+copy, would anything else keep the old value and still pass CI?* If yes, it needs one of the
+two patterns below.
+
+### 11.1 Pattern 1 — shared data file (read the one home at runtime)
+
+The fact lives in a **checked-in data file** that every consumer reads; no consumer restates
+it. Best when the fact is plain data (a list, a field set, a map) and every consumer can load
+a file at startup.
+
+*Illustrative:* a checked-in `phases.json` that `showrunner.js` derives its `PHASES` array
+from at load and the Python harness `json.load`s directly. One edit, both move; nothing to
+drift. (Superheroes' phase list happens to use Pattern 2 today because the JS literal
+predates any shared file and the harness read is test-time only — but a new cross-boundary
+fact with several runtime consumers should prefer Pattern 1.)
+
+### 11.2 Pattern 2 — copy + drift test (fail-closed reader + equality assertion)
+
+A consumer keeps its own copy for ergonomics, but a **drift test parses the authoritative
+home and asserts equality**. The reader **must fail closed** — if it parses nothing (literal
+renamed, moved, duplicated, or malformed) it raises rather than returning an empty set that
+would make the equality vacuously pass. A rename of the truth then **fails the drift test**,
+not production.
+
+*Worked example (the phase list, shipped by [#233](https://github.com/zwrose/superheroes/issues/233)):*
+`showrunner.js` owns the canonical `const PHASES = [...]` literal. Python does **not** re-type
+it: `lib/acceptance_phases.py::read_pipeline_phases` parses that JS literal and **fails closed**
+on every not-found / duplicated / unparseable / non-string-list shape (see its five
+`RuntimeError` paths and the matching `test_acceptance_fixture.py` fail-closed tests). The
+drift test `test_acceptance_fixture.py::test_fixture_expected_phases_match_showrunner_source_of_truth`
+asserts the committed fixture's `expected_phases` equals what the reader returns — so a phase
+rename in `showrunner.js` **breaks CI** (mutation-verified). This is the canonical Pattern-2
+reference; **do not rebuild it.**
+
+**Caveat — a copy-list drift test is only as complete as the copies it enumerates.** Pattern 2
+catches drift in the copies the test names; a **new** copy someone adds later is invisible until
+it is added to the test. So the enumerating drift test must name every known copy-holder (a comment
+listing them), and **adding a copy means extending the drift test** — checked at review under this §.
+The roster guard `test_dispatch_tables.py::test_code_reviewer_rosters_match_bundled_agents` follows
+this: it enumerates all six copy-holders (two `showrunner.js` JS literals, two Python `DIMENSIONS`,
+and the same roster re-keyed as two `AGENT_SUFFIX` dicts) against the `agents/*-reviewer` home. When
+a single runtime home is cheap to read, Pattern 1 sidesteps this failure mode entirely.
+
+### 11.3 Test corollary — a contract test must read the home, never restate it
+
+**A test for a cross-boundary contract must not restate the constant** — it **imports or
+reads the authoritative home**, or it is merely testing the copy against itself and proves
+nothing. This is how #205's 172 green tests locked the defect in: they asserted the wrong
+`PIPELINE_PHASES` copy against a fixture that restated the *same* wrong copy, so the tautology
+passed while the two real homes disagreed. A drift test that reads one copy and asserts against
+a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
+must trace back to the authoritative home (directly, or via the fixture the home also feeds).

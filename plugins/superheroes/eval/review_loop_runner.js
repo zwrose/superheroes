@@ -64,7 +64,13 @@ global.synthesisLeaf = async (_merged, _context, _rubric, _runDir, round) => {
 }
 global.recordDeferred = async () => {}
 global.fixStep = async (fixContext, verdict) => {
-  fixContexts.push({ round: verdict.round, context: fixContext })
+  // #211: the fixer receives the worklist PATH; read it so the eval can assert on its content
+  // (findings / classKeys / generalizeRequired / changedSubjects / coverageDecisions on disk).
+  let context = fixContext
+  if (fixContext && fixContext.worklistPath) {
+    try { context = JSON.parse(fs.readFileSync(fixContext.worklistPath, 'utf8')) } catch (_) { context = fixContext }
+  }
+  fixContexts.push({ round: verdict.round, context })
   usage[`fix:r${verdict.round}`] = { total: 1 }
   const fix = (fixture.fixEvents || []).find((f) => f.afterRound === verdict.round) || { changedSubjects: [], coverageDecisions: [] }
   fixResults.push({ round: verdict.round, coverageDecisionIds: (fix.coverageDecisions || []).map((d) => d.id).filter(Boolean) })

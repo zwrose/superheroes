@@ -20,12 +20,14 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const vm = require('vm')
+const crypto = require('crypto')
 
 // ---------------------------------------------------------------------------
 // PART A: showrunner() startup plants __SR_OVERRIDES via exec(model_tier_overrides.py)
 // ---------------------------------------------------------------------------
 const sr = require('../showrunner.js')
 const modelTier = require('../model_tier.js')
+const { markedStdout } = require('./_marked_stdout.js')
 
 async function partA() {
   // Track agent calls to find the overrides exec
@@ -44,12 +46,12 @@ async function partA() {
       // by the command in the prompt rather than the old bare 'exec' label.
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
         // reconcile: return empty snapshot -> world_derive -> proceed
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null,
           world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
           generation: 1,
           root: globalThis.__SR_ROOT,
-        }) }]
+        })
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         // readGate for spec: 'passed'
@@ -107,12 +109,12 @@ async function partA() {
     }
     if (opts && opts.courier) {
       if (typeof prompt === 'string' && prompt.includes('recover_entry.py')) {
-        return [{ index: 0, ok: true, stdout: JSON.stringify({
+        return markedStdout({
           checkpoint: null,
           world: { store_ok: true, current_content_hash: null, pr: null, seeded_empty: true },
           generation: 1,
           root: globalThis.__SR_ROOT,
-        }) }]
+        })
       }
       if (typeof prompt === 'string' && prompt.includes('definition_doc.py read-gate')) {
         return [{ index: 0, ok: true, stdout: '{"review":"passed"}' }]
@@ -157,7 +159,9 @@ async function partB() {
   sandbox.globalThis = sandbox
   sandbox.global = sandbox
   sandbox.agent = async function(prompt, opts) {
-    received.push({ label: opts && opts.label, model: opts && opts.model })
+    received.push(Object.assign({ prompt }, opts || {}))
+    if (String(prompt).includes('single-backtick-probe')) return '`{"ok":true}\n__SR_EXIT:0`'
+    if (typeof sandbox.__payloadHarness === 'function') return sandbox.__payloadHarness(prompt, opts || {})
     throw new Error('STOP')  // stop after first real agent call
   }
   sandbox.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
@@ -170,6 +174,19 @@ async function partB() {
   // Now manually set __SR_LEAF_MODEL to 'sonnet' (as if args.model='sonnet' was passed)
   sandbox.globalThis.__SR_LEAF_MODEL = 'sonnet'
   const cheapest = modelTier.DEFAULT_TIERS.mechanical  // 'haiku'
+
+  // (b0) A live courier wrapped the whole helper response in a single inline backtick pair:
+  // `{"ok":true}\n__SR_EXIT:0`. The marker slice leaves the leading backtick in stdout unless
+  // __helperResult strips this inline wrapper too.
+  received.length = 0
+  const helper = await sandbox.globalThis.io.runHelper('single-backtick-probe', [])
+  assert.strictEqual(helper.status, 0, 'FAIL (b0): single-backtick helper answer should preserve exit status 0')
+  assert.strictEqual(helper.stdout, '{"ok":true}', 'FAIL (b0): helper stdout should strip one inline backtick wrapper')
+  assert.strictEqual(
+    received[0].model,
+    cheapest,
+    `FAIL (b0): io.runHelper must still be pinned to cheapest ('${cheapest}'), got '${received[0].model}'`,
+  )
 
   // (b1) Call globalThis.agent with label='exec' -> wrapper must pass cheapest to __realAgent
   received.length = 0
@@ -258,11 +275,251 @@ async function partB() {
   assert.strictEqual(received[0].label, 'read gate', 'FAIL (b8): the descriptive label is preserved for display (not relabelled)')
   assert.ok(!('courier' in received[0]), 'FAIL (b8): the courier marker is stripped before the real agent() call')
 
-  console.log('OK (b): bundle wrapper — exec/io + courier:true always cheapest regardless of __SR_LEAF_MODEL; non-dumb gets __SR_LEAF_MODEL')
+
+  // (b9) Payload-carrying dumb pipes are still couriers, but they must use a copy-faithful fixer tier
+  // rather than the cheapest mechanical tier.
+  sandbox.globalThis.__SR_LEAF_MODEL = 'haiku'
+  received.length = 0
+  try { await sandbox.globalThis.agent('stage payload chunk', { label: 'io', courier: true, payload: true }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b9): no call to underlying agent for payload courier')
+  assert.strictEqual(
+    received[0].model,
+    modelTier.DEFAULT_TIERS.fixer,
+    `FAIL (b9): payload courier must use fixer tier ('${modelTier.DEFAULT_TIERS.fixer}'), got '${received[0].model}'`,
+  )
+
+  // (b10) The live bundle path for oversized stageAndRunHelper payloads chunks, verifies,
+  // reassembles, and runs the helper against the exact original payload.
+  function sha(text) {
+    return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex')
+  }
+  function commandFromPrompt(prompt) {
+    const text = String(prompt || '')
+    const idx = text.lastIndexOf('\n\n')
+    return idx >= 0 ? text.slice(idx + 2) : text
+  }
+  function argValue(cmd, flag) {
+    const match = String(cmd).match(new RegExp("'" + flag + "'\\s+'([^']*)'"))
+    return match ? match[1] : null
+  }
+  const staged = Object.create(null)
+  const partsByPath = Object.create(null)
+  const stageCalls = []
+  const finishCalls = []
+  sandbox.__payloadHarness = async function(prompt) {
+    const cmd = commandFromPrompt(prompt)
+    const current = received[received.length - 1]
+    if (cmd.includes("'stage-chunk'")) {
+      assert.strictEqual(current.model, modelTier.DEFAULT_TIERS.fixer, 'FAIL (b10): stage-chunk courier must use fixer tier')
+      const target = argValue(cmd, '--path')
+      const index = Number(argValue(cmd, '--index'))
+      const total = Number(argValue(cmd, '--total'))
+      const b64 = argValue(cmd, '--chunk-b64')
+      const hash = argValue(cmd, '--chunk-hash')
+      assert.strictEqual(sha(b64), hash, 'FAIL (b10): stage-chunk hash must cover the base64 chunk')
+      const bucket = partsByPath[target] || (partsByPath[target] = { total, chunks: [] })
+      bucket.chunks[index] = Buffer.from(b64, 'base64').toString('utf8')
+      stageCalls.push({ target, index, total })
+      return JSON.stringify({ ok: true, index, total }) + '\n__SR_EXIT:0'
+    }
+    if (cmd.includes("'finish-chunks'")) {
+      assert.strictEqual(current.model, modelTier.DEFAULT_TIERS.fixer, 'FAIL (b10): finish/helper courier must use fixer tier')
+      const target = argValue(cmd, '--path')
+      const total = Number(argValue(cmd, '--total'))
+      const payloadHash = argValue(cmd, '--payload-hash')
+      const bucket = partsByPath[target]
+      assert.ok(bucket, 'FAIL (b10): finish-chunks ran before any chunks were staged')
+      assert.strictEqual(bucket.chunks.length, total, 'FAIL (b10): finish-chunks total must match staged chunks')
+      const text = bucket.chunks.join('')
+      assert.strictEqual(sha(text), payloadHash, 'FAIL (b10): finish-chunks hash must cover the assembled payload')
+      // The mock fabricates the helper's stdout from its own bucket, so this branch would pass
+      // even if the bundle forgot to chain the helper. Pin the COMMAND SHAPE: the helper must be
+      // chained after a verified finish, with the exit marker last.
+      const helperSegment = " >/dev/null && 'cat' '" + target + "' 2>&1; echo __SR_EXIT:$?"
+      assert.ok(cmd.endsWith(helperSegment),
+        'FAIL (b10): finish-chunks must gate the chained helper on a verified finish, got: ' + cmd.slice(-160))
+      staged[target] = text
+      finishCalls.push({ target, total })
+      return staged[target] + '\n__SR_EXIT:0'
+    }
+    throw new Error('unexpected payload courier command: ' + cmd)
+  }
+  sandbox.globalThis.__SR_LEAF_MODEL = 'haiku'
+  received.length = 0
+  const stagedPath = '/tmp/staged-large-payload.txt'
+  const payload = ('chunked payload \u2014 \u{1f3a1} ' + 'x'.repeat(1800) + '\n').repeat(3)
+  const result = await sandbox.globalThis.io.stageAndRunHelper(stagedPath, payload, 'cat', [stagedPath])
+  assert.strictEqual(result.ok, true, 'FAIL (b10): oversized stageAndRunHelper should report a clean helper exit')
+  assert.strictEqual(result.stdout, payload, 'FAIL (b10): helper must see the exact staged payload')
+  assert.ok(stageCalls.length > 1, 'FAIL (b10): oversized payload must be split across multiple stage-chunk calls')
+  assert.strictEqual(finishCalls.length, 1, 'FAIL (b10): finish-chunks must run exactly once before the helper')
+  assert.ok(received.every((c) => c.model === modelTier.DEFAULT_TIERS.fixer), 'FAIL (b10): every oversized payload courier call must use fixer tier')
+  sandbox.__payloadHarness = null
+
+  // (b11) io.runHelper forwards the payload marker (#191): a receipt-fetch (read-chunk) answer
+  // is a ~2KB relay payload and must ride the copy-faithful fixer tier; b0 already pins the
+  // plain (opt-less) runHelper to cheapest.
+  received.length = 0
+  try { await sandbox.globalThis.io.runHelper('python3', ['read_chunk_probe.py'], { payload: true }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (b11): no call to underlying agent for payload runHelper')
+  assert.strictEqual(
+    received[0].model,
+    modelTier.DEFAULT_TIERS.fixer,
+    `FAIL (b11): payload-marked runHelper must use fixer tier ('${modelTier.DEFAULT_TIERS.fixer}'), got '${received[0].model}'`,
+  )
+
+  console.log('OK (b): bundle wrapper — exec/io + courier:true model pinning, payload courier fixer tier, smart leaves get __SR_LEAF_MODEL')
+}
+
+// ---------------------------------------------------------------------------
+// PART C (#194): the lean courier agent — every dumb-pipe (__sh) leaf dispatches on
+// agentType 'superheroes:courier'; the __SR_EXIT prompt-drop guard retries once then falls
+// back to the DEFAULT dispatch; a smart (non-courier) leaf never carries agentType.
+// ---------------------------------------------------------------------------
+async function partC() {
+  const bundlePath = path.join(__dirname, '..', 'showrunner.bundle.js')
+  const text = fs.readFileSync(bundlePath, 'utf8').replace(/export\s+const\s+meta/, 'const meta')
+
+  const received = []
+  let answerFn = null
+  const sandbox = {
+    console,
+    args: JSON.stringify({ workItem: 'c-probe', model: 'sonnet' }),
+    process: { env: {}, cwd: () => '/' },
+  }
+  sandbox.globalThis = sandbox
+  sandbox.global = sandbox
+  sandbox.agent = async function(prompt, opts) {
+    received.push(Object.assign({ prompt }, opts || {}))
+    // answerFn drives the guard: return a marker-less answer to simulate a prompt-drop, or a
+    // marker-carrying one for the healthy path. Default: a clean marker answer.
+    return answerFn ? answerFn(received.length, prompt, opts) : '__SR_EXIT:0'
+  }
+  sandbox.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
+  sandbox.log = () => {}
+  vm.createContext(sandbox)
+  vm.runInContext('globalThis.__SR_RUN = false;\n;(async () => {\n' + text + '\n})();', sandbox, { timeout: 5000 })
+  const cheapest = modelTier.DEFAULT_TIERS.mechanical
+
+  // (c1) A healthy courier leaf (io.runHelper -> __sh) carries agentType 'superheroes:courier',
+  // dispatches exactly once, keeps the cheapest-model pin, and the courier marker is still stripped.
+  received.length = 0
+  answerFn = () => '{"ok":true}\n__SR_EXIT:0'
+  const c1 = await sandbox.globalThis.io.runHelper('probe', [])
+  assert.strictEqual(c1.status, 0, 'FAIL (c1): healthy helper answer should read exit status 0')
+  assert.strictEqual(received.length, 1, 'FAIL (c1): a healthy marker-carrying leaf must dispatch exactly once')
+  assert.strictEqual(
+    received[0].agentType,
+    'superheroes:courier',
+    `FAIL (c1): a courier leaf must carry agentType 'superheroes:courier', got '${received[0].agentType}'`,
+  )
+  assert.strictEqual(received[0].model, cheapest, 'FAIL (c1): agentType must not disturb the cheapest-model pin')
+  assert.ok(!('courier' in received[0]), 'FAIL (c1): the courier marker is still stripped before the real agent() call')
+
+  // (c2) A smart (non-courier) leaf NEVER carries agentType — the lean courier agent is a dumb-pipe
+  // concern only, so smart reviewers/fixers keep the full tool surface.
+  received.length = 0
+  answerFn = () => 'noop'
+  try { await sandbox.globalThis.agent('review something', { label: 'reviewer:r1', model: 'opus' }) } catch (_) {}
+  assert.ok(received.length > 0, 'FAIL (c2): no call to underlying agent for smart leaf')
+  assert.ok(!('agentType' in received[0]), `FAIL (c2): a smart leaf must NOT carry agentType, got '${received[0].agentType}'`)
+
+  // (c3) Prompt-drop guard: two marker-less answers -> retry once on the courier agent, then fall back
+  // to the DEFAULT dispatch (agentType dropped) so a dispatch bug degrades to today's cost, never a
+  // park. The cheapest-model pin (courier:true) survives the fallback.
+  received.length = 0
+  answerFn = (n) => (n <= 2 ? 'EXEC-FAILED' : '{"ok":true}\n__SR_EXIT:0')
+  const c3 = await sandbox.globalThis.io.runHelper('drop-probe', [])
+  assert.strictEqual(received.length, 3, 'FAIL (c3): two marker-less answers must produce retry + fallback = 3 dispatches')
+  assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c3): first dispatch is on the courier agent')
+  assert.strictEqual(received[1].agentType, 'superheroes:courier', 'FAIL (c3): the retry stays on the courier agent')
+  assert.ok(!('agentType' in received[2]), 'FAIL (c3): the fallback drops agentType (default dispatch)')
+  assert.strictEqual(received[2].model, cheapest, 'FAIL (c3): the fallback keeps the cheapest-model pin (courier:true retained)')
+  assert.strictEqual(c3.ok, true, 'FAIL (c3): the fallback answer (marker-carrying) is parsed as a clean exit')
+
+  // (c4) A NON-marker courier leaf (mkdir) still carries agentType but is NOT subject to the guard
+  // (there is no marker to check), so it dispatches exactly once even on a marker-less answer — a
+  // regression guard against the fallback loop firing on every leaf.
+  received.length = 0
+  answerFn = () => 'ok'
+  await sandbox.globalThis.io.mkdirp('/tmp/c4-probe')
+  assert.strictEqual(received.length, 1, 'FAIL (c4): a non-marker courier leaf must dispatch once (no marker guard)')
+  assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c4): a non-marker courier leaf still carries agentType')
+
+  // (c5) Echo-back blind spot (#194 review): a leaf that echoes the command back WITHOUT running it
+  // returns text carrying the LITERAL unexpanded '__SR_EXIT:$?' — the marker STRING is present, so a
+  // bare presence check would wrongly pass. The guard must treat this as a failed dispatch too:
+  // retry once, then fall back to the default dispatch, exactly like a marker-less answer.
+  received.length = 0
+  answerFn = (n) => (n <= 2
+    ? "cd '/repo' && 'echo-probe' 2>&1; echo __SR_EXIT:$?"   // command echoed back, $? unexpanded
+    : '{"ok":true}\n__SR_EXIT:0')
+  const c5 = await sandbox.globalThis.io.runHelper('echo-probe', [])
+  assert.strictEqual(received.length, 3, 'FAIL (c5): an echoed-command answer must retry + fall back = 3 dispatches')
+  assert.strictEqual(received[0].agentType, 'superheroes:courier', 'FAIL (c5): first dispatch is on the courier agent')
+  assert.strictEqual(received[1].agentType, 'superheroes:courier', 'FAIL (c5): the retry stays on the courier agent')
+  assert.ok(!('agentType' in received[2]), 'FAIL (c5): the fallback drops agentType (default dispatch)')
+  assert.strictEqual(c5.ok, true, 'FAIL (c5): the fallback answer (real marker) parses as a clean exit')
+
+  // (c6) Dispatch REJECTION fallback (live 2026-07-04, run wf_b408ece1-0ed): on a plugin cache
+  // older than the courier agent, agent() REJECTS with "agent type 'superheroes:courier' not
+  // found" — a THROW the __SR_EXIT answer guard never sees (it only inspects returned answers).
+  // The wrapper must catch exactly that rejection at the dispatch choke-point and re-dispatch
+  // ONCE without agentType. Fresh sandbox: __realAgent is captured at bundle eval, so the
+  // rejecting agent must be installed BEFORE the eval. Covers BOTH leaf shapes: a non-marker
+  // leaf (mkdir — the run-29 test-pilot writeStatus crash class) and a marker leaf (runHelper).
+  const sandbox2 = {
+    console, args: JSON.stringify({ workItem: 'c-probe-2', model: 'sonnet' }),
+    process: { env: {}, cwd: () => '/' },
+  }
+  sandbox2.globalThis = sandbox2
+  sandbox2.global = sandbox2
+  const received2 = []
+  let rejectMode = 'not-found'
+  sandbox2.agent = async function(prompt, opts) {
+    received2.push(Object.assign({ prompt }, opts || {}))
+    if (opts && opts.agentType) {
+      if (rejectMode === 'not-found') {
+        throw new Error("agent type 'superheroes:courier' not found. Available agents: claude, general-purpose")
+      }
+      throw new Error('rate limited — try again')
+    }
+    return '{"ok":true}\n__SR_EXIT:0'
+  }
+  sandbox2.parallel = async (thunks) => Promise.all((thunks || []).map((f) => f()))
+  sandbox2.log = () => {}
+  vm.createContext(sandbox2)
+  vm.runInContext('globalThis.__SR_RUN = false;\n;(async () => {\n' + text + '\n})();', sandbox2, { timeout: 5000 })
+
+  received2.length = 0
+  await sandbox2.globalThis.io.mkdirp('/tmp/c6-probe')          // non-marker leaf: run-29's crash shape
+  assert.strictEqual(received2.length, 2, 'FAIL (c6): a not-found rejection must re-dispatch exactly once')
+  assert.strictEqual(received2[0].agentType, 'superheroes:courier', 'FAIL (c6): first dispatch carries agentType')
+  assert.ok(!('agentType' in received2[1]), 'FAIL (c6): the fallback re-dispatch drops agentType')
+  assert.strictEqual(received2[1].model, cheapest, 'FAIL (c6): the fallback keeps the cheapest-model pin')
+
+  received2.length = 0
+  const c6h = await sandbox2.globalThis.io.runHelper('c6-helper-probe', [])
+  assert.strictEqual(c6h.status, 0, 'FAIL (c6): a marker leaf must parse the fallback answer cleanly')
+  assert.strictEqual(received2.length, 2, 'FAIL (c6): marker leaf — not-found rejection means 2 dispatches (no extra marker retries)')
+  assert.ok(!('agentType' in received2[1]), 'FAIL (c6): marker-leaf fallback drops agentType')
+
+  // (c7) Any OTHER rejection with agentType present must PROPAGATE — the fallback is scoped to
+  // the not-found shape only, never a blanket swallow of dispatch errors.
+  rejectMode = 'other'
+  received2.length = 0
+  let c7threw = null
+  try { await sandbox2.globalThis.io.mkdirp('/tmp/c7-probe') } catch (e) { c7threw = e }
+  assert.ok(c7threw && /rate limited/.test(String((c7threw && c7threw.message) || c7threw)),
+    'FAIL (c7): a non-not-found rejection must propagate, not silently fall back')
+  assert.strictEqual(received2.length, 1, 'FAIL (c7): no fallback re-dispatch for a non-not-found rejection')
+
+  console.log('OK (c): courier leaves dispatch on superheroes:courier; guard (missing + echoed marker) falls back to default; a not-found dispatch REJECTION falls back at the wrapper; smart leaves never carry it')
 }
 
 ;(async () => {
   await partA()
   await partB()
-  console.log('OK: Task 17 — startup __SR_OVERRIDES + unconditional cheapest dumb-pipe (bundle wrapper)')
+  await partC()
+  console.log('OK: Task 17 — startup __SR_OVERRIDES + unconditional cheapest dumb-pipe (bundle wrapper) + lean courier agent (#194)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack); process.exit(1) })

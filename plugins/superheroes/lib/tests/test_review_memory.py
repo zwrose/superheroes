@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import json
 import os
@@ -39,6 +40,11 @@ def test_carried_findings_do_not_recur():
     assert rm.recurrent_classes(records) == []
 
 
+def test_class_key_falls_back_to_summary_when_title_missing():
+    rm = load_memory()
+    assert rm.class_key({"dimension": "Security", "taxonomy": "leak", "summary": "Secret leaked"}) == "Security::leak::secret leaked"
+
+
 # --- persist-skeleton / update-round / hash: the round record's DURABLE form is the bounded
 # skeleton (D3) — evidence bodies never touch round-records.json, and the inline transport
 # self-verifies via --record-hash (a courier that mangles the JSON cannot recompute its sha256).
@@ -65,6 +71,155 @@ def _skeleton_cli(records_path, record, expected_hash, run_id="run-1", record_ha
                 "--record-json", record_json,
                 "--record-hash", record_hash or rm.content_hash(record_json),
                 "--expected-hash", expected_hash, "--run-id", run_id)
+
+
+def _long_title():
+    return ("Finding title word " * 20).strip()
+
+
+def test_title_clamp_bounds_identity_and_skeleton_titles():
+    rm = load_memory()
+    title = _long_title()
+    clamped = rm.clamp_title(title)
+    assert len(clamped) <= 160
+    assert clamped.endswith("...")
+    assert not clamped.endswith("word F...")
+    assert rm.class_key({"dimension": "Security", "taxonomy": "auth", "title": title}) == \
+        "Security::auth::" + " ".join(clamped.lower().split())
+    skeleton = rm.summarize_record({
+        "schemaVersion": 2,
+        "round": 1,
+        "kind": "baseline",
+        "findings": [{"dimension": "Security", "taxonomy": "auth", "title": title,
+                       "severity": "Critical", "classKey": "Security::auth::" + " ".join(title.lower().split())}],
+        "dimensions": {"Security": {"dimension": "Security", "status": "run",
+                                       "findings": [{"dimension": "Security", "taxonomy": "auth", "title": title,
+                                                      "severity": "Critical"}]}}
+    })
+    assert skeleton["findings"][0]["title"] == clamped
+    # a STORED (legacy, unclamped-title) classKey is preserved verbatim — class_key_aliases
+    # needs that form to keep matching legacy coverage decisions after skeletonization
+    assert skeleton["findings"][0]["classKey"] == "Security::auth::" + " ".join(title.lower().split())
+    # a key-LESS finding gets the canonical CLAMPED stamp
+    assert skeleton["dimensions"]["Security"]["findings"][0]["classKey"] == \
+        "Security::auth::" + " ".join(clamped.lower().split())
+    assert skeleton["dimensions"]["Security"]["findings"][0]["title"] == clamped
+
+
+def test_summarized_records_keep_matching_legacy_coverage_decisions():
+    """#177 handoff repro: a legacy coverage decision (classKey computed from the UNCLAMPED
+    title) must suppress recurrence for RAW and SUMMARIZED records alike — skeletonization
+    must not clobber the stored key the alias match relies on. load-summary feeds the loop
+    summarized records, so a clobber re-reports every legacy-covered class on resume."""
+    rm = load_memory()
+    title = _long_title()
+    legacy_key = "Test::coverage::" + " ".join(title.lower().split())
+    finding = {"file": "a.py", "title": title, "severity": "Important",
+               "dimension": "Test", "taxonomy": "coverage", "classKey": legacy_key}
+    records = [{"schemaVersion": 2, "round": rnd, "kind": "baseline", "findings": [dict(finding)],
+                "carriedFindings": [], "dimensions": {}} for rnd in (1, 2)]
+    decisions = [{"id": "cd-1", "classKey": legacy_key}]
+    assert rm.recurrent_classes(records, decisions) == []
+    summarized = [rm.summarize_record(r) for r in records]
+    assert rm.recurrent_classes(summarized, decisions) == []
+
+
+def test_load_summary_receipt_round_trips_by_verified_raw_text_chunks(tmp_path):
+    """#211: the emergency receipt+chunk fallback ships each chunk as RAW TEXT (a readable JSON
+    fragment), not reversed base64 — run-5 evidence: the API safety layer refuses an opaque
+    base64-shaped answer, and an earlier run showed a courier decoding a b64 payload. Force the
+    receipt path with a tiny threshold, then reassemble the staged file via read-chunk, verifying
+    each chunk's text against its chunkHash (over the string as shipped) and the reconstructed
+    content hash — a retype would break the hash and fail closed."""
+    rm = load_memory()
+    records_path = tmp_path / "round-records.json"
+    findings = [{"file": "a.py", "line": i, "dimension": "code", "taxonomy": "bug",
+                 "title": f"finding {i}", "severity": "Critical", "evidence": "x" * 2048}
+                for i in range(80)]
+    records_path.write_text(json.dumps([{"schemaVersion": 2, "round": 1, "kind": "baseline",
+                                         "findings": findings, "carriedFindings": [],
+                                         "dimensions": {"code": {"dimension": "code", "status": "run",
+                                                                  "confidence": "high", "findings": findings}}}]),
+                            encoding="utf-8")
+    out_path = tmp_path / "summary-receipt.json"
+    r = _cli("load-summary", "--path", str(records_path), "--dimensions", '["code"]',
+             "--out-path", str(out_path), "--receipt-threshold", "1")
+    receipt = json.loads(r.stdout)
+    assert receipt["ok"] is True and receipt["receipt"] == "load-summary"
+    assert "records" not in receipt, "receipt mode must not echo the summary blob"
+    chunks = []
+    index = 0
+    while True:
+        cr = _cli("read-chunk", "--path", str(out_path), "--index", str(index), "--chunk-size", "300")
+        chunk = json.loads(cr.stdout)
+        assert chunk["ok"] is True
+        # raw text, not base64: no rb64/b64 field, and chunkHash covers the text exactly as shipped.
+        assert "rb64" not in chunk and "b64" not in chunk
+        assert chunk["chunkHash"] == rm.content_hash(chunk["text"])
+        assert chunk["contentHash"] == receipt["contentHash"]
+        chunks.append(chunk["text"])
+        if chunk["eof"]:
+            break
+        index += 1
+    text = "".join(chunks)
+    assert rm.content_hash(text) == receipt["contentHash"]
+    loaded = json.loads(text)
+    assert loaded["ok"] is True and len(loaded["records"][0]["findings"]) == 80
+    assert "evidence" not in text
+
+
+def test_read_chunk_ships_raw_text_and_fails_closed_on_bad_request(tmp_path):
+    """read_chunk's raw-text contract in isolation: the slice rides verbatim under `text` (no
+    base64/reversal), chunkHash is over that text exactly as shipped, contentHash is over the whole
+    file, and reassembling the slices reproduces the file. Out-of-range / bad requests fail closed."""
+    rm = load_memory()
+    p = tmp_path / "blob.json"
+    body = json.dumps({"k": ["value-" + str(i) for i in range(200)]})
+    p.write_text(body, encoding="utf-8")
+    seen = ""
+    index = 0
+    while True:
+        chunk = json.loads(_cli("read-chunk", "--path", str(p), "--index", str(index),
+                                "--chunk-size", "128").stdout)
+        assert chunk["ok"] is True
+        assert isinstance(chunk["text"], str) and "rb64" not in chunk
+        assert chunk["text"] == body[index * 128:index * 128 + 128], "slice must be the raw on-disk text"
+        assert chunk["chunkHash"] == rm.content_hash(chunk["text"])
+        assert chunk["contentHash"] == rm.content_hash(body)
+        seen += chunk["text"]
+        if chunk["eof"]:
+            break
+        index = chunk["nextIndex"]
+    assert seen == body
+    # fail-closed: a negative index / non-positive chunk size / past-EOF index never returns content
+    assert json.loads(_cli("read-chunk", "--path", str(p), "--index", "-1").stdout) == \
+        {"ok": False, "reason": "bad-chunk-request"}
+    assert json.loads(_cli("read-chunk", "--path", str(p), "--index", "0",
+                           "--chunk-size", "0").stdout) == {"ok": False, "reason": "bad-chunk-request"}
+    far = json.loads(_cli("read-chunk", "--path", str(p), "--index", "9999",
+                          "--chunk-size", "128").stdout)
+    assert far == {"ok": False, "reason": "chunk-out-of-range"}
+
+
+def test_stage_chunk_reassembles_large_payload_with_hashes(tmp_path):
+    rm = load_memory()
+    target = tmp_path / "round-skeleton-r1.json"
+    payload = json.dumps({"schemaVersion": 2, "round": 1, "findings": [{"title": "x" * 50} for _ in range(40)]})
+    parts = [payload[i:i + 75] for i in range(0, len(payload), 75)]
+    bad_b64 = base64.b64encode(parts[0].encode("utf-8")).decode("ascii")
+    bad = _cli("stage-chunk", "--path", str(tmp_path / "bad.json"), "--index", "0", "--total", "1",
+               "--chunk-b64", bad_b64, "--chunk-hash", "0" * 64)
+    assert json.loads(bad.stdout) == {"ok": False, "reason": "chunk-corrupt"}
+    for index, part in enumerate(parts):
+        b64 = base64.b64encode(part.encode("utf-8")).decode("ascii")
+        r = _cli("stage-chunk", "--path", str(target), "--index", str(index), "--total", str(len(parts)),
+                 "--chunk-b64", b64, "--chunk-hash", rm.content_hash(b64))
+        assert json.loads(r.stdout)["ok"] is True, r.stderr
+    finish = _cli("finish-chunks", "--path", str(target), "--total", str(len(parts)),
+                  "--payload-hash", rm.content_hash(payload))
+    out = json.loads(finish.stdout)
+    assert out["ok"] is True
+    assert target.read_text(encoding="utf-8") == payload
 
 
 def test_persist_skeleton_strips_bodies_python_side(tmp_path):

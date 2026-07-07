@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pr_comment  # noqa: E402  (same-tree sibling; the band's single scrub source)
+import cost_report  # noqa: E402  (#130: the run-cost line renderer)
 
 
 def scrub(text, root=None):
@@ -68,5 +69,10 @@ def build_readout(ctx):
     if ctx.get("raw_ci_excerpt"):
         lines += ["", "<details><summary>CI excerpt</summary>", "",
                   _safe(ctx["raw_ci_excerpt"]), "</details>"]
+    # #130: the run-cost footer — Workhorse-authored structured counts (not CI/env free-text), so it
+    # bypasses the scrub seam. Omitted entirely when there is no cost data.
+    cost_lines = cost_report.render_cost_line(ctx.get("cost"))
+    if cost_lines:
+        lines += [""] + cost_lines
     lines += ["", "_Merge is yours — Workhorse never merges._"]
     return "\n".join(lines)

@@ -36,6 +36,14 @@ import escalation  # noqa: E402  (same-tree sibling core; no band_lib, no subpro
 import permission_rules  # noqa: E402  (pure below-the-floor allowance layer; non-gated branch only)
 
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Acceptance-harness enforcement marker (UFR-6). Set by the child-process launcher on the
+# showrunner child's env (inherited by every subagent/grandchild, so it is independent of
+# cwd / worktree / store resolution — including the fresh build worktree under
+# ~/.superheroes-worktrees whose checkout has no gitignored docs/superheroes/ tree). When
+# present, the owner-authority (gated) set is a STRUCTURAL deny — the child cannot merge,
+# publish, run workflows, force-push, or push to the default branch, no matter the host,
+# scope, or a minted allowance. This is the never-merge floor the acceptance run runs behind.
+_DENY_ONLY_ENV = "SUPERHEROES_ACCEPTANCE_DENY_ONLY"
 # Tool-name surfaces, HOST-AGNOSTIC: Claude names Bash / Edit|Write|MultiEdit; Codex names
 # shell / apply_patch (the patch carries the target path in its body). Accepting both makes
 # the single enforcer.py genuinely host-agnostic — without the `shell`/`apply_patch` aliases
@@ -176,6 +184,12 @@ def _bash_writes_to_safety_machinery(command):
     return False
 
 
+def _deny_only():
+    """True iff the acceptance-harness enforcement marker is set on the environment. Read
+    live from os.environ so it tracks the child's inherited env (independent of cwd)."""
+    return bool(os.environ.get(_DENY_ONLY_ENV))
+
+
 def gated_action(command):
     """The owner-authority action name this command performs, or None. Used both by the
     classifier (gate decision) and by the hook (whether to run the Codex allowance
@@ -240,6 +254,16 @@ def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None
         return ("deny", "Bash write to band safety-machinery is refused")
     action = gated_action(command)
     if action:
+        # Acceptance-harness deny-only floor (UFR-6): evaluated BEFORE the not-in-scope
+        # short-circuit — the showrunner child's Build phase runs from a build worktree whose
+        # fresh checkout has no gitignored docs/superheroes/, so in_scope is False there; if
+        # this deny sat after the short-circuit, an owner-authority action from that worktree
+        # would fall through to allow and the never-merge floor would be bypassed. The marker
+        # denies regardless of host and regardless of in_scope; a minted allowance cannot flip
+        # it (the hook overlay is guarded on `not _deny_only()`).
+        if _deny_only():
+            return ("deny", "owner-authority action '%s' denied: acceptance-harness "
+                            "deny-only floor" % action)
         if not in_scope:
             return ("allow", "")
         if host == "claude":
@@ -403,6 +427,7 @@ def hook(stdin_text, host="codex"):
         # approve a compound `cp x <band>/enforcer.py && gh pr merge` and the safety-write
         # would ride through). Re-checking those surfaces here keeps them unconditional.
         if (decision == "deny" and host != "claude" and in_scope and action
+                and not _deny_only()
                 and not _CANARY.search(command)
                 and not _bash_writes_to_safety_machinery(command)):
             if allowance.consume(command, cwd):
@@ -427,13 +452,21 @@ def selfcheck():
     # The classifier matrix, including the below-the-floor allowance layer. A broken
     # allowance layer that RAISES must be reported here (armed=0), not crash selfcheck — so
     # the whole matrix is evaluated inside a try/except that fail-closes `ok` to False.
+    # Under the acceptance deny-only marker (UFR-6), "deny" IS the correct armed
+    # classification for the owner-authority set on every host and scope — asserting
+    # "ask"/"allow" there would make the harness's own safety marker fail the spine's
+    # step-0 arming gate (mutual-deadlock, found live in the 0.10.0 qualification).
     try:
+        gated_expected = "deny" if _deny_only() else "ask"
         ok = (
-            # gated merge: ask on Claude, deny on a deny-only host (both in-scope)...
-            classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == "ask"
+            # gated merge: ask on Claude (deny under the deny-only marker), deny on a
+            # deny-only host (both in-scope)...
+            classify_command("gh pr merge 1", host="claude", in_scope=True)[0] == gated_expected
             and classify_command("gh pr merge 1", host="codex", in_scope=True)[0] == "deny"
-            # ...and NOT gated outside a superheroes repo (flaw #1)...
-            and classify_command("gh pr merge 1", host="claude", in_scope=False)[0] == "allow"
+            # ...and NOT gated outside a superheroes repo (flaw #1) — except under
+            # deny-only, which denies the owner-authority set regardless of scope (UFR-6)...
+            and classify_command("gh pr merge 1", host="claude", in_scope=False)[0]
+                == ("deny" if _deny_only() else "allow")
             # ...unconditional surfaces hold regardless of host/scope...
             and classify_command(": workhorse-enforcer-canary")[0] == "deny"
             # ...and the producer's own commands stay allowed.
@@ -445,7 +478,7 @@ def selfcheck():
             # threads a cwd/run_id (the exact shape the hook now passes), proving the layer's
             # presence on the non-gated branch did not leak into the gated arms.
             and classify_command("gh pr merge 1", host="claude", in_scope=True,
-                                 cwd=None, run_id=None)[0] == "ask"
+                                 cwd=None, run_id=None)[0] == gated_expected
             and classify_command("gh release create v1", host="codex", in_scope=True,
                                  cwd=None, run_id=None)[0] == "deny"
             # Task 6 (observability): a would-be routine command with NO rules store present

@@ -101,3 +101,37 @@ Both M1 acceptance criteria met, each citing the plan doc:
 Three additional correct gaps surfaced (all Important, all real for this plan): `concurrency/race` (concurrent scheduler runs double-push), `dependency-failure` (outbound HTTP push with no timeout/retry story), `detectability` (no log/metric for failure or dirty-row accumulation). No false positives.
 
 A literal installed-plugin live-run remains available to anyone after `/plugin marketplace update` + `/plugin update` to 0.3.0 (re-run skill-tests.md §7); it is expected to reproduce (a) and (b).
+
+# 0.10.0 release-eval — single-variant benchmark, all fixtures
+
+**Method:** single-variant run of the release content (main `8a41387`; agents/rubric byte-identical to release PR #227 head `49f5429e5a5dd6abe79194088b0ef5bf4e523a28`), per `README.md` §Procedure adapted to one variant + §Single-variant fixtures. 10 Opus-pinned reviewer-simulating dispatches, blind to `expected.json`: 4 agents × {web-handler, refactor} + premortem-only × {failure-modes, failure-modes-bait}. Scored with `score.py` (`gate: n/a` — no baseline variant; release-qualification bars below). This is the **benchmark instrument** for the 0.10.0 `release-evidence` gate (RELEASING.md).
+
+**Date:** 2026-07-05.
+
+Own-dimension recall (strict `score.py`) + traps, per dispatch:
+
+| Agent | Fixture | Own-dim recall | Traps flagged | Net-new (inspected) |
+|---|---|---|---|---|
+| architecture-reviewer | web-handler | **1/1** | 0 | 0 |
+| code-reviewer | web-handler | **1/1** | 0 | 1 (cross-dim true positive: the ownership dual-filter miss, Security's seed) |
+| security-reviewer | web-handler | 0/1 † | 0 | 1 († the BOLA itself) |
+| test-reviewer | web-handler | 0/1 † | 0 | 3 († incl. the claim/test-mismatch itself; other 2 are real extra catches) |
+| architecture-reviewer | refactor | **1/1** (AcyclicDependencies) | 0 | 0 |
+| code-reviewer | refactor | 0/1 † | 0 | 3 († incl. classifyOrder cognitive-complexity; other 2 = cross-dim BFLA/BOPLA true positives) |
+| security-reviewer | refactor | **2/2** (BFLA + BOPLA) | 0 | 0 |
+| test-reviewer | refactor | **1/1** (mock-echo) | 0 | 1 (real coverage gap, not an FP) |
+| premortem-reviewer | failure-modes | **7/7** (all seven classes) | 0 | 0 (9 findings emitted; the two extras — redeem.ts partial-failure, credits.ts race — were window-absorbed into their flows' seed matches, unlike 2026-06-11 where one listed as net_new on out-of-range lines) |
+| premortem-reviewer | failure-modes-bait | n/a (0 findings emitted) | **0** | 0 |
+
+**Mechanical bars (README §Single-variant fixtures): both PASS** — `failure-modes` matched == total (7/7, first run, now including the two newer `fail-direction` + `transport-contract` classes), `failure-modes-bait` traps_flagged == 0 (zero findings emitted at all).
+
+**† Line-arithmetic caveat (3 cells, same class as the documented 2026-06-11 caveat):** in each strict-scored miss the dispatch DID emit the seeded bug — verified by hand against the seed's resolved location:
+- security/web-handler: BOLA flagged at `notes.ts:26` vs seed resolved ~20 (the same 6-line offset both 2026-06-11 variants produced) — correct taxonomy `BOLA`, correct file, same `db.notes.update({ id }...)` call.
+- test/web-handler: the `"returns 401 when not authenticated"` claim/test-mismatch flagged, cited `:74` (outside the ±2 window of the seed's resolved line).
+- code/refactor: `classifyOrder` deep-nesting flagged (`cognitive-complexity spike`) — the seeded function (seed resolves to `orders.ts:12`, inside `classifyOrder`) — but cited `:89` (diff-relative arithmetic) and a non-exact taxonomy string, so neither the ±15 window nor the exact-taxonomy fallback fired.
+
+Substantive own-dimension recall is therefore **8/8 cells** across the eight four-agent dispatches (the two premortem dispatches are covered by the mechanical bars above) — **16/16 seed instances** across all dispatches (web-handler 4 + refactor 5 + failure-modes 7, counting cross-dimension catches once, in their own dimension's cell). **Zero traps flagged in all 10 dispatches** — the precision guardrails (context-line, theme-token, sibling-import, size-only, framework-escaped, clear-non-duplicative, and all three bait reasons) held everywhere.
+
+**Tokens:** ~50–58k total tokens per dispatch (subagent total incl. reading agent file + rubric + fixture; ~536k across all 10).
+
+**Verdict: PASS** for the 0.10.0 benchmark instrument — no seeded regression anywhere the strict scorer OR hand-verification can see, zero false positives, both mechanical bars green on first attempt. The strict-scored misses are runner line-arithmetic noise (documented class), not agent regressions; absolute strict numbers remain non-comparable across runs per the 2026-06-11 caveat.

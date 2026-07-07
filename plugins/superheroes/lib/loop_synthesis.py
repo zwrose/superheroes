@@ -18,6 +18,13 @@ Hard rules:
     Critical/Important (compile_findings keeps the max) — is flagged `was_blocking_tagged` so the
     readout surfaces it for human scrutiny; an all-drop or confidently-wrong leaf can never make
     a silent clean.
+  - DOWNGRADE-FLAG (#186): NORMALIZE's other door. A finding the judge re-tiers from blocking
+    (Critical/Important) down to non-blocking (Minor/Nit) still applies — the severity change is
+    unchanged behavior — but it is recorded in `downgrades` so the readout surfaces it for the
+    SAME scrutiny as a dropped blocker. A silent downgrade is functionally a silent drop (it no
+    longer counts as blocking in any verdict/gate/confirmation decision); visibility only, so an
+    over-confident judge cannot quietly demote a real blocker. Upgrades and non-blocking↔non-
+    blocking re-tiers are not flagged (noise).
 
 Single-reviewer legs never call this (FR-11). stdlib only; never raises on bad leaf output.
 """
@@ -29,38 +36,60 @@ import circuit_breaker
 
 _TIERS = ("Critical", "Important", "Minor", "Nit")
 _BLOCKING = ("Critical", "Important")
+_NON_BLOCKING = ("Minor", "Nit")
+_DEFAULT_BLOCKING_SEVERITY = "Important"
 
 
 def _identity(f):
     return circuit_breaker.finding_identity(f)
 
 
+def _kept_severity(f, v):
+    verdict_severity = v.get("severity") if isinstance(v, dict) else None
+    if verdict_severity in _TIERS:
+        return verdict_severity
+    finding_severity = f.get("severity")
+    if finding_severity in _TIERS:
+        return finding_severity
+    return _DEFAULT_BLOCKING_SEVERITY
+
+
 def consume(merged, leaf_verdicts):
     """merged: the mechanically-merged finding list (each has file/title/severity). leaf_verdicts:
     list of {id, action, reason, severity} from the Opus leaf, keyed by finding identity
-    (file::normalized_title). Returns {"findings", "drops"}."""
+    (file::normalized_title). Returns {"findings", "drops", "downgrades"}."""
     by_id = {}
     if isinstance(leaf_verdicts, list):
         for v in leaf_verdicts:
             if isinstance(v, dict) and isinstance(v.get("id"), str):
                 by_id[v["id"]] = v
-    survivors, drops = [], []
+    survivors, drops, downgrades = [], [], []
     for f in merged:
-        v = by_id.get(_identity(f))
+        identity = _identity(f)
+        v = by_id.get(identity)
+        if v is None and isinstance(f, dict) and isinstance(f.get("id"), str):
+            v = by_id.get(f["id"])
         action = v.get("action") if isinstance(v, dict) else None
         reason = v.get("reason") if isinstance(v, dict) else None
         # DROP only on a clear, well-formed drop with a reason; everything else KEEPS.
         if action == "drop" and isinstance(reason, str) and reason.strip():
-            drops.append({"id": _identity(f), "file": f.get("file"), "title": f.get("title"),
+            drops.append({"id": identity, "file": f.get("file"), "title": f.get("title"),
                           "reason": reason.strip(),
                           "was_blocking_tagged": f.get("severity") in _BLOCKING})
             continue
         kept = dict(f)
-        sev = v.get("severity") if isinstance(v, dict) else None
-        if sev in _TIERS:
-            kept["severity"] = sev  # normalize iff a valid tier; else keep original
+        kept["severity"] = _kept_severity(f, v)
         survivors.append(kept)
-    return {"findings": survivors, "drops": drops}
+        # DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
+        # (severity outcome unchanged) so the readout can flag it like a dropped blocker.
+        from_severity = f.get("severity")
+        if from_severity in _BLOCKING and kept["severity"] in _NON_BLOCKING:
+            entry = {"id": identity, "file": f.get("file"), "title": f.get("title"),
+                     "from": from_severity, "to": kept["severity"]}
+            if isinstance(reason, str) and reason.strip():
+                entry["reason"] = reason.strip()
+            downgrades.append(entry)
+    return {"findings": survivors, "drops": drops, "downgrades": downgrades}
 
 
 def _safe_read_json(path, default):
