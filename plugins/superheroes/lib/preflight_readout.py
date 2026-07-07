@@ -14,7 +14,14 @@ import engine_adapter  # for the external-engine display model constants (single
 import model_tier_overrides
 import engine_detect
 
-READOUT_VERSION = 1
+# Bumped to 2 (freeze-consume hardening): a frozenSnapshot persisted by an EARLIER commit of this
+# branch carries version 1 but predates the widened merge exclusions (fallbackToClaude/unavailable/
+# unrecognized) + the merge-boundary set validation. mergeFrozenSnapshot ignores any snapshot whose
+# `version` != this constant (falls through to live config, the documented rollback state), so every
+# pre-fix record is treated stale-and-ignored. The JS side learns this value from the snapshot Python
+# wrote and, in a drift smoke, from a `python3 -c` dump of this constant — never a hand-duplicated JS
+# literal. BUMP this on any change that re-interprets an already-persisted snapshot.
+READOUT_VERSION = 2
 
 # The spine's phase roster is the single source of truth. Kept as a literal that MUST equal
 # showrunner.js's PHASES; the roster-parity node smoke (Task 12) asserts they match so a phase
@@ -37,7 +44,13 @@ _PHASE_ROLES = {
                      ("per-task reviewer", "reviewer", "review", "review"),
                      ("fixer", "fixer", "fix", "fix"),
                      ("final reviewer", "reviewer-deep", "review", "review-deep")],
-    "review-code":  [("deep reviewer", "reviewer-deep", "review", "review-deep")],
+    # review-code dispatches the deep reviewer AND a synthesis leaf (FR-2: no dispatching role omitted).
+    # The synthesis leaf is LOOP-OWNED native Claude (showrunner.js's reviewCodeLeaves.synthesisLeaf —
+    # never engine-routed), so its kind-tag "synthesis" resolves engine "claude" via _engine_for (same
+    # as author): _TIER_ROLE.synthesis's pin branch is otherwise unreachable, letting a confirm-window
+    # config edit leak into the synthesis model. Model rides the "synthesis" tier role (opus).
+    "review-code":  [("deep reviewer", "reviewer-deep", "review", "review-deep"),
+                     ("synthesis judge", "synthesis", None, "synthesis")],
     "draft-PR":     [("no agent (deterministic step)", None, None, "none")],
     "test-pilot":   [("orchestration", "orchestrator", None, "orchestration")],
     "mark-ready":   [("no agent (deterministic step)", None, None, "none")],

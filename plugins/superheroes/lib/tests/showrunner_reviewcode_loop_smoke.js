@@ -176,7 +176,10 @@ async function main() {
   // ── FR-8 / NFR-Accuracy: frozen per-run model pins reach the review-code dispatch ──────────────
   // With NO pins (__SR_OVERRIDES absent), the dispatch carries the cfg.tiers values EXACTLY — the
   // deep reviewer at the reviewerDeep tier ('opus') and the fixer at the fixer tier ('sonnet').
-  // (This is the byte-identical no-op control; the mutation to kill is removing the pinnedTier overlay.)
+  // This block is the BACKWARD-COMPAT no-op guard: it proves that with no frozen pin the disk-resolved
+  // cfg.tiers values flow through byte-identically (the pinnedTier overlay must be a pure passthrough
+  // when __SR_OVERRIDES is absent). The overlay-removal mutation is killed by the FROZEN-pin scenario
+  // below (where a pin must OVERRIDE cfg.tiers) — not here.
   assert.ok(!globalThis.__SR_OVERRIDES, 'precondition: no frozen pins for the no-op control')
   assert.ok(calls.fixerModels.length >= 1 && calls.fixerModels.every((c) => c.model === 'sonnet'),
     'no pins: the fixer dispatch carries the cfg.tiers fixer model (sonnet), unchanged')

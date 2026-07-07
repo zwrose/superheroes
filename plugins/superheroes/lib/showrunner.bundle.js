@@ -5671,6 +5671,12 @@ const DEFAULT_TIERS = {
   builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
 }
 
+// The accepted-model set — twin of model_tier_overrides.KNOWN_MODELS (the Python validator's domain).
+// This is NOT DEFAULT_TIERS' value set (which omits 'fable', a valid but non-default model). The
+// freeze-consume merge boundary validates a snapshot's pinned model against this before pinning it,
+// mirroring the producer's refusal posture. Drift-guarded against the Python home by test_ssot_drift.py.
+const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable']
+
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
 
 // Split roles (mirror model_tier.py._ROLE_FALLBACK): own override wins, else resolve as the base
@@ -5706,7 +5712,7 @@ function resolveModel(role, overrides, context) {
   return def   // malformed (non-str / empty) -> default
 }
 
-module.exports = { resolveModel, DEFAULT_TIERS }
+module.exports = { resolveModel, DEFAULT_TIERS, KNOWN_MODELS }
 
 };
 
@@ -6133,6 +6139,19 @@ const REVIEW_CODE_REVIEWERS = [
 ]
 
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
+
+// The ONE place the review-code cfg.tiers vocabulary (camelCase keys from review_code_config.resolve_tiers)
+// maps to model_tier roles (= the __SR_OVERRIDES pin key, = the preflight readout row's tier_role). The
+// `.role` values here are an UNGUARDED copy of the role vocabulary that also lives in
+// preflight_readout._PHASE_ROLES (tier_role column) and review_code_config.resolve_tiers. The SSOT drift
+// smoke (showrunner_reviewcode_tier_role_drift_smoke) reads BOTH Python homes and deepStrictEquals the
+// mapping against this export, so a rename on either side fails CI rather than silently mis-routing a pin.
+const _TIER_ROLE = {
+  reviewer: { role: 'reviewer', context: null },
+  reviewerDeep: { role: 'reviewer-deep', context: null },
+  synthesis: { role: 'synthesis', context: null },
+  fixer: { role: 'fixer', context: 'code' },
+}
 const ADVANCE_TERMINALS = new Set(['clean'])
 const POLICY_SUBJECT_FALLBACK = {
   test: 'Test',
@@ -6406,16 +6425,9 @@ function reviewCodeLeaves(tiers, opts) {
   // dispatch (ENGINE/EFFORT do, via resolveEngine/resolveEffort; MODEL rode cfg.tiers). This mirrors
   // build_phase's in-build review roles, which already resolve through resolveModel(role,_overrides()).
   //
-  // The ONE place the two vocabularies are mapped: cfg.tiers key (camelCase, from resolve_tiers) ->
-  // model_tier role (= the __SR_OVERRIDES pin key, which is the readout row's `tier_role`). A frozen
-  // pin for the role WINS; with no pin the exact cfg.tiers value flows through (byte-identical no-op —
-  // the backward-compat invariant). Keyed by cfg.tiers key so callers keep reading tiers.<key>.
-  const _TIER_ROLE = {
-    reviewer: { role: 'reviewer', context: null },
-    reviewerDeep: { role: 'reviewer-deep', context: null },
-    synthesis: { role: 'synthesis', context: null },
-    fixer: { role: 'fixer', context: 'code' },
-  }
+  // The cfg.tiers-key -> model_tier-role map is the module-scope _TIER_ROLE (SSOT-drift-guarded). A
+  // frozen pin for the role WINS; with no pin the exact cfg.tiers value flows through (byte-identical
+  // no-op — the backward-compat invariant). Keyed by cfg.tiers key so callers keep reading tiers.<key>.
   const pinnedTier = (tierKey) => {
     const base = tiers[tierKey]
     const m = _TIER_ROLE[tierKey]
@@ -7791,6 +7803,20 @@ async function showrunner({ workItem }) {
     globalThis.__SR_OVERRIDES = _merged.overrides
     globalThis.__SR_ENGINE_PREFS = _merged.enginePrefs
   }
+  // D (detectability): fail-open never blocks the run, but a silent revert to live config must be
+  // LOUD. A frozenSnapshot record was on disk (run_overrides_present, from the same run_overrides.read)
+  // yet no pin reached dispatch — the snapshot was dropped in transit (courier lost frozen_snapshot),
+  // version-gated stale (B), or every row was skipped by the merge exclusions/validation (C). Narrate
+  // it on the existing log() channel so the run isn't silently dispatching on live config unnoticed.
+  if ((startupFacts && startupFacts.run_overrides_present) && (!_merged || !_merged.pinnedCount)) {
+    const _why = (_merged && _merged.reason) ? _merged.reason
+      : (_frozenSnapshot ? 'no pins produced' : 'frozen_snapshot dropped in transit')
+    try {
+      if (typeof log === 'function') {
+        log(`frozen readout snapshot present but NOT applied — dispatching on live config (${_why})`)
+      }
+    } catch (_) { /* logging must never break the run */ }
+  }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   // #25: a FRESH quick run starts at `workhorse` (plan/review-plan/tasks/review-tasks skipped — the
@@ -7928,14 +7954,21 @@ function startupStateScript() {
     // snapshot's per-row `overridden` values already ride the frozen rows, so a second copy would be
     // a producer without a consumer.
     'frozen_snapshot = None',
+    // D (detectability): a cheap on-disk-presence flag derived from the SAME run_overrides.read. It is
+    // true whenever a frozenSnapshot record existed on disk, INDEPENDENT of whether the snapshot itself
+    // survives the courier hop into frozen_snapshot. So if a courier answer drops `frozen_snapshot`
+    // (keeping the required fields), this flag still reports the record was there — letting the JS side
+    // log a loud no-apply line rather than silently reverting the run to live config.
+    'run_overrides_present = False',
     'try:',
     '    import run_overrides',
     '    _rec = run_overrides.read(wi, root)',
     '    if isinstance(_rec, dict):',
     '        frozen_snapshot = _rec.get("frozenSnapshot")',
+    '        run_overrides_present = _rec.get("frozenSnapshot") is not None',
     'except Exception:',
     '    frozen_snapshot = None',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate, "frozen_snapshot": frozen_snapshot}))',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate, "frozen_snapshot": frozen_snapshot, "run_overrides_present": run_overrides_present}))',
   ].join('\n')
 }
 
@@ -7985,6 +8018,15 @@ async function readStartupState(workItem) {
 //     resolved model), never the unauthorized target — freezing the target would re-route to it.
 const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
+// The snapshot-format version this consumer understands. preflight_readout.py is the ONLY writer of
+// frozenSnapshots and stamps its READOUT_VERSION onto each (assemble's `version` field). A snapshot
+// whose `version` !== this is from an incompatible commit — its rows predate the current merge
+// exclusions/validation, so re-interpreting them could pin values this consumer would now refuse.
+// mergeFrozenSnapshot ignores such a snapshot entirely (falls through to live config, the documented
+// rollback state). This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
+// smoke asserts it equals preflight_readout.READOUT_VERSION via a `python3 -c` dump (roster-parity
+// pattern), so a Python-side bump that isn't mirrored here fails CI rather than silently ungating.
+const READOUT_VERSION = 2
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -7993,6 +8035,19 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const enginePrefs = Object.assign({}, src)
   enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
     ? Object.assign({}, src.effort) : {}
+  // Track how many pins we actually plant + why we might plant none, so the caller can log a loud
+  // no-apply narrator line (D) when a snapshot WAS present on disk but nothing survived to dispatch.
+  let pinnedCount = 0
+  let reason = null
+  // Migration gate (B): a frozenSnapshot persisted by an incompatible commit carries a different
+  // `version`. Its rows predate the current exclusions/validation, so re-interpreting them could pin
+  // values this consumer would now refuse. Ignore the whole snapshot and fall through to live config
+  // (the documented rollback state). A snapshot with no `version` at all is treated the same (stale).
+  if (frozen && typeof frozen === 'object' && !Array.isArray(frozen)
+      && frozen.version !== READOUT_VERSION) {
+    return { overrides, enginePrefs, pinnedCount: 0,
+      reason: `snapshot version ${JSON.stringify(frozen.version)} != expected ${READOUT_VERSION} (stale — ignored)` }
+  }
   const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
@@ -8019,8 +8074,13 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       : (typeof row.engine === 'string' && row.engine.trim() ? row.engine : null)
 
     // Pin the model onto the model-tier override map (resolveModel reads __SR_OVERRIDES[role]).
-    if (typeof role === 'string' && typeof row.model === 'string' && row.model.trim()) {
-      overrides[role] = row.model
+    // Set validation (C): pin a model ONLY if it is in the model twin's accepted set — matching the
+    // producer's refusal posture (a value outside KNOWN_MODELS is never a real dispatch target). On a
+    // miss, skip the pin and resolve that role live rather than freeze a bad value into the resolver.
+    if (typeof role === 'string' && typeof row.model === 'string' && row.model.trim()
+        && modelTierTwin.KNOWN_MODELS.indexOf(row.model.trim()) !== -1) {
+      overrides[role] = row.model.trim()
+      pinnedCount++
     }
     // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
     // The pref map is keyed by role_kind, so normalize review-deep -> review for the engine key.
@@ -8028,8 +8088,12 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
     const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
       ? _ENGINE_ROLE_KIND[kind] : null
-    if (epKey && effectiveEngine) {
+    // Set validation (C): pin an engine ONLY if it is in the known ENGINES set (the producer's domain).
+    // The effective 'claude' fallback is always in-set; a raw/unknown engine that reached here (e.g. a
+    // non-fallback row carrying a mistyped engine) is skipped so the role resolves its engine live.
+    if (epKey && effectiveEngine && enginePrefTwin.ENGINES.indexOf(effectiveEngine) !== -1) {
       enginePrefs[epKey] = effectiveEngine
+      pinnedCount++
     }
     // Pin the effort onto the effort sub-map (resolveEffort reads __SR_ENGINE_PREFS.effort[role_kind]).
     // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name. A
@@ -8038,9 +8102,14 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
     if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()) {
       const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
       enginePrefs.effort[effortKind] = row.effort
+      pinnedCount++
     }
   }
-  return { overrides, enginePrefs }
+  // A snapshot present but pinning nothing (all rows excluded/skipped by C) — record why for D's log.
+  if ((frozen && Array.isArray(frozen.phases) && frozen.phases.length) && pinnedCount === 0) {
+    reason = 'snapshot present but no row produced a pin (all excluded or values not recognized)'
+  }
+  return { overrides, enginePrefs, pinnedCount, reason }
 }
 
 async function readDefinitionDraft(workItem, doc) {
@@ -9180,6 +9249,8 @@ module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
 module.exports.startupStateScript = startupStateScript
 module.exports.mergeFrozenSnapshot = mergeFrozenSnapshot
+module.exports.READOUT_VERSION = READOUT_VERSION
+module.exports._TIER_ROLE = _TIER_ROLE
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained

@@ -254,3 +254,20 @@ def test_route_vocabulary_single_sourced():
         r"const declared = \(explicit === '(\w+)' \|\| explicit === '(\w+)'\)", sr)
     assert declared, "showrunner.js: resolveIntake `declared` route expression not found"
     assert set(declared.groups()) == routes
+
+
+# --- Cluster 5: accepted-model set (KNOWN_MODELS) ----------------------------
+
+def test_known_models_single_sourced():
+    """CONVENTIONS §11: the accepted-model set is validated Python-side in
+    model_tier_overrides.KNOWN_MODELS (the home) and re-typed JS-side in model_tier.js
+    (the freeze-consume merge boundary validates a snapshot's pinned model against it).
+    A model added/renamed in one place must break CI in the other, so a valid new model
+    isn't silently refused at the merge boundary (or a stale one silently pinned). Order
+    is not semantically load-bearing for a membership set, so compare as sets."""
+    import model_tier_overrides
+    home = list(model_tier_overrides.KNOWN_MODELS)  # ('haiku', 'sonnet', 'opus', 'fable')
+
+    mt = _read(os.path.join("lib", "model_tier.js"))
+    assert set(_js_str_array(mt, "KNOWN_MODELS", "model_tier.js")) == set(home), (
+        "model_tier.js KNOWN_MODELS drifted from model_tier_overrides.KNOWN_MODELS")

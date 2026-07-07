@@ -76,10 +76,66 @@ function runGather(script, repo, store) {
       { reviewer: degraded.engine_prefs.reviewer, implementation: degraded.engine_prefs.implementation },
       { reviewer: 'claude', implementation: 'claude' },
       '#221: passing the repo root into the store-base slot silently degrades to all-claude (the shipped bug)')
+
+    // ── A (persisted-record end-to-end): drive the WHOLE frozen-snapshot boundary with the REAL Python.
+    // run_overrides.write persists a record with a frozenSnapshot -> the REAL startupStateScript gather
+    // reads it and emits `frozen_snapshot` (+ `run_overrides_present`) over the courier boundary -> the
+    // parsed JSON feeds sr.mergeFrozenSnapshot -> a builder model pin + a build engine pin are planted.
+    // A key-name typo on EITHER side of the courier boundary (write's "frozenSnapshot" vs the gather's
+    // `_rec.get("frozenSnapshot")`, or the emitted "frozen_snapshot" vs mergeFrozenSnapshot's read) makes
+    // frozen_snapshot arrive null and the pin assertions below fail — the gap this smoke exists to close.
+    const frozenSnapshot = {
+      workItem: 'wi', version: sr.READOUT_VERSION,
+      phases: [
+        { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus', effort: 'high' },
+      ],
+    }
+    // Persist through the REAL run_overrides.write, into the SAME store/cwd/root the gather reads with.
+    const writeScript = [
+      'import json, sys',
+      'sys.path.insert(0, sys.argv[1])',
+      'import run_overrides',
+      'snap = json.loads(sys.argv[4])',
+      'ok = run_overrides.write(sys.argv[2], sys.argv[3], {}, snap)',
+      'print(json.dumps({"ok": ok}))',
+    ].join('\n')
+    const wrote = JSON.parse(cp.execFileSync('python3',
+      ['-c', writeScript, LIB, 'wi', repo, JSON.stringify(frozenSnapshot)],
+      { cwd: repo, env: Object.assign({}, process.env, { SUPERHEROES_STORE_ROOT: store }), encoding: 'utf8' }))
+    assert.strictEqual(wrote.ok, true, 'run_overrides.write must persist the record')
+
+    // The REAL gather now carries the frozen snapshot + the presence flag across the courier boundary.
+    const withSnap = runGather(script, repo, store)
+    assert.ok(withSnap.frozen_snapshot && Array.isArray(withSnap.frozen_snapshot.phases),
+      'A: the gather output must carry frozen_snapshot with its phases array (courier boundary intact)')
+    assert.strictEqual(withSnap.frozen_snapshot.phases[0].role, 'builder',
+      'A: the persisted frozenSnapshot builder row round-trips through the gather')
+    assert.strictEqual(withSnap.run_overrides_present, true,
+      'D: run_overrides_present is true when a frozenSnapshot record existed on disk')
+
+    // Feed the gather-parsed snapshot through the REAL merge and assert the planted pins.
+    const merged = sr.mergeFrozenSnapshot(withSnap.frozen_snapshot,
+      { builder: 'sonnet' }, { reviewer: 'claude', implementation: 'claude', effort: {} })
+    assert.strictEqual(merged.overrides.builder, 'opus',
+      'A: the frozen builder model (opus) is pinned end-to-end, winning over the config-derived value')
+    assert.strictEqual(merged.enginePrefs.implementation, 'codex',
+      'A: the frozen build engine (codex) is pinned onto the implementation engine-pref key')
+    assert.strictEqual(merged.enginePrefs.effort.build, 'high',
+      'A: the frozen build effort (high) is pinned onto the effort sub-map')
+
+    // D control: a courier answer that DROPS frozen_snapshot but keeps run_overrides_present still lets
+    // the merge no-op, and the presence flag is what tells the caller to narrate the silent revert.
+    const dropped = Object.assign({}, withSnap, { frozen_snapshot: null })
+    const droppedMerge = sr.mergeFrozenSnapshot(
+      (dropped.frozen_snapshot && typeof dropped.frozen_snapshot === 'object') ? dropped.frozen_snapshot : null,
+      { builder: 'sonnet' }, { reviewer: 'claude', implementation: 'claude', effort: {} })
+    assert.strictEqual(droppedMerge.pinnedCount, 0, 'D: a dropped frozen_snapshot pins nothing')
+    assert.strictEqual(dropped.run_overrides_present, true,
+      'D: run_overrides_present stays true even when frozen_snapshot is dropped — the caller can detect the revert')
   } finally {
     fs.rmSync(base, { recursive: true, force: true })
     delete globalThis.__SR_LIB
   }
 
-  console.log('ok: #221 startup gather round-trips out-of-repo engine prefs (None store-base); (root,root) degrades to all-claude')
+  console.log('ok: #221 startup gather round-trips out-of-repo engine prefs; A: persisted frozenSnapshot flows write->gather->merge->pins; D: run_overrides_present detectability')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })

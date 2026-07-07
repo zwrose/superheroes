@@ -52,6 +52,11 @@ def test_write_touches_only_control_plane_never_profile(tmp_path, monkeypatch):
     the write creates or modifies lives strictly under the control-plane issue dir, and that a
     pre-seeded profile/config file elsewhere in the repo is byte-for-byte unchanged. A regression that
     stamped the override into the profile (or anywhere outside the issue dir) fails this."""
+    # NOTE on store pinning: the explicit `root` arg passed to write()/_record_path() is what pins the
+    # store here, NOT SUPERHEROES_STORE_ROOT. control_plane.checkout_dir(cwd, root) uses `root or
+    # store_root()`, so a non-None `root` WINS over the env — every path below (issue_dir, record,
+    # the `checkouts/` subtree) resolves under `root`, i.e. tmp_path/repo. The env is set only as a
+    # belt-and-suspenders isolation guard for any nested read that might default to store_root().
     monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
     root = str(tmp_path / "repo")
     os.makedirs(root, exist_ok=True)
@@ -83,6 +88,10 @@ def test_write_touches_only_control_plane_never_profile(tmp_path, monkeypatch):
     # unchanged'). The profile sits OUTSIDE `checkouts/`, so a regression that stamped it fails here.
     store_subtree = os.path.realpath(os.path.join(root, "checkouts")) + os.sep
     changed = {p for p in after if after.get(p) != before.get(p)}
+    # The escape check below iterates `changed`; guard against a VACUOUS pass — if the write somehow
+    # created no files at all, the per-path assertion would trivially hold while proving nothing. A real
+    # write must have produced at least the override record (and the ensure_store scaffolding).
+    assert changed, "the write must create/modify at least one file (else the escape check passes vacuously)"
     for p in changed:
         assert os.path.realpath(p).startswith(store_subtree), \
             "write escaped the control-plane store: %s" % p
