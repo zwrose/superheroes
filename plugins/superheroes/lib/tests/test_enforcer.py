@@ -794,12 +794,13 @@ def test_allowance_journal_failure_never_affects_decision(tmp_path, monkeypatch)
 
 
 def test_hook_journals_allowance_via_active_run(tmp_path, monkeypatch, capsys):
-    # End-to-end through hook(): an active run (monkeypatched _active_run_id) + an auto-allowance
-    # leaves the allowance_fired record AND stays silent (allow == silent).
+    # End-to-end through hook(): an active run (the lease resolves to the (work_item, run_id)
+    # pair via the shared permission_rules.resolve_active_lease seam hook() actually calls) + an
+    # auto-allowance leaves the allowance_fired record AND stays silent (allow == silent).
     import journal
     import control_plane
-    monkeypatch.setattr(enforcer, "_active_run_id", lambda c: "RUN1")
-    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: ("wi-x", "RUN1"))
     monkeypatch.setattr(permission_rules, "evaluate",
                         lambda *a, **k: ("allow", "composed-exact"))
     cwd = str(tmp_path)
