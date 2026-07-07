@@ -28,6 +28,15 @@ EVENT_TYPES = {
     # review-tasks), recorded ONCE at intake so they are never silently absent from the audit trail.
     # Structured non-secret `payload` ({route, skipped, entryPhase}), written as-is; run_watch renders it.
     "phases_skipped",
+    # #149 permission posture: a bounded ask that timed out and degraded (UFR-3) — non-secret
+    # structured payload, disclosed in the readout.
+    "permission_denied",
+    # #149 auditability NFR ("every automatic allowance or timeout denial made during a run is
+    # visible in that run's records"): an AUTO-ALLOWANCE the below-the-floor allowance layer
+    # fired (denials already ride permission_denied). Structured non-secret `payload`
+    # ({reason, command_sha256, cwd}), written as-is — the command HASH (first 16 hex of
+    # sha256), never the raw command text (which may embed tokens/secrets).
+    "allowance_fired",
 }
 
 
@@ -112,6 +121,20 @@ def read_events(events_path, *, want_torn_tail=False):
             if i == last:
                 torn_tail = True      # a torn TRAILING line — counted conservatively below
     return (evs, torn_tail) if want_torn_tail else evs
+
+
+def permission_denied_events(events_path):
+    """The parsed `permission_denied` journal events — the SINGLE reader of that literal type
+    (architecture-001). Fail-safe to `[]` on any read error (a denial carrier that could clear a
+    real denial on an I/O hiccup would be worse than useless). Callers each apply their own
+    secondary filter/shape: ship_gate.journal_build_denials keeps only `build:` steps as the gate
+    carrier; run_readout._permission_denials projects every one as a disclosure entry."""
+    try:
+        evs = read_events(events_path)
+    except Exception:
+        return []
+    return [ev for ev in evs
+            if isinstance(ev, dict) and ev.get("type") == "permission_denied"]
 
 
 def ci_attempts(events_path):

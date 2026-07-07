@@ -6,7 +6,7 @@ if (globalThis.__SR_ROOT) process.chdir(globalThis.__SR_ROOT)
 const assert = require('assert')
 const bp = require('../build_phase.js')
 const { testPilotPhase } = require('../test_pilot_phase.js')
-const { saveProgressOk } = require('./_marked_stdout.js')
+const { saveProgressOk, markedStdout } = require('./_marked_stdout.js')
 
 // pid-unique work item: buildPhase's final review derives a machine-global
 // /tmp/workhorse-<wi>-final-review dir from the work-item name, so a fixed name shares (and
@@ -51,7 +51,7 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     seen.add(label)
     if (forbidden.includes(label)) throw new Error('forbidden label exercised: ' + label)
     if (label === 'read startup state') {
-      return jsonOut({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', world: {} })
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', world: {}, run_overrides_present: false }) }]
     }
     if (label === 'read world-snapshot') {
       return jsonOut({ ok: true, gate: 'passed' })
@@ -78,9 +78,13 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     // substring. The 'resolve review target' gather embeds build_entry.py + review_code_config.py in
     // its python -c script, so a p.includes('build_entry.py') check would mis-handle it (returning the
     // build-setup shape and failing its require:['ok']); label matching avoids that class of collision.
-    // buildPhase's 'read gate' leaf (execText) wants plain 'passed'; the front-half readGate (execJson,
-    // --json) parses 'passed' as non-JSON and falls back to 'unreadable', as it did under bare 'exec'.
-    if (label === 'read gate') return [{ index: 0, ok: true, stdout: 'passed' }]
+    // Both gate reads ride --json now (run-9 fenced-answer fix): buildPhase's UFR-1 entry read wants
+    // {"review":"passed"} to build; the front-half readGate shares the label. The build read's --doc
+    // is BARE (`--doc tasks`), the front-half's is shq-quoted (`--doc 'plan'`) — route the front-half
+    // to 'unreadable'-equivalent (non-JSON) to preserve this smoke's pre-fix front-half behavior.
+    if (label === 'read gate') {
+      return [{ index: 0, ok: true, stdout: /--doc tasks /.test(p) ? '{"review": "passed"}' : 'passed' }]
+    }
     if (label === 'prepare build') return [{ index: 0, ok: true, stdout: JSON.stringify({ branch: 'superheroes/wi-abc', path: '/tmp/wt' }) }]
     if (label === 'read tasks') return [{ index: 0, ok: true, stdout: JSON.stringify({ tasks: [{ id: '1', title: 'A' }], raw_task_heading_count: 1 }) }]
     if (label === 'fence lease') return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]

@@ -109,6 +109,10 @@ function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(lab
 // the observed as-built count; the breakdown comments map every leaf to its matrix row so a
 // future courier added to a phase fails here and has to justify itself against the matrix.
 const PHASE_BUDGETS = {
+  // Task 12 (FR-8/UFR-9): the run-start rules freeze — ONE 'io' bookkeeping leaf that snapshots the
+  // provenance-valid rules for this run (permission_rules.freeze_run_rules via the io() runHelper
+  // shim). Grouped under its own phase so it never inflates the sanctioned two-leaf startup stretch.
+  'permission-freeze': 1,
   // read world-snapshot (exec) + read startup state — the FR-1 two-leaf exception. Was 3 before
   // #118 conformance (engine_pref_load.py rode its own exec leaf).
   startup: 2,
@@ -128,7 +132,9 @@ const PHASE_BUDGETS = {
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
   // decider + telemetry write + stamp build coverage + prov exec + save phase progress. Was 19
   // pre-#211 (separate load-summary + coverage + deferred reads, in-memory tally), 24 pre-D3.
-  workhorse: 18,
+  // Task 12 (FR-8, #149): +1 per built task — the record_composed 'io' leaf that freezes the
+  // spine-composed leaf command into this run's composed-exact allow set (1 task in this canned run).
+  workhorse: 19,
   // resolve review target (the ONE entry gather: worktree + head + config + cwd-head) + #211 pre-round
   // SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1 plan + coverage, folded Python-side) +
   // one panel round (run verify, persist-skeleton, #211 tally-round decider, telemetry write = 4) +
@@ -165,6 +171,10 @@ const PR = { number: 7, url: 'https://github.com/o/r/pull/7', state: 'open', isD
 // fenced writes' hash verification passes with REAL hashes).
 const files = Object.create(null)
 const usableCalls = Object.create(null)   // per-doc draft-signal call count (1st: not usable)
+// Stateful mini gate store: pending until the phase tail's chained set-gate flips it. Both the
+// front-half readGate AND build_phase's UFR-1 entry read now ride --json (the run-9 fenced-answer
+// fix), so the old plain-vs-json discriminator can't tell them apart — the gate LIFECYCLE can.
+const gateStore = { plan: 'pending', tasks: 'pending' }
 
 function runHelperResponse(cmdline) {
   // runHelper prompts quote each argv element: 'python3' 'plugins/...X.py' 'sub' '--flag' 'v' ...
@@ -333,9 +343,8 @@ function shellResponse(cmd) {
     return JSON.stringify({ usable: usableCalls[doc] > 1, recorded: 'x', expected: 'x', missing_sections: [], placeholder: false })
   }
   if (cmd.includes('definition_doc.py read-gate')) {
-    // showrunner.readGate passes --json (front-half skip check: pending -> run the panel);
-    // build_phase's entry gate check reads the PLAIN gate word and needs 'passed' to build.
-    return cmd.includes('--json') ? JSON.stringify({ review: 'pending' }) : 'passed'
+    const doc = (cmd.match(/--doc '?(plan|tasks)/) || [])[1] || 'plan'
+    return JSON.stringify({ review: gateStore[doc] || 'pending' })
   }
   if (cmd.includes('engine_pref_load.py')) throw new Error('engine_pref_load.py dispatched as its own leaf (#118 startup fold)')
   if (cmd.includes('journal_entry.py')) throw new Error('journal_entry.py rode its own leaf (#118 every-phase tail)')
@@ -379,8 +388,14 @@ function answerCommandPrompt(prompt) {
 }
 
 const COURIER_JSON = {
-  'read startup state': () => JSON.stringify({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {} }),
-  'save phase progress': () => markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true }),
+  'read startup state': () => markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', engine_prefs: {}, run_overrides_present: false }),
+  'save phase progress': (prompt) => {
+    // The review-phase tail chains set-gate ahead of the save — flip the mini gate store so the
+    // NEXT read-gate (workhorse's UFR-1 entry read of the tasks doc) sees the passed gate.
+    const sg = String(prompt).match(/set-gate --doc '?(plan|tasks)'?[\s\S]*?--review '?([a-z-]+)'?/)
+    if (sg) gateStore[sg[1]] = sg[2]
+    return markedStdout({ ok: true, journal_confirmed: true, checkpoint_confirmed: true })
+  },
   'save round state': () => JSON.stringify({ ok: true }),
   'gather build state': () => JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, review_records: {}, worktree_dirty: false, final_review: null, provenance: 'absent' }),
   'record task built': () => JSON.stringify({ ok: true, read_back: true, task: '1' }),
@@ -438,7 +453,7 @@ async function cannedAgent(prompt, opts) {
     if (re.test(label)) return fn(prompt)
   }
   if (label === 'run verify') return { command: 'none', returncode: 0, timedOut: false }
-  if (COURIER_JSON[label]) return COURIER_JSON[label]()
+  if (COURIER_JSON[label]) return COURIER_JSON[label](String(prompt))
   return answerCommandPrompt(String(prompt))
 }
 

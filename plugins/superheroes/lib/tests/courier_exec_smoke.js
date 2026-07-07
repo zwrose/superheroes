@@ -95,6 +95,47 @@ function agentFrom(outputs) {
   )
   assert.strictEqual(a.calls(), 2)
 
+  // extract:'strict' (PR #273 — the UFR-1 gate read): the answer must BE the JSON, bare or as
+  // the whole answer in ONE fence. Prose-embedded objects are REJECTED (fail closed) — the
+  // permissive brace-slice would let a courier that merely QUOTES {"review":"passed"} open a gate.
+  const GATE = JSON.stringify({ ok: true, gate: 'passed' })
+  a = agentFrom([[{ ok: true, stdout: GATE }]])
+  courier.setCourierAgent(a.fn)
+  out = await courier.runCourierJson('read startup state', 'cmd', { require: ['ok', 'gate'], extract: 'strict' })
+  assert.strictEqual(out.gate, 'passed', 'strict: bare whole-answer JSON must parse')
+  assert.strictEqual(a.calls(), 1)
+
+  a = agentFrom([[{ ok: true, stdout: '```json\n' + GATE + '\n```' }]])
+  courier.setCourierAgent(a.fn)
+  out = await courier.runCourierJson('read startup state', 'cmd', { require: ['ok', 'gate'], extract: 'strict' })
+  assert.strictEqual(out.gate, 'passed', 'strict: whole-answer single fence must parse (run-9 shape)')
+  assert.strictEqual(a.calls(), 1)
+
+  const PROSE_QUOTE = { ok: true, stdout: 'If it were passed it would print ' + GATE + ' as output.' }
+  a = agentFrom([[PROSE_QUOTE], [PROSE_QUOTE]])
+  courier.setCourierAgent(a.fn)
+  await assert.rejects(
+    () => courier.runCourierJson('read startup state', 'cmd', { require: ['ok', 'gate'], extract: 'strict' }),
+    /courier transport failed after retry/,
+    'strict: a prose-embedded object must FAIL CLOSED, never parse',
+  )
+  assert.strictEqual(a.calls(), 2)
+
+  const PROSE_FENCE = { ok: true, stdout: 'Here is the output:\n```\n' + GATE + '\n```' }
+  a = agentFrom([[PROSE_FENCE], [PROSE_FENCE]])
+  courier.setCourierAgent(a.fn)
+  await assert.rejects(
+    () => courier.runCourierJson('read startup state', 'cmd', { require: ['ok', 'gate'], extract: 'strict' }),
+    /courier transport failed after retry/,
+    'strict: a prose-PREFIXED fence is not the whole answer — fail closed',
+  )
+  assert.strictEqual(a.calls(), 2)
+
+  // extractJsonStrict direct: null on prose, object on bare/fenced-whole answers.
+  assert.strictEqual(courier.extractJsonStrict('The result is ' + GATE + ' as requested.'), null)
+  assert.deepStrictEqual(courier.extractJsonStrict(GATE), { ok: true, gate: 'passed' })
+  assert.deepStrictEqual(courier.extractJsonStrict('```json\n' + GATE + '\n```'), { ok: true, gate: 'passed' })
+
   // BUG B (live 2026-07-02 review-plan park): a `side-effect && save` chain answers with TWO
   // top-level JSON objects on two lines (set-gate line + save line). Neither the whole-string
   // JSON.parse nor the first-{…-last-} brace slice can parse two objects, so the parse must fall

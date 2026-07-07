@@ -88,3 +88,21 @@ def test_readout_text_includes_cost_block_when_present(tmp_path):
 def test_readout_omits_cost_block_when_absent():
     import readout
     assert "Run cost" not in readout.build_readout(run_readout.assemble(STATE))
+
+import journal
+
+def test_assemble_enumerates_permission_denials(tmp_path):
+    ep = str(tmp_path / "events.jsonl")
+    journal.append(ep, "permission_denied", step="build:task-3", detail={"command": "python3 -c x"})
+    journal.append(ep, "step_completed", step="build:task-4")
+    journal.append(ep, "permission_denied", step="review:code-reviewer", detail={"check": "probe"})
+    ctx = run_readout.assemble({"events_path": ep})
+    denials = ctx["permissionDenials"]
+    assert len(denials) == 2
+    assert denials[0]["step"] == "build:task-3"
+    assert denials[1]["step"] == "review:code-reviewer"
+
+def test_assemble_no_denials_is_empty_list(tmp_path):
+    ep = str(tmp_path / "events.jsonl")           # absent/empty events -> empty list, never a skip
+    ctx = run_readout.assemble({"events_path": ep})
+    assert ctx["permissionDenials"] == []

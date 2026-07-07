@@ -79,7 +79,7 @@ function makeAgent(startupFacts, trace, opts) {
         checkpoint: opts.checkpoint || null, world: WORLD, generation: 7, root: CHECKOUT_ROOT })
     }
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: JSON.stringify(Object.assign({ ok: true }, startupFacts)) }]
+      return [{ ok: true, stdout: markedStdout(Object.assign({ ok: true }, startupFacts)) }]
     }
     if (label === 'record skipped phases') {
       trace.skipRecord = prompt
@@ -87,10 +87,10 @@ function makeAgent(startupFacts, trace, opts) {
       return JSON.stringify(opts.skipRecordFails ? { ok: false } : { ok: true })
     }
     if (label === 'read gate') {
-      // buildPhase's FIRST leaf reads the tasks gate; a non-'passed' answer parks it immediately,
-      // proving the loop reached `workhorse` without any front-half authoring.
+      // buildPhase's FIRST leaf reads the tasks gate (--json); a non-'passed' answer parks it
+      // immediately, proving the loop reached `workhorse` without any front-half authoring.
       trace.buildEntered = true
-      return 'pending'
+      return '{"review": "pending"}'
     }
     if (label === 'save phase progress') {
       return saveProgressOk({ checkpoint_confirmed: false })
@@ -104,7 +104,7 @@ function makeAgent(startupFacts, trace, opts) {
 }
 
 const QUICK_FACTS = {
-  spec_gate: 'unreadable', model_overrides: {}, doc_dir: '',
+  spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', run_overrides_present: false,
   engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
   spec_present: false, tasks_present: true, tasks_gate: 'passed',
 }
@@ -138,7 +138,7 @@ const QUICK_FACTS = {
   {
     globalThis.__SR_ROUTE = 'quick'
     const trace = { releases: [] }
-    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '',
+    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', run_overrides_present: false,
       engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
       spec_present: false, tasks_present: false, tasks_gate: null }, trace)
     const out = await sr.showrunner({ workItem: 'wi' })
@@ -155,7 +155,7 @@ const QUICK_FACTS = {
   // -------------------------------------------------------------------------
   {
     const trace = { releases: [] }
-    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '',
+    global.agent = makeAgent({ spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', run_overrides_present: false,
       engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
       spec_present: false, tasks_present: true, tasks_gate: 'malformed' }, trace)
     const out = await sr.showrunner({ workItem: 'wi' })
@@ -169,7 +169,7 @@ const QUICK_FACTS = {
   // -------------------------------------------------------------------------
   {
     const trace = { releases: [] }
-    global.agent = makeAgent({ spec_gate: 'pending', model_overrides: {}, doc_dir: '',
+    global.agent = makeAgent({ spec_gate: 'pending', model_overrides: {}, doc_dir: '', run_overrides_present: false,
       engine_prefs: { reviewer: 'claude', implementation: 'claude', effort: {} },
       spec_present: true, tasks_present: false, tasks_gate: null }, trace)
     const out = await sr.showrunner({ workItem: 'wi' })

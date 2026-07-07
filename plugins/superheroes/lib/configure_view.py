@@ -15,6 +15,7 @@ import core_md         # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
 import model_tier_overrides  # noqa: E402
+import permission_rules  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
@@ -59,9 +60,18 @@ def collect(cwd, root=None):
         overrides = model_tier_overrides.load_overrides(profile)
     except Exception:
         profile, tiers, overrides = None, None, {}
+    try:
+        permission = permission_rules.rules(cwd, root=root)  # read-only, provenance-valid only
+    except Exception:
+        permission = []
+    try:
+        permission_audit = permission_rules.audit(cwd, root=root)  # read-only FR-7 record
+    except Exception:
+        permission_audit = []
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
-            "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile}
+            "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
+            "permissionRules": permission, "permissionAudit": permission_audit}
 
 
 def _health_line(counts):
@@ -106,6 +116,20 @@ def render(cwd, *, root=None):
         for role in model_tier_overrides.KNOWN_ROLES:
             model = tiers.get(role)
             out.append(f"{role}: {model if model is not None else '(session, orchestrator only)'}")
+    out.append("")
+    out.append("## Permission posture")
+    perm = data.get("permissionRules") or []
+    if not perm:
+        out.append("(no auto-allow rules — every would-be prompt still prompts)")
+    else:
+        out.append("auto-allowed routine families (owner-curated, below the owner-role floor):")
+        for rule in perm:
+            out.append(f"- {rule.get('family') or '(unnamed)'}: {rule.get('pattern') or '(no pattern)'}")
+    audit = data.get("permissionAudit") or []
+    if audit:
+        out.append(f"Audit record: {len(audit)} observed command{'s' if len(audit) != 1 else ''}")
+    else:
+        out.append("Audit record: none (seed the routine families to write it)")
     out.append("")
     out.append("## Pinned patterns")
     out.append((data["patterns"] or "(none)").strip())

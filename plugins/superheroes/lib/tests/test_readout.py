@@ -88,3 +88,45 @@ def test_readout_post_builds_structured_ctx(tmp_path, monkeypatch):
     assert "confirm catch-up" in body                        # FR-6: spot-check list
     assert "Merge is yours" in body                          # FR-6: never-merges statement
     assert "post-review base integration" in body            # FR-7: integration note
+
+
+def test_readout_post_discloses_real_permission_denials(tmp_path, monkeypatch):
+    # UFR-3 end-to-end: readout_post reads the RUN'S OWN events.jsonl (not a caller-supplied stub)
+    # and folds any permission_denied events into the posted hand-back — a build step or reviewer
+    # probe the 15-min timeout denied must be visible, never silently absorbed.
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    sys.path.insert(0, LIB_R)
+    import control_plane, journal
+    paths = control_plane.paths(str(tmp_path), "wi-denied")
+    journal.append(paths["events"], "permission_denied", step="build:task-3",
+                   detail={"command": "python3 -c x"})
+    journal.append(paths["events"], "permission_denied", step="review:security-reviewer",
+                   detail="probe denied")
+    ctx = {"pr_url": "https://x/pr/9", "ci_status": "green"}
+    r = subprocess.run([sys.executable, os.path.join(LIB_R, "readout_post.py"),
+                        "--work-item", "wi-denied", "--ctx", json.dumps(ctx)],
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=30)
+    assert r.returncode == 0, r.stderr
+    body = open(paths["resume_brief"]).read()
+    assert "Permission denials" in body
+    assert "build:task-3" in body
+    assert "review:security-reviewer" in body
+
+
+def test_readout_post_caller_supplied_permission_denials_wins(tmp_path, monkeypatch):
+    # An explicit ctx.permissionDenials (test/override input) must not be silently overwritten by
+    # the real journal read — the caller-supplied value wins.
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", str(tmp_path / "store"))
+    sys.path.insert(0, LIB_R)
+    import control_plane, journal
+    paths = control_plane.paths(str(tmp_path), "wi-override")
+    journal.append(paths["events"], "permission_denied", step="build:real-step")
+    ctx = {"pr_url": "https://x/pr/10", "ci_status": "green",
+           "permissionDenials": [{"step": "explicit-override"}]}
+    r = subprocess.run([sys.executable, os.path.join(LIB_R, "readout_post.py"),
+                        "--work-item", "wi-override", "--ctx", json.dumps(ctx)],
+                       capture_output=True, text=True, cwd=str(tmp_path), timeout=30)
+    assert r.returncode == 0, r.stderr
+    body = open(paths["resume_brief"]).read()
+    assert "explicit-override" in body
+    assert "build:real-step" not in body

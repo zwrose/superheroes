@@ -390,7 +390,11 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     } catch (err) {
       return { done: low(`test-pilot browser fix batch failed: ${message(err)}`) }
     }
-    if (!fixResult || fixResult.ok === false || fixResult.action === 'park' || fixResult.confidence === 'low') {
+    // #275: fail closed on the fix leaf's `ok` — a stringy 'false' (truthy in JS) or a missing ok both
+    // slipped past the old `ok === false` gate and recorded false progress (empty shas, unchanged head)
+    // while the browser pass re-ran against the unfixed app. Only a genuine boolean `true` is a fix;
+    // mirrors the #275 build-gate consumer (`worker.ok === true`), belt-and-braces with the typed schema.
+    if (!fixResult || fixResult.ok !== true || fixResult.action === 'park' || fixResult.confidence === 'low') {
       return { done: low((fixResult && (fixResult.reason || fixResult.message)) || 'test-pilot browser fix batch parked') }
     }
 

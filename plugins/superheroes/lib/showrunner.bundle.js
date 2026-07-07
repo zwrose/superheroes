@@ -569,6 +569,24 @@ __modules["circuit_breaker"] = function (module, exports, require) {
 // plugins/superheroes/lib/circuit_breaker.js
 const { clampTitle, canonicalClassKey, classKeyAliases } = require('./review_memory.js')
 const BLOCKING = new Set(['Critical', 'Important'])
+// The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
+// (Minor/Nit — SSOT §11, guarded by test_ssot_drift). `isBlocking` is the single, case-normalized,
+// FAIL-CLOSED blocking predicate every severity consumer routes through (#276): a foreign scale
+// (`blocker`/`high`/`medium`), an unknown tier, a mis-cased `critical`, or a missing severity is
+// treated as blocking — an unrecognized severity means blocking, never a silent demotion. Consumers
+// keep BLOCKING for rank/identity/"was-tagged-blocking" bookkeeping but ask `isBlocking` the
+// partition question, so _partition, the breaker's own stuck-detection, the panel gate, and the
+// build legs can never disagree on what blocks.
+const _NON_BLOCKING = new Set(['minor', 'nit'])
+function isBlocking(severity) {
+  return !_NON_BLOCKING.has(String(severity == null ? '' : severity).trim().toLowerCase())
+}
+// #291: the TIER-specific Critical match (case-normalized), single-sourced alongside isBlocking so the
+// confirmation re-arm/park gate can't miss a mis-cased `critical`. Distinct from isBlocking: Important
+// is blocking but NOT critical.
+function isCritical(severity) {
+  return String(severity == null ? '' : severity).trim().toLowerCase() === 'critical'
+}
 // Python re.ASCII: \w == [A-Za-z0-9_], \s == [ \t\n\r\f\v]. Match those explicitly so JS \w/\s
 // (which differ on unicode) cannot drift.
 const _NON_WORD = /[^A-Za-z0-9_ \t\n\r\f\v]/g
@@ -602,7 +620,7 @@ function intersects(a, b) {
   for (const x of a) if (b.has(x)) return true
   return false
 }
-function _blocking(round) { return round.findings.filter((f) => BLOCKING.has(f.severity)) }
+function _blocking(round) { return round.findings.filter((f) => isBlocking(f.severity)) }
 function _roundRecordedFix(roundRec) {
   // Parity twin of circuit_breaker._round_recorded_fix: true when this round's fixer recorded
   // applied fixes (rec.fix.fixes). The cap-halt precedes the round's fix leg, so the latest round
@@ -692,7 +710,7 @@ function checkCircuitBreaker(rounds, maxRounds) {
   }
   return { halt: false, reason: null, detail: 'progressing' }
 }
-module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING }
+module.exports = { normalizeTitle, findingIdentity, recurrenceKey, recurrenceAliases, checkCircuitBreaker, BLOCKING, isBlocking, isCritical }
 
 };
 
@@ -721,11 +739,12 @@ module.exports = { decide }
 // ===== loop_synthesis.js =====
 __modules["loop_synthesis"] = function (module, exports, require) {
 // plugins/superheroes/lib/loop_synthesis.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const _TIERS = new Set(['Critical', 'Important', 'Minor', 'Nit'])
-const _BLOCKING = new Set(['Critical', 'Important'])
-const _NON_BLOCKING = new Set(['Minor', 'Nit'])
 const _DEFAULT_BLOCKING_SEVERITY = 'Important'
+// #276: the blocking partition (was-tagged-blocking, blocking→non-blocking downgrade detection) routes
+// through circuit_breaker.isBlocking — the single, case-normalized, fail-closed predicate — so this
+// leg can never disagree with _partition / the breaker / the panel gate on what blocks.
 
 function _keptSeverity(f, v) {
   const verdictSeverity = (v && typeof v === 'object') ? v.severity : null
@@ -750,7 +769,7 @@ function consume(merged, leafVerdicts) {
     const reason = (v && typeof v === 'object') ? v.reason : null
     if (action === 'drop' && typeof reason === 'string' && reason.trim()) {
       drops.push({ id, file: f.file === undefined ? null : f.file, title: f.title === undefined ? null : f.title,
-        reason: reason.trim(), was_blocking_tagged: _BLOCKING.has(f.severity) })
+        reason: reason.trim(), was_blocking_tagged: isBlocking(f.severity) })
       continue
     }
     const kept = Object.assign({}, f)
@@ -759,7 +778,7 @@ function consume(merged, leafVerdicts) {
     // DOWNGRADE-FLAG (#186): a survivor re-tiered from blocking to non-blocking rides recorded
     // (severity outcome unchanged) so the readout can flag it like a dropped blocker.
     const fromSeverity = f && f.severity
-    if (_BLOCKING.has(fromSeverity) && _NON_BLOCKING.has(kept.severity)) {
+    if (isBlocking(fromSeverity) && !isBlocking(kept.severity)) {
       const entry = { id, file: f.file === undefined ? null : f.file,
         title: f.title === undefined ? null : f.title, from: fromSeverity, to: kept.severity }
       if (typeof reason === 'string' && reason.trim()) entry.reason = reason.trim()
@@ -775,8 +794,11 @@ module.exports = { consume }
 // ===== panel_tally.js =====
 __modules["panel_tally"] = function (module, exports, require) {
 // plugins/superheroes/lib/panel_tally.js
-const { findingIdentity } = require('./circuit_breaker.js')
+const { findingIdentity, isBlocking } = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
+// BLOCKING is the drift-guarded canonical blocking vocabulary (exported; SSOT §11). The blocking
+// PARTITION decision routes through circuit_breaker.isBlocking (#276) — case-normalized + fail-closed
+// — so the panel gate never disagrees with _partition / the breaker on what blocks.
 const BLOCKING = new Set(['Critical', 'Important'])
 const SEV_RANK = { Critical: 0, Important: 1, Minor: 2, Nit: 3 }
 const _ACTION_TO_TERMINAL = { review: 'continue', exit_clean: 'clean', exit_skipped: 'clean-with-skips', halt: 'halted' }
@@ -810,7 +832,7 @@ function compileFindings(findings, contextFiles) {
 }
 function roundGate(compiled, expectedRoster, completedRoster) {
   const incomplete = expectedRoster.filter((r) => !completedRoster.includes(r))
-  const hasBlocker = compiled.some((f) => BLOCKING.has(f.severity))
+  const hasBlocker = compiled.some((f) => isBlocking(f.severity))
   let gate
   if (incomplete.length) gate = 'cannot-certify'
   else if (hasBlocker) gate = 'blocking'
@@ -822,7 +844,7 @@ function roundGate(compiled, expectedRoster, completedRoster) {
 function presentDeferred(compiled, deferredSet) {
   let n = 0
   for (const f of compiled) {
-    if (!BLOCKING.has(f.severity)) continue
+    if (!isBlocking(f.severity)) continue
     const deferredSev = deferredSet[findingIdentity(f)]
     if (deferredSev === undefined || deferredSev === null) continue
     if ((SEV_RANK[f.severity] != null ? SEV_RANK[f.severity] : 99) >= (SEV_RANK[deferredSev] != null ? SEV_RANK[deferredSev] : 99)) n += 1
@@ -880,7 +902,7 @@ function _currentBlockingFindings(results) {
     if (!result || result.status !== 'run') continue
     for (const f of Array.isArray(result.findings) ? result.findings : []) {
       if (!f || f.carried) continue
-      if (BLOCKING.has(f.severity)) out.push(f)
+      if (isBlocking(f.severity)) out.push(f)
     }
   }
   return out
@@ -959,6 +981,7 @@ module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, 
 // ===== review_round_policy.js =====
 __modules["review_round_policy"] = function (module, exports, require) {
 // plugins/superheroes/lib/review_round_policy.js
+const { isCritical } = require('./circuit_breaker.js')
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 // #174 confirmation-bar economics: at most this many FULL confirmation panels per loop, and the
@@ -1107,7 +1130,9 @@ function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting
   // cap of `maxConfirmations` panels; a Critical still owed at the cap parks (certification
   // withheld), a non-Critical at the cap is resolved by a scoped verify then certified.
   const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
-  const hasCritical = sevs.includes('Critical')
+  // #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap
+  // (was `sevs.includes('Critical')`, case-sensitive, so a lowercase Critical resolved by scoped verify).
+  const hasCritical = sevs.some((s) => isCritical(s))
   const trigger = hasCritical || !!crossCutting
   const atCap = confirmationsRun >= maxConfirmations
   if (!trigger) {
@@ -1436,7 +1461,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
-const BLOCKING = new Set(['Critical', 'Important'])
+// #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
+// — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 
 // ── #211 decider leaves (couriers): the shell asks the Python deciders "what now?" and receives
@@ -1512,7 +1538,7 @@ function annotateChallengedCoverage(coverageDecisions, roundFindings, reviewerSe
     const result = roundFindings[name]
     if (!result || result.status !== 'run') continue
     for (const f of result.findings || []) {
-      if (!BLOCKING.has(f.severity)) continue
+      if (!circuitBreaker.isBlocking(f.severity)) continue
       const key = f.classKey || reviewMemory.classKey(f)
       if (!known.has(key)) continue
       const decision = byClass[key]
@@ -1787,6 +1813,10 @@ function _retryableReviewerIssue(out) {
 // Covers every retryable cause, not only receipts: `malformed` catches a schema-failing/off-task
 // answer (live precedent: a reviewer glitched onto an unrelated MCP connector and returned nonsense).
 function _retryReason(out) {
+  // FR-1/FR-2: a denied verification probe (permissionDenied) is degraded to receiptMissing by
+  // ensureReviewerShape, but its retry must NOT be told to "supply a receipt" — it must be told the
+  // denied probe is FINAL and to verify another way / return low. Surface it ahead of receipt-missing.
+  if (out && out.permissionDenied) return 'permission-denied'
   if (out && out.receiptMissing) return 'receipt-missing'
   if (out && out.receiptStale) return 'receipt-stale'
   if (!_validReviewerResult(out)) return 'malformed'
@@ -1987,6 +2017,22 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (legKind.code) {
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
+      // #279 bounded corrective re-run: when verify is the SOLE blocker — a 'fail' with zero blocking
+      // findings this round — the fix loop has nothing to resolve and so can never earn a re-verify,
+      // and one transient infra flake (a module-resolution error in an untouched file, node_modules
+      // still settling after an in-branch install, a shared vite-cache collision) becomes a terminal
+      // halt on a branch that found nothing to fix. Re-run verify exactly once (serialized, same round
+      // file). Two consecutive fails reproduce today's fail-closed halt exactly — no loop, cap 1
+      // (precedent: #212 corrective retry / fix-before-park). A round with blocking findings takes the
+      // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
+      if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
+        try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        catch (e) { verifyResult = 'fail' }
+        // Surface the flake vs the real regression: a fail→pass flip means the verify gate is flaky
+        // (worth investigating the infra cause); a fail→fail confirms a genuine failure (halts below).
+        try { log(`review-panel r${round}: corrective re-run verify → ${verifyResult}`) } catch (_) {}
+      }
     }
 
     const tokenUsage = collectRoundUsage(roundFindings, round, synthesized)
@@ -2511,6 +2557,28 @@ function extractJson(text) {
   return null
 }
 
+// extractJsonStrict: the fail-closed twin of extractJson for GATE-shaped reads whose parsed value
+// OPENS something (the UFR-1 tasks-gate read). The answer must BE the JSON: the whole trimmed
+// stdout parsing directly, or the whole answer being exactly ONE fenced block whose content
+// parses (the run-9 wf_b69571d9 courier shape — a correct answer wrapped in ```json fences).
+// Deliberately NO brace-slice, NO per-line pass, NO mid-prose fence: extractJson's permissive
+// candidates would let a courier answer that merely QUOTES the expected object in prose
+// ("...it would print {\"review\": \"passed\"}") open the gate — a false-PASS, the one direction
+// a gate read must never take. Prose answers land on the caller's fail-closed retry/park instead.
+function extractJsonStrict(text) {
+  const trimmed = String(text == null ? '' : text).trim()
+  const candidates = [trimmed]
+  const fenceOnly = trimmed.match(/^```(?:[a-zA-Z0-9]+)?\s*([\s\S]*?)```$/)
+  if (fenceOnly) candidates.push(fenceOnly[1].trim())
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate)
+      if (parsed !== null && typeof parsed === 'object') return parsed
+    } catch (_e) { /* strict: no fallback slicing — fail closed */ }
+  }
+  return null
+}
+
 async function callOnce(label, command, promptOpts) {
   // `courier: true` marks this a dumb pipe for the bundle preamble's unconditional cheapest-model
   // pinning (same treatment as label 'exec'/'io'); the preamble strips it before the real agent().
@@ -2664,7 +2732,9 @@ async function runCourierJson(label, command, opts) {
       last = 'empty stdout'
       continue
     }
-    const parsed = extractJson(out)   // fence-tolerant (see extractJson) — bare parse alone parked live runs
+    // fence-tolerant (see extractJson) — bare parse alone parked live runs. opts.extract:'strict'
+    // narrows to extractJsonStrict for gate-shaped reads (whole-answer JSON only, no prose slicing).
+    const parsed = (options.extract === 'strict' ? extractJsonStrict : extractJson)(out)
     if (parsed == null) {
       last = 'unparseable JSON'
       continue
@@ -2690,6 +2760,7 @@ module.exports = {
   CourierTransportError,
   badCourierAnswer,
   extractJson,
+  extractJsonStrict,
   helperResult,
   markerSliceStdout,
   runCourierJson,
@@ -3587,7 +3658,11 @@ async function runBrowserPasses(deps, workItem, context, plan, records, artifact
     } catch (err) {
       return { done: low(`test-pilot browser fix batch failed: ${message(err)}`) }
     }
-    if (!fixResult || fixResult.ok === false || fixResult.action === 'park' || fixResult.confidence === 'low') {
+    // #275: fail closed on the fix leaf's `ok` — a stringy 'false' (truthy in JS) or a missing ok both
+    // slipped past the old `ok === false` gate and recorded false progress (empty shas, unchanged head)
+    // while the browser pass re-ran against the unfixed app. Only a genuine boolean `true` is a fix;
+    // mirrors the #275 build-gate consumer (`worker.ok === true`), belt-and-braces with the typed schema.
+    if (!fixResult || fixResult.ok !== true || fixResult.action === 'park' || fixResult.confidence === 'low') {
       return { done: low((fixResult && (fixResult.reason || fixResult.message)) || 'test-pilot browser fix batch parked') }
     }
 
@@ -4512,7 +4587,12 @@ function _partition(findings) {
   const blocking = []; const minors = []; const cannotVerify = []
   for (const f of findings || []) {
     if (f && f.cannot_verify_from_diff) cannotVerify.push(f)
-    if (f && circuitBreaker.BLOCKING.has(f.severity)) blocking.push(f)
+    // #276: the single, case-normalized, FAIL-CLOSED blocking predicate — only Minor/Nit demote;
+    // every other severity (foreign scale, mis-cased, missing) is blocking. Shared with the circuit
+    // breaker's own stuck-detection so the two can never disagree. Keep the leading `f &&` guard (as on
+    // the cannot_verify line above) so a falsy element routes to minors rather than blocking — the
+    // Python twin only ever receives dict findings, so this guard is JS-side defensiveness, not parity.
+    if (f && circuitBreaker.isBlocking(f.severity)) blocking.push(f)
     else minors.push(f)
   }
   return { blocking, minors, cannotVerify }
@@ -4532,6 +4612,15 @@ function decide(verdicts, findings, rnd, maxRounds, history) {
   let reason = loopReason
   if (brk.halt) {
     reason = brk.detail !== undefined ? brk.detail : reason
+  }
+  // FR-5/FR-6: the two verdicts GATE — they are not merely required-to-be-present. A non-'pass'
+  // spec_compliance or code_quality can never complete, even with zero blocking findings, so a
+  // reviewer that reports the task non-compliant sends it back for a fix round (#276). Vocabulary-
+  // independent backstop: this holds even if a finding's severity drifts past _partition.
+  const failing = REQUIRED_VERDICTS.filter((k) => verdicts[k] !== 'pass')
+  if (mapped === 'complete' && failing.length) {
+    mapped = 'review'
+    reason = `verdict(s) ${failing.join(' + ')} are not 'pass' — the task is not compliant; a fix round is required before completion (FR-5/FR-6).`
   }
   // UFR-5: never complete while a cannot-verify item is unresolved — force a resolution round.
   if (mapped === 'complete' && cannotVerify.length) {
@@ -4954,9 +5043,10 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
-// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
-// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
-// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+// #160/#276: circuit_breaker.isBlocking is the single, case-normalized, FAIL-CLOSED blocking predicate
+// the task_review twin's partition also reads. Used here to synthesize the per-task review's two
+// verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
+// final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
@@ -5014,20 +5104,9 @@ function exec(commands, label) {
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
 // `label` is the cosmetic display purpose (defaults to 'exec'); dumb-pipe routing rides the courier's
 // `courier: true` marker, so a descriptive label never loosens the cheapest-model pinning.
-async function execJson(cmd, label) {
+async function execJson(cmd, label, opts) {
   try {
-    return await courier.runCourierJson(label || 'exec', cmd)
-  } catch (e) {
-    if (e instanceof courier.CourierTransportError) return null
-    throw e
-  }
-}
-
-// Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
-// Retry once on an empty stdout; returns the trimmed string, or null after the retry.
-async function execText(cmd, label) {
-  try {
-    return (await courier.runCourierText(label || 'exec', cmd)).trim()
+    return await courier.runCourierJson(label || 'exec', cmd, opts)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -5104,15 +5183,25 @@ function reconcileState(taskList, state) {
 
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
-  // UFR-1: refuse unless the tasks gate is passed. read-gate prints a PLAIN STRING (e.g. 'passed'),
-  // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
-  // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
-  const gate = await execText(
-    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+  // UFR-1: refuse unless the tasks gate is passed. Read via `read-gate --json` ({"review": "..."}
+  // — produced by definition_doc.py; showrunner.js readGate is the other JS consumer of the field)
+  // so a FENCED-but-correct courier answer parses: the plain-string mode byte-compared a fenced
+  // 'passed' and false-parked (run 9, wf_b69571d9). Extraction is STRICT — the whole answer must
+  // BE the JSON, bare or in one fence (extractJsonStrict); the permissive extractJson brace-slice
+  // would let an answer that merely QUOTES {"review":"passed"} in prose OPEN the gate, and this
+  // gate must only ever fail closed. NOTE this is deliberately STRICTER than showrunner.js
+  // readGate's bare JSON.parse-or-'unreadable' (which guards a skip decision, not a build).
+  const gateOut = await execJson(
+    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}" --json`,
     'read gate',
+    { extract: 'strict' },
   )
+  if (gateOut == null) return park('could not read the tasks gate — failing closed')
+  const gate = (gateOut && typeof gateOut.review === 'string') ? gateOut.review : null
   if (gate == null) return park('could not read the tasks gate — failing closed')
-  if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
+  // Clamp the untrusted courier-provided value at this sink: the reason flows into journal
+  // entries, readouts, and PR comments downstream.
+  if (gate !== 'passed') return park(`tasks gate not passed (${String(gate).slice(0, 80)}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
     `python3 ${libPath('build_entry.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
@@ -5246,7 +5335,12 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-    if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
+    // #279: carry the verdict's reason into the park so the owner sees WHY (e.g. the verify error),
+    // not a bare terminal — the sole difference between a real regression and a transient flake.
+    if (fr.terminal !== 'clean') {
+      const detail = fr.reason ? ' (' + fr.reason + ')' : ''
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
       return park('final review coverage stamp failed read-back')
@@ -5388,12 +5482,31 @@ function _tasksDocPath(workItem) {
   return require('./showrunner.js').docPathFor(workItem, 'tasks')
 }
 
+// #275: the build leaf's structured-output schema. Constrain `ok` to a boolean and `signal` to the
+// three recovery signals so schema-validated output retries a stringy shape AT THE SOURCE — the #219
+// live escape was every build leaf returning `ok` as the string "false"/"true" past an untyped
+// {required:['ok']} schema, and "false" is truthy in JS. `evidence` is left unconstrained (it is not
+// consumed here, and the leaf sometimes emits it as a JSON string — don't force needless retries on it).
+const BUILD_LEAF_SCHEMA = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    // Reference the canonical token (CONVENTIONS §11) rather than re-typing the string —
+    // worker_recovery.js is the home of the plan_wrong signal, already required in this file.
+    signal: { enum: ['ok', 'needs_context', workerRecoveryTwin.PLAN_WRONG] },
+  },
+}
+
 // #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
 // task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
 // nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
 // appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
-function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+// `deniedNote` (FR-1 finality) carries forward the actions a prior attempt reported the permission
+// timeout denied — a re-dispatched fresh leaf is a re-attempt of the SAME step, so it must not retry the
+// denied action in any rewording. Appended AFTER retryNote so it rides every subsequent dispatch.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
     + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
@@ -5401,9 +5514,26 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
     + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
     + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
-    + `Co-Authored-By). Return JSON `
-    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + `Co-Authored-By). ${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
+    + `fired on ANY substantive step (not a verification probe — an actual implementation/commit action), set `
+    + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
+    + `to null — never fabricate a completed step you were denied. Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
     + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+
+// FR-1 finality memory: the action(s) a prior attempt of THIS step reported the permission timeout
+// denied are FINAL — a fresh re-dispatch of the same work is a re-attempt, not a distinct step, so the
+// worker must not re-enter the denied action in any rewording. One tight sentence naming each denied
+// action so the worker works around them and reports honestly instead of re-hitting the permission wait.
+function buildDeniedNote(deniedActions) {
+  if (!deniedActions || !deniedActions.length) return ''
+  return (
+    ` FINAL — the following action(s) were already denied by the permission timeout in this step and are `
+    + `FINAL; do NOT re-attempt them in any form or rewording — work around them and report honestly: `
+    + deniedActions.join('; ') + '.'
   )
 }
 
@@ -5418,27 +5548,127 @@ function buildRetryNote(task, docPath) {
   )
 }
 
+// #149 Task 11/12: the SINGLE object-arg composer for the spine's leaf prompt — used by BOTH
+// production (buildOneTask, below) and the permission smokes, so the dispatched bytes and the bytes
+// tests reconstruct for the FR-8 composed-exact hash can never drift (one composer, zero re-encoding).
+// Delegates to buildTaskPrompt; threads `deniedNote` (FR-1 finality) through so the production caller's
+// denial-memory suffix rides the same source of truth. `deniedNote` defaults to '' — a smoke that omits
+// it composes byte-identically to a first-attempt dispatch.
+function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote, deniedNote }) {
+  return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '', deniedNote || '')
+}
+
+// UFR-6/UFR-8 dual-carrier denial recording (premortem-001), extracted from buildOneTask's loop so
+// the loop body stays control flow. Returns a park result to return, or null (nothing denied / both
+// carriers rode). The denial is written to TWO independent carriers the ship gate (ship_gate.decide)
+// both consult; EITHER gates the PR to a draft, REGARDLESS of whether the leaf still reports ok:true:
+//   1. the run's journal `permission_denied` event (step `build:<id>`, detail = the denied action) —
+//      best-effort/fail-open but courier-RETRIED, written FIRST so it survives even if carrier 2 fails
+//      and the task then parks (a resume skips this already-committed leaf, so carrier 2 stays empty).
+//      ship_gate.journal_build_denials folds these `build:` events in as the second gate signal.
+//   2. the prov_entry build-denial provenance entry (ship_gate.record_build_denial) — fail-CLOSED
+//      (record-before-advance): a dropped courier (null) or durable-write failure (ok!==true) PARKs
+//      the task, never silently promoting a tainted build to a ready PR.
+// Ordering (journal first) narrows the loss window to a CORRELATED double failure: writing the durable
+// journal event before carrier 2's park closes any SINGLE-carrier failure. RESIDUAL (transport-
+// inherent, cannot be closed by ordering): if the courier drops/garbles BOTH writes in the same window,
+// both durable carriers stay empty — and because the resume forward-walk skips the already-committed
+// leaf, that denial is never re-earned. For exactly that double-drop, the fail-closed PARK REASON below
+// names the denied action, so the disclosure still reaches the resuming owner through the park channel
+// even when neither durable carrier landed.
+async function recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions) {
+  if (!(worker && worker.deniedAction)) return null
+  const denied = String(worker.deniedAction)
+  // Carrier 1 (journal) FIRST — best-effort + fail-open, courier-retried.
+  try {
+    await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type permission_denied --step ${shq('build:' + task.id)} `
+      + `--detail ${shq(denied)}`,
+      'journal build denial',
+    )
+  } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
+  // Carrier 2 (provenance) — fail-CLOSED. The park on a failed provenance write STAYS: even though
+  // carrier 1 may have ridden, parking here keeps record-before-advance honest for the provenance path.
+  const denialRec = await execJson(
+    `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
+    + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(denied)}`,
+    'record build denial',
+  )
+  if (!(denialRec && denialRec.ok === true)) {
+    // Name the denied action in the park reason: on a correlated double-drop this is the only surviving
+    // disclosure of the denial, and it reaches the resuming owner through the park channel.
+    return { parked: true,
+             reason: `build-denial record write failed for denied action '${denied}' `
+                     + `(record-before-advance) — park (UFR-6/UFR-8)` }
+  }
+  // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is told
+  // the action is FINAL and must not be re-attempted — carried into the next attempt's prompt.
+  deniedActions.push(denied)
+  return null
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
+  // FR-1 finality: actions a prior attempt reported the permission timeout denied. Accumulated across
+  // attempts and threaded into EVERY subsequent dispatch so a fresh re-dispatched leaf never re-attempts
+  // the denied action (re-dispatching denied work under a new leaf is a re-attempt, not a distinct step).
+  const deniedActions = []
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
-    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
+    // FR-1: also thread any prior-attempt denied actions so the fresh leaf works around them, never re-tries them.
+    // Compose via buildLeafPrompt — the SINGLE source-of-truth composer the smokes also use — so the
+    // dispatched bytes provably equal what the FR-8 record_composed hash covers (no parallel inline path).
+    const prompt = buildLeafPrompt({
+      wt, branch, task, docPath,
+      retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
+      deniedNote: buildDeniedNote(deniedActions),
+    })
+    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
+    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
+    // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
+    // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
+    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
+    // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
+    // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
+    // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
+    // leaf, but IMPLICIT: the preflight readout's builder row (model_tier role) then disagreed with the
+    // dispatch (readout showed the tier's model, dispatch showed the safeSmartDefault fallthrough), and a
+    // per-run builder-model override could never REACH the dispatch (no `model` option existed to carry
+    // it). resolveModel('builder') defaults to the same opus (no behavior change in the default config)
+    // AND makes the readout row + dispatch share one source (NFR-Accuracy) + lets an override land here.
+    const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
-    if (worker.ok) {
+    // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence.
+    // Record it on both carriers (recordBuildDenialIfAny); a failed fail-closed carrier parks here.
+    const denialPark = await recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions)
+    if (denialPark) return denialPark
+    // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
+    // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
+    // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
+    // an explicit refusal and recorded built:passed for zero commits. Only a genuine boolean `true`
+    // advances; anything else falls through to the recovery twin (which parks immediately on
+    // plan_wrong, UFR-3). `worker` can be null (agent() returns null on a dead/skipped subagent), so
+    // guard the deref — a null result must fall through to bounded recovery, never crash the run.
+    // Scope: this is type-strictness on the NATIVE leaf only. It does NOT catch an EXTERNAL-engine
+    // refusal: engine_adapter.py parse_result coerces any parseable external stdout to a genuine
+    // boolean `ok:true` UPSTREAM of this gate (build|fix branch), so an external {ok:false,plan_wrong}
+    // never reaches here as a falsy value — that refusal-laundering is tracked separately (#288).
+    if (worker && worker.ok === true) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
@@ -5470,7 +5700,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return reviewLoop(workItem, generation, task, branch, wt)
     }
     // #115 increment B: bounded recovery decided in-process via the worker_recovery twin (no leaf).
-    const rec = workerRecoveryTwin.decide(attempt, worker.signal || 'needs_context')
+    // #275: `worker` may be null (dead/skipped subagent) — a null signal defaults to needs_context
+    // (bounded retry → escalate → park), never a crash.
+    const rec = workerRecoveryTwin.decide(attempt, (worker && worker.signal) || 'needs_context')
     if (rec.action === 'park') return { parked: true, reason: rec.reason }
     attempt += 1                                   // retry_with_context / escalate -> re-dispatch
   }
@@ -5501,7 +5733,43 @@ const REVIEW_TASK_SCHEMA = {
         code_quality: { enum: ['pass', 'fail'] },
       },
     },
-    findings: { type: 'array' },
+    // #276: constrain finding items so structured-output validation corrects severity-vocabulary
+    // drift AT THE SOURCE. `severity` is the canonical rubric tier enum (SSOT §11, guarded by
+    // test_ssot_drift) — the live escape was reviewers emitting a foreign scale (`blocker`/`critical`
+    // /`high`) that the blocking partition then demoted to Minor. Required so every finding carries a
+    // gating severity; the task_review twin still fails closed on anything that slips past.
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['severity'],
+        properties: {
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          file: { type: 'string' },
+          title: { type: 'string' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
+  },
+}
+
+// #276: the whole-branch final-review reviewer's findings schema — same canonical severity-tier enum
+// (SSOT §11, guarded by test_ssot_drift) as REVIEW_TASK_SCHEMA, so a branch reviewer emitting a
+// foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
+// instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
+// sites in runFinalReview's reviewerAgent.
+const FINAL_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['findings'],
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+      },
+    },
   },
 }
 
@@ -5525,7 +5793,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
     + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+    + `"findings":[{"severity":"Critical|Important|Minor|Nit","file","title","cannot_verify_from_diff"}]}. `
+    + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
@@ -5541,7 +5810,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     // two-verdict review that returned the same findings. An unreadable external review (null / no
     // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
     if (res && Array.isArray(res.findings)) {
-      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
       return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
     }
   }
@@ -5661,24 +5930,25 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity":"Critical|Important|Minor|Nit","evidence"}]} ({"findings":[]} if nothing to flag). `
+      + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
     if (rEngine !== 'claude') {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+        schema: FINAL_REVIEW_SCHEMA,
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+        schema: FINAL_REVIEW_SCHEMA })
       return (out && Array.isArray(out.findings)) ? out.findings : null
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      schema: FINAL_REVIEW_SCHEMA })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -5693,7 +5963,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
     await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
+    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
+    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
+    // severity is dispatched to the fixer, never silently counted nowhere.
+    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
@@ -5716,11 +5989,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
     runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal }
+  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.buildDeniedNote = buildDeniedNote
+module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop
@@ -5746,7 +6022,14 @@ const DEFAULT_TIERS = {
   synthesis: 'opus',
   fixer: 'sonnet',
   author: 'opus',
+  builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
 }
+
+// The accepted-model set — twin of model_tier_overrides.KNOWN_MODELS (the Python validator's domain).
+// This is NOT DEFAULT_TIERS' value set (which omits 'fable', a valid but non-default model). The
+// freeze-consume merge boundary validates a snapshot's pinned model against this before pinning it,
+// mirroring the producer's refusal posture. Drift-guarded against the Python home by test_ssot_drift.py.
+const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable']
 
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
 
@@ -5783,7 +6066,7 @@ function resolveModel(role, overrides, context) {
   return def   // malformed (non-str / empty) -> default
 }
 
-module.exports = { resolveModel, DEFAULT_TIERS }
+module.exports = { resolveModel, DEFAULT_TIERS, KNOWN_MODELS }
 
 };
 
@@ -6210,6 +6493,19 @@ const REVIEW_CODE_REVIEWERS = [
 ]
 
 const REVIEW_DEEP = new Set(['security-reviewer', 'architecture-reviewer'])
+
+// The ONE place the review-code cfg.tiers vocabulary (camelCase keys from review_code_config.resolve_tiers)
+// maps to model_tier roles (= the __SR_OVERRIDES pin key, = the preflight readout row's tier_role). The
+// `.role` values here are an UNGUARDED copy of the role vocabulary that also lives in
+// preflight_readout._PHASE_ROLES (tier_role column) and review_code_config.resolve_tiers. The SSOT drift
+// smoke (showrunner_reviewcode_tier_role_drift_smoke) reads BOTH Python homes and deepStrictEquals the
+// mapping against this export, so a rename on either side fails CI rather than silently mis-routing a pin.
+const _TIER_ROLE = {
+  reviewer: { role: 'reviewer', context: null },
+  reviewerDeep: { role: 'reviewer-deep', context: null },
+  synthesis: { role: 'synthesis', context: null },
+  fixer: { role: 'fixer', context: 'code' },
+}
 const ADVANCE_TERMINALS = new Set(['clean'])
 const POLICY_SUBJECT_FALLBACK = {
   test: 'Test',
@@ -6233,8 +6529,6 @@ const FIX_REPORT_SCHEMA = {
   type: 'object',
   properties: { fixed: { type: 'array' }, deferred: DEFERRED_ITEMS },
 }
-const PROV_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {}, error: { type: 'string' } } }
-const OK_SCHEMA = { type: 'object', required: ['ok'], properties: { ok: {} } }
 // #115: the reviewer leaf RETURNS a findings[] array (no findings-<name>.json write); the panel holds
 // it in memory and runs the merge/synthesis-consume/tally twins in-process.
 // #212/#175 structural receipt: making a high-confidence answer WITHOUT a verificationReceipt
@@ -6417,11 +6711,46 @@ const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
 
+// Task 11 (FR-4) probe steering: an unattended leaf/reviewer that needs to *run* something to verify
+// its work must use the sanctioned throwaway-test-file-in-worktree + allowed test-run family (which the
+// enforcer's allowance layer auto-allows), NOT an improvised inline interpreter one-liner (which the
+// enforcer prompts on and — owner absent — stalls). One tight sentence: the allowance layer only
+// recognizes these shapes, so steering the probe here is what turns a would-be stall into an auto-allow.
+const PROBE_STEERING =
+  'To verify by running code, write a throwaway test file inside the build worktree and run it with the ' +
+  'project test-run family (e.g. pytest / the repo test command); do not improvise inline interpreter ' +
+  'one-liners (python3 -c / node -e) — those are not on the allowed probe path and will stall on a permission prompt.'
+
+// Task 10 (FR-2) reviewer-side denial flag: TIMEOUT_PROCEED_CONTRACT tells a reviewer to proceed and
+// report a denied probe honestly IN PROSE, but ensureReviewerShape only degrades a dimension when the
+// STRUCTURED result carries permissionDenied:true — a reviewer that only narrates the denial in prose
+// never sets the flag, so the degradation branch is unreachable. This sentence closes that gap: it is
+// the reviewer-specific instruction (the builder/leaf prompt uses its own `deniedAction` field instead,
+// since the shell — not a structured contract keyword — decides what happens to a build denial).
+const REVIEWER_DENIAL_FLAG =
+  'If the 15-minute timeout fired on YOUR verification probe (you proceeded without actually verifying), ' +
+  'set "permissionDenied":true in your JSON result (in addition to reporting it honestly in prose) — this ' +
+  'is what tells the review loop your dimension was not actually verified.'
+
+// Task 11 (FR-1/UFR-6) 15-minute proceed contract: the enforcer stays synchronous, so the timeout bound
+// lives in the dispatched instruction. If an action awaits owner permission unanswered for 15 minutes,
+// the leaf proceeds without it and reports the denied action HONESTLY — never as done. The spine absorbs
+// the denial (a denied probe -> low-confidence; a denied substantive build step -> incomplete build
+// evidence that holds the PR a draft), so honest reporting is what makes the absorption correct.
+const TIMEOUT_PROCEED_CONTRACT =
+  'If any action awaits owner permission with no response for 15 minutes, proceed without it and report ' +
+  'the denied action honestly (never as done) — say exactly what you could not do so the run records it. ' +
+  'A denied action is FINAL for this step: do not re-attempt it in any rewording or variation — report it and move on.'
+
 // #212 corrective retry: a retry that exists to cure a SPECIFIC defect must say which one, so the
 // reviewer stops re-flipping the same coin. Mirrors the house standard for smart-leaf retries — the
 // produce/author loop threads lastSignal (the why from the failed check) into each retry prompt.
 // null/unknown retryReason → no correction (e.g. a plain low→deep escalation with nothing to cure).
 function reviewerRetryCorrection(retryReason) {
+  if (retryReason === 'permission-denied') {
+    return ' RETRY: your previous verification probe was permission-DENIED by the 15-minute timeout — that denied probe is FINAL; do NOT re-attempt the same denied probe in any rewording. ' +
+      'Verify this dimension another way, or return confidence "low" and report honestly — do NOT fabricate a receipt for a probe you could not run.'
+  }
   if (retryReason === 'receipt-missing') {
     return ' RETRY: your previous answer was REJECTED — it claimed high confidence but supplied no verificationReceipt. ' +
       'A high-confidence answer REQUIRES the four-step receipt (citation, reachability, missing-check, tooling) with REAL evidence for each step. ' +
@@ -6441,6 +6770,71 @@ function reviewerRetryCorrection(retryReason) {
 const FIX_RESULT_INSTRUCTION =
   'Read the fix worklist JSON at the path in fixContext.worklistPath (#211 — the findings are on disk, never inlined here). It holds: findings (every round\'s findings, this round\'s first — each with file, line, title, severity, classKey; read the code at each file:line for detail), classKeys, generalizeRequired, changedSubjects, and coverageDecisions. Fix every blocking finding. Local first occurrences should normally return changedSubjects with no coverageDecisions. When generalizeRequired contains a class you are actually addressing, return a visible coverageDecisions entry with id, classKey, text, and sourceRound. Return changedSubjects as policy-subject strings (Test, Security, Code, Architecture, Failure-Mode) for EVERY dimension you touched — the scheduler re-runs those dimensions, so under-declaring skips a needed re-review. Return ONLY {"fixes":[],"deferred":[],"changedSubjects":[],"coverageDecisions":[],"extras":{}}.'
 
+// Task 10 (FR-2) journal seam: record a reviewer's denied verification probe as a `permission_denied`
+// event (step `review:<reviewer>`) via the Python journal.append, run through the io() runHelper seam so
+// the SAME call works under node (fs-backed defaultIo) and under the Workflow bundle (leaf-bash io from
+// the preamble) — never a bare node child-process/process reference, which the bundle guard bans. Best-effort
+// + fail-open: fired-and-not-awaited from the synchronous ensureReviewerShape and any error is swallowed,
+// so a recording failure NEVER derails the review (the low-confidence degradation is what protects the
+// gate; this journal entry is the readout's UFR-3 disclosure). Injectable so the smoke harness observes
+// it without shelling Python.
+function _defaultDenialRecorder(reviewer, eventsPath) {
+  if (!eventsPath) return
+  // Put the plugin lib dir on sys.path so `import journal` resolves regardless of the helper's cwd.
+  // Helpers run from the repo/worktree root (the sanctioned runHelper contract), and the dir comes
+  // from lib_root.pyLibDir() (#170) — never a hand-typed path; no __dirname (absent in the bundle sandbox).
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import journal; ` +
+    'journal.append(sys.argv[1], "permission_denied", step=("review:" + sys.argv[2]), ' +
+    'detail={"probe": "denied", "reviewer": sys.argv[2]})'
+  try {
+    const p = io().runHelper('python3', ['-c', script, String(eventsPath), String(reviewer || 'reviewer')])
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a journal write derail the review (UFR-2) */ }
+}
+// A mutable holder so the recorder is overridable (the smoke harness swaps in an observer) — a plain
+// `let` exported by value would be a copy the caller could not rebind.
+const _denialSeam = { record: _defaultDenialRecorder }
+
+// Task 12 (FR-8, UFR-9 wiring): the spine's two permission_rules seams, run through the SAME io()
+// runHelper Python shim the denial recorder uses (works under node's fs-backed defaultIo AND under the
+// Workflow bundle's leaf-bash io — never a bare child_process/process reference the bundle guard bans).
+// The byte-exact hashing lives in Python (permission_rules._hash), so the JS side NEVER re-implements
+// it — it shells freeze_run_rules / record_composed so a recorded command's hash byte-equals evaluate()'s
+// composed-exact check. Both are best-effort + fail-open (UFR-2): a freeze/record error is swallowed and
+// the run proceeds (the allowance simply won't fire for that command → the existing prompt path).
+//
+// The lib dir goes on sys.path via lib_root.pyLibDir() (#170), the same seam the denial recorder uses
+// (helpers run from the repo/worktree root — the sanctioned runHelper contract; no __dirname in the
+// bundle sandbox).
+function _permHelper(call, args) {
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import permission_rules; ` +
+    call
+  try {
+    const p = io().runHelper('python3', ['-c', script].concat(args.map(String)))
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a permission-store write derail the run (UFR-2) */ }
+}
+// freeze_run_rules(run_id, cwd): snapshot the current provenance-valid rules for THIS run (a mid-run
+// edit is invisible to a run that already froze — UFR-9) + init the empty composed set + lazy-reap.
+function _defaultFreezeRunRules(runId, cwd, workItem) {
+  if (runId == null) return   // no active run -> nothing to freeze (FR-3: allowance inert)
+  // work_item namespaces the per-run frozen file (a lease generation is per-work-item, so two
+  // concurrent same-project runs would otherwise collide on runs/<gen>.json — UFR-9/FR-8).
+  _permHelper('permission_rules.freeze_run_rules(sys.argv[1], sys.argv[2], work_item=(sys.argv[3] or None))',
+    [runId, cwd || procCwd(), workItem || ''])
+}
+// record_composed(run_id, command): register a spine-composed leaf command in this run's frozen file so
+// evaluate() allows the leaf to run it byte-for-byte (FR-8), and only within the run that composed it.
+function _defaultRecordComposed(runId, command, workItem) {
+  if (runId == null || typeof command !== 'string' || !command) return
+  _permHelper('permission_rules.record_composed(sys.argv[1], sys.argv[2], sys.argv[3], work_item=(sys.argv[4] or None))',
+    [runId, command, procCwd(), workItem || ''])
+}
+// Mutable holders so both seams are overridable (the smoke harness swaps in observers).
+const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
+
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -6450,6 +6844,18 @@ function ensureReviewerShape(out, opts = {}) {
   out = Object.assign({}, out, { findings: normalizeReviewerFindings(out.findings) })
   if (out.confidence !== 'high' && out.confidence !== 'low') {
     out = Object.assign({}, out, { confidence: 'high' })
+  }
+  // FR-2: a reviewer whose verification probe was DENIED (the 15-min timeout fired on its improvised
+  // probe, recorded as a permission_denied for this reviewer) did NOT actually verify its dimension.
+  // Force confidence:low + receiptMissing so the existing deep-retry / degraded-dimension path (in
+  // review_panel_shell.dispatchReviewer) treats it exactly like an unverified reviewer — one deep retry,
+  // then a degraded (never re-cycled) dimension on the loop's existing single-retry ceiling. Record the
+  // denial to the journal (UFR-3 disclosure). This must precede the receipt-missing branch below so a
+  // denied probe never masquerades as a receipt-bearing high-confidence pass.
+  if (out.permissionDenied) {
+    _denialSeam.record(opts.reviewer, opts.eventsPath)
+    out = Object.assign({}, out, { confidence: 'low', receiptMissing: true, permissionDenied: true })
+    return _withRealUsage(out)
   }
   if (out.confidence === 'high' && !out.verificationReceipt) {
     if (opts.external) {
@@ -6476,6 +6882,31 @@ function ensureReviewerShape(out, opts = {}) {
 function reviewCodeLeaves(tiers, opts) {
   opts = opts || {}
   const withModel = (model, opts) => (model ? Object.assign({ model }, opts) : opts)
+  // Overlay the FROZEN per-run model pin (readout gate) over the disk-resolved cfg.tiers value.
+  // `tiers` comes from review_code_config.py (model_tier_overrides.load_overrides read fresh off the
+  // DISK profile) and CANNOT see globalThis.__SR_OVERRIDES — so a per-run model override the owner
+  // accepted at the readout (persisted into __SR_OVERRIDES by mergeFrozenSnapshot) never reached this
+  // dispatch (ENGINE/EFFORT do, via resolveEngine/resolveEffort; MODEL rode cfg.tiers). This mirrors
+  // build_phase's in-build review roles, which already resolve through resolveModel(role,_overrides()).
+  //
+  // The cfg.tiers-key -> model_tier-role map is the module-scope _TIER_ROLE (SSOT-drift-guarded). A
+  // frozen pin for the role WINS; with no pin the exact cfg.tiers value flows through (byte-identical
+  // no-op — the backward-compat invariant). Keyed by cfg.tiers key so callers keep reading tiers.<key>.
+  const pinnedTier = (tierKey) => {
+    const base = tiers[tierKey]
+    const m = _TIER_ROLE[tierKey]
+    if (!m) return base
+    const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+    // Only an OWN per-run pin for this exact role overrides the disk-resolved value; otherwise the
+    // cfg.tiers value flows through unchanged (resolveModel's own-default would be the twin's
+    // DEFAULT_TIERS, which can differ from a project's disk-profile tier — so we fall through to
+    // `base`, never to resolveModel's default, when there is no pin).
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)
+        && Object.prototype.hasOwnProperty.call(overrides, m.role)) {
+      return modelTierTwin.resolveModel(m.role, overrides, m.context)
+    }
+    return base
+  }
   const target = opts.target || {}
   const targetSuffix = target.worktree || target.head
     ? `\n\nTarget worktree: ${target.worktree || procCwd()}\nExpected head: ${target.head || 'current HEAD'}`
@@ -6483,7 +6914,7 @@ function reviewCodeLeaves(tiers, opts) {
 
   const reviewerAgent = async (reviewer, context, rubric, runDir, round, opts = {}) => {
     const tier = opts.tier || 'reviewer-deep'
-    const model = tier === 'reviewer' ? tiers.reviewer : tiers.reviewerDeep
+    const model = tier === 'reviewer' ? pinnedTier('reviewer') : pinnedTier('reviewerDeep')
     const workItem = (context && context.workItem) || context
     const promptContext = Object.assign({}, context || {}, {
       roundKind: opts.roundKind,
@@ -6493,7 +6924,12 @@ function reviewCodeLeaves(tiers, opts) {
     })
     const prompt =
       `You are the ${reviewer}. Review the built change for work-item ${workItem} against the ` +
-      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+      `${rubric} rubric. ${REVIEW_CODE_DIFF_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION} ${PROBE_STEERING} ${TIMEOUT_PROCEED_CONTRACT} ${REVIEWER_DENIAL_FLAG}${reviewerRetryCorrection(opts.retryReason)}${targetSuffix}\n\nPrompt context: ${JSON.stringify(promptContext)}`
+    // Task 10 (FR-2): thread the reviewer identity + the run's journal path so ensureReviewerShape can
+    // tag a denied-probe permission_denied event to `review:<reviewer>`. eventsPath rides context when
+    // the caller supplies it; absent, the denial degrades the dimension (low confidence) without a
+    // journal line — the gate protection is intact either way (fail-open, UFR-2).
+    const shapeExtra = { reviewer, eventsPath: (context && context.eventsPath) || undefined }
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     // FR-9 (#128): effort follows reviewer persona (security/architecture -> review-deep), not the
     // scheduler's model tier — a dimension scheduled deep for code/test/premortem still dispatches
@@ -6509,16 +6945,16 @@ function reviewCodeLeaves(tiers, opts) {
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
-          Object.assign({}, opts, { round, external: true, externalEngine: rEngine }))
+          Object.assign({}, opts, shapeExtra, { round, external: true, externalEngine: rEngine }))
         if (shaped) return shaped
       }
       const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
       if (!out || !Array.isArray(out.findings)) return null
-      return ensureReviewerShape(out, Object.assign({}, opts, { round }))
+      return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
     }
     const out = await agent(prompt, withModel(model, { label: `${reviewer}:r${round}`, schema: FINDINGS_SCHEMA }))
     if (!out || !Array.isArray(out.findings)) return null
-    return ensureReviewerShape(out, Object.assign({}, opts, { round }))
+    return ensureReviewerShape(out, Object.assign({}, opts, shapeExtra, { round }))
   }
 
   // Synthesis stays LOOP-OWNED (native Claude, tiers.synthesis) — never engine-routed. It is the
@@ -6540,7 +6976,7 @@ function reviewCodeLeaves(tiers, opts) {
       `showrunner/session cwd as the reality anchor.\n\n` +
       `Prompt context: ${JSON.stringify(promptContext)}\n\n` +
       `Merged findings:\n${JSON.stringify(merged)}`,
-      withModel(tiers.synthesis, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
+      withModel(pinnedTier('synthesis'), { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
     return out || null
   }
 
@@ -6557,10 +6993,10 @@ function reviewCodeLeaves(tiers, opts) {
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
-      const out = await agent(prompt, withModel(tiers.fixer, { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+      const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
       return normalizeFixResult(out, fixContext)
     }
-    const out = await agent(prompt, withModel(tiers.fixer, { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
+    const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
     return normalizeFixResult(out, fixContext)
   }
 
@@ -6603,6 +7039,32 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 }
 
 module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
+module.exports.ensureReviewerShape = ensureReviewerShape
+// Task 11: export the reviewer-leaf factory + the two shared contract blocks (single source of truth
+// for the FR-4 probe steering and the 15-min proceed contract; build_phase.js reuses the latter so the
+// builder leaf and reviewer leaf agree byte-for-byte on the timeout instruction).
+module.exports.reviewCodeLeaves = reviewCodeLeaves
+module.exports.PROBE_STEERING = PROBE_STEERING
+module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
+module.exports.REVIEWER_DENIAL_FLAG = REVIEWER_DENIAL_FLAG
+// Task 10 seam: the denial recorder is overridable for the smoke harness. Read/write it through the
+// mutable holder so an assignment (`sr._denialRecorder = fn`) actually rebinds what ensureReviewerShape
+// calls.
+Object.defineProperty(module.exports, '_denialRecorder', {
+  get() { return _denialSeam.record },
+  set(fn) { _denialSeam.record = fn },
+})
+// Task 12 seams: overridable through mutable holders so an assignment (`sr._freezeRunRules = fn`,
+// `sr._recordComposed = fn`) rebinds what showrunner()/build_phase call. build_phase.js reaches
+// _recordComposed through this export (lazy require) so the smoke's override is honored there too.
+Object.defineProperty(module.exports, '_freezeRunRules', {
+  get() { return _permissionSeam.freeze },
+  set(fn) { _permissionSeam.freeze = fn },
+})
+Object.defineProperty(module.exports, '_recordComposed', {
+  get() { return _permissionSeam.recordComposed },
+  set(fn) { _permissionSeam.recordComposed = fn },
+})
 
 // The plan/tasks doc-review panel (the five reviewers, unchanged by #34 — spec Assumptions).
 const DOC_REVIEWERS = ['architecture-reviewer', 'code-reviewer', 'security-reviewer',
@@ -7770,6 +8232,16 @@ async function showrunner({ workItem }) {
     await releaseLease(workItem, r.generation, r.root)
     return { outcome: 'parked', phase: 'reconcile', reason: r.reason || r.action }
   }
+  // Task 12 (FR-8, UFR-9): the moment the run's lease generation (the run_id) is known — reconcile
+  // has acquired/reconciled it — freeze the current provenance-valid rules ONCE for THIS run and init
+  // its empty composed-command set. A mid-run edit to rules.json is thereafter invisible to this run
+  // (UFR-9); the freeze also lazily reaps stale sibling run files. Fail-open (UFR-2): a freeze error
+  // is swallowed inside the seam and the run proceeds (allowance simply won't fire → prompt path).
+  // Grouped under its OWN 'permission-freeze' progress phase (NOT 'startup') so it never inflates
+  // the deliberately-two-leaf startup stretch (#118 budget): a single run-start bookkeeping leaf.
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
+  _permissionSeam.freeze(r.generation, procCwd(), workItem)
+  if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
   // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)
   // and the launch-declared route; on the quick route it either hands back the tasks gate to check or
@@ -7793,9 +8265,9 @@ async function showrunner({ workItem }) {
     return { outcome: 'parked', phase: 'startup', reason: startup.reason }
   }
   const _ovMap = (startupFacts && startupFacts.model_overrides) || {}
-  if (typeof globalThis !== 'undefined') {
-    globalThis.__SR_OVERRIDES = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
-  }
+  // Config-derived model-tier map (the resolve-live baseline). The frozen-snapshot fork below
+  // (FR-8) merges the frozen pins over this before it is planted on globalThis.
+  const _ovConfig = (_ovMap && typeof _ovMap === 'object' && !Array.isArray(_ovMap)) ? _ovMap : {}
   // Plant the startup-resolved, storage-mode-aware docs dir for docDirFor (docPathFor /
   // notifyLedgerFor). Best-effort: an absent/empty doc_dir (resolution failed, or an older canned
   // response) plants nothing and the legacy in-repo fallback stays in force.
@@ -7822,7 +8294,34 @@ async function showrunner({ workItem }) {
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
   }
-  if (typeof globalThis !== 'undefined') globalThis.__SR_ENGINE_PREFS = _epMap
+  // FR-8 / UFR-2 (second clause): the pin-or-resolve fork. The frozen preflight-readout snapshot for
+  // this work-item (read off the control-plane store on the SAME startup gather — no new leaf) pins
+  // each role's confirmed engine/model/effort; mergeFrozenSnapshot folds those pins over the
+  // config-derived maps (a pinned role wins; an unpinned role keeps the resolve-live value). When no
+  // snapshot is present (the rollback state), the merge returns the config-derived maps unchanged, so
+  // the seed is byte-equivalent to pre-readout. Both globals are planted from the merged result.
+  const _frozenSnapshot = _coerceObj((startupFacts && startupFacts.frozen_snapshot) || null)
+  const _merged = mergeFrozenSnapshot(
+    (_frozenSnapshot && typeof _frozenSnapshot === 'object' && !Array.isArray(_frozenSnapshot)) ? _frozenSnapshot : null,
+    _ovConfig, _epMap)
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_OVERRIDES = _merged.overrides
+    globalThis.__SR_ENGINE_PREFS = _merged.enginePrefs
+  }
+  // D (detectability): fail-open never blocks the run, but a silent revert to live config must be
+  // LOUD. A frozenSnapshot record was on disk (run_overrides_present, from the same run_overrides.read)
+  // yet no pin reached dispatch — the snapshot was dropped in transit (courier lost frozen_snapshot),
+  // version-gated stale (B), or every row was skipped by the merge exclusions/validation (C). Narrate
+  // it on the existing log() channel so the run isn't silently dispatching on live config unnoticed.
+  if ((startupFacts && startupFacts.run_overrides_present) && (!_merged || !_merged.pinnedCount)) {
+    const _why = (_merged && _merged.reason) ? _merged.reason
+      : (_frozenSnapshot ? 'no pins produced' : 'frozen_snapshot dropped in transit')
+    try {
+      if (typeof log === 'function') {
+        log(`frozen readout snapshot present but NOT applied — dispatching on live config (${_why})`)
+      }
+    } catch (_) { /* logging must never break the run */ }
+  }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
   // #25: a FRESH quick run starts at `workhorse` (plan/review-plan/tasks/review-tasks skipped — the
@@ -7952,27 +8451,198 @@ function startupStateScript() {
     '        engine_prefs = _ep_degenerate',
     'except Exception:',
     '    engine_prefs = _ep_degenerate',
-    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate}))',
+    // FR-8: the frozen preflight-readout snapshot rides the SAME startup gather (no new startup leaf
+    // — respect the #118 two-leaf budget). run_overrides.read is itself fail-open; any failure here
+    // degrades to no-snapshot, so the run resolves live exactly as it does pre-readout (the rollback
+    // state). Only frozen_snapshot is consumed (mergeFrozenSnapshot folds ALL its concrete rows over
+    // the config-derived maps); the record's separate `overrides` field is NOT read here — the
+    // snapshot's per-row `overridden` values already ride the frozen rows, so a second copy would be
+    // a producer without a consumer.
+    'frozen_snapshot = None',
+    // D (detectability): a cheap on-disk-presence flag derived from the SAME run_overrides.read. It is
+    // true whenever a frozenSnapshot record existed on disk, INDEPENDENT of whether the snapshot itself
+    // survives the courier hop into frozen_snapshot. So if a courier answer drops `frozen_snapshot`
+    // (keeping the required fields), this flag still reports the record was there — letting the JS side
+    // log a loud no-apply line rather than silently reverting the run to live config.
+    'run_overrides_present = False',
+    'try:',
+    '    import run_overrides',
+    '    _rec = run_overrides.read(wi, root)',
+    '    if isinstance(_rec, dict):',
+    '        frozen_snapshot = _rec.get("frozenSnapshot")',
+    '        run_overrides_present = _rec.get("frozenSnapshot") is not None',
+    'except Exception:',
+    '    frozen_snapshot = None',
+    'print(json.dumps({"ok": True, "spec_gate": spec_gate, "model_overrides": overrides, "doc_dir": doc_dir, "engine_prefs": engine_prefs, "spec_present": spec_present, "tasks_present": tasks_present, "tasks_gate": tasks_gate, "frozen_snapshot": frozen_snapshot, "run_overrides_present": run_overrides_present}))',
   ].join('\n')
 }
 
 async function readStartupState(workItem) {
   const script = startupStateScript()
+  const cmd = `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`
+  // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed resolution), so an
+  // absent field means a mangled courier response — retry rather than silently planting nothing (which
+  // would mis-route the NOTIFY ledger + review doc paths to the in-repo fallback on an
+  // out-of-repo-calibrated project mid-run). engine_prefs is NOT required: an older canned response
+  // without it degrades to the safe both-'claude' default (the same fail-open engine_pref_load.py had).
+  // run_overrides_present IS required: the Python gather now emits it UNCONDITIONALLY (false when no
+  // frozenSnapshot record was on disk). It is the detectability flag the no-apply narrator (D) reads —
+  // a courier answer that drops BOTH frozen_snapshot AND this flag would otherwise read as "no freeze
+  // on disk" and silently revert a frozen run to live config with no loud line. Requiring it forces a
+  // retry on such a mangled answer instead of a silent freeze-drop.
+  const opts = { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir', 'run_overrides_present'] }
   try {
-    return await courier.runCourierJson(
-      'read startup state',
-      `python3 -c ${shq(script)} ${shq(workItem)} "$(git rev-parse --show-toplevel)"`,
-      // doc_dir is REQUIRED: the Python side always emits it (empty string on a failed
-      // resolution), so an absent field means a mangled courier response — retry rather than
-      // silently planting nothing (which would mis-route the NOTIFY ledger + review doc paths
-      // to the in-repo fallback on an out-of-repo-calibrated project mid-run).
-      // engine_prefs is NOT required: an older canned response without it degrades to the safe
-      // both-'claude' default (the same fail-open engine_pref_load.py had), never a retry.
-      { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] },
-    )
+    // #281: PROOF OF EXECUTION. This gather was answered WITHOUT executing in a live run (park
+    // wf_ac2f134f: 4 transcript events, ZERO tool calls) — a courier mentally simulated the embedded
+    // Python and fabricated a well-formed payload: a poisoned spec_gate:'unreadable' (the script's
+    // init-default, only reachable via a read exception) AND a rewritten engine_prefs claude/claude
+    // when the store's real pref was implementation:cursor. runCourierMarkedJson requires the
+    // __SR_EXIT execution marker (appended by the shell AFTER the script prints the WHOLE payload), so
+    // a did-not-run answer has no real marker → retried (2×3) → fails closed. This is the #218/#232
+    // marker protocol extended from the libRoot probes to the startup gather, and it certifies EVERY
+    // field the gather returns (incl. engine_prefs — which, unlike the gate, has no
+    // impossible-combination signature a semantic tripwire could ever catch).
+    let res = await courier.runCourierMarkedJson('read startup state', cmd, opts)
+    // #281 semantic tripwire (a cheap adjunct the marker can't give, NOT the load-bearing fix):
+    // spec_present && spec_gate=='unreadable' is only reachable via a real read exception on a PRESENT
+    // spec — the exact fabrication tell from the live park. Retry ONCE (same marker protocol); a
+    // genuine read exception reproduces (the twin then parks honestly on it), a stochastic parrot
+    // usually self-corrects to the real gate on the re-dispatch. The first answer is ALREADY
+    // marker-certified (it executed), so scope the retry in its OWN try/catch: if the retry itself
+    // transport-fails, KEEP the certified first answer (its real doc_dir/engine_prefs) instead of
+    // letting the throw reach the outer catch and reset to the degenerate fallback — a genuine
+    // present-but-unparseable spec legitimately carries this combo WITH real prefs (#281 review).
+    if (res && res.spec_present === true && res.spec_gate === 'unreadable') {
+      try {
+        const retry = await courier.runCourierMarkedJson('read startup state', cmd, opts)
+        if (retry) res = retry
+      } catch (_) { /* retry transport-failed: keep the already-certified first answer */ }
+    }
+    return res
   } catch (_) {
     return { ok: true, spec_gate: 'unreadable', model_overrides: {}, doc_dir: '', engine_prefs: null }
   }
+}
+
+// Pure freeze fork (FR-8). Fold the frozen preflight-readout snapshot's per-role dispatch values
+// over the config-derived model-tier + engine-pref maps so the run dispatches with the EXACT
+// settings the confirmed readout displayed — a snapshot frozen at confirmation, regardless of any
+// config edit made in the confirm window (FR-8 acceptance bullet 2). Every row that displayed a
+// concrete, recognized value is pinned — NOT only rows the owner overrode; a merely-rendered row's
+// displayed value is just as much part of the frozen render, and pinning it is what keeps a later
+// config edit from leaking into dispatch. Behavior-preserving when no snapshot is present: the
+// config-derived maps are returned unchanged (the rollback state), so the seed is byte-equivalent
+// to pre-readout — mergeFrozenSnapshot(null, …) and an empty snapshot both pass config through live.
+//
+// The frozen snapshot rows carry preflight_readout's row shape ({phase, role, roleLabel, engine,
+// model, effort, kind, …flags}). Exclusions — each row NOT pinned, and why:
+//   - kind 'orchestration' (role 'orchestrator'): session-inherited by design (FR-3); never pinned
+//     so the run inherits the live session model at dispatch.
+//   - kind 'none' (draft-PR / mark-ready): a deterministic spine step that dispatches no agent —
+//     nothing to pin.
+//   - a row flagged `unavailable`: no snapshot value existed (a per-field read degraded, UFR-2);
+//     FR-8 says the run resolves that phase normally at dispatch, so leave it live (no pin).
+//   - a row flagged `unrecognized` (UFR-5): the owner asked for a raw, unvalidated engine value;
+//     pinning it into the dispatch resolvers is riskier than resolving live (a bad value could
+//     mis-route), and the dispatch outcome is identical unless config changed — which the owner was
+//     already warned about via the `unrecognized` flag. So leave it live rather than freeze a raw value.
+//   - a row flagged `fallbackToClaude` (FR-4): the readout showed the unauthorized target engine but
+//     dispatch falls back to Claude. Pin the EFFECTIVE dispatch values (engine 'claude' + the row's
+//     resolved model), never the unauthorized target — freezing the target would re-route to it.
+const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'implementation',
+  'author-plan': 'planAuthor' }
+// The snapshot-format version this consumer understands. preflight_readout.py is the ONLY writer of
+// frozenSnapshots and stamps its READOUT_VERSION onto each (assemble's `version` field). A snapshot
+// whose `version` !== this is from an incompatible commit — its rows predate the current merge
+// exclusions/validation, so re-interpreting them could pin values this consumer would now refuse.
+// mergeFrozenSnapshot ignores such a snapshot entirely (falls through to live config, the documented
+// rollback state). This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
+// smoke asserts it equals preflight_readout.READOUT_VERSION via a `python3 -c` dump (roster-parity
+// pattern), so a Python-side bump that isn't mirrored here fails CI rather than silently ungating.
+const READOUT_VERSION = 2
+function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
+  const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
+    ? Object.assign({}, baseOverrides) : {}
+  const src = (baseEnginePrefs && typeof baseEnginePrefs === 'object' && !Array.isArray(baseEnginePrefs))
+    ? baseEnginePrefs : {}
+  const enginePrefs = Object.assign({}, src)
+  enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
+    ? Object.assign({}, src.effort) : {}
+  // Track how many pins we actually plant + why we might plant none, so the caller can log a loud
+  // no-apply narrator line (D) when a snapshot WAS present on disk but nothing survived to dispatch.
+  let pinnedCount = 0
+  let reason = null
+  // Migration gate (B): a frozenSnapshot persisted by an incompatible commit carries a different
+  // `version`. Its rows predate the current exclusions/validation, so re-interpreting them could pin
+  // values this consumer would now refuse. Ignore the whole snapshot and fall through to live config
+  // (the documented rollback state). A snapshot with no `version` at all is treated the same (stale).
+  if (frozen && typeof frozen === 'object' && !Array.isArray(frozen)
+      && frozen.version !== READOUT_VERSION) {
+    return { overrides, enginePrefs, pinnedCount: 0,
+      reason: `snapshot version ${JSON.stringify(frozen.version)} != expected ${READOUT_VERSION} (stale — ignored)` }
+  }
+  const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    // --- Exclusions: rows that must NOT freeze a snapshot value (each keeps the resolve-live path) ---
+    // Orchestration is session-inherited by design (FR-3) — never pin, or the run would freeze a
+    // stale session model instead of inheriting the live one at dispatch.
+    if (row.kind === 'orchestration') continue
+    // No-agent spine steps (draft-PR / mark-ready) dispatch nothing — no value to pin.
+    if (row.kind === 'none') continue
+    // UFR-2/FR-8: `unavailable` means no snapshot value was captured (a per-field read degraded);
+    // the run resolves that phase normally at dispatch, so leave it live.
+    if (row.unavailable) continue
+    // UFR-5: an `unrecognized` engine is a raw, unvalidated value. Pinning it into the dispatch
+    // resolvers is riskier than live resolution — a raw value could mis-route — and the dispatch
+    // outcome is identical unless config changed, which the owner was already warned about via the
+    // `unrecognized` flag. So leave it live rather than freeze the raw value.
+    if (row.unrecognized) continue
+
+    const role = row.role
+    // FR-4: a `fallbackToClaude` row displayed the unauthorized target engine but dispatches on
+    // Claude. Freeze the EFFECTIVE dispatch (engine 'claude' + the row's resolved model), never the
+    // target engine — pinning the target would route the frozen run straight to the unauthorized one.
+    const effectiveEngine = row.fallbackToClaude ? 'claude'
+      : (typeof row.engine === 'string' && row.engine.trim() ? row.engine : null)
+
+    // Pin the model onto the model-tier override map (resolveModel reads __SR_OVERRIDES[role]).
+    // Set validation (C): pin a model ONLY if it is in the model twin's accepted set — matching the
+    // producer's refusal posture (a value outside KNOWN_MODELS is never a real dispatch target). On a
+    // miss, skip the pin and resolve that role live rather than freeze a bad value into the resolver.
+    if (typeof role === 'string' && typeof row.model === 'string' && row.model.trim()
+        && modelTierTwin.KNOWN_MODELS.indexOf(row.model.trim()) !== -1) {
+      overrides[role] = row.model.trim()
+      pinnedCount++
+    }
+    // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
+    // The pref map is keyed by role_kind, so normalize review-deep -> review for the engine key.
+    const kind = row.kind === 'review-deep' ? 'review'
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+    const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
+      ? _ENGINE_ROLE_KIND[kind] : null
+    // Set validation (C): pin an engine ONLY if it is in the known ENGINES set (the producer's domain).
+    // The effective 'claude' fallback is always in-set; a raw/unknown engine that reached here (e.g. a
+    // non-fallback row carrying a mistyped engine) is skipped so the role resolves its engine live.
+    if (epKey && effectiveEngine && enginePrefTwin.ENGINES.indexOf(effectiveEngine) !== -1) {
+      enginePrefs[epKey] = effectiveEngine
+      pinnedCount++
+    }
+    // Pin the effort onto the effort sub-map (resolveEffort reads __SR_ENGINE_PREFS.effort[role_kind]).
+    // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name. A
+    // Claude fallback has null effort (resolveEffort returns null for claude), so a fallback row that
+    // still carries the target engine's effort must not pin it — only pin effort for a non-fallback row.
+    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()) {
+      const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
+      enginePrefs.effort[effortKind] = row.effort
+      pinnedCount++
+    }
+  }
+  // A snapshot present but pinning nothing (all rows excluded/skipped by C) — record why for D's log.
+  if ((frozen && Array.isArray(frozen.phases) && frozen.phases.length) && pinnedCount === 0) {
+    reason = 'snapshot present but no row produced a pin (all excluded or values not recognized)'
+  }
+  return { overrides, enginePrefs, pinnedCount, reason }
 }
 
 async function readDefinitionDraft(workItem, doc) {
@@ -8210,7 +8880,10 @@ function testPilotDeps(workItem, generation) {
       `Fix the app bugs found by native test-pilot for work-item ${workItem}. Commit fixes locally. ` +
       `Return ONLY JSON {"ok":true,"commitShas":["..."],"changedFiles":["..."],"head":"..."}. ` +
       `Failures: ${JSON.stringify(failures)} Details: ${JSON.stringify(details)}`,
-      { label: 'fix-app-bug', schema: { type: 'object' } }),
+      // #275: type `ok` boolean so a stringy 'false' refusal is retried at the source (its consumer
+      // gates on ok, test_pilot_phase.js) and `commitShas` array so a stringified list can't slip past
+      // normalizeShas (which returns [] for a non-array, silently losing the shas → false progress).
+      { label: 'fix-app-bug', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' }, commitShas: { type: 'array' } } } }),
 
     reviewCode: (wi, opts) => reviewCodePhase(wi, Object.assign({}, opts, {
       runDir: opts.runDir || `/tmp/showrunner-${wi}-review-code-${safeRunKey(opts.runDirSuffix || `${opts.cycle || 1}-${opts.expectedHead || 'head'}`)}`,
@@ -8410,6 +9083,12 @@ async function reviewCodePhase(workItem, opts) {
   let resolvedConfig = null
   let cwdHeadBefore = null
   let resolvedViaGather = false
+  // Task 10 (FR-2/UFR-3): the run's events.jsonl path, threaded through context so a denied reviewer
+  // probe's permission_denied event lands in the SAME journal the readout later reads (UFR-3
+  // disclosure). opts.eventsPath lets a caller/smoke override it directly; otherwise it rides the
+  // resolver's gather below. Absent -> the denial still degrades the dimension, just without a
+  // journal line (fail-open, UFR-2) — the gate protection never depends on this path resolving.
+  let resolvedEventsPath = opts.eventsPath || null
   if (!opts.worktree) {
     const resolver = opts.resolveTarget || resolveBuildTarget
     const resolved = await resolver(workItem)
@@ -8427,6 +9106,7 @@ async function reviewCodePhase(workItem, opts) {
     resolvedConfig = _coerceObj(resolved.config)
     cwdHeadBefore = resolved.cwdHead || null
     resolvedViaGather = true
+    if (!resolvedEventsPath) resolvedEventsPath = resolved.eventsPath || null
   }
   const initialHead = resolvedHead || null
   // The head re-check only fires when the head was supplied EXTERNALLY (opts.expectedHead —
@@ -8456,7 +9136,7 @@ async function reviewCodePhase(workItem, opts) {
   })
   const verdict = await runReviewCodePanel({
     runDir,
-    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, synthesisVerificationRoot: targetWorktree },
+    context: { workItem, target: { worktree: resolvedWorktree, head: resolvedHead }, coverageDecisionPath, eventsPath: resolvedEventsPath, synthesisVerificationRoot: targetWorktree },
     rubric: 'review-base',
     verifyCommand: (cfg && cfg.verifyCommand) || 'none', leaves, worktree: targetWorktree,
     preloaded: setup || undefined,
@@ -8587,7 +9267,7 @@ const buildPhase = (workItem, generation) => require('./build_phase.js').buildPh
 // Returns {worktree, expectedHead, config, cwdHead} or null on any failure (caller parks on null).
 async function resolveBuildTarget(workItem) {
   const script = [
-    'import json, subprocess, sys',
+    'import json, os, subprocess, sys',
     'wi = sys.argv[1]',
     'setup = None',
     'for _ in range(2):',
@@ -8627,7 +9307,18 @@ async function resolveBuildTarget(workItem) {
     '        cwd_head = r.stdout.strip()',
     'except Exception:',
     '    cwd_head = None',
-    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head}))',
+    // Task 10 (FR-2/UFR-3) wiring: this leaf already resolves the work item, so it is the cheapest
+    // place to also resolve the run's events.jsonl path (control_plane.paths keys off cwd + work-item —
+    // no separate leaf). Best-effort: an events-path resolution failure must not fail the whole gather
+    // (the reviewer denial flag still degrades the dimension even with no journal line — fail-open).
+    'events_path = None',
+    'try:',
+    `    sys.path.insert(0, ${pyLibDir()})`,
+    '    import control_plane',
+    '    events_path = control_plane.paths(os.getcwd(), wi)["events"]',
+    'except Exception:',
+    '    events_path = None',
+    'print(json.dumps({"ok": True, "worktree": wt, "expectedHead": head, "config": cfg, "cwdHead": cwd_head, "eventsPath": events_path}))',
   ].join('\n')
   let setup = null
   try {
@@ -8645,6 +9336,7 @@ async function resolveBuildTarget(workItem) {
     expectedHead: setup.expectedHead,
     config: setup.config != null ? setup.config : null,
     cwdHead: setup.cwdHead || null,
+    eventsPath: setup.eventsPath || null,
   }
 }
 
@@ -8736,7 +9428,7 @@ async function proposeDodDispositions(workItem, prNumber) {
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
       `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
       `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'] } })
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } })
     // Boundary coercion (#115 class, observed live in run wf_a9654118: the leaf returned
     // ok:'true' and rows as a JSON STRING). ok must compare against the string form too —
     // 'false' is truthy, so a plain truthiness check would read a refusal as consent.
@@ -9111,6 +9803,9 @@ module.exports.persistPhase = persistPhase
 module.exports.phaseCostPayload = phaseCostPayload
 module.exports.readStartupState = readStartupState
 module.exports.startupStateScript = startupStateScript
+module.exports.mergeFrozenSnapshot = mergeFrozenSnapshot
+module.exports.READOUT_VERSION = READOUT_VERSION
+module.exports._TIER_ROLE = _TIER_ROLE
 module.exports.readDefinitionDraft = readDefinitionDraft
 module.exports.cheapestModel = cheapestModel
 module.exports.selfContained = selfContained

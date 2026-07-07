@@ -127,6 +127,51 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
     assert not missing, "missing bounded-read dispatch guidance:\n" + "\n".join(missing)
 
 
+def test_showrunner_step_1_5_preflight_readout_confirm_override_loop():
+    """Task 11: the showrunner SKILL gains a step 1.5 (the one interactive confirm/override/decline
+    surface) between the pre-flight gate (step 1) and the bundle launch (step 2). Assert its shape
+    structurally: it lives between the gate and the launch, shells the three preflight_readout CLI
+    verbs + run_overrides.write, names all three owner choices, and states the FR-1 no-dispatch-
+    before-confirm + UFR-1 decline-is-side-effect-free + UFR-3 fail-closed guarantees."""
+    text = _read_repo("plugins/superheroes/skills/showrunner/SKILL.md")
+
+    # The step exists and is numbered 1.5.
+    assert "1.5" in text, "no step 1.5 heading in the showrunner SKILL"
+
+    # It sits AFTER the pre-flight gate (preflight.py) and BEFORE the bundle launch (Workflow tool
+    # on showrunner.bundle.js) — the readout slots between step 1 and step 2.
+    gate = text.index("preflight.py")
+    step_1_5 = text.index("1.5")
+    launch = text.index("showrunner.bundle.js")
+    assert gate < step_1_5 < launch, "step 1.5 must sit between the pre-flight gate and the launch"
+
+    section = _section(text, "1.5", "## Resume")
+    low = section.lower()
+
+    # Shells the three verified CLI verbs of the pure core + the durable freeze seam.
+    for needle in ("preflight_readout.py", "assemble", "render",
+                   "validate-override", "run_overrides"):
+        assert needle in section, f"step 1.5 missing shell of {needle}"
+
+    # Names all three owner choices, resolved via the host ask primitive (host-neutral).
+    assert "ask primitive" in low, "step 1.5 must reach the interactive host ask primitive"
+    for choice in ("confirm", "override", "decline"):
+        assert choice in low, f"step 1.5 missing the {choice} branch"
+
+    # FR-1: no agent dispatches before confirm. UFR-1: decline is side-effect-free (no write, no
+    # launch, run not started, no branch/PR). UFR-3: a total-failure assemble is fail-closed (STOP).
+    assert "before this confirm" in low or "no dispatch precedes" in low or "no agent dispatch" in low, \
+        "step 1.5 must state the FR-1 no-dispatch-before-confirm guarantee"
+    assert "no changes" in low or "no side effect" in low or "not marked started" in low, \
+        "step 1.5 must state the UFR-1 side-effect-free decline"
+    assert "stop" in low and ("ok:false" in low or "ok: false" in low or "total-failure" in low), \
+        "step 1.5 must fail closed (STOP) on a total-failure assemble (UFR-3)"
+
+    # FR-14 / FR-4: a stale override and an unauthorized-engine fallback surface as per-row flags.
+    assert "no longer valid" in low, "step 1.5 must reference the FR-14 stale-override row flag"
+    assert "falls back to claude" in low, "step 1.5 must reference the FR-4 fallback row flag"
+
+
 def test_host_maps_document_claude_dispatch_recovery_and_codex_asymmetry():
     claude_needles = (
         "dispatch reliability",

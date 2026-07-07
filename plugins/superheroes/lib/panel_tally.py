@@ -24,6 +24,9 @@ SCHEMA_VERSION = 1
 _ROUND_RE = re.compile(r"^round-(\d+)$")
 _VERIFY_OK = (None, "pass", "skipped")  # None=doc leg; skipped=unverified project; pass=ok
 
+# BLOCKING is the drift-guarded canonical blocking vocabulary (SSOT §11). The blocking PARTITION
+# decision routes through circuit_breaker.is_blocking (#276) — case-normalized + fail-closed — so the
+# panel gate never disagrees with _partition / the breaker on what blocks.
 BLOCKING = ("Critical", "Important")
 SEV_RANK = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
 
@@ -144,7 +147,7 @@ def round_gate(compiled, expected_roster, completed_roster):
     the `missing` (incomplete) reviewers too, so the verdict can NAME the missing review angles
     (FR-5/UFR-2)."""
     incomplete = [r for r in expected_roster if r not in completed_roster]
-    has_blocker = any(f.get("severity") in BLOCKING for f in compiled)
+    has_blocker = any(circuit_breaker.is_blocking(f.get("severity")) for f in compiled)
     if incomplete:
         gate = "cannot-certify"
     elif has_blocker:
@@ -164,7 +167,7 @@ def _current_blocking_findings(results):
         for f in result.get("findings") or []:
             if not isinstance(f, dict) or f.get("carried"):
                 continue
-            if f.get("severity") in BLOCKING:
+            if circuit_breaker.is_blocking(f.get("severity")):
                 out.append(f)
     return out
 
@@ -299,7 +302,7 @@ def present_deferred(compiled, deferred_set):
     present-∩-skip contract: a deferral for a finding no longer re-flagged simply stops counting."""
     n = 0
     for f in compiled:
-        if f.get("severity") not in BLOCKING:
+        if not circuit_breaker.is_blocking(f.get("severity")):
             continue
         deferred_sev = deferred_set.get(_identity(f))
         if deferred_sev is None:
@@ -446,7 +449,7 @@ def tally(run_dir, rnd, roster, max_rounds=7, breaker_halt=False, fix_status="co
         deferred_set = _safe_read_json(deferred_set_path(run_dir), {})
         if not isinstance(deferred_set, dict):
             deferred_set = {}
-        present_blocking = sum(1 for f in compiled if f.get("severity") in BLOCKING)
+        present_blocking = sum(1 for f in compiled if circuit_breaker.is_blocking(f.get("severity")))
         pdef = present_deferred(compiled, deferred_set)
         # Internal circuit breaker (UFR-2): prior rounds from disk + this round's findings,
         # skip-set excluded — computed here (protected) so the breaker decision isn't in the shell.

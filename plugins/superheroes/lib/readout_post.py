@@ -4,7 +4,7 @@ Always record a durable 'parked' event; on a failed PR post, also write the read
 store and surface the failure — never silently drop it (UFR-4)."""
 import argparse, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import control_plane, journal, pr_comment, readout
+import control_plane, journal, pr_comment, readout, run_readout
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--work-item", required=True)
@@ -34,6 +34,13 @@ if a.ctx:
         sys.exit(2)
     ctx.setdefault("root", os.getcwd())
     note = ctx.pop("integration_note", None)
+    # UFR-3 disclosure: enumerate this run's own permission_denied events (a build step or reviewer
+    # probe the 15-min timeout denied) and fold them into the hand-back — a caller-supplied
+    # permissionDenials always wins (explicit test/override input), otherwise read the run's real
+    # journal. Fail-soft (run_readout._permission_denials never raises): an unreadable journal yields
+    # no denials, never breaks the readout.
+    if "permissionDenials" not in ctx:
+        ctx["permissionDenials"] = run_readout._permission_denials({"events_path": paths["events"]})
     body = readout.build_readout(ctx)                # every free-text field scrubbed inside build_readout
     if note:
         body = body + "\n\n> _" + readout.scrub(note, root=os.getcwd())[0] + "_"

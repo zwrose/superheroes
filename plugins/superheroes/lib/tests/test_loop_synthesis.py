@@ -41,6 +41,28 @@ def test_clear_drop_with_reason_is_dropped():
     assert out["drops"][0]["was_blocking_tagged"] is False
 
 
+# #276: was_blocking_tagged and the blocking→non-blocking downgrade flag route through
+# circuit_breaker.is_blocking (fail-closed). These pin that CONSUMER wiring — a revert to the
+# case-sensitive `_BLOCKING`/`_NON_BLOCKING` sets would silently mis-classify a foreign/mis-cased
+# severity, and the canonical-only fixtures would not catch it.
+def test_dropped_foreign_scale_finding_flagged_was_blocking_tagged():
+    f = _f("a.py", "unimplemented", "blocker")   # foreign scale — a real blocker
+    v = {"id": CB.finding_identity(f), "action": "drop", "reason": "leaf says it does not hold"}
+    out = LS.consume([f], [v])
+    # fail-closed: a dropped 'blocker' MUST be surfaced for scrutiny (old `in _BLOCKING` → False → hidden)
+    assert out["drops"][0]["was_blocking_tagged"] is True
+
+
+def test_downgrade_flagged_from_miscased_blocking_severity():
+    f = _f("a.py", "bug", "critical")   # lowercase blocking severity
+    v = {"id": CB.finding_identity(f), "action": "keep", "reason": "really only cosmetic",
+         "severity": "Minor"}
+    out = LS.consume([f], [v])
+    # blocking('critical') → non-blocking('Minor') is a downgrade the readout must surface
+    assert len(out["downgrades"]) == 1
+    assert out["downgrades"][0]["from"] == "critical" and out["downgrades"][0]["to"] == "Minor"
+
+
 def test_clear_drop_can_match_reviewer_short_id():
     f = {"id": "premortem-001", "file": "plugins/superheroes/lib/acceptance_deps.py",
          "line": 12, "title": "Accepts stale dependency state", "severity": "Important"}

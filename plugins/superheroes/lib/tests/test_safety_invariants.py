@@ -1,7 +1,9 @@
 import os
 
 import ci_loop
+import control_plane
 import enforcer
+import permission_rules
 import reset
 
 
@@ -52,6 +54,29 @@ def test_command_path_fails_closed_on_non_string():
     # The command path's fail-closed surface is a non-string command (process-level
     # failure is the hook wrapper's job, §Task 6); a None command must deny.
     assert enforcer.classify_command(None)[0] == "deny"
+
+
+def test_permission_store_never_resolves_inside_the_repo_tree():
+    # Task 15 criterion (c): the permission rules store is an OUT-OF-REPO data store —
+    # it must never resolve to a path under the repo working tree (no committed rule
+    # artifact, no session-local repo write). The store dir is config-keyed under
+    # control_plane.store_root(); with the default root it lands under ~/.claude/superheroes,
+    # never under the repo. A regression that re-rooted the store into the repo (e.g.
+    # defaulting to a repo-relative path) would leak a data artifact and fail here.
+    repo = os.path.realpath(_repo_root())
+    # Resolve against the real default root (no `root=` override), from a cwd inside the repo.
+    store_dir = os.path.realpath(permission_rules._store_dir(repo))
+    assert store_dir.startswith(os.path.realpath(control_plane.store_root())), store_dir
+    # And it is not a descendant of the repo tree.
+    assert os.path.commonpath([store_dir, repo]) != repo, \
+        "permission store must not resolve inside the repo tree (Task 15 criterion c): %s" % store_dir
+
+
+def test_enforcer_selfcheck_passes_with_allowance_layer_present():
+    # Task 15 criterion (a): the enforcer selfcheck still exits 0 (all invariants hold)
+    # with the below-the-floor allowance layer wired in. A broken allowance layer that
+    # widened the owner-role floor, or that raised, would flip selfcheck non-zero.
+    assert enforcer.selfcheck() == 0
 
 
 def test_showrunner_path_is_superpowers_free():

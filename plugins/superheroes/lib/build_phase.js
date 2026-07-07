@@ -15,9 +15,10 @@ const courier = require('./courier_exec.js')
 // deciders with no IO, so a top-level require is safe (no load-time cycle).
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
-// #160: the blocking-severity set (Critical/Important) — the single source of truth the task_review
-// twin's partition also reads. Used to synthesize the per-task review's two verdicts from an external
-// engine's findings-only result (below). Pure module, safe to require at top level (no load-time cycle).
+// #160/#276: circuit_breaker.isBlocking is the single, case-normalized, FAIL-CLOSED blocking predicate
+// the task_review twin's partition also reads. Used here to synthesize the per-task review's two
+// verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
+// final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
@@ -75,20 +76,9 @@ function exec(commands, label) {
 // as-is on the first call — it is NOT a courier-drop, so it is NOT retried.
 // `label` is the cosmetic display purpose (defaults to 'exec'); dumb-pipe routing rides the courier's
 // `courier: true` marker, so a descriptive label never loosens the cheapest-model pinning.
-async function execJson(cmd, label) {
+async function execJson(cmd, label, opts) {
   try {
-    return await courier.runCourierJson(label || 'exec', cmd)
-  } catch (e) {
-    if (e instanceof courier.CourierTransportError) return null
-    throw e
-  }
-}
-
-// Like execJson but for commands whose stdout is a PLAIN STRING (e.g. read-gate prints `passed`).
-// Retry once on an empty stdout; returns the trimmed string, or null after the retry.
-async function execText(cmd, label) {
-  try {
-    return (await courier.runCourierText(label || 'exec', cmd)).trim()
+    return await courier.runCourierJson(label || 'exec', cmd, opts)
   } catch (e) {
     if (e instanceof courier.CourierTransportError) return null
     throw e
@@ -165,15 +155,25 @@ function reconcileState(taskList, state) {
 
 async function buildPhase(workItem, generation) {
   const root = '$(git rev-parse --show-toplevel)'
-  // UFR-1: refuse unless the tasks gate is passed. read-gate prints a PLAIN STRING (e.g. 'passed'),
-  // NOT JSON — execText returns the trimmed raw stdout (no JSON.parse), retrying the courier ONCE on
-  // an empty stdout (a courier-drop) before failing closed. null -> park (fail closed on exec-fail).
-  const gate = await execText(
-    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}"`,
+  // UFR-1: refuse unless the tasks gate is passed. Read via `read-gate --json` ({"review": "..."}
+  // — produced by definition_doc.py; showrunner.js readGate is the other JS consumer of the field)
+  // so a FENCED-but-correct courier answer parses: the plain-string mode byte-compared a fenced
+  // 'passed' and false-parked (run 9, wf_b69571d9). Extraction is STRICT — the whole answer must
+  // BE the JSON, bare or in one fence (extractJsonStrict); the permissive extractJson brace-slice
+  // would let an answer that merely QUOTES {"review":"passed"} in prose OPEN the gate, and this
+  // gate must only ever fail closed. NOTE this is deliberately STRICTER than showrunner.js
+  // readGate's bare JSON.parse-or-'unreadable' (which guards a skip decision, not a build).
+  const gateOut = await execJson(
+    `python3 ${libPath('definition_doc.py')} read-gate --doc tasks --work-item ${shq(workItem)} --root "${root}" --json`,
     'read gate',
+    { extract: 'strict' },
   )
+  if (gateOut == null) return park('could not read the tasks gate — failing closed')
+  const gate = (gateOut && typeof gateOut.review === 'string') ? gateOut.review : null
   if (gate == null) return park('could not read the tasks gate — failing closed')
-  if (gate !== 'passed') return park(`tasks gate not passed (${gate}) — refusing to build (UFR-1)`)
+  // Clamp the untrusted courier-provided value at this sink: the reason flows into journal
+  // entries, readouts, and PR comments downstream.
+  if (gate !== 'passed') return park(`tasks gate not passed (${String(gate).slice(0, 80)}) — refusing to build (UFR-1)`)
   // UFR-2: setup the content-addressed worktree/branch + persist this run's generation.
   const setup = await execJson(
     `python3 ${libPath('build_entry.py')} --work-item ${shq(workItem)} --generation ${shq(String(generation))}`,
@@ -307,7 +307,12 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-    if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
+    // #279: carry the verdict's reason into the park so the owner sees WHY (e.g. the verify error),
+    // not a bare terminal — the sole difference between a real regression and a transient flake.
+    if (fr.terminal !== 'clean') {
+      const detail = fr.reason ? ' (' + fr.reason + ')' : ''
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
       return park('final review coverage stamp failed read-back')
@@ -449,12 +454,31 @@ function _tasksDocPath(workItem) {
   return require('./showrunner.js').docPathFor(workItem, 'tasks')
 }
 
+// #275: the build leaf's structured-output schema. Constrain `ok` to a boolean and `signal` to the
+// three recovery signals so schema-validated output retries a stringy shape AT THE SOURCE — the #219
+// live escape was every build leaf returning `ok` as the string "false"/"true" past an untyped
+// {required:['ok']} schema, and "false" is truthy in JS. `evidence` is left unconstrained (it is not
+// consumed here, and the leaf sometimes emits it as a JSON string — don't force needless retries on it).
+const BUILD_LEAF_SCHEMA = {
+  type: 'object',
+  required: ['ok'],
+  properties: {
+    ok: { type: 'boolean' },
+    // Reference the canonical token (CONVENTIONS §11) rather than re-typing the string —
+    // worker_recovery.js is the home of the plan_wrong signal, already required in this file.
+    signal: { enum: ['ok', 'needs_context', workerRecoveryTwin.PLAN_WRONG] },
+  },
+}
+
 // #222: the per-task build prompt. Carries the ABSOLUTE tasks-doc pointer so the worker implements the
 // task's real definition (not the one-line title) and never sweeps the owner's filesystem hunting for
 // the doc — the out-of-repo-storage blind-build defect where a bare-main build worktree gave the worker
 // nothing to anchor to (which also tripped repeated macOS TCC dialogs, live run 8). `retryNote` is
 // appended ONLY on a re-dispatch so a needs_context retry is genuinely different from the first prompt.
-function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
+// `deniedNote` (FR-1 finality) carries forward the actions a prior attempt reported the permission
+// timeout denied — a re-dispatched fresh leaf is a re-attempt of the SAME step, so it must not retry the
+// denied action in any rewording. Appended AFTER retryNote so it rides every subsequent dispatch.
+function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
   return (
     `In the build worktree at ${wt} (branch ${branch}), implement Task ${task.id} (${task.title}) TEST-FIRST: `
     + `write the test(s), run to observe FAIL, implement, run to observe PASS. The task's full definition is `
@@ -462,9 +486,26 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote) {
     + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
     + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
-    + `Co-Authored-By). Return JSON `
-    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool}}.`
+    + `Co-Authored-By). ${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
+    + `fired on ANY substantive step (not a verification probe — an actual implementation/commit action), set `
+    + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
+    + `to null — never fabricate a completed step you were denied. Return JSON `
+    + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
     + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+
+// FR-1 finality memory: the action(s) a prior attempt of THIS step reported the permission timeout
+// denied are FINAL — a fresh re-dispatch of the same work is a re-attempt, not a distinct step, so the
+// worker must not re-enter the denied action in any rewording. One tight sentence naming each denied
+// action so the worker works around them and reports honestly instead of re-hitting the permission wait.
+function buildDeniedNote(deniedActions) {
+  if (!deniedActions || !deniedActions.length) return ''
+  return (
+    ` FINAL — the following action(s) were already denied by the permission timeout in this step and are `
+    + `FINAL; do NOT re-attempt them in any form or rewording — work around them and report honestly: `
+    + deniedActions.join('; ') + '.'
   )
 }
 
@@ -479,27 +520,127 @@ function buildRetryNote(task, docPath) {
   )
 }
 
+// #149 Task 11/12: the SINGLE object-arg composer for the spine's leaf prompt — used by BOTH
+// production (buildOneTask, below) and the permission smokes, so the dispatched bytes and the bytes
+// tests reconstruct for the FR-8 composed-exact hash can never drift (one composer, zero re-encoding).
+// Delegates to buildTaskPrompt; threads `deniedNote` (FR-1 finality) through so the production caller's
+// denial-memory suffix rides the same source of truth. `deniedNote` defaults to '' — a smoke that omits
+// it composes byte-identically to a first-attempt dispatch.
+function buildLeafPrompt({ wt, branch, task, workItem, docPath, retryNote, deniedNote }) {
+  return buildTaskPrompt(task, branch, wt, docPath || _tasksDocPath(workItem), retryNote || '', deniedNote || '')
+}
+
+// UFR-6/UFR-8 dual-carrier denial recording (premortem-001), extracted from buildOneTask's loop so
+// the loop body stays control flow. Returns a park result to return, or null (nothing denied / both
+// carriers rode). The denial is written to TWO independent carriers the ship gate (ship_gate.decide)
+// both consult; EITHER gates the PR to a draft, REGARDLESS of whether the leaf still reports ok:true:
+//   1. the run's journal `permission_denied` event (step `build:<id>`, detail = the denied action) —
+//      best-effort/fail-open but courier-RETRIED, written FIRST so it survives even if carrier 2 fails
+//      and the task then parks (a resume skips this already-committed leaf, so carrier 2 stays empty).
+//      ship_gate.journal_build_denials folds these `build:` events in as the second gate signal.
+//   2. the prov_entry build-denial provenance entry (ship_gate.record_build_denial) — fail-CLOSED
+//      (record-before-advance): a dropped courier (null) or durable-write failure (ok!==true) PARKs
+//      the task, never silently promoting a tainted build to a ready PR.
+// Ordering (journal first) narrows the loss window to a CORRELATED double failure: writing the durable
+// journal event before carrier 2's park closes any SINGLE-carrier failure. RESIDUAL (transport-
+// inherent, cannot be closed by ordering): if the courier drops/garbles BOTH writes in the same window,
+// both durable carriers stay empty — and because the resume forward-walk skips the already-committed
+// leaf, that denial is never re-earned. For exactly that double-drop, the fail-closed PARK REASON below
+// names the denied action, so the disclosure still reaches the resuming owner through the park channel
+// even when neither durable carrier landed.
+async function recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions) {
+  if (!(worker && worker.deniedAction)) return null
+  const denied = String(worker.deniedAction)
+  // Carrier 1 (journal) FIRST — best-effort + fail-open, courier-retried.
+  try {
+    await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type permission_denied --step ${shq('build:' + task.id)} `
+      + `--detail ${shq(denied)}`,
+      'journal build denial',
+    )
+  } catch (_e) { /* fail-open: a readout-disclosure journal write never derails the build (UFR-2) */ }
+  // Carrier 2 (provenance) — fail-CLOSED. The park on a failed provenance write STAYS: even though
+  // carrier 1 may have ridden, parking here keeps record-before-advance honest for the provenance path.
+  const denialRec = await execJson(
+    `python3 ${libPath('prov_entry.py')} --step build-denial --work-item ${shq(workItem)} `
+    + `--denied-step ${shq('build:' + task.id)} --denied-command ${shq(denied)}`,
+    'record build denial',
+  )
+  if (!(denialRec && denialRec.ok === true)) {
+    // Name the denied action in the park reason: on a correlated double-drop this is the only surviving
+    // disclosure of the denial, and it reaches the resuming owner through the park channel.
+    return { parked: true,
+             reason: `build-denial record write failed for denied action '${denied}' `
+                     + `(record-before-advance) — park (UFR-6/UFR-8)` }
+  }
+  // FR-1 finality: remember this denial so any subsequent re-dispatch (needs_context/escalate) is told
+  // the action is FINAL and must not be re-attempted — carried into the next attempt's prompt.
+  deniedActions.push(denied)
+  return null
+}
+
 // Build one task test-first (FR-3) with bounded recovery (UFR-3), then review it. `validIds` is the
 // FULL enumeration's task ids (comma-joined) so the write-time trailer check scores every above-base
 // commit against the whole task set — not just this task (an earlier task's commit is not "unmapped").
 async function buildOneTask(workItem, generation, task, branch, validIds, wt, taskCount) {
   const docPath = _tasksDocPath(workItem)   // #222: anchor the worker to the real task definition
   let attempt = 1
+  // FR-1 finality: actions a prior attempt reported the permission timeout denied. Accumulated across
+  // attempts and threaded into EVERY subsequent dispatch so a fresh re-dispatched leaf never re-attempts
+  // the denied action (re-dispatching denied work under a new leaf is a re-attempt, not a distinct step).
+  const deniedActions = []
   for (;;) {
     if (!(await fenceOrPark(workItem, generation))) {
       return { parked: true, reason: 'lease lost before build — park (UFR-10)' }
     }
     // #222: after the first attempt, add genuine context (re-state the doc path + a Read instruction)
     // so a needs_context retry is NOT the identical prompt the recovery twin used to re-dispatch.
-    const prompt = buildTaskPrompt(task, branch, wt, docPath, attempt > 1 ? buildRetryNote(task, docPath) : '')
+    // FR-1: also thread any prior-attempt denied actions so the fresh leaf works around them, never re-tries them.
+    // Compose via buildLeafPrompt — the SINGLE source-of-truth composer the smokes also use — so the
+    // dispatched bytes provably equal what the FR-8 record_composed hash covers (no parallel inline path).
+    const prompt = buildLeafPrompt({
+      wt, branch, task, docPath,
+      retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
+      deniedNote: buildDeniedNote(deniedActions),
+    })
+    // Task 12 (FR-8): register the command the spine just composed for this leaf against the run's
+    // generation (the run_id), so the enforcer allows the leaf to run it byte-for-byte without a
+    // prompt — and only within the run that composed it. Recorded per attempt (a retry's prompt is a
+    // NEW composed command). The seam is fail-open (UFR-2): a record error never derails the build.
+    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
+    // Pin the native builder's model EXPLICITLY (mirrors the per-task reviewer's resolveModel beside it,
+    // fixed pre-#160). Before this, buildOneTask called agent() with NO `model` option, so the dispatch
+    // silently rode the bundle preamble's __safeSmartDefault() Opus floor — policy-correct for a smart
+    // leaf, but IMPLICIT: the preflight readout's builder row (model_tier role) then disagreed with the
+    // dispatch (readout showed the tier's model, dispatch showed the safeSmartDefault fallthrough), and a
+    // per-run builder-model override could never REACH the dispatch (no `model` option existed to carry
+    // it). resolveModel('builder') defaults to the same opus (no behavior change in the default config)
+    // AND makes the readout row + dispatch share one source (NFR-Accuracy) + lets an override land here.
+    const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
       prompt,
       nativeAgentCall: () => agent(
         prompt,
-        { label: implementTaskLabel(task, taskCount), schema: { type: 'object', required: ['ok'] } }),
+        { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
     })
-    if (worker.ok) {
+    // UFR-6/UFR-8: a substantive build step the 15-min timeout denied taints the build evidence.
+    // Record it on both carriers (recordBuildDenialIfAny); a failed fail-closed carrier parks here.
+    const denialPark = await recordBuildDenialIfAny(worker, workItem, task, generation, deniedActions)
+    if (denialPark) return denialPark
+    // #275: fail-closed on the leaf's `ok`. A model that emits `ok` as the STRING "false" (observed
+    // live — every leaf of the #219 run returned a stringy `ok` with signal:"plan_wrong") must NOT
+    // read as success: "false" is truthy in JS, so a plain `if (worker.ok)` ran the success branch on
+    // an explicit refusal and recorded built:passed for zero commits. Only a genuine boolean `true`
+    // advances; anything else falls through to the recovery twin (which parks immediately on
+    // plan_wrong, UFR-3). `worker` can be null (agent() returns null on a dead/skipped subagent), so
+    // guard the deref — a null result must fall through to bounded recovery, never crash the run.
+    // Scope: this is type-strictness on the NATIVE leaf only. It does NOT catch an EXTERNAL-engine
+    // refusal: engine_adapter.py parse_result coerces any parseable external stdout to a genuine
+    // boolean `ok:true` UPSTREAM of this gate (build|fix branch), so an external {ok:false,plan_wrong}
+    // never reaches here as a falsy value — that refusal-laundering is tracked separately (#288).
+    if (worker && worker.ok === true) {
       // write-time trailer enforcement (UFR-7): every above-base commit must carry its Task-Id.
       // This is a per-built-task CORRECTNESS read (NOT the FR-4a per-iteration resume gather).
       // execJson retries the courier ONCE on a dropped/garbled stdout, then fails closed: a leaf that
@@ -531,7 +672,9 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       return reviewLoop(workItem, generation, task, branch, wt)
     }
     // #115 increment B: bounded recovery decided in-process via the worker_recovery twin (no leaf).
-    const rec = workerRecoveryTwin.decide(attempt, worker.signal || 'needs_context')
+    // #275: `worker` may be null (dead/skipped subagent) — a null signal defaults to needs_context
+    // (bounded retry → escalate → park), never a crash.
+    const rec = workerRecoveryTwin.decide(attempt, (worker && worker.signal) || 'needs_context')
     if (rec.action === 'park') return { parked: true, reason: rec.reason }
     attempt += 1                                   // retry_with_context / escalate -> re-dispatch
   }
@@ -562,7 +705,43 @@ const REVIEW_TASK_SCHEMA = {
         code_quality: { enum: ['pass', 'fail'] },
       },
     },
-    findings: { type: 'array' },
+    // #276: constrain finding items so structured-output validation corrects severity-vocabulary
+    // drift AT THE SOURCE. `severity` is the canonical rubric tier enum (SSOT §11, guarded by
+    // test_ssot_drift) — the live escape was reviewers emitting a foreign scale (`blocker`/`critical`
+    // /`high`) that the blocking partition then demoted to Minor. Required so every finding carries a
+    // gating severity; the task_review twin still fails closed on anything that slips past.
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['severity'],
+        properties: {
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          file: { type: 'string' },
+          title: { type: 'string' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
+  },
+}
+
+// #276: the whole-branch final-review reviewer's findings schema — same canonical severity-tier enum
+// (SSOT §11, guarded by test_ssot_drift) as REVIEW_TASK_SCHEMA, so a branch reviewer emitting a
+// foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
+// instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
+// sites in runFinalReview's reviewerAgent.
+const FINAL_REVIEW_SCHEMA = {
+  type: 'object',
+  required: ['findings'],
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+      },
+    },
   },
 }
 
@@ -586,7 +765,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     + `definition is Task ${task.id} in ${docPath} — Read it and judge spec_compliance against THAT, not the title. `
     + `Never search the filesystem outside the build worktree and the given doc path. Return JSON `
     + `{"verdicts":{"spec_compliance":"pass|fail","code_quality":"pass|fail"},`
-    + `"findings":[{"severity","file","title","cannot_verify_from_diff"}]}.`
+    + `"findings":[{"severity":"Critical|Important|Minor|Nit","file","title","cannot_verify_from_diff"}]}. `
+    + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
   const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
@@ -602,7 +782,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     // two-verdict review that returned the same findings. An unreadable external review (null / no
     // findings array) falls open to the native Claude reviewer below (UFR-7 parity with runFinalReview).
     if (res && Array.isArray(res.findings)) {
-      const v = res.findings.some((f) => f && circuitBreaker.BLOCKING.has(f.severity)) ? 'fail' : 'pass'
+      const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
       return { verdicts: { spec_compliance: v, code_quality: v }, findings: res.findings }
     }
   }
@@ -722,24 +902,25 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const rEngine = enginePrefTwin.resolveEngine('review', _enginePrefs())
     const prompt =
       `In the build worktree at ${wt}, review the whole branch ${branch}; carried-forward Minor findings: ${JSON.stringify(minors)}. `
-      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity","evidence"}]} ({"findings":[]} if nothing to flag).`
+      + `Return ONLY a JSON object {"findings":[{"file","line","title","severity":"Critical|Important|Minor|Nit","evidence"}]} ({"findings":[]} if nothing to flag). `
+      + `severity MUST be one of Critical, Important, Minor, Nit (no other scale) — a blocker is Critical or Important.`
     if (rEngine !== 'claude') {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } },
+        schema: FINAL_REVIEW_SCHEMA,
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-        schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+        schema: FINAL_REVIEW_SCHEMA })
       return (out && Array.isArray(out.findings)) ? out.findings : null
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
-      schema: { type: 'object', required: ['findings'], properties: { findings: { type: 'array' } } } })
+      schema: FINAL_REVIEW_SCHEMA })
     return (out && Array.isArray(out.findings)) ? out.findings : null
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
@@ -754,7 +935,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
     await io().writeFile(p, JSON.stringify(set))
   }
   const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => f.severity === 'Critical' || f.severity === 'Important')
+    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
+    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
+    // severity is dispatched to the fixer, never silently counted nowhere.
+    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
@@ -777,11 +961,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
     runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal }
+  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
+module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.buildDeniedNote = buildDeniedNote
+module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
 module.exports.reviewOneTask = reviewOneTask
 module.exports.reviewLoop = reviewLoop

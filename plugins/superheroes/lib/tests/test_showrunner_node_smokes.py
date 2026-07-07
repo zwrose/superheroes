@@ -36,6 +36,16 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_loop_smoke.js",
+    # Task 10 (FR-2): a denied reviewer probe -> confidence:low + degraded-dimension (single-retry
+    # ceiling), with the denial recorded to the journal.
+    "plugins/superheroes/lib/tests/showrunner_reviewer_denied_probe_smoke.js",
+    # Task 11 (FR-1/FR-4/UFR-6): reviewer + builder/leaf prompts embed the FR-4 probe steering
+    # (throwaway-test-file family, no inline interpreter probes) + the 15-min proceed-honestly contract.
+    "plugins/superheroes/lib/tests/showrunner_permission_contract_smoke.js",
+    # Task 12 (FR-8/UFR-9 wiring): the spine freezes the rules ONCE at run start (run_id = reconcile
+    # generation) and records each composed leaf command against that run_id, via the Python
+    # permission_rules seams; both seams are fail-open (UFR-2).
+    "plugins/superheroes/lib/tests/showrunner_permission_freeze_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_verify_readback_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_phase_progress_budget_smoke.js",
@@ -43,6 +53,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_ship_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_gate_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_startup_fold_smoke.js",
+    # #281: the startup gather (readStartupState) rides the __SR_EXIT proof-of-execution marker so a
+    # did-not-run parrot can't fabricate the payload (gate AND engine_prefs), plus a semantic tripwire
+    # on the spec_present+unreadable fabrication tell (live park wf_ac2f134f).
+    "plugins/superheroes/lib/tests/showrunner_startup_parrot_smoke.js",
     # #221: the startup gather resolves engine prefs from an OUT-OF-REPO core.md — runs the REAL gather
     # script (store-base=None), asserting the owner's non-claude prefs round-trip and that the (root,root)
     # bug degrades to all-claude (the canned-answer smokes were blind to the real Python resolution).
@@ -106,6 +120,10 @@ SHOWRUNNER_SMOKES = [
     # #115 courier-drop retry: execJson/execText retry the cheap haiku exec courier ONCE on a
     # dropped/garbled stdout (journal recover/park/no-retry-on-real-fail/happy-path + read-gate recover).
     "plugins/superheroes/lib/tests/build_phase_courier_retry_smoke.js",
+    # UFR-6/UFR-8 (permission posture): a build leaf's deniedAction (a substantive step the 15-min
+    # timeout denied) is instructed in buildLeafPrompt AND recorded via prov_entry's build-denial
+    # step, tainting provenance so the ship gate later GATEs.
+    "plugins/superheroes/lib/tests/build_phase_denial_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
@@ -166,6 +184,22 @@ SHOWRUNNER_SMOKES = [
     # output-token deltas) and the spine's best-effort phase_cost / run_completed emit path.
     "plugins/superheroes/lib/tests/showrunner_cost_meter_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_cost_emit_smoke.js",
+    # spec showrunner-preflight-readout Task 9: the pin-or-resolve fork (FR-8, UFR-2 second clause) —
+    # a pinned frozen-snapshot value wins over the config-derived map; an unpinned field resolves
+    # live; no snapshot present -> the config-derived maps are returned unchanged (rollback state).
+    "plugins/superheroes/lib/tests/showrunner_preflight_freeze_smoke.js",
+    # spec showrunner-preflight-readout Task 10: roster-parity guard — preflight_readout.PHASES must
+    # equal showrunner.js's exported PHASES, so a phase add in the spine fails a test rather than
+    # silently under-reporting in the readout (Risk: roster drift).
+    "plugins/superheroes/lib/tests/showrunner_preflight_roster_smoke.js",
+    # freeze-consume hardening (B): the JS consumer's READOUT_VERSION is a COPY of the Python writer's
+    # preflight_readout.READOUT_VERSION — dumped via python3 -c and asserted equal, so a Python bump
+    # that isn't mirrored in the migration gate fails CI (roster-parity pattern).
+    "plugins/superheroes/lib/tests/showrunner_freeze_version_drift_smoke.js",
+    # freeze-consume hardening (E): showrunner.js's _TIER_ROLE (review-code tier vocabulary) must match
+    # review_code_config._TIER_ROLE AND appear in preflight_readout._PHASE_ROLES — a rename on either
+    # Python home fails CI rather than silently mis-routing a frozen pin.
+    "plugins/superheroes/lib/tests/showrunner_reviewcode_tier_role_drift_smoke.js",
 ]
 
 
