@@ -12,6 +12,8 @@ Clusters covered (sweep follow-up of #231):
 - Task-review required verdicts                        (home: task_review.py)
 - Terminal-state vocabulary                            (home: panel_tally.py)
 - Route vocabulary full/quick    (shared vocabulary: preflight.py + showrunner.js)
+- Accepted-model set (KNOWN_MODELS)                    (home: model_tier_overrides.py)
+- Accepted-engine set (ENGINES)                        (home: engine_pref.py)
 
 The generated showrunner.bundle.js copies of these facts are guarded separately by
 test_bundle_drift. The reviewer-roster, docs-location, and Failure-Mode-taxonomy
@@ -311,3 +313,21 @@ def test_known_models_single_sourced():
     mt = _read(os.path.join("lib", "model_tier.js"))
     assert set(_js_str_array(mt, "KNOWN_MODELS", "model_tier.js")) == set(home), (
         "model_tier.js KNOWN_MODELS drifted from model_tier_overrides.KNOWN_MODELS")
+
+
+# --- Cluster 6: accepted-engine set (ENGINES) --------------------------------
+
+def test_engines_single_sourced():
+    """CONVENTIONS §11: the accepted-engine set is re-typed across the engine_pref
+    pair — engine_pref.py's authoritative ENGINES tuple (the resolver that falls open to
+    'claude' on anything outside it) and engine_pref.js's ENGINES array (the same
+    membership gate on the Workflow side). An engine added/renamed in one place must break
+    CI in the other, so a valid new engine isn't silently rejected on one side (or a stale
+    one silently still-accepted). Order is not semantically load-bearing for a membership
+    set, so compare as sets — mirrors the KNOWN_MODELS cluster."""
+    import engine_pref
+    home = list(engine_pref.ENGINES)  # ('claude', 'codex', 'cursor')
+
+    js = _read(os.path.join("lib", "engine_pref.js"))
+    assert set(_js_str_array(js, "ENGINES", "engine_pref.js")) == set(home), (
+        "engine_pref.js ENGINES drifted from engine_pref.py ENGINES")

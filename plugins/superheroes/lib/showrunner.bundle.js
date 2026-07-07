@@ -8225,7 +8225,12 @@ async function readStartupState(workItem) {
   // would mis-route the NOTIFY ledger + review doc paths to the in-repo fallback on an
   // out-of-repo-calibrated project mid-run). engine_prefs is NOT required: an older canned response
   // without it degrades to the safe both-'claude' default (the same fail-open engine_pref_load.py had).
-  const opts = { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir'] }
+  // run_overrides_present IS required: the Python gather now emits it UNCONDITIONALLY (false when no
+  // frozenSnapshot record was on disk). It is the detectability flag the no-apply narrator (D) reads —
+  // a courier answer that drops BOTH frozen_snapshot AND this flag would otherwise read as "no freeze
+  // on disk" and silently revert a frozen run to live config with no loud line. Requiring it forces a
+  // retry on such a mangled answer instead of a silent freeze-drop.
+  const opts = { require: ['ok', 'spec_gate', 'model_overrides', 'doc_dir', 'run_overrides_present'] }
   try {
     // #281: PROOF OF EXECUTION. This gather was answered WITHOUT executing in a live run (park
     // wf_ac2f134f: 4 transcript events, ZERO tool calls) — a courier mentally simulated the embedded

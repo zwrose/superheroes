@@ -31,7 +31,7 @@ function jsonOut(obj) { return [{ ok: true, stdout: JSON.stringify(obj) }] }
     seen.add(label)
     if (forbidden.includes(label)) throw new Error('forbidden label exercised: ' + label)
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', world: {} }) }]
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: {}, doc_dir: '', world: {}, run_overrides_present: false }) }]
     }
     if (label === 'read world-snapshot') {
       return jsonOut({ ok: true, gate: 'passed' })
