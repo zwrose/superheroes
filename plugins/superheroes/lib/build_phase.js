@@ -308,7 +308,12 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-    if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
+    // #279: carry the verdict's reason into the park so the owner sees WHY (e.g. the verify error),
+    // not a bare terminal — the sole difference between a real regression and a transient flake.
+    if (fr.terminal !== 'clean') {
+      const detail = fr.reason ? ' (' + fr.reason + ')' : ''
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
       return park('final review coverage stamp failed read-back')
@@ -848,7 +853,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal }
+  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.

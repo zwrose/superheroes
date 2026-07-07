@@ -2013,6 +2013,22 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (legKind.code) {
       try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
       catch (e) { verifyResult = 'fail' }
+      // #279 bounded corrective re-run: when verify is the SOLE blocker — a 'fail' with zero blocking
+      // findings this round — the fix loop has nothing to resolve and so can never earn a re-verify,
+      // and one transient infra flake (a module-resolution error in an untouched file, node_modules
+      // still settling after an in-branch install, a shared vite-cache collision) becomes a terminal
+      // halt on a branch that found nothing to fix. Re-run verify exactly once (serialized, same round
+      // file). Two consecutive fails reproduce today's fail-closed halt exactly — no loop, cap 1
+      // (precedent: #212 corrective retry / fix-before-park). A round with blocking findings takes the
+      // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
+      if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
+        try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        catch (e) { verifyResult = 'fail' }
+        // Surface the flake vs the real regression: a fail→pass flip means the verify gate is flaky
+        // (worth investigating the infra cause); a fail→fail confirms a genuine failure (halts below).
+        try { log(`review-panel r${round}: corrective re-run verify → ${verifyResult}`) } catch (_) {}
+      }
     }
 
     const tokenUsage = collectRoundUsage(roundFindings, round, synthesized)
@@ -5291,7 +5307,12 @@ async function buildPhase(workItem, generation) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
     // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-    if (fr.terminal !== 'clean') return park('whole-branch final review did not reach clean: ' + fr.terminal)
+    // #279: carry the verdict's reason into the park so the owner sees WHY (e.g. the verify error),
+    // not a bare terminal — the sole difference between a real regression and a transient flake.
+    if (fr.terminal !== 'clean') {
+      const detail = fr.reason ? ' (' + fr.reason + ')' : ''
+      return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
       return park('final review coverage stamp failed read-back')
@@ -5831,7 +5852,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal }
+  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.
