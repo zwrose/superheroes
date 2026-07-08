@@ -68,3 +68,15 @@ def test_partial_owner_ceilings_merge_with_defaults_and_never_raise():
     assert r["action"] == "continue"
     assert r["remaining"]["elapsed_sec"] == 10.0
     assert r["remaining"]["spend"] == EXPECTED_DEFAULT_SPEND
+
+
+def test_default_elapsed_ceiling_pinned_at_5400():
+    # #298 review r1: the raised default is the point of the change — a revert to the old
+    # 1800s (which hard-killed a healthy 50+ min run, issue #298 run 5) must fail the suite.
+    assert c.DEFAULT_CEILINGS["elapsed_sec"] == 5400.0
+    assert c.DEFAULT_CEILINGS["spend"] == 5_000_000.0
+    # Absent/invalid owner config falls back to exactly the pinned default.
+    norm = c.normalize_ceilings(None)
+    assert norm["elapsed_sec"] == 5400.0
+    norm2 = c.normalize_ceilings({"elapsed_sec": "not-a-number"})
+    assert norm2["elapsed_sec"] == 5400.0

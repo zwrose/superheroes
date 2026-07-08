@@ -132,7 +132,7 @@ def _install_termination_handlers():
 
 
 def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
-                         orphan_record_path, prior_unsafe=False):
+                         orphan_record_path, prior_unsafe=False, lease_owned=True):
     """Route a caught `_SignalTermination` through the EXISTING kill+teardown+record path
     (issue #245): hard-kill the live child group FIRST (reusing `_hard_kill_group`), then apply
     the same kill-unconfirmed quarantine semantics the ceiling-kill path uses today — an
@@ -165,7 +165,8 @@ def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
         teardown = {"cleaned_up": [], "left_behind": [],
                     "note": "teardown also failed: %s" % td_exc}
 
-    if unsafe_kill and callable(deps.get("quarantine_lease")):
+    # #298 review r1: never quarantine a lease this invocation does not own (pre-lease window).
+    if unsafe_kill and lease_owned and callable(deps.get("quarantine_lease")):
         try:
             deps["quarantine_lease"](stamp)
         except Exception:
@@ -175,7 +176,8 @@ def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
     try:
         record_path = _finalize(
             deps, "fail", reason, None, attempts, len(attempts) > 1, teardown,
-            run_stamp=stamp, release_lease=not unsafe_kill, spine_provenance=prov)
+            run_stamp=stamp, release_lease=(not unsafe_kill) and lease_owned,
+            spine_provenance=prov)
     except Exception:
         record_path = None
     return {
@@ -292,6 +294,14 @@ def invoke(deps):
     # `finalized`/`result`: this invocation already wrote its terminal record + handled the
     # lease — a signal in the return-construction window must not re-teardown/re-write/re-release.
     sig_state = {"unsafe": False, "finalized": False, "result": None}
+    # #298 review r1 (premortem, fail-direction): does THIS invocation own the store lease yet?
+    # False until the reclaim decision resolves to proceed (the exclusive-create acquire lives in
+    # reclaim_probe). A signal or internal error in the PRE-LEASE window — materially wider now
+    # that step 0's root-ancestry probe does network git I/O — must NEVER release (or quarantine)
+    # the lease: with run_stamp still None, release_lease(None) is the legacy UNCONDITIONAL
+    # remove and would delete a CONCURRENT run's lease, re-opening the two-runs hazard the lease
+    # exists to prevent. Both except paths below gate on this flag.
+    lease_owned = False
 
     def _mark_finalized():
         # Fired by `_finalize` the instant the record is durably written, BEFORE the lease
@@ -360,6 +370,9 @@ def invoke(deps):
             reason = "a prior acceptance run is in flight (%s); refusing to start another" % liveness
             return _prelaunch_refusal(
                 reason, "NOT WRITTEN (prior run lease still held)")
+        # Non-refuse: the reclaim probe's exclusive-create acquire succeeded — from here on the
+        # lease is OURS, and the signal/error finalizers may (and should) release it.
+        lease_owned = True
         # UFR-8: sweep any leftover accepted-stamp artifacts before this invocation launches.
         # This covers both a confirmed-dead lease holder and a lease-free checkout whose prior
         # completed invocation wrote a record but failed to reap everything.
@@ -504,7 +517,7 @@ def invoke(deps):
         return _terminate_by_signal(
             deps, sig_exc.child, stamp, attempts,
             locals().get("dead_run_teardown"), prov, orphan_record_path,
-            prior_unsafe=prior_unsafe)
+            prior_unsafe=prior_unsafe, lease_owned=lease_owned)
 
     except Exception as exc:
         # Fail-CLOSED: any internal error still teardowns and yields a fail naming the error.
@@ -528,7 +541,8 @@ def invoke(deps):
         try:
             record_path = _finalize(deps, "fail", reason, None, attempts,
                                     len(attempts) > 1, teardown, run_stamp=stamp,
-                                    release_lease=not unsafe_kill, spine_provenance=prov)
+                                    release_lease=(not unsafe_kill) and lease_owned,
+                                    spine_provenance=prov)
         except Exception:
             record_path = None
         return {

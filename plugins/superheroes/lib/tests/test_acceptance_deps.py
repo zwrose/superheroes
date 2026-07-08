@@ -747,8 +747,10 @@ def test_root_ancestry_preserves_slash_in_default_branch_name():
     res = deps.real_root_ancestry("/root", run=fake_run, warn=lambda m: None)()
     assert res["ok"] is True and res["checked"] is True
     assert res["default_branch"] == "release/stable"
-    # the fetch and the merge-base both used the FULL slash-containing branch, not a truncation.
-    assert ["git", "fetch", "origin", "release/stable"] in seen
+    # the fetch and the merge-base both used the FULL slash-containing branch, not a truncation
+    # (fetch now via the explicit tracking refspec — #298 review r1, Code finding).
+    assert ["git", "fetch", "origin",
+            "+refs/heads/release/stable:refs/remotes/origin/release/stable"] in seen
     assert ["git", "merge-base", "--is-ancestor", "HEAD", "origin/release/stable"] in seen
 
 
@@ -791,3 +793,69 @@ def test_root_ancestry_bypass_never_touches_git():
 def test_build_wires_root_ancestry_seam(tmp_path):
     d = deps.build(str(tmp_path / "fixture"), str(tmp_path))
     assert callable(d["root_ancestry"])
+
+
+# --- #298 review round 1 additions ------------------------------------------------------
+
+
+def test_root_ancestry_fetch_uses_explicit_tracking_refspec():
+    # r1 Code finding: a bare `git fetch origin main` updates the tracking ref only via the
+    # remote's configured refspec (a narrowed/single-branch clone leaves it stale, and step 4
+    # would refuse a genuinely-merged root). Pin the explicit-refspec form.
+    seen = []
+    deps.real_root_ancestry(
+        "/root", run=_ancestry_run(recorder=seen), warn=lambda m: None)()
+    fetches = [a for a in seen if a[:2] == ["git", "fetch"]]
+    assert fetches == [["git", "fetch", "origin",
+                        "+refs/heads/main:refs/remotes/origin/main"]]
+
+
+def test_root_ancestry_refusal_recovery_command_is_paste_safe():
+    # r1 Security finding: `default` derives from origin/HEAD and git ref names may carry
+    # shell metacharacters — the pasteable remediation must quote it.
+    evil = "main;rm -rf x"
+
+    def fake_run(args, timeout=15):
+        if args[:2] == ["git", "symbolic-ref"]:
+            return (0, "refs/remotes/origin/%s\n" % evil, "")
+        if args[:3] == ["git", "rev-parse", "--verify"]:
+            return (0, "aa\n", "")
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return (0, "cafef00d99\n", "")
+        if args[:2] == ["git", "fetch"]:
+            return (0, "", "")
+        if args[:2] == ["git", "merge-base"]:
+            return (1, "", "")
+        return (1, "", "")
+
+    res = deps.real_root_ancestry("/root", run=fake_run, warn=lambda m: None)()
+    assert res["ok"] is False
+    import shlex as _shlex
+    assert ("git checkout %s && git pull" % _shlex.quote(evil)) in res["reason"]
+    assert "checkout main;rm" not in res["reason"]   # the raw metachar form never appears
+
+
+def test_root_ancestry_fallback_names_share_one_home_with_build_state_cli():
+    # r1 Architecture finding (CONVENTIONS §11): the default-branch NAME preference has ONE
+    # home — build_state_cli.DEFAULT_BRANCH_FALLBACK — consumed by both the UFR-7 base
+    # resolution and this gate. Pin the home and that _base still derives its historical
+    # ref order from it.
+    import build_state_cli as bsc
+    assert bsc.DEFAULT_BRANCH_FALLBACK == ("main", "master")
+    seen = []
+    deps.real_root_ancestry(
+        "/root", run=_ancestry_run(default_symbolic=False, ref_rc=0, recorder=seen),
+        warn=lambda m: None)()
+    # With origin/HEAD unset, the first candidate probed is origin/<first fallback name>.
+    probes = [a for a in seen if a[:3] == ["git", "rev-parse", "--verify"]]
+    assert probes and probes[0][-1] == "origin/%s" % bsc.DEFAULT_BRANCH_FALLBACK[0]
+
+
+def test_build_escape_hatch_threads_to_a_bypassing_seam(tmp_path):
+    # r1 Test finding: prove build(allow_unmerged_root=True) yields a seam that BYPASSES —
+    # a mutant dropping the kwarg inside build() must fail here. The bypass path returns
+    # before any git I/O, so this is deterministic with real deps.
+    d = deps.build(str(tmp_path / "fixture"), str(tmp_path), allow_unmerged_root=True)
+    res = d["root_ancestry"]()
+    assert res["ok"] is True
+    assert res.get("bypassed") is True

@@ -795,3 +795,51 @@ def test_signal_after_record_written_does_not_rewrite_or_double_release(monkeypa
     assert d["_state"]["lease_released"] is True
     # the echoed result still names the durably-written record.
     assert r["record_path"] == "/rec.json"
+
+
+# --- #298 review r1 (premortem, fail-direction): the pre-lease window ---------------------
+
+
+def test_signal_during_root_ancestry_never_releases_or_quarantines_the_lease():
+    # A SIGTERM/SIGINT while step 0's root-ancestry probe is blocked in git (the probe does
+    # network I/O, so this window is real and wide) must NOT release the lease: this
+    # invocation has not acquired it yet, run_stamp is still None, and release_lease(None)
+    # is the legacy UNCONDITIONAL remove — it would delete a CONCURRENT run's lease.
+    def _ancestry():
+        raise run._SignalTermination(_signal.SIGTERM, None)
+
+    d = _deps(root_ancestry=_ancestry)
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "terminated by signal" in r["report"].lower()
+    assert d["_state"]["lease_released"] is False        # the load-bearing assertion
+    assert d["_state"]["lease_quarantined"] is None      # nor quarantined — we never owned it
+    assert len(d["_state"]["records_written"]) == 1      # the honest record still lands
+
+
+def test_internal_error_during_root_ancestry_never_releases_the_lease():
+    # Same pre-lease window, generic-exception flavor: an internal error inside the probe
+    # routes through the fail-closed except path, which must also skip the lease release.
+    def _ancestry():
+        raise RuntimeError("git exploded")
+
+    d = _deps(root_ancestry=_ancestry)
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "internal harness error" in r["report"]
+    assert d["_state"]["lease_released"] is False
+    assert len(d["_state"]["records_written"]) == 1
+
+
+def test_signal_after_reclaim_still_releases_the_owned_lease():
+    # Counter-case: once the reclaim decision resolved to proceed, the lease IS ours — a
+    # signal later (here: during launch, no live child) must keep today's release behavior.
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        raise run._SignalTermination(_signal.SIGTERM, None)
+
+    d = _deps(launcher=_launcher)
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert d["_state"]["lease_released"] is True

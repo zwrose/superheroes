@@ -23,10 +23,13 @@ stub that declines (the DoD floor `test_acceptance_run_cli.py` pins).
 import hashlib
 import json
 import os
+import shlex
 import sys
 import tempfile
 import socket
 import subprocess
+
+import build_state_cli   # DEFAULT_BRANCH_FALLBACK — the ONE home for default-branch name order (#298 r1)
 import time
 import uuid
 
@@ -606,17 +609,27 @@ def real_root_ancestry(root, allow_unmerged_root=False, run=None, warn=None):
         head_sha = head_out.strip() if rc_head == 0 and head_out.strip() else "unknown"
 
         # 2. Best-effort fetch. When origin/HEAD is unset we don't know the default branch, so
-        # refresh ALL remote-tracking refs; otherwise fetch just the default. Failure = degrade.
-        fetch_args = ["git", "fetch", "origin", default] if default else ["git", "fetch", "origin"]
+        # refresh ALL remote-tracking refs; otherwise fetch the default with an EXPLICIT refspec
+        # (#298 review r1, Code): a bare `git fetch origin <branch>` updates only FETCH_HEAD plus
+        # — opportunistically, per the remote's configured refspec — the tracking ref; a narrowed
+        # refspec (single-branch clone) leaves refs/remotes/origin/<branch> STALE, and step 4
+        # would then refuse a root whose HEAD is genuinely on the remote default. The explicit
+        # `+refs/heads/X:refs/remotes/origin/X` form updates the compared ref regardless of the
+        # remote's fetch config. Failure = degrade.
+        fetch_args = (["git", "fetch", "origin",
+                       "+refs/heads/%s:refs/remotes/origin/%s" % (default, default)]
+                      if default else ["git", "fetch", "origin"])
         rc_fetch, _o, _fe = _run_git(fetch_args, timeout=45)
         if rc_fetch != 0:
             return _degrade(head_sha, default, "fetch failed (offline / no remote?)")
 
         # 3. Resolve the remote-tracking ref to compare against — discovered default first, then
-        # main/master (build_state_cli._base's fallback order, so the gate never diverges from
-        # the spine's own default-branch resolution).
+        # the shared default-branch name fallback (ONE home: build_state_cli.DEFAULT_BRANCH_FALLBACK,
+        # the same order `_base` derives its refs from — CONVENTIONS §11, #298 review r1: the
+        # pre-launch gate and the UFR-7 trailer gate it protects must never disagree on the
+        # default branch).
         remote_ref = None
-        for cand in [c for c in (default, "main", "master") if c]:
+        for cand in [c for c in (default,) + build_state_cli.DEFAULT_BRANCH_FALLBACK if c]:
             if _run_git(["git", "rev-parse", "--verify", "--quiet", "origin/%s" % cand])[0] == 0:
                 remote_ref, default = "origin/%s" % cand, cand
                 break
@@ -637,6 +650,10 @@ def real_root_ancestry(root, allow_unmerged_root=False, run=None, warn=None):
             return _degrade(head_sha, default,
                             "`git merge-base --is-ancestor` errored (rc=%s)" % rc_anc)
 
+        # Paste-safe recovery command (#298 review r1, Security): `default` comes from
+        # refs/remotes/origin/HEAD, and git ref names may legally contain shell metacharacters
+        # (`;`, `$`, `&`…) — an operator pasting the remediation must never execute extra syntax.
+        quoted_default = shlex.quote(default)
         reason = (
             "--root checkout HEAD %s is not an ancestor of %s: it carries commit(s) not on "
             "origin/%s (e.g. a release-please version bump) — UFR-7's trailer gate will "
@@ -644,7 +661,7 @@ def real_root_ancestry(root, allow_unmerged_root=False, run=None, warn=None):
             "--spine-lib + the recorded bundle sha bind the pass to the release. To validate an "
             "unmerged branch spine deliberately (a pre-merge branch-spine run), pass "
             "--allow-unmerged-root."
-            % (head_sha, remote_ref, default, default, default)
+            % (head_sha, remote_ref, default, quoted_default, quoted_default)
         )
         return {"ok": False, "checked": True, "head_sha": head_sha,
                 "default_branch": default, "reason": reason}
