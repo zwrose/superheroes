@@ -210,6 +210,72 @@ def _cmd_context(a):
                                     a.root or os.getcwd(), a.base, a.issue, a.body_path)))
 
 
+def _ensure_closes(body, issue):
+    if issue and ("Closes #%s" % issue) not in body:
+        body = body.rstrip() + "\n\nCloses #%s" % issue
+    return body
+
+
+def fallback_body(work_item, issue, commits):
+    """A DETERMINISTIC, real body from local data only (no Sonnet, no network) — the floor when
+    the smart compose is unavailable (owner Decision 2). Lean what & why + Closes #N."""
+    commits = commits or []
+    lead = (commits[0] if commits else "Changes for %s" % work_item).strip()
+    lines = [lead, "", "## What changed"]
+    lines += (["- %s" % c for c in commits] if commits else ["- See the diff for details."])
+    lines += ["", "_Built by the superheroes showrunner._"]
+    return _ensure_closes("\n".join(lines), issue)
+
+
+def is_placeholder_body(prose):
+    """True when the PROSE part of a PR body is `--fill-first` commit-trailer junk or blank —
+    safe to replace on the adopt path. Callers pass split_prose(body)[0]; a composed/fallback
+    prose ('## What changed' / 'Closes #') or owner prose is NEVER a placeholder."""
+    if not prose or not prose.strip():
+        return True
+    p = prose.strip()
+    return "Task-Id:" in p and "## What changed" not in p and "Closes #" not in p
+
+
+def resolve_body(body_file, work_item, *, root=None, worktree=None, base=None,
+                 issue=None, commits=None):
+    """The final PROSE body: composed (if the file is usable) else the deterministic fallback,
+    always scrubbed (pr_comment.scrub — the band's single scrub seam), always carrying Closes #N
+    when an issue is known. Self-gathers issue/commits when not supplied. Fail-closed: an
+    un-scrubbable body drops to a minimal safe body — never raw. NOTE: prose only — the caller
+    owns re-attaching the #228 generated tail (split_prose / compose_body)."""
+    import pr_comment
+    wt = worktree or os.getcwd()
+    rt = root or os.getcwd()
+    if issue is None or commits is None:
+        rbase = _resolve_base(wt, base)
+        if commits is None:
+            commits = _commits(wt, rbase)
+        if issue is None:
+            issue, _ = _intent(work_item, rt, wt)
+    candidate = ""
+    if body_file:
+        try:
+            with open(body_file, encoding="utf-8") as fh:
+                candidate = fh.read()
+        except OSError:
+            candidate = ""
+    if not _usable(candidate):
+        candidate = fallback_body(work_item, issue, commits)
+    candidate = _ensure_closes(candidate, issue)
+    try:
+        scrubbed = pr_comment.scrub(candidate)
+    except Exception:
+        scrubbed = _ensure_closes("Changes for %s (body scrub failed — see the diff)." % work_item,
+                                  issue)
+    return scrubbed if _usable(scrubbed) else _ensure_closes("Changes for %s." % work_item, issue)
+
+
+def _cmd_resolve_body(a):
+    print(resolve_body(a.body_file, a.work_item, root=a.root, worktree=a.worktree, base=a.base,
+                       issue=a.issue))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="showrunner PR-body composer (#219)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -221,6 +287,14 @@ def main(argv=None):
     c.add_argument("--issue", default=None)
     c.add_argument("--body-path", default=None)
     c.set_defaults(fn=_cmd_context)
+    r = sub.add_parser("resolve-body")
+    r.add_argument("--work-item", required=True)
+    r.add_argument("--body-file", default=None)
+    r.add_argument("--base", default=None)
+    r.add_argument("--worktree", default=None)
+    r.add_argument("--root", default=None)
+    r.add_argument("--issue", default=None)
+    r.set_defaults(fn=_cmd_resolve_body)
     a = ap.parse_args(argv)
     a.fn(a)
 

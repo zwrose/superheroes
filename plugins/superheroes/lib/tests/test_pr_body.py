@@ -132,3 +132,65 @@ def test_split_prose_separates_generated_tail():
     # no tail -> everything is prose, tail empty
     p2, t2 = pr_body.split_prose("just prose\n")
     assert p2.strip() == "just prose" and t2 == ""
+
+
+# ---- #219: fallback_body / is_placeholder_body / resolve_body (appended) ----
+def test_fallback_body_has_what_changed_and_closes():
+    body = pr_body.fallback_body("wi", "219", ["feat(x): add the second line"])
+    assert "## What changed" in body
+    assert "add the second line" in body
+    assert body.rstrip().endswith("Closes #219")
+
+
+def test_fallback_body_omits_closes_without_issue():
+    body = pr_body.fallback_body("wi", None, ["feat: y"])
+    assert "Closes #" not in body
+
+
+def test_resolve_body_prefers_usable_composed_file(tmp_path):
+    f = tmp_path / "composed.md"
+    f.write_text("A real composed body.\n\nCloses #219\n")
+    out = pr_body.resolve_body(str(f), "wi", issue="219", commits=["feat: z"])
+    assert "A real composed body." in out
+    assert "Closes #219" in out
+
+
+def test_resolve_body_falls_back_when_file_missing_or_empty(tmp_path):
+    out = pr_body.resolve_body(str(tmp_path / "nope.md"), "wi", issue="219", commits=["feat: z"])
+    assert "## What changed" in out and "Closes #219" in out
+    f = tmp_path / "empty.md"
+    f.write_text("   \n")
+    out = pr_body.resolve_body(str(f), "wi", issue=None, commits=["feat: z"])
+    assert "## What changed" in out
+
+
+def test_resolve_body_scrubs_secrets(tmp_path):
+    f = tmp_path / "leak.md"
+    # UNQUOTED key=value — the shape pr_comment.scrub actually redacts (probe-verified rev 1).
+    f.write_text("config: api_key=SECRET_TOKEN_VALUE\n")
+    out = pr_body.resolve_body(str(f), "wi", issue=None, commits=[])
+    assert "SECRET_TOKEN_VALUE" not in out
+
+
+def test_resolve_body_appends_closes_when_missing(tmp_path):
+    f = tmp_path / "no-closes.md"
+    f.write_text("Composed body without the trailer.\n")
+    out = pr_body.resolve_body(str(f), "wi", issue="219", commits=[])
+    assert "Closes #219" in out
+
+
+def test_is_placeholder_body_on_prose():
+    assert pr_body.is_placeholder_body("") is True
+    assert pr_body.is_placeholder_body("   ") is True
+    assert pr_body.is_placeholder_body("Task-Id: 1\n\nCo-authored-by: x") is True
+    assert pr_body.is_placeholder_body("## What changed\n- real\n\nCloses #219") is False
+    assert pr_body.is_placeholder_body("An owner's hand-written description.") is False
+
+
+def test_is_placeholder_body_ignores_generated_tail():
+    # A junk prose followed by a seeded DoD table is still a placeholder PROSE — callers pass
+    # split_prose(body)[0]; the seeded tail must not disguise the junk as a real body.
+    seeded = pr_body.compose_body("Task-Id: 1\n\nCo-authored-by: x",
+                                  pr_body.seed_dod_block(["b1"]), "")
+    prose, _tail = pr_body.split_prose(seeded)
+    assert pr_body.is_placeholder_body(prose) is True
