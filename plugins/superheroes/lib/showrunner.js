@@ -2162,8 +2162,12 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
     }
     // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
     // The pref map is keyed by role_kind, so normalize review-deep -> review for the engine key.
+    // 'author-plan' is engine-routable too (planAuthor, #299): normalize it through so its engine +
+    // effort freeze alongside review/build/fix — otherwise the confirmed plan-author engine could
+    // drift live between readout-confirm and dispatch.
     const kind = row.kind === 'review-deep' ? 'review'
-      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review'
+         || row.kind === 'author-plan' ? row.kind : null)
     const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
       ? _ENGINE_ROLE_KIND[kind] : null
     // Set validation (C): pin an engine ONLY if it is in the known ENGINES set (the producer's domain).

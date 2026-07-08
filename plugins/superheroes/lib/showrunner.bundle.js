@@ -6231,7 +6231,8 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       pinnedCount++
     }
     const kind = row.kind === 'review-deep' ? 'review'
-      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review'
+         || row.kind === 'author-plan' ? row.kind : null)
     const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
       ? _ENGINE_ROLE_KIND[kind] : null
     if (epKey && effectiveEngine && enginePrefTwin.ENGINES.indexOf(effectiveEngine) !== -1) {

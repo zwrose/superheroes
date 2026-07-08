@@ -7,6 +7,11 @@ def _claude_prefs():
     return {"reviewer": "claude", "implementation": "claude", "effort": {}}
 
 
+def _external_prefs(reviewer="codex", implementation="cursor", plan_author="claude"):
+    return {"reviewer": reviewer, "implementation": implementation, "planAuthor": plan_author,
+            "effort": {}}
+
+
 def test_roster_phase_set_equals_spine_PHASES():
     rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {})
     phases = []
@@ -413,6 +418,75 @@ def test_documented_invocation_adversarial_old_root_root_shape_degrades(tmp_path
 
 # --- Task 12: End-to-end assemble->render golden test + the <=40-line bound under a full
 # external pipeline ---
+
+# --- #299 dispatch-routing honesty: the readout must render what each site actually dispatches ---
+
+def test_plan_row_is_engine_routed_via_planauthor():
+    # author-plan IS wired (produce → engineDispatch when planAuthor routes externally). The plan row
+    # must reflect it, not the old hard-coded claude·author. codex plan authoring runs at xhigh.
+    rows = preflight_readout.enumerate_dispatch(_external_prefs(plan_author="codex"), {})
+    plan = [r for r in rows if r["phase"] == "plan"][0]
+    assert plan["kind"] == "author-plan"
+    assert plan["engine"] == "codex"
+    assert plan["effort"] == "xhigh"  # engine_pref._CODEX_EFFORT['author-plan']
+    assert not plan.get("nativeByDesign")
+
+
+def test_plan_row_defaults_claude_when_planauthor_unset():
+    # No planAuthor key (the common calibration) → the plan row is native claude, no effort.
+    rows = preflight_readout.enumerate_dispatch(_claude_prefs(), {})
+    plan = [r for r in rows if r["phase"] == "plan"][0]
+    assert plan["engine"] == "claude" and plan["effort"] is None
+    assert plan["role"] == "author-plan"  # the split model role, so author-plan overrides land here
+
+
+def test_plan_row_honors_author_plan_model_role():
+    # An author-plan model override (raise plan authoring alone, e.g. to fable) rides the split role;
+    # tasks authoring (role 'author') is untouched. Mirrors authorModel('plan') vs authorModel('tasks').
+    rows = preflight_readout.enumerate_dispatch(
+        _external_prefs(plan_author="cursor"), {"author-plan": "fable", "author": "opus"})
+    plan = [r for r in rows if r["phase"] == "plan"][0]
+    tasks = [r for r in rows if r["phase"] == "tasks"][0]
+    assert plan["model"] == "fable" and plan["configuredOrDefault"] == "configured"
+    assert tasks["model"] == "opus"
+    # cursor maps the fable tier to its own model id — shown honestly, not flattened to composer.
+    assert preflight_readout.display_model(plan["engine"], plan["model"]) == "claude-fable-5-thinking-xhigh"
+
+
+def test_doc_panels_stay_native_under_external_calibration():
+    # review-plan / review-tasks doc panels have NO engine axis (docReviewerAgent dispatches native
+    # Claude). Even under reviewer:codex they must render claude, never an engine they can't honor.
+    rows = preflight_readout.enumerate_dispatch(_external_prefs(reviewer="codex"), {})
+    for phase in ("review-plan", "review-tasks"):
+        row = [r for r in rows if r["phase"] == phase][0]
+        assert row["kind"] == "review-native"
+        assert row["engine"] == "claude" and row["effort"] is None
+        assert row["nativeByDesign"] is True
+        assert row["model"] == "sonnet"  # the reviewer tier the panels actually dispatch
+
+
+def test_ship_ci_fixer_is_native_claude_at_the_smart_leaf_floor():
+    # The ship CI fixer is a bare native agent() (no model pin, no resolveEngine). It must render
+    # claude·opus (the bundle __safeSmartDefault = resolveModel('synthesis', None)), NOT cursor·sonnet.
+    import model_tier
+    rows = preflight_readout.enumerate_dispatch(_external_prefs(implementation="cursor"), {})
+    ship = [r for r in rows if r["phase"] == "ship"][0]
+    assert ship["kind"] == "ship-fix-native"
+    assert ship["engine"] == "claude"                       # never the implementation engine
+    assert ship["model"] == model_tier.resolve_model("synthesis", None) == "opus"
+    assert ship["effort"] is None and ship["nativeByDesign"] is True
+    assert ship["role"] is None                             # so the freeze merge never pins a tier here
+
+
+def test_ship_row_never_pins_the_fixer_tier_in_freeze():
+    # Regression: the ship row must not carry role 'fixer' with model opus, or mergeFrozenSnapshot
+    # would freeze overrides['fixer']=opus and corrupt the workhorse code-fixer (a separate row).
+    rows = preflight_readout.enumerate_dispatch(_external_prefs(), {})
+    ship = [r for r in rows if r["phase"] == "ship"][0]
+    assert ship["role"] != "fixer"
+    workhorse_fixer = [r for r in rows if r["phase"] == "workhorse" and r["kind"] == "fix"][0]
+    assert workhorse_fixer["role"] == "fixer"  # the fixer tier is owned by the workhorse row alone
+
 
 def test_full_external_pipeline_render_within_bound_and_complete():
     readers = _fake_readers(

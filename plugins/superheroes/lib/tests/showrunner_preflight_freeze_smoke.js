@@ -42,6 +42,16 @@ async function main() {
   assert.strictEqual(merged.enginePrefs.reviewer, 'codex', 'a pinned engine must win over the config-derived value')
   assert.strictEqual(merged.enginePrefs.effort.review, 'xhigh', 'a pinned effort must seed the effort sub-map')
 
+  // #299: an engine-routed plan-author row (kind 'author-plan') freezes its engine onto the
+  // planAuthor pref key AND its effort onto the author-plan effort key — so the confirmed plan-author
+  // engine can't drift live between readout-confirm and dispatch (the freeze-drift guard for plan).
+  const planFrozen = { version: V, phases: [
+    { phase: 'plan', role: 'author-plan', kind: 'author-plan', engine: 'codex', model: 'opus', effort: 'xhigh' }] }
+  const planMerged = sr.mergeFrozenSnapshot(planFrozen, {}, { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {} })
+  assert.strictEqual(planMerged.enginePrefs.planAuthor, 'codex', 'author-plan engine freezes onto planAuthor')
+  assert.strictEqual(planMerged.enginePrefs.effort['author-plan'], 'xhigh', 'author-plan effort freezes onto the author-plan effort key')
+  assert.strictEqual(planMerged.overrides['author-plan'], 'opus', 'author-plan model freezes onto its split role')
+
   // Behavior-preserving: no frozen snapshot -> the maps are returned unchanged (the rollback state).
   const passthrough = sr.mergeFrozenSnapshot(null, baseOv, baseEp)
   assert.deepStrictEqual(passthrough.overrides, baseOv, 'no snapshot -> config-derived overrides unchanged')

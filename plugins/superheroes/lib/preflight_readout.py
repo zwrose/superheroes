@@ -36,10 +36,22 @@ PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
 # stays row-for-phase complete against showrunner.js's PHASES (roster-parity guard) — a phase can
 # never be silently dropped from the readout. A "none"-kind row pins no engine/model/effort.
 _PHASE_ROLES = {
-    "plan":         [("author", "author", None, "author")],
-    "review-plan":  [("reviewer", "reviewer", "review", "review")],
+    # plan authoring IS engine-routed: produce() dispatches roleKind 'author-plan' when
+    # enginePreferences.planAuthor routes externally (showrunner.js produce → engineDispatch), pinning
+    # authorModel('plan') = resolveModel('author-plan') (split role → author). The kind-tag
+    # "author-plan" makes _engine_for consult engine_pref.resolve_engine('author-plan') and the tier
+    # role "author-plan" carries the split-role model — so a planAuthor:codex / author-plan:fable
+    # calibration renders honestly here instead of the old hard-coded claude·author. tasks authoring
+    # has NO engine key (always native), so it keeps kind "author".
+    "plan":         [("author", "author-plan", "author-plan", "author-plan")],
+    # review-plan / review-tasks doc panels are native-by-design: docReviewerAgent (showrunner.js)
+    # dispatches agent() with resolveModel('reviewer') only — NO resolveEngine / no engine axis (a
+    # deliberate FR-15 scope, owner-confirmed 2026-07-08). kind "review-native" pins engine claude so
+    # the readout never shows an external reviewer these panels can't honor; the model rides the
+    # 'reviewer' tier (sonnet), which is exactly what the panels dispatch.
+    "review-plan":  [("reviewer", "reviewer", "review", "review-native")],
     "tasks":        [("author", "author", None, "author")],
-    "review-tasks": [("reviewer", "reviewer", "review", "review")],
+    "review-tasks": [("reviewer", "reviewer", "review", "review-native")],
     "workhorse":    [("builder", "builder", "build", "build"),
                      ("per-task reviewer", "reviewer", "review", "review"),
                      ("fixer", "fixer", "fix", "fix"),
@@ -54,26 +66,49 @@ _PHASE_ROLES = {
     "draft-PR":     [("no agent (deterministic step)", None, None, "none")],
     "test-pilot":   [("orchestration", "orchestrator", None, "orchestration")],
     "mark-ready":   [("no agent (deterministic step)", None, None, "none")],
-    "ship":         [("fixer (on CI failure)", "fixer", "fix", "fix")],
+    # ship-phase CI fixer is native-by-design: showrunner.js's ship phase fires a BARE agent()
+    # ({label:'fix-ci'}, no model, no resolveEngine) — so it runs native Claude at the spine's
+    # unpinned smart-leaf floor (bundle __safeSmartDefault = resolveModel('synthesis', None) = opus),
+    # NOT the fixer tier and NOT the implementation engine. kind "ship-fix-native" renders that truth
+    # (claude·opus) instead of the old cursor·sonnet lie. Its tier role is None so the freeze-consume
+    # merge (mergeFrozenSnapshot) never pins a value from this row — critically it must NOT pin the
+    # 'fixer' tier to opus, which would corrupt the workhorse code-fixer (a separate engine-routed row).
+    "ship":         [("fixer (on CI failure)", None, "fix", "ship-fix-native")],
 }
 
 
+# Kinds handled in the MAIN enumerate_dispatch loop that are native Claude BY DESIGN (their dispatch
+# site has no engine axis at all), as distinct from a kind that CAN route externally but happens to
+# resolve claude for this config. These get engine "claude" + the nativeByDesign flag: author-tasks,
+# the review-plan/review-tasks doc panels (review-native), and the review-code synthesis judge.
+# (ship-fix-native is ALSO native-by-design but is emitted by its own dedicated branch below, which
+# sets nativeByDesign inline; it is deliberately NOT in this set — that branch never reaches here.)
+_NATIVE_BY_DESIGN_KINDS = frozenset({"author", "synthesis", "review-native"})
+
+
 def _engine_for(kind, prefs):
-    """The engine for a role kind. author/orchestration/None-kind roles run on claude (model_tier
-    governs); review/build/fix defer to engine_pref."""
+    """The engine for a role kind. Native-by-design kinds (author/synthesis/review-native/
+    ship-fix-native), orchestration, and None-kind roles run on claude (model_tier governs);
+    review/build/fix and plan authoring (author-plan) defer to engine_pref."""
     if kind in ("review", "review-deep"):
         return engine_pref.resolve_engine("review", prefs)
     if kind == "build":
         return engine_pref.resolve_engine("build", prefs)
     if kind == "fix":
         return engine_pref.resolve_engine("fix", prefs)
+    if kind == "author-plan":
+        return engine_pref.resolve_engine("author-plan", prefs)
     return "claude"
 
 
 def _effort_for(engine, kind, prefs):
     effort_overrides = prefs.get("effort") if isinstance(prefs, dict) else None
-    role_kind = "review-deep" if kind == "review-deep" else ("review" if kind == "review"
-                else ("build" if kind == "build" else ("fix" if kind == "fix" else None)))
+    role_kind = ("review-deep" if kind == "review-deep"
+                 else "review" if kind == "review"
+                 else "build" if kind == "build"
+                 else "fix" if kind == "fix"
+                 else "author-plan" if kind == "author-plan"
+                 else None)  # native-by-design / orchestration / none -> no engine effort
     if role_kind is None:
         return None
     return engine_pref.resolve_effort(engine, role_kind, effort_overrides)
@@ -95,6 +130,18 @@ def enumerate_dispatch(prefs, tier_overrides, run_overrides=None):
                              "engine": "claude", "model": None, "effort": None, "kind": kind,
                              "configuredOrDefault": "default"})
                 continue
+            if kind == "ship-fix-native":
+                # The ship-phase CI fixer is a bare native agent() with NO model pin, so it lands on
+                # the spine's unpinned smart-leaf floor — bundle_showrunner.js's __safeSmartDefault(),
+                # i.e. resolveModel('synthesis', None) (overrides ignored, exactly as the bundle does).
+                # role is None so mergeFrozenSnapshot never pins a tier from this row (it must not pin
+                # 'fixer' → opus and corrupt the workhorse code-fixer). Not overridable (its dispatch
+                # can't honor an engine/model override), so it skips _apply_override entirely.
+                rows.append({"phase": phase, "role": tier_role, "roleLabel": label,
+                             "engine": "claude", "model": model_tier.resolve_model("synthesis", None),
+                             "effort": None, "kind": kind, "nativeByDesign": True,
+                             "configuredOrDefault": "default"})
+                continue
             model = model_tier.resolve_model(tier_role, tier_overrides,
                                              "code" if tier_role == "fixer" else None)
             engine = _engine_for(kind, prefs)
@@ -108,6 +155,10 @@ def enumerate_dispatch(prefs, tier_overrides, run_overrides=None):
             row = {"phase": phase, "role": tier_role, "roleLabel": label,
                    "engine": engine, "model": model, "effort": effort, "kind": kind,
                    "configuredOrDefault": "configured" if configured else "default"}
+            if kind in _NATIVE_BY_DESIGN_KINDS:
+                # Marks a row whose dispatch site has no engine axis; consumers (the dispatch-census
+                # audit, #299) use it to know an external row here would be a bug, not a fall-open.
+                row["nativeByDesign"] = True
             # UFR-4: a non-orchestration role whose model resolved to None (session inherit) is
             # unexpected — the orchestration role inherits by design (kind == "orchestration"), any
             # other role inheriting is flagged so the owner sees it rather than a silent inherit.
