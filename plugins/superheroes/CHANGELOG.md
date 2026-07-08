@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.11.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.10.0...superheroes-v0.11.0) (2026-07-08)
+
+
+### Features
+
+* **superheroes:** add permission_rules.worktree_confined (FR-5, UFR-5) ([#286](https://github.com/zwrose/superheroes/issues/286)) ([e1cc216](https://github.com/zwrose/superheroes/commit/e1cc216063ca8d7433de0ca82097e5f8e79fe4ee))
+* **superheroes:** preflight readout confirm gate — dispatch roster, freeze snapshot, per-run overrides ([#162](https://github.com/zwrose/superheroes/issues/162)) ([#285](https://github.com/zwrose/superheroes/issues/285)) ([e49dc99](https://github.com/zwrose/superheroes/commit/e49dc99021c119125c5a04661bf552c6a3008840))
+
+
+### Bug Fixes
+
+* **superheroes:** bounded verify re-run + honest verify park reason ([#279](https://github.com/zwrose/superheroes/issues/279)) ([#283](https://github.com/zwrose/superheroes/issues/283)) ([c99cdd0](https://github.com/zwrose/superheroes/commit/c99cdd08afd9da4397e70990b7256c2f089d62eb))
+* **superheroes:** build gate fails closed on stringy leaf ok ([#275](https://github.com/zwrose/superheroes/issues/275)) ([#280](https://github.com/zwrose/superheroes/issues/280)) ([d2fada5](https://github.com/zwrose/superheroes/commit/d2fada5045a067d09974e96d2e38709a6329fd56))
+* **superheroes:** de-flake final-review smokes — pid-unique runDir + surfaced cannot-certify reason ([#290](https://github.com/zwrose/superheroes/issues/290)) ([624d401](https://github.com/zwrose/superheroes/commit/624d40194a20f59c8362f692cebc0040428d2b77))
+* **superheroes:** de-flake nine more smokes — pid-unique /tmp state + root-pinned cwd ([#294](https://github.com/zwrose/superheroes/issues/294)) ([44227d5](https://github.com/zwrose/superheroes/commit/44227d50f380389864d45c114c0c23c485486cd1))
+* **superheroes:** external-engine dispatch survives the Workflow sandbox ([#277](https://github.com/zwrose/superheroes/issues/277)) ([#282](https://github.com/zwrose/superheroes/issues/282)) ([51abc54](https://github.com/zwrose/superheroes/commit/51abc544553d436d2877e19374d4c37f06302373))
+* **superheroes:** make fill-dod leaf schema require the rows payload ([#301](https://github.com/zwrose/superheroes/issues/301)) ([#302](https://github.com/zwrose/superheroes/issues/302)) ([63bd1f0](https://github.com/zwrose/superheroes/commit/63bd1f0c8d55b1ea9dfbd959685f97d5a4fb6a92))
+* **superheroes:** parse_result honors external build/fix refusals ([#288](https://github.com/zwrose/superheroes/issues/288)) ([#292](https://github.com/zwrose/superheroes/issues/292)) ([9d2bf02](https://github.com/zwrose/superheroes/commit/9d2bf02900a7566306c76f8fb7381e3c39d2a453))
+* **superheroes:** per-task review gates on verdicts + fails closed on unknown severity ([#276](https://github.com/zwrose/superheroes/issues/276)) ([#278](https://github.com/zwrose/superheroes/issues/278)) ([6f0f401](https://github.com/zwrose/superheroes/commit/6f0f401ad3cb760538bfffd6e22507a69916b849))
+* **superheroes:** refuse a non-ancestor --root in the acceptance harness + raise the default ceiling ([#298](https://github.com/zwrose/superheroes/issues/298)) ([#304](https://github.com/zwrose/superheroes/issues/304)) ([4683e4a](https://github.com/zwrose/superheroes/commit/4683e4aa1bfc3e70476188176e5678962ca0cf81))
+* **superheroes:** startup gather rides the __SR_EXIT proof-of-execution marker ([#281](https://github.com/zwrose/superheroes/issues/281)) ([#289](https://github.com/zwrose/superheroes/issues/289)) ([14f2998](https://github.com/zwrose/superheroes/commit/14f2998f379af5544d153fab668d686024502a4e))
+* **superheroes:** strip comments at bundle-emit time to stay under Workflow script-size cap ([#297](https://github.com/zwrose/superheroes/issues/297)) ([bd84ac0](https://github.com/zwrose/superheroes/commit/bd84ac050bc0c9ad4846ae98b90ce93863fd92fd))
+
 ## [0.10.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.9.0...superheroes-v0.10.0) (2026-07-06)
 
 
