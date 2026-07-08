@@ -637,3 +637,157 @@ def test_real_discover_artifacts_finds_pr_by_head_ref_not_title(monkeypatch):
     # The artifact's name is the head branch (embeds the stamp for parse_stamp routing),
     # not the PR's own (unrelated) title.
     assert pr_artifacts[0]["name"] == "superheroes/accept-harness-xyz-abc123"
+
+
+# --- real_root_ancestry (issue #298) ---------------------------------------------------
+#
+# Refuse a --root checkout whose HEAD is not an ancestor of origin/<default-branch> (a
+# release-branch checkout false-parks on UFR-7 mid-run). All git I/O flows through an
+# injected run seam so every branch is driven without a real fetch.
+
+
+def _ancestry_run(default_symbolic=True, head_sha="deadbeef12", fetch_rc=0,
+                  ref_rc=0, is_ancestor_rc=0, recorder=None):
+    """Build a fake `run(args, timeout=?) -> (rc, out, err)` for real_root_ancestry."""
+    def fake_run(args, timeout=15):
+        if recorder is not None:
+            recorder.append(args)
+        if args[:2] == ["git", "symbolic-ref"]:
+            return (0, "refs/remotes/origin/main\n", "") if default_symbolic else (128, "", "no HEAD")
+        if args[:3] == ["git", "rev-parse", "--verify"]:
+            return (ref_rc, "aa\n" if ref_rc == 0 else "", "")
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return (0, head_sha + "\n", "")
+        if args[:2] == ["git", "fetch"]:
+            return (fetch_rc, "", "" if fetch_rc == 0 else "no remote")
+        if args[:2] == ["git", "merge-base"]:
+            return (is_ancestor_rc, "", "")
+        return (1, "", "")
+    return fake_run
+
+
+def test_root_ancestry_ancestor_clean_proceeds():
+    res = deps.real_root_ancestry(
+        "/root", run=_ancestry_run(is_ancestor_rc=0), warn=lambda m: None)()
+    assert res["ok"] is True
+    assert res["checked"] is True
+    assert res["default_branch"] == "main"
+
+
+def test_root_ancestry_non_ancestor_refuses_naming_sha_and_hatch():
+    warned = []
+    res = deps.real_root_ancestry(
+        "/root", run=_ancestry_run(head_sha="cafef00d99", is_ancestor_rc=1),
+        warn=warned.append)()
+    assert res["ok"] is False
+    assert res["head_sha"] == "cafef00d99"
+    # the refusal reason names the sha, the remote default, and the escape hatch + fix.
+    assert "cafef00d99" in res["reason"]
+    assert "origin/main" in res["reason"]
+    assert "--allow-unmerged-root" in res["reason"]
+    assert "--spine-lib" in res["reason"]
+    assert warned == []                          # a clean refusal is not a degrade warning
+
+
+def test_root_ancestry_fetch_failure_warns_and_continues():
+    warned = []
+    res = deps.real_root_ancestry(
+        "/root", run=_ancestry_run(fetch_rc=1), warn=warned.append)()
+    assert res["ok"] is True                      # never a hard block for offline
+    assert res["checked"] is False                # but the check did NOT actually run
+    assert warned and "fetch" in warned[0].lower()  # the degrade is loud, never silent
+
+
+def test_root_ancestry_unresolvable_remote_ref_warns_and_continues():
+    warned = []
+    res = deps.real_root_ancestry(
+        "/root", run=_ancestry_run(ref_rc=1), warn=warned.append)()
+    assert res["ok"] is True
+    assert res["checked"] is False
+    assert warned                                 # loud degrade, not a silent pass
+
+
+def test_root_ancestry_default_falls_back_to_main_without_symbolic_ref():
+    res = deps.real_root_ancestry(
+        "/root", run=_ancestry_run(default_symbolic=False, is_ancestor_rc=0),
+        warn=lambda m: None)()
+    assert res["ok"] is True
+    assert res["default_branch"] == "main"        # fell back to main when symbolic-ref failed
+
+
+def test_root_ancestry_merge_base_error_degrades_not_refuses():
+    warned = []
+    # rc 128 (neither 0 ancestor nor 1 not-ancestor) is an error -> degrade, never a refusal.
+    res = deps.real_root_ancestry(
+        "/root", run=_ancestry_run(is_ancestor_rc=128), warn=warned.append)()
+    assert res["ok"] is True
+    assert res["checked"] is False
+    assert warned
+
+
+def test_root_ancestry_preserves_slash_in_default_branch_name():
+    # A slash-containing default (e.g. release/stable) must survive intact — the parse strips
+    # the full refs/remotes/origin/ prefix, not rsplit on the last '/'.
+    seen = []
+
+    def fake_run(args, timeout=15):
+        seen.append(args)
+        if args[:2] == ["git", "symbolic-ref"]:
+            return (0, "refs/remotes/origin/release/stable\n", "")
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            return (0, "abc123\n", "")
+        if args[:3] == ["git", "rev-parse", "--verify"]:
+            return (0, "x\n", "") if args[-1] == "origin/release/stable" else (1, "", "")
+        if args[:2] == ["git", "fetch"]:
+            return (0, "", "")
+        if args[:2] == ["git", "merge-base"]:
+            return (0, "", "")
+        return (1, "", "")
+
+    res = deps.real_root_ancestry("/root", run=fake_run, warn=lambda m: None)()
+    assert res["ok"] is True and res["checked"] is True
+    assert res["default_branch"] == "release/stable"
+    # the fetch and the merge-base both used the FULL slash-containing branch, not a truncation.
+    assert ["git", "fetch", "origin", "release/stable"] in seen
+    assert ["git", "merge-base", "--is-ancestor", "HEAD", "origin/release/stable"] in seen
+
+
+def test_root_ancestry_merge_base_subprocess_failure_degrades_not_false_refusal(monkeypatch):
+    # Review finding: the shared _run collapses a subprocess failure to rc 1, which is EXACTLY
+    # git's merge-base "not an ancestor" code — so a merge-base timeout must not launder into a
+    # false refusal. The dedicated default runner maps the failure to rc 128 instead, landing in
+    # the degrade branch. Drive it with the REAL default runner (no injected `run`), forcing ONLY
+    # merge-base to raise.
+    import subprocess as _sp
+
+    def selective(args, cwd=None, capture_output=None, text=None, timeout=None):
+        if "merge-base" in args:
+            raise _sp.TimeoutExpired(cmd=args, timeout=timeout or 1)
+        out = ""
+        if args[:2] == ["git", "symbolic-ref"]:
+            out = "refs/remotes/origin/main\n"
+        elif args[:3] == ["git", "rev-parse", "HEAD"]:
+            out = "abc123\n"
+        elif args[:3] == ["git", "rev-parse", "--verify"]:
+            out = "def456\n"
+        return _sp.CompletedProcess(args, 0, out, "")
+
+    monkeypatch.setattr(deps.subprocess, "run", selective)
+    warned = []
+    res = deps.real_root_ancestry("/root", warn=warned.append)()
+    assert res["ok"] is True           # a merge-base subprocess failure must NEVER refuse
+    assert res["checked"] is False     # it degrades (warn + continue) instead
+    assert warned
+
+
+def test_root_ancestry_bypass_never_touches_git():
+    def boom(args, timeout=15):
+        raise AssertionError("git must not run under --allow-unmerged-root")
+    res = deps.real_root_ancestry("/root", allow_unmerged_root=True, run=boom)()
+    assert res["ok"] is True
+    assert res.get("bypassed") is True
+
+
+def test_build_wires_root_ancestry_seam(tmp_path):
+    d = deps.build(str(tmp_path / "fixture"), str(tmp_path))
+    assert callable(d["root_ancestry"])

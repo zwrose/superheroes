@@ -47,7 +47,18 @@ Resolve the checkout once: `ROOT=$(git rev-parse --show-toplevel)`.
    - **`acceptance`** — invoke the repo-local **`acceptance`** skill to run the live pre-release
      acceptance gate (it points `--spine-lib` at this checkout's `plugins/superheroes/lib`, so it
      validates the exact spine being released and records the bundle's SHA-256). This wraps
-     `acceptance`; do not re-implement it. When it finishes, read the result record it names:
+     `acceptance`; do not re-implement it.
+
+     **Never `--root` a release-branch checkout — run from merged `<default-branch>`; the bundle
+     hash binds the evidence to the release, so the release branch's version-bump commits add
+     nothing but a false UFR-7 park.** The harness refuses a non-ancestor `--root` pre-launch
+     (issue #298). **Launch with a generous ceiling + a liveness monitor, not a tight wall-clock:**
+     ceilings catch pathology, not duration variance — a healthy full-pipeline run took 50+ min
+     live and the old 30-min default hard-killed one mid-review (issue #298, run 5). Watch
+     journal/phase-record staleness (≈10–15 min with no new event → investigate) rather than
+     capping the clock tight.
+
+     When it finishes, read the result record it names:
 
      ```bash
      # the acceptance report prints the record path; read verdict + provenance from it

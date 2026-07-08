@@ -259,6 +259,62 @@ def test_cli_unset_child_model_not_forced_through():
     assert calls == [(FIXTURE, ROOT)]
 
 
+def test_cli_threads_allow_unmerged_root_to_the_real_builder():
+    # issue #298: `--allow-unmerged-root` must reach the real `acceptance_deps.build` as its
+    # `allow_unmerged_root` kwarg (the escape hatch that bypasses the root-lineage refusal).
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root, allow_unmerged_root=False):
+        calls.append({"allow_unmerged_root": allow_unmerged_root})
+        return real_build(fixture, root, allow_unmerged_root=allow_unmerged_root)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted before any live launch",
+                "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli(["--fixture", FIXTURE, "--root", ROOT, "--allow-unmerged-root"],
+                        env, io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+    assert code == 1
+    assert calls[0]["allow_unmerged_root"] is True
+
+
+def test_cli_unset_allow_unmerged_root_not_forced_through():
+    # Omitted flag -> the kwarg is NOT passed, so a legacy 2-arg spy builder still works.
+    calls = []
+    real_build = acceptance_deps.build
+    real_invoke = run.invoke
+
+    def _spy_build(fixture, root):   # legacy 2-arg signature
+        calls.append((fixture, root))
+        return real_build(fixture, root)
+
+    def _fake_invoke(deps):
+        return {"verdict": "fail", "report": "intercepted", "record_path": None}
+
+    acceptance_deps.build = _spy_build
+    run.invoke = _fake_invoke
+    try:
+        env = dict(os.environ)
+        env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
+        code = run._cli(["--fixture", FIXTURE, "--root", ROOT], env,
+                        io.StringIO(), io.StringIO())
+    finally:
+        acceptance_deps.build = real_build
+        run.invoke = real_invoke
+    assert code == 1
+    assert calls == [(FIXTURE, ROOT)]
+
+
 def test_cli_bad_ceilings_config_returns_argparse_status_without_raising(tmp_path):
     env = dict(os.environ)
     env.pop("SUPERHEROES_ACCEPTANCE_CONTEXT", None)
