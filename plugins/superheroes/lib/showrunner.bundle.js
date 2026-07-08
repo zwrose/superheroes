@@ -6857,9 +6857,16 @@ async function proposeDodDispositions(workItem, prNumber) {
       `dropped bullet as a failure, not a shortcut.\n` +
       `Return ONLY JSON {"ok": true, "rows": [{"bullet": "<bullet text exactly as it appears ` +
       `in the spec/table>", "disposition": "done"|"deferred", "detail": "<evidence pointer or ` +
-      `#NNN + reason>"}]} — one entry per bullet you can evidence (ok=false with "reason" if you ` +
-      `could not read the spec or PR). If you genuinely cannot evidence a bullet, OMIT it.`,
-      { label: 'fill-dod', schema: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } })
+      `#NNN + reason>"}]} — one entry per bullet you can evidence. "rows" is ALWAYS present: an ` +
+      `ok=false refusal (you could not read the spec or PR) returns rows: [] explicitly. If you ` +
+      `genuinely cannot evidence a bullet, OMIT it from rows (never emit a row with empty fields).`,
+      { label: 'fill-dod', schema: { type: 'object', required: ['ok', 'rows'], properties: {
+        ok: { type: 'boolean' },
+        rows: { type: 'array', items: { type: 'object',
+          required: ['bullet', 'disposition', 'detail'],
+          properties: { bullet: { type: 'string' },
+                        disposition: { enum: ['done', 'deferred'] },
+                        detail: { type: 'string' } } } } } } })
     const obj = _coerceObj(raw)
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
     const rows = _coerceObj(obj.rows)
