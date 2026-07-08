@@ -1,1 +1,2 @@
 acceptance-harness fixture target — the run appends one dated line below.
+acceptance run: 2026-07-08T00:47:12Z
