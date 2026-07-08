@@ -23,9 +23,13 @@ stub that declines (the DoD floor `test_acceptance_run_cli.py` pins).
 import hashlib
 import json
 import os
+import shlex
+import sys
 import tempfile
 import socket
 import subprocess
+
+import build_state_cli   # DEFAULT_BRANCH_FALLBACK — the ONE home for default-branch name order (#298 r1)
 import time
 import uuid
 
@@ -513,6 +517,156 @@ def _run(args, cwd, timeout=15):
         return r.returncode, (r.stdout or ""), (r.stderr or "")
     except (OSError, subprocess.SubprocessError):
         return 1, "", "subprocess failed"
+
+
+def _stderr_warn(msg):
+    """Loud, single-line degrade warning to stderr — the acceptance harness's own diagnostic
+    channel (the report is stdout). Used when the root-ancestry check cannot run (offline /
+    no remote) so the degrade is NEVER a silent pass."""
+    print(msg, file=sys.stderr)
+
+
+def real_root_ancestry(root, allow_unmerged_root=False, run=None, warn=None):
+    """`deps["root_ancestry"]`: refuse a `--root` checkout whose HEAD is not an ancestor of
+    origin/<default-branch> (issue #298).
+
+    Live evidence (0.11.0 eval, run 4): an acceptance run was rooted at a checkout of the
+    release-please branch head instead of merged `main`. It traversed the whole front half,
+    then false-parked mid-workhorse on UFR-7 ("commit above the branch base carries no/unknown
+    Task-Id") — the flagged commit was the legitimately trailer-less release version-bump
+    commit. A full ~8-minute run and a confusing park signature, for an invocation error at
+    second zero. Per the tripwire policy an owner-named failure mode gets a MECHANICAL guard.
+
+    Sequence (all git I/O flows through the injected `run(args, timeout=?) -> (rc, out, err)`
+    seam so the tests drive every branch without a network fetch):
+
+      1. Resolve the remote default branch the spine uses: `git symbolic-ref --quiet
+         refs/remotes/origin/HEAD`, stripping the `refs/remotes/origin/` prefix so a
+         slash-containing default (e.g. `release/stable`) survives intact.
+      2. Best-effort fetch — `git fetch origin <default>` when the default is known, else a full
+         `git fetch origin` to refresh all remote-tracking refs. A FETCH FAILURE (offline / no
+         remote) is a loud stderr warning + continue, never a silent pass and never a hard block
+         (offline runs are already non-evidence; the ancestor check simply cannot run).
+      3. Pick the remote-tracking ref to compare against: the discovered default, else the
+         conventional `main`/`master` — the SAME fallback order as `build_state_cli._base`, so
+         the gate and the spine can never disagree on the default branch (the #115 drift lesson).
+      4. Refuse when `git merge-base --is-ancestor HEAD origin/<default>` is FALSE — the refusal
+         names the offending HEAD sha, the cause, the fix, and the `--allow-unmerged-root`
+         escape hatch. Any state that leaves ancestry UNDETERMINABLE (HEAD unresolvable,
+         origin/<default> absent, merge-base error) degrades like a fetch failure: warn + continue.
+
+    Subprocess-failure safety (review finding): the default git runner maps an OSError / timeout
+    to rc 128 (git's own error convention), NOT rc 1. The shared `_run` collapses failures to
+    rc 1 — which is EXACTLY git's `merge-base --is-ancestor` "not an ancestor" code — so using it
+    here would launder a merge-base timeout into a false refusal of a perfectly valid run. The
+    dedicated runner keeps rc 1 meaning ONLY a genuine not-ancestor verdict; every subprocess
+    failure lands in the `rc != 1` degrade branch.
+
+    `allow_unmerged_root=True` (the CLI escape hatch, for a deliberate pre-merge branch-spine
+    run — the run-10 pattern) short-circuits to `{"ok": True, "bypassed": True}` WITHOUT touching
+    git. The refusal is deterministic and pre-launch; `acceptance_run.invoke` calls this BEFORE
+    reclaim/lease/stamp, so a refusal takes no lease and stamps no fixture.
+    """
+    def _default_run(args, timeout=15):
+        try:
+            r = subprocess.run(args, cwd=root, capture_output=True, text=True, timeout=timeout)
+            return r.returncode, (r.stdout or ""), (r.stderr or "")
+        except (OSError, subprocess.SubprocessError):
+            # 128 (not 1) so a merge-base subprocess failure degrades rather than reads as a
+            # genuine "not an ancestor" refusal — see the docstring's subprocess-failure note.
+            return 128, "", "subprocess failed"
+    _run_git = run or _default_run
+    emit = warn or _stderr_warn
+
+    def _resolve_default():
+        """The remote default branch name (slashes preserved), or None when origin/HEAD is
+        unset. Mirrors build_state_cli._base's symbolic-ref parse: strip the full
+        `refs/remotes/origin/` prefix rather than rsplit on the last '/'."""
+        rc, out, _err = _run_git(["git", "symbolic-ref", "--quiet",
+                                  "refs/remotes/origin/HEAD"])
+        prefix = "refs/remotes/origin/"
+        if rc == 0 and out.strip().startswith(prefix):
+            name = out.strip()[len(prefix):]
+            if name:
+                return name
+        return None
+
+    def _degrade(head_sha, default, reason):
+        emit("WARNING: acceptance root-ancestry check could not run (%s) — proceeding WITHOUT "
+             "the ancestor check; this run is non-evidence. Root at merged %s for a "
+             "release-binding run." % (reason, default or "the default branch"))
+        return {"ok": True, "checked": False, "head_sha": head_sha,
+                "default_branch": default, "reason": reason}
+
+    def _probe():
+        if allow_unmerged_root:
+            return {"ok": True, "bypassed": True, "checked": False,
+                    "reason": "--allow-unmerged-root: ancestor check bypassed deliberately"}
+        # 1. Resolve the remote default branch (same derivation the spine uses).
+        default = _resolve_default()
+
+        rc_head, head_out, _e = _run_git(["git", "rev-parse", "HEAD"])
+        head_sha = head_out.strip() if rc_head == 0 and head_out.strip() else "unknown"
+
+        # 2. Best-effort fetch. When origin/HEAD is unset we don't know the default branch, so
+        # refresh ALL remote-tracking refs; otherwise fetch the default with an EXPLICIT refspec
+        # (#298 review r1, Code): a bare `git fetch origin <branch>` updates only FETCH_HEAD plus
+        # — opportunistically, per the remote's configured refspec — the tracking ref; a narrowed
+        # refspec (single-branch clone) leaves refs/remotes/origin/<branch> STALE, and step 4
+        # would then refuse a root whose HEAD is genuinely on the remote default. The explicit
+        # `+refs/heads/X:refs/remotes/origin/X` form updates the compared ref regardless of the
+        # remote's fetch config. Failure = degrade.
+        fetch_args = (["git", "fetch", "origin",
+                       "+refs/heads/%s:refs/remotes/origin/%s" % (default, default)]
+                      if default else ["git", "fetch", "origin"])
+        rc_fetch, _o, _fe = _run_git(fetch_args, timeout=45)
+        if rc_fetch != 0:
+            return _degrade(head_sha, default, "fetch failed (offline / no remote?)")
+
+        # 3. Resolve the remote-tracking ref to compare against — discovered default first, then
+        # the shared default-branch name fallback (ONE home: build_state_cli.DEFAULT_BRANCH_FALLBACK,
+        # the same order `_base` derives its refs from — CONVENTIONS §11, #298 review r1: the
+        # pre-launch gate and the UFR-7 trailer gate it protects must never disagree on the
+        # default branch).
+        remote_ref = None
+        for cand in [c for c in (default,) + build_state_cli.DEFAULT_BRANCH_FALLBACK if c]:
+            if _run_git(["git", "rev-parse", "--verify", "--quiet", "origin/%s" % cand])[0] == 0:
+                remote_ref, default = "origin/%s" % cand, cand
+                break
+        if remote_ref is None or head_sha == "unknown":
+            return _degrade(head_sha, default,
+                            "could not resolve origin/<default-branch> or HEAD after fetch")
+
+        # 4. The gate: is HEAD an ancestor of origin/<default>? (Both refs are confirmed real
+        # above, so rc 1 is a genuine not-ancestor verdict — not a laundered subprocess error.)
+        rc_anc, _o, _e = _run_git(["git", "merge-base", "--is-ancestor", "HEAD", remote_ref])
+        if rc_anc == 0:
+            return {"ok": True, "checked": True, "head_sha": head_sha,
+                    "default_branch": default}
+        if rc_anc != 1:
+            # Any code other than 0 (ancestor) / 1 (not ancestor) is an error, not a verdict —
+            # degrade rather than refuse on an ambiguous git failure (incl. the 128 subprocess
+            # sentinel above).
+            return _degrade(head_sha, default,
+                            "`git merge-base --is-ancestor` errored (rc=%s)" % rc_anc)
+
+        # Paste-safe recovery command (#298 review r1, Security): `default` comes from
+        # refs/remotes/origin/HEAD, and git ref names may legally contain shell metacharacters
+        # (`;`, `$`, `&`…) — an operator pasting the remediation must never execute extra syntax.
+        quoted_default = shlex.quote(default)
+        reason = (
+            "--root checkout HEAD %s is not an ancestor of %s: it carries commit(s) not on "
+            "origin/%s (e.g. a release-please version bump) — UFR-7's trailer gate will "
+            "false-park on them mid-run. Root the run at merged %s (git checkout %s && git pull); "
+            "--spine-lib + the recorded bundle sha bind the pass to the release. To validate an "
+            "unmerged branch spine deliberately (a pre-merge branch-spine run), pass "
+            "--allow-unmerged-root."
+            % (head_sha, remote_ref, default, quoted_default, quoted_default)
+        )
+        return {"ok": False, "checked": True, "head_sha": head_sha,
+                "default_branch": default, "reason": reason}
+
+    return _probe
 
 
 def real_discover_artifacts(root):
@@ -1030,7 +1184,8 @@ def real_write_orphan_record(root):
 # --- assembly --------------------------------------------------------------------------
 
 
-def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None):
+def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None,
+          allow_unmerged_root=False):
     """Assemble the full real `deps` dict `acceptance_run.invoke` expects.
 
     Every seam here is a real primitive (control-plane store, git/gh subprocess reads,
@@ -1049,6 +1204,12 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None):
     session's model so it never inherits the invoking user's CLI default; it is resolved to
     a concrete value ONCE here and threaded to both the launcher (what is spawned) and the
     provenance seam (what is recorded), so the recorded driver always matches the spawned one.
+
+    `allow_unmerged_root` (issue #298, default False) wires the `root_ancestry` pre-launch
+    guard in enforcing mode: `invoke` refuses BEFORE reclaim/lease/stamp when the `--root`
+    checkout's HEAD is not an ancestor of origin/<default-branch> (a release-branch checkout
+    would false-park on UFR-7 mid-run). True bypasses the guard for a deliberate pre-merge
+    branch-spine run.
 
     premortem-001: `reclaim_probe` and the FIRST `materialize()` share one atomically-
     reserved stamp (`state["reserved_stamp"]`, minted once here and consumed exactly
@@ -1103,6 +1264,7 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None):
         return (state["stamped"] or {}).get("stamp")
 
     return {
+        "root_ancestry": real_root_ancestry(root, allow_unmerged_root=allow_unmerged_root),
         "reclaim_probe": reclaim_probe,
         "materialize": materialize,
         "preflight_ok": real_preflight_ok(fixture_dir, root, spine_lib=spine_lib),

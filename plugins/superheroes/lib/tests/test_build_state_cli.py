@@ -152,3 +152,34 @@ def test_record_reviewed_then_gather_reads_it(tmp_path):
                           "--branch", "superheroes/wi-abc", "--valid-ids", "1"],
                          cwd=repo, env=env, capture_output=True, text=True)
     assert json.loads(out.stdout)["review_records"].get("1") == "passed"
+
+
+def test_base_fallback_refs_derive_from_the_shared_constant(monkeypatch):
+    # #298 review r2 (Test): _base must genuinely DERIVE its fallback probe order from
+    # DEFAULT_BRANCH_FALLBACK (the ONE home shared with acceptance_deps.real_root_ancestry) —
+    # a mutant that re-hardcodes ("origin/main", "main", "master") inline would otherwise
+    # survive the constant-equality assert. Drive _base with origin/HEAD unset and every
+    # candidate missing, and pin the exact probe sequence against the constant.
+    import build_state_cli as bsc
+
+    probed = []
+
+    class _R:
+        def __init__(self, rc, out=""):
+            self.returncode, self.stdout = rc, out
+
+    def fake_git(git_root, *args):
+        probed.append(args)
+        if args[0] == "symbolic-ref":
+            return _R(1)                       # origin/HEAD unset -> fallback path
+        if args[0] == "rev-parse":
+            return _R(1)                       # every candidate missing -> walk the whole order
+        if args[0] == "rev-list":
+            return _R(0, "rootsha\n")
+        return _R(1)
+
+    monkeypatch.setattr(bsc, "_git", fake_git)
+    assert bsc._base("/repo") == "rootsha"
+    fallback_probes = [a[-1] for a in probed if a[0] == "rev-parse"]
+    expected = ["origin/%s" % bsc.DEFAULT_BRANCH_FALLBACK[0]] + list(bsc.DEFAULT_BRANCH_FALLBACK)
+    assert fallback_probes == expected

@@ -21,6 +21,13 @@ class _BaseUnresolvable(Exception):
         self.reason = reason
 
 
+# The conventional default-branch NAME preference, in order — the ONE home (CONVENTIONS §11)
+# shared with acceptance_deps.real_root_ancestry's remote-ref fallback, so the pre-launch
+# root-ancestry gate (#298) and this module's UFR-7 base resolution can never disagree on
+# which branch counts as the default when origin/HEAD is unset.
+DEFAULT_BRANCH_FALLBACK = ("main", "master")
+
+
 def _base(git_root):
     # Prefer the remote's ACTUAL default branch (a non-standard default must not fall through to
     # the root commit, which would read the whole branch as unmapped).
@@ -31,7 +38,9 @@ def _base(git_root):
             ref = ref[len("refs/remotes/"):]          # -> e.g. "origin/main"
         if ref and _git(git_root, "rev-parse", "--verify", "--quiet", ref).returncode == 0:
             return ref
-    for ref in ("origin/main", "main", "master"):
+    # Derived from DEFAULT_BRANCH_FALLBACK: remote-tracking first for the preferred name, then
+    # the local names in preference order (the historical ("origin/main", "main", "master")).
+    for ref in ("origin/%s" % DEFAULT_BRANCH_FALLBACK[0],) + DEFAULT_BRANCH_FALLBACK:
         if _git(git_root, "rev-parse", "--verify", "--quiet", ref).returncode == 0:
             return ref
     r = _git(git_root, "rev-list", "--max-parents=0", "HEAD")

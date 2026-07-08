@@ -9,6 +9,11 @@ proven without a live run (DoD); only Task 13's single live run touches a real s
 
 Lifecycle (fail-CLOSED everywhere — an internal error yields a fail verdict, never a pass):
 
+  0. `root_ancestry()` (issue #298) — the FIRST pre-launch gate, BEFORE reclaim so a refusal
+     takes no lease and stamps no fixture. Refuses when the `--root` checkout's HEAD is not an
+     ancestor of origin/<default-branch> (a release-branch checkout would false-park on UFR-7
+     mid-run); writes a refusal record, fails non-zero, and names the offending sha. Absent seam
+     (injected bare deps) skips the check. `--allow-unmerged-root` bypasses it deliberately.
   1. `reclaim_probe()` → `acceptance_reclaim.decide`. On `refuse`, write this invocation's
      fail record and report naming the in-flight / unconfirmable prior run, without releasing
      the other holder's lease. On `reclaim`,
@@ -127,7 +132,7 @@ def _install_termination_handlers():
 
 
 def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
-                         orphan_record_path, prior_unsafe=False):
+                         orphan_record_path, prior_unsafe=False, lease_owned=True):
     """Route a caught `_SignalTermination` through the EXISTING kill+teardown+record path
     (issue #245): hard-kill the live child group FIRST (reusing `_hard_kill_group`), then apply
     the same kill-unconfirmed quarantine semantics the ceiling-kill path uses today — an
@@ -160,7 +165,8 @@ def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
         teardown = {"cleaned_up": [], "left_behind": [],
                     "note": "teardown also failed: %s" % td_exc}
 
-    if unsafe_kill and callable(deps.get("quarantine_lease")):
+    # #298 review r1: never quarantine a lease this invocation does not own (pre-lease window).
+    if unsafe_kill and lease_owned and callable(deps.get("quarantine_lease")):
         try:
             deps["quarantine_lease"](stamp)
         except Exception:
@@ -170,7 +176,8 @@ def _terminate_by_signal(deps, child, stamp, attempts, dead_run_teardown, prov,
     try:
         record_path = _finalize(
             deps, "fail", reason, None, attempts, len(attempts) > 1, teardown,
-            run_stamp=stamp, release_lease=not unsafe_kill, spine_provenance=prov)
+            run_stamp=stamp, release_lease=(not unsafe_kill) and lease_owned,
+            spine_provenance=prov)
     except Exception:
         record_path = None
     return {
@@ -287,6 +294,14 @@ def invoke(deps):
     # `finalized`/`result`: this invocation already wrote its terminal record + handled the
     # lease — a signal in the return-construction window must not re-teardown/re-write/re-release.
     sig_state = {"unsafe": False, "finalized": False, "result": None}
+    # #298 review r1 (premortem, fail-direction): does THIS invocation own the store lease yet?
+    # False until the reclaim decision resolves to proceed (the exclusive-create acquire lives in
+    # reclaim_probe). A signal or internal error in the PRE-LEASE window — materially wider now
+    # that step 0's root-ancestry probe does network git I/O — must NEVER release (or quarantine)
+    # the lease: with run_stamp still None, release_lease(None) is the legacy UNCONDITIONAL
+    # remove and would delete a CONCURRENT run's lease, re-opening the two-runs hazard the lease
+    # exists to prevent. Both except paths below gate on this flag.
+    lease_owned = False
 
     def _mark_finalized():
         # Fired by `_finalize` the instant the record is durably written, BEFORE the lease
@@ -301,33 +316,63 @@ def invoke(deps):
         sig_state["result"] = result
         return result
 
+    def _prelaunch_refusal(reason, unwritten_note):
+        # Shared shape for a pre-launch refusal that writes a refusal record (never the terminal
+        # record) and takes/holds NO new lease — the root-lineage gate (#298, step 0) and the
+        # in-flight-run refusal (step 1). Marks the invocation finalized so a signal in the
+        # return window echoes this result instead of re-entering teardown (no lease/stamp
+        # exists to tear down). A missing writer leaves record_path None and the report shows the
+        # unwritten note.
+        record_path = None
+        writer = deps.get("write_refusal_record") if isinstance(deps, dict) else None
+        if callable(writer):
+            try:
+                record_path = _write_record_only(
+                    deps, "fail", reason, None, [], False,
+                    {"cleaned_up": [], "left_behind": []}, spend_partial=True,
+                    writer=writer, spine_provenance=prov)
+            except Exception:
+                record_path = None
+        return _final({
+            "verdict": "fail",
+            "report": _report(
+                "fail", reason, record_path, None, spend_partial=True,
+                unwritten_record_note=unwritten_note, spine_provenance=prov),
+            "record_path": record_path,
+        })
+
     try:
+        # 0. Root-lineage refusal (issue #298) — the FIRST pre-launch gate, BEFORE reclaim so
+        # a refusal takes NO lease and stamps NO fixture (the trap: a refusing run that held the
+        # lease would break the next run). When the `--root` checkout's HEAD is not an ancestor
+        # of origin/<default-branch> it carries commits not on the default branch (e.g. a
+        # release-please version bump) and UFR-7's trailer gate would false-park mid-run. The
+        # seam does all git I/O (injected, so tests drive it without a fetch) and self-emits the
+        # offline-degrade warning; a fetch failure returns ok=True (never a silent pass here).
+        # Absent seam (fake deps / an injected bare builder) -> skip, unchanged behavior.
+        ancestry_probe = deps.get("root_ancestry") if isinstance(deps, dict) else None
+        if callable(ancestry_probe):
+            lineage = ancestry_probe() or {}
+            if not lineage.get("ok"):
+                reason = lineage.get("reason") or (
+                    "--root checkout is not an ancestor of the remote default branch "
+                    "(HEAD %s); root the run at merged main or pass --allow-unmerged-root"
+                    % lineage.get("head_sha", "unknown"))
+                return _prelaunch_refusal(
+                    reason, "NOT WRITTEN (refused pre-launch; no lease taken)")
+
         # 1. Reclaim / refuse a prior in-flight run.
         recorded_state, liveness = deps["reclaim_probe"]()
         reclaim = acceptance_reclaim.decide(recorded_state, liveness)
         if reclaim["action"] == "refuse":
-            reason = "a prior acceptance run is in flight (%s); refusing to start another" % liveness
-            record_path = None
-            writer = deps.get("write_refusal_record") if isinstance(deps, dict) else None
-            if callable(writer):
-                try:
-                    record_path = _write_record_only(
-                        deps, "fail", reason, None, [], False,
-                        {"cleaned_up": [], "left_behind": []}, spend_partial=True,
-                        writer=writer, spine_provenance=prov)
-                except Exception:
-                    record_path = None
             # The refusal record is written and the OTHER holder's lease is intentionally held;
-            # a signal after this must not re-teardown/reclaim it, so mark finalized now.
-            sig_state["finalized"] = True
-            return _final({
-                "verdict": "fail",
-                "report": _report(
-                    "fail", reason, record_path, None, spend_partial=True,
-                    unwritten_record_note="NOT WRITTEN (prior run lease still held)",
-                    spine_provenance=prov),
-                "record_path": record_path,
-            })
+            # _prelaunch_refusal marks finalized so a signal after this can't re-teardown it.
+            reason = "a prior acceptance run is in flight (%s); refusing to start another" % liveness
+            return _prelaunch_refusal(
+                reason, "NOT WRITTEN (prior run lease still held)")
+        # Non-refuse: the reclaim probe's exclusive-create acquire succeeded — from here on the
+        # lease is OURS, and the signal/error finalizers may (and should) release it.
+        lease_owned = True
         # UFR-8: sweep any leftover accepted-stamp artifacts before this invocation launches.
         # This covers both a confirmed-dead lease holder and a lease-free checkout whose prior
         # completed invocation wrote a record but failed to reap everything.
@@ -472,7 +517,7 @@ def invoke(deps):
         return _terminate_by_signal(
             deps, sig_exc.child, stamp, attempts,
             locals().get("dead_run_teardown"), prov, orphan_record_path,
-            prior_unsafe=prior_unsafe)
+            prior_unsafe=prior_unsafe, lease_owned=lease_owned)
 
     except Exception as exc:
         # Fail-CLOSED: any internal error still teardowns and yields a fail naming the error.
@@ -496,7 +541,8 @@ def invoke(deps):
         try:
             record_path = _finalize(deps, "fail", reason, None, attempts,
                                     len(attempts) > 1, teardown, run_stamp=stamp,
-                                    release_lease=not unsafe_kill, spine_provenance=prov)
+                                    release_lease=(not unsafe_kill) and lease_owned,
+                                    spine_provenance=prov)
         except Exception:
             record_path = None
         return {
@@ -665,6 +711,11 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
                              "child does only wrapper work; pinning it stops the driver from "
                              "inheriting the invoking user's CLI default (model-governance). "
                              "Recorded in the result-record provenance.")
+    parser.add_argument("--allow-unmerged-root", action="store_true",
+                        help="Escape hatch (issue #298): proceed even when the --root checkout's "
+                             "HEAD is not an ancestor of origin/<default-branch>. Default refuses "
+                             "pre-launch (a release-branch checkout false-parks on UFR-7 mid-run). "
+                             "Use only for a deliberate pre-merge branch-spine validation.")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -694,6 +745,10 @@ def _cli(argv, env, stdout, stderr, deps_builder=None):
             build_kwargs["spine_lib"] = args.spine_lib
         if args.child_model is not None:
             build_kwargs["child_model"] = args.child_model
+        # Only thread the escape hatch when set, so a legacy 2-arg spy builder still works
+        # when no overrides are given (mirrors the spine_lib/child_model pattern above).
+        if args.allow_unmerged_root:
+            build_kwargs["allow_unmerged_root"] = True
         deps = acceptance_deps.build(args.fixture, args.root, **build_kwargs)
     else:
         deps = deps_builder(args.fixture, args.root)

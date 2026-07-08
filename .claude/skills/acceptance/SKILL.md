@@ -66,8 +66,23 @@ process, which only sees exported variables.
    pass `--ceilings-config /path/to/ceilings.json` where the JSON object may contain
    `elapsed_sec` and/or `spend`, or pass `--ceiling-elapsed-sec <seconds>` /
    `--ceiling-spend <measured-output-tokens>` directly. Unset or partial values fall back to
-   the built-in defaults: 1800 elapsed seconds and 5,000,000 measured output tokens. The
-   `spend` ceiling is measured output tokens, not dollars.
+   the built-in defaults: **5400 elapsed seconds (90 min)** and 5,000,000 measured output
+   tokens. The `spend` ceiling is measured output tokens, not dollars.
+
+   **Never `--root` a release-branch checkout** (or any checkout whose HEAD is not an ancestor
+   of `origin/<default-branch>`): its extra commits — e.g. a release-please version bump — make
+   UFR-7's trailer gate false-park mid-run. The harness refuses a non-ancestor `--root`
+   pre-launch (issue #298), naming the sha and the fix; `--allow-unmerged-root` is the deliberate
+   escape hatch for a pre-merge branch-spine run. Root a release-binding run at merged
+   `<default-branch>` and bind it with `--spine-lib` (the bundle hash ties the pass to the release).
+
+   **Launch pattern — generous ceiling + a liveness monitor, not a tight wall-clock.** Ceilings
+   exist to catch *pathology* (a wedged or runaway run), not healthy duration variance — a healthy
+   full-pipeline run measured 50+ min live, and the old 30-min default hard-killed exactly such a
+   run mid-review (issue #298, run 5). So prefer the generous default (or raise it) and watch
+   *liveness* instead: if the journal / phase-record mtime goes stale (≈10–15 min with no new
+   event) the run is likely stuck → investigate; if the dispatch count balloons within a single
+   phase the run is likely runaway. Reserve a hard ceiling kill for the genuine hang.
 
    **Pre-release gate (`--spine-lib`).** By default the child launches the spine from the
    installed plugin cache — the last *released* version — so merged-but-unreleased spine

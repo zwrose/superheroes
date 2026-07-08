@@ -115,6 +115,83 @@ def test_no_spine_provenance_seam_leaves_record_and_report_unchanged():
     assert "Provenance" not in r["report"]
 
 
+# --- issue #298: root-lineage refusal (a non-ancestor --root checkout) -------------------
+#
+# A run rooted at a release-branch checkout (HEAD carries the release version-bump commit,
+# not on origin/main) traverses the front half then false-parks mid-workhorse on UFR-7. The
+# guard refuses BEFORE reclaim/lease/stamp so a refusal never holds the lease. The seam does
+# the git I/O; these drive it with a fake seam (no fetch).
+
+
+def test_ancestor_clean_root_proceeds_to_a_normal_run():
+    launched = []
+    d = _deps(root_ancestry=lambda: {"ok": True, "checked": True, "head_sha": "abc123"})
+    base_launch = d["launcher"]
+    d["launcher"] = lambda stamped, budget_consumed=None, attempt=1: (
+        launched.append(attempt) or base_launch(stamped, budget_consumed=budget_consumed,
+                                                 attempt=attempt))
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    assert launched == [1]                       # the clean root launched normally
+    assert len(d["_state"]["records_written"]) == 1
+
+
+def test_non_ancestor_root_refuses_pre_launch_no_lease_no_stamp():
+    calls = {"reclaim": 0, "materialize": 0}
+    reason = ("--root checkout HEAD deadbeef12 is not an ancestor of origin/main: it carries "
+              "commit(s) not on origin/main (e.g. a release-please version bump) — UFR-7's "
+              "trailer gate will false-park on them mid-run. Root the run at merged main; "
+              "--spine-lib + the recorded bundle sha bind the pass to the release. ... "
+              "--allow-unmerged-root.")
+    d = _deps(root_ancestry=lambda: {"ok": False, "head_sha": "deadbeef12",
+                                     "default_branch": "main", "reason": reason})
+    base_reclaim, base_mat = d["reclaim_probe"], d["materialize"]
+    d["reclaim_probe"] = lambda: (calls.__setitem__("reclaim", calls["reclaim"] + 1)
+                                  or base_reclaim())
+    d["materialize"] = lambda: (calls.__setitem__("materialize", calls["materialize"] + 1)
+                                or base_mat())
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "deadbeef12" in r["report"]           # the message names the offending sha
+    assert calls["reclaim"] == 0                 # refused BEFORE reclaim -> no lease acquired
+    assert calls["materialize"] == 0             # nothing stamped
+    assert len(d["_state"]["records_written"]) == 0
+    # a refusal record (not a normal record) captures the refusal, no lease released.
+    assert len(d["_state"]["refusal_records_written"]) == 1
+    assert "deadbeef12" in d["_state"]["refusal_records_written"][0]["reason"]
+    assert d["_state"]["lease_released"] is False
+    assert r["record_path"] == "/refusal-rec.json"
+
+
+def test_allow_unmerged_root_bypass_seam_proceeds():
+    # The escape hatch wires a seam that short-circuits to ok=True (bypassed) — the run
+    # proceeds exactly as a clean root would.
+    d = _deps(root_ancestry=lambda: {"ok": True, "bypassed": True, "checked": False})
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    assert len(d["_state"]["records_written"]) == 1
+
+
+def test_fetch_failure_degrade_continues_the_run():
+    # The seam's offline degrade (fetch failed -> ok=True, checked=False, warning already
+    # emitted by the seam) must let the run proceed, never silently pass AND never hard-block.
+    d = _deps(root_ancestry=lambda: {"ok": True, "checked": False,
+                                     "reason": "fetch failed; ancestor check skipped"})
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+    assert len(d["_state"]["records_written"]) == 1
+
+
+def test_absent_root_ancestry_seam_skips_the_check():
+    # A fake deps bundle with no seam (an injected bare builder) proceeds unchanged — the
+    # guard is opt-in via the seam the real build() always wires.
+    d = _deps()
+    assert "root_ancestry" not in d
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+
+
 def test_confirmed_alive_prior_run_refuses_creating_nothing():
     d = _deps(reclaim_probe=lambda: ({"in_flight": True, "stamp": "old", "has_record": True},
                                      "alive"))
@@ -718,3 +795,51 @@ def test_signal_after_record_written_does_not_rewrite_or_double_release(monkeypa
     assert d["_state"]["lease_released"] is True
     # the echoed result still names the durably-written record.
     assert r["record_path"] == "/rec.json"
+
+
+# --- #298 review r1 (premortem, fail-direction): the pre-lease window ---------------------
+
+
+def test_signal_during_root_ancestry_never_releases_or_quarantines_the_lease():
+    # A SIGTERM/SIGINT while step 0's root-ancestry probe is blocked in git (the probe does
+    # network I/O, so this window is real and wide) must NOT release the lease: this
+    # invocation has not acquired it yet, run_stamp is still None, and release_lease(None)
+    # is the legacy UNCONDITIONAL remove — it would delete a CONCURRENT run's lease.
+    def _ancestry():
+        raise run._SignalTermination(_signal.SIGTERM, None)
+
+    d = _deps(root_ancestry=_ancestry)
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "terminated by signal" in r["report"].lower()
+    assert d["_state"]["lease_released"] is False        # the load-bearing assertion
+    assert d["_state"]["lease_quarantined"] is None      # nor quarantined — we never owned it
+    assert len(d["_state"]["records_written"]) == 1      # the honest record still lands
+
+
+def test_internal_error_during_root_ancestry_never_releases_the_lease():
+    # Same pre-lease window, generic-exception flavor: an internal error inside the probe
+    # routes through the fail-closed except path, which must also skip the lease release.
+    def _ancestry():
+        raise RuntimeError("git exploded")
+
+    d = _deps(root_ancestry=_ancestry)
+    r = run.invoke(d)
+
+    assert r["verdict"] == "fail"
+    assert "internal harness error" in r["report"]
+    assert d["_state"]["lease_released"] is False
+    assert len(d["_state"]["records_written"]) == 1
+
+
+def test_signal_after_reclaim_still_releases_the_owned_lease():
+    # Counter-case: once the reclaim decision resolved to proceed, the lease IS ours — a
+    # signal later (here: during launch, no live child) must keep today's release behavior.
+    def _launcher(stamped, budget_consumed=None, attempt=1):
+        raise run._SignalTermination(_signal.SIGTERM, None)
+
+    d = _deps(launcher=_launcher)
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert d["_state"]["lease_released"] is True

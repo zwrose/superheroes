@@ -3,6 +3,12 @@
 Pure `decide(state)` over a plain dict: judges whether a live run has breached its
 elapsed-time or spend ceiling and must be hard-killed, or may continue. The spend unit is
 measured output tokens, not dollars; the built-in default is 5,000,000 output tokens.
+The elapsed default is 5,400s (90 min) — ceilings exist to catch PATHOLOGY (a wedged or
+runaway run), not to bound healthy duration variance: a healthy full-pipeline run measured
+50+ min live (0.11.0 eval), and the old 1800s (30 min) default hard-killed exactly such a
+healthy run mid-review (issue #298, run 5). A generous ceiling paired with a liveness
+monitor (journal/phase-record staleness → investigate) is the launch pattern the skills
+document; the ceiling is the last-resort backstop, deliberately well above any real run.
 Fail-CLOSED on the readable ceiling — when spend is unreadable the run governs on elapsed
 alone and NEVER kills on spend (an unreadable spend sample can never justify a kill, and
 can never mask an elapsed breach).
@@ -20,9 +26,14 @@ Mirrors `preflight.decide` (pure, no I/O; all clock/spend sampling lives in the 
 layer and is injected as `state`). Never raises.
 """
 
-# Conservative built-in defaults applied when the owner configured no ceilings (FR-8):
-# 30 minutes wall-clock, 5M measured output tokens.
-DEFAULT_CEILINGS = {"elapsed_sec": 1800.0, "spend": 5_000_000.0}
+# Built-in defaults applied when the owner configured no ceilings (FR-8): 90 minutes
+# wall-clock, 5M measured output tokens. The elapsed default is deliberately generous —
+# ceilings catch pathology (a wedged/runaway run), not duration variance. Healthy
+# full-pipeline runs took 50+ min live (0.11.0 eval); the prior 1800s default hard-killed a
+# healthy run mid-review (issue #298, run 5), while the same run finished comfortably under
+# an explicit 3600s ceiling (run 7). 5400s leaves headroom above the observed healthy max
+# and still bounds a genuinely-stuck run; the skills pair it with a staleness monitor.
+DEFAULT_CEILINGS = {"elapsed_sec": 5400.0, "spend": 5_000_000.0}
 
 
 def _positive_number(value, default):
