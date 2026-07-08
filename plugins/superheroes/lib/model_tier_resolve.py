@@ -25,6 +25,7 @@ _FALLBACK = {
     "fixer": "sonnet",
     "author": "opus",
     "builder": "opus",
+    "pr-body": "sonnet",
     "author-plan": "opus",
 }
 

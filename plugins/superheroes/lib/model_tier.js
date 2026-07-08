@@ -10,6 +10,7 @@ const DEFAULT_TIERS = {
   fixer: 'sonnet',
   author: 'opus',
   builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
+  'pr-body': 'sonnet',           // #219: durable draft-PR body composer (showrunner composePrBody)
 }
 
 // The accepted-model set — twin of model_tier_overrides.KNOWN_MODELS (the Python validator's domain).

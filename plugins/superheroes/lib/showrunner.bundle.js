@@ -4498,6 +4498,7 @@ const DEFAULT_TIERS = {
   fixer: 'sonnet',
   author: 'opus',
   builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
+  'pr-body': 'sonnet',           // #219: durable draft-PR body composer (showrunner composePrBody)
 }
 const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable']
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
