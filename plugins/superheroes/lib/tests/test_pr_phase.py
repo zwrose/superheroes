@@ -280,6 +280,22 @@ def _stub_run(scenario, calls, real_run):
                     return subprocess.CompletedProcess(c, 1, "", scenario.get("create_stderr", ""))
                 scenario["pr_created"] = True
                 return subprocess.CompletedProcess(c, 0, "https://ex.test/pr/77\n", "")
+            if sub == "view":
+                # #219: the draft body-set reads the current PR body (empty by default ->
+                # placeholder -> fallback prose). Returns scenario["body"] as gh's stdout.
+                return subprocess.CompletedProcess(c, 0, scenario.get("body", ""), "")
+            if sub == "edit":
+                # #219: capture the --body-file CONTENTS (the file still exists during the call —
+                # _gh_edit_body unlinks it only after) so the new cases can assert the set prose.
+                try:
+                    bf = c[c.index("--body-file") + 1]
+                    with open(bf, encoding="utf-8") as fh:
+                        scenario.setdefault("edits", []).append(fh.read())
+                except (ValueError, IndexError, OSError):
+                    pass
+                if scenario.get("edit_fail"):
+                    return subprocess.CompletedProcess(c, 1, "", "gh pr edit failed")
+                return subprocess.CompletedProcess(c, 0, "", "")
         if c[:3] == ["git", "push", "origin"]:
             mode = scenario.get("push", "ok")
             if mode == "timeout":
@@ -291,7 +307,7 @@ def _stub_run(scenario, calls, real_run):
     return run
 
 
-def _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario):
+def _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario, extra_args=None):
     """Wire a draft-ready work-item, stub subprocess.run per `scenario`, and call
     pr_entry.main(['--step','draft', ...]) in-process. Returns (parsed_output, calls)."""
     import ship_gate
@@ -313,8 +329,11 @@ def _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario):
     calls = []
     real_run = subprocess.run
     monkeypatch.setattr(subprocess, "run", _stub_run(scenario, calls, real_run))
+    argv = ["--step", "draft", "--work-item", "wi-base"]
+    if extra_args:
+        argv.extend(extra_args)
     try:
-        pr_entry.main(["--step", "draft", "--work-item", "wi-base"])
+        pr_entry.main(argv)
     except SystemExit:
         pass
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -395,3 +414,84 @@ def test_push_branch_timeout_returns_plain_reason():
     def run(cmd, **kw):
         raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 120))
     assert pr_entry.push_branch("feature/x", run=run) == "branch push timed out before PR create"
+
+
+# ---------------------------------------------------------------------------
+# #219: the draft leaf sets a real PROSE body (composed via --body-file, else a
+# deterministic fallback), never clobbers a real/owner body on adopt, and
+# preserves the #228 generated tail (DoD table / stubbed seams). Uses the shared
+# _stub_run above (extended to answer `gh pr view`/`gh pr edit`).
+# ---------------------------------------------------------------------------
+
+def _last_edit(scenario):
+    """The CONTENTS of the last `gh pr edit --body-file` the draft leaf issued, or None."""
+    edits = scenario.get("edits") or []
+    return edits[-1] if edits else None
+
+
+def test_draft_create_sets_composed_prose_from_body_file(tmp_path, monkeypatch, capsys):
+    """(1) create + --body-file: the composed prose is set via `gh pr edit --body-file`,
+    and `gh pr create` still carries --fill-first (the conventional title)."""
+    body_file = tmp_path / "composed.md"
+    body_file.write_text("A composed body.\n\nCloses #219\n")
+    scenario = {"push": "ok", "body": ""}
+    out, calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario,
+                                       extra_args=["--body-file", str(body_file)])
+    assert out["ok"] is True
+    edit = _last_edit(scenario)
+    assert edit is not None, "the composed prose must be set via gh pr edit --body-file"
+    assert "A composed body." in edit
+    create_i = _index(calls, ["gh", "pr", "create"])
+    assert create_i != -1 and "--fill-first" in calls[create_i], \
+        "gh pr create must still carry --fill-first (conventional title)"
+
+
+def test_draft_create_sets_fallback_prose_without_body_file(tmp_path, monkeypatch, capsys):
+    """(2) create without --body-file: the deterministic fallback prose is set."""
+    scenario = {"push": "ok", "body": ""}
+    out, _calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario)
+    assert out["ok"] is True
+    edit = _last_edit(scenario)
+    assert edit is not None and "## What changed" in edit, \
+        "without a body-file the deterministic fallback prose must be set"
+
+
+def test_draft_create_parks_when_body_set_fails(tmp_path, monkeypatch, capsys):
+    """(3) create where the body-set fails (gh pr edit rc=1): the step parks fail-closed."""
+    scenario = {"push": "ok", "body": "", "edit_fail": True}
+    out, _calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario)
+    assert out["ok"] is False, "a failed body-set on create parks fail-closed (resume adopts)"
+    assert out["read_back"] is False
+
+
+def test_draft_adopt_replaces_placeholder_prose(tmp_path, monkeypatch, capsys):
+    """(4) adopt with a placeholder body (`Task-Id: 1` junk): the prose is replaced."""
+    scenario = {"pr_created": True, "body": "Task-Id: 1\n\nCo-authored-by: x"}
+    out, _calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario)
+    assert out["ok"] is True
+    edit = _last_edit(scenario)
+    assert edit is not None, "a placeholder prose on adopt must be replaced"
+    assert "## What changed" in edit
+
+
+def test_draft_adopt_never_clobbers_real_prose(tmp_path, monkeypatch, capsys):
+    """(5) adopt with a real body: NO body edit is recorded (never clobber real/owner prose)."""
+    scenario = {"pr_created": True, "body": "## What changed\n- real\n\nCloses #219"}
+    out, _calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario)
+    assert out["ok"] is True
+    assert _last_edit(scenario) is None, "a real/owner prose must never be clobbered on adopt"
+
+
+def test_draft_adopt_preserves_generated_tail(tmp_path, monkeypatch, capsys):
+    """(6) adopt with placeholder prose + a seeded DoD tail: the edit carries the NEW prose AND
+    the unchanged dod-table marker section (the generated tail is preserved)."""
+    import pr_body
+    seeded = pr_body.compose_body("Task-Id: 1\n\nCo-authored-by: x",
+                                  pr_body.seed_dod_block(["b1"]), "")
+    scenario = {"pr_created": True, "body": seeded}
+    out, _calls = _run_draft_in_process(tmp_path, monkeypatch, capsys, scenario)
+    assert out["ok"] is True
+    edit = _last_edit(scenario)
+    assert edit is not None, "the placeholder prose must be replaced"
+    assert "## What changed" in edit, "the placeholder prose is replaced with real prose"
+    assert "superheroes:dod-table" in edit, "the generated DoD tail must be preserved unchanged"
