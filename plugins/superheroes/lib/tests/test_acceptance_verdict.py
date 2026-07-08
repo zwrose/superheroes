@@ -61,3 +61,32 @@ def test_unreadable_required_fact_is_fail_naming_it_never_pass():
     f = dict(PASS); f["unreadable"] = ["live_checks_green"]
     r = v.decide(f)
     assert r["verdict"] == "fail" and "live_checks_green" in r["reason"]
+
+
+# --- #299 dispatch census: an otherwise-passing run still fails if the census diverged ---
+
+def test_absent_dispatch_census_is_pass():
+    # Existing runs (no census fact) are unaffected — additive.
+    assert v.decide(dict(PASS))["verdict"] == "pass"
+
+
+def test_census_ok_is_pass():
+    f = dict(PASS); f["dispatch_census"] = {"ok": True, "failures": []}
+    assert v.decide(f)["verdict"] == "pass"
+
+
+def test_census_divergence_fails_naming_it():
+    f = dict(PASS)
+    f["dispatch_census"] = {"ok": False, "failures": [
+        "engine evidence missing: calibration routes review to codex (phase workhorse) but the run "
+        "journaled no matching external_dispatch and no fall-open reason — silent fall-open to Claude"]}
+    r = v.decide(f)
+    assert r["verdict"] == "fail"
+    assert "dispatch census" in r["reason"] and "codex" in r["reason"]
+
+
+def test_census_never_overrides_an_earlier_real_failure():
+    # A census pass must not mask a genuine red-checks fail (census is judged LAST).
+    f = dict(PASS); f["checks_green"] = False
+    f["dispatch_census"] = {"ok": True, "failures": []}
+    assert v.decide(f)["verdict"] == "fail"

@@ -76,4 +76,12 @@ def decide(facts):
             % (facts.get("readout_claimed_pr"), facts.get("live_pr"))
         )
 
+    # 4. #299 dispatch census: the run's ACTUAL engine/model dispatch must match the readout's
+    # EXPECTED rows. A silent fall-open to Claude under an external calibration, or an off-policy /
+    # Fable model, fails here (never a false pass). Absent / all-Claude -> {ok:True} -> no-op.
+    census = facts.get("dispatch_census")
+    if isinstance(census, dict) and census.get("ok") is False:
+        return _fail("dispatch census diverged from the readout: %s"
+                     % "; ".join(census.get("failures") or ["unspecified divergence"]))
+
     return _pass()

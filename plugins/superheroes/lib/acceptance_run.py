@@ -260,6 +260,12 @@ def _run_one_attempt(deps, stamped, budget_consumed, attempt):
         "live_pr": gh.get("live_pr"),
         "unreadable": gh.get("unreadable") or [],
     }
+    # #299: assert the run's ACTUAL dispatch census matches the readout's EXPECTED rows (engines AND
+    # models), failing loud on a silent fall-open under an external calibration or an off-policy model
+    # (never Fable). Absent dep (custom test deps) / all-Claude calibration -> a trivial pass, so this
+    # is additive and never flips an existing verdict on its own.
+    census_dep = deps.get("dispatch_census") if isinstance(deps, dict) else None
+    facts["dispatch_census"] = census_dep() if callable(census_dep) else {"ok": True, "failures": []}
     verdict = acceptance_verdict.decide(facts)
     return launch, outcome, verdict
 

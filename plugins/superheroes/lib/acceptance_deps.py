@@ -1077,6 +1077,100 @@ def real_run_outcome(root, work_item=None, spine_lib=None):
     return _read
 
 
+def _project_dispatch_census(events):
+    """Project the run's journal into the actual dispatch census (#299): external_dispatch legs keyed
+    on the payload engine/roleKind (never labels), and native legs' phase_cost byModel tallies."""
+    external, by_model = [], {}
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        if ev.get("type") == "external_dispatch":
+            external.append({"engine": payload.get("engine"), "roleKind": payload.get("roleKind"),
+                             "outcome": payload.get("outcome")})
+        elif ev.get("type") == "phase_cost":
+            phase = payload.get("phase")
+            bm = (payload.get("dispatches") or {}).get("byModel") or {}
+            dest = by_model.setdefault(phase, {})
+            for model, count in bm.items() if isinstance(bm, dict) else []:
+                dest[model] = dest.get(model, 0) + (count or 0)
+    return external, by_model
+
+
+def _census_config(root, snapshot_rows):
+    """The model-governance context the census decider needs: the legitimate model set (resolver
+    defaults ∪ profile overrides ∪ the readout's own resolved rows) and whether fable is EXPLICITLY
+    configured (the only way it may legitimately appear — checked against the profile, not the rows).
+    Best-effort: any read failure degrades to the resolver defaults + fable-not-allowed."""
+    import model_tier
+    import model_tier_overrides
+    allowed = {m for m in model_tier.DEFAULT_TIERS.values() if m}
+    for r in snapshot_rows or []:
+        if isinstance(r, dict) and isinstance(r.get("model"), str):
+            allowed.add(r["model"])
+    fable_allowed = False
+    try:
+        overrides = model_tier_overrides.load_overrides(
+            model_tier_overrides.resolve_profile_path(root)) or {}
+        allowed.update(v for v in overrides.values() if isinstance(v, str))
+        fable_allowed = any(v == "fable" for v in overrides.values())
+    except Exception:
+        pass
+    return sorted(allowed), fable_allowed
+
+
+def real_dispatch_census(root, work_item=None, spine_lib=None):
+    """`deps["dispatch_census"]`: after a run, assert its ACTUAL dispatch census matches the readout's
+    EXPECTED rows (#299). Returns the pure `dispatch_census.decide` verdict {ok, failures}.
+
+    Only asserts when the resolved calibration routes SOMETHING externally (an all-Claude run has
+    nothing to prove and passes trivially). If the calibration IS external but the journal can't be
+    read, that is itself a fail (an external calibration with no verifiable evidence is exactly the
+    silent-fall-open blind spot this instrument closes). Best-effort/never raises: a snapshot-assembly
+    failure degrades to ok (the verdict must never crash on telemetry)."""
+    def _census():
+        import dispatch_census
+        import preflight_readout
+        wi = work_item() if callable(work_item) else work_item
+        if not wi:
+            return {"ok": True, "failures": []}
+        try:
+            snapshot = preflight_readout.assemble(wi, root)
+            rows = snapshot.get("phases") or []
+        except Exception:
+            return {"ok": True, "failures": []}   # no expected side -> nothing to assert (fail-open)
+        # EFFECTIVE external routing: an engine row that fell back to Claude (unauthorized) runs native
+        # by design, so it is excluded here exactly as the decider excludes it — otherwise an all-native
+        # fallback run would be forced down the "must have journal evidence" path (a false failure).
+        routes_external = any(isinstance(r, dict) and r.get("engine") in ("codex", "cursor")
+                              and not r.get("nativeByDesign") and not r.get("fallbackToClaude")
+                              for r in rows)
+        if not routes_external:
+            return {"ok": True, "failures": []}
+        try:
+            events = journal.read_events(control_plane.paths(root, wi)["events"])
+        except Exception:
+            events = []   # read_events is itself fail-safe ([]); this guards a malformed path only
+        if not events:
+            # An external calibration that reached the verdict but journaled NOTHING cannot be
+            # confirmed to have dispatched its external legs — fail-closed rather than pass blind.
+            return {"ok": False, "failures": [
+                "the calibration routes roles to external engines but the run journaled no dispatch "
+                "events at all — cannot confirm the external legs ran (possible silent all-Claude "
+                "fall-open, or an unreadable run journal)"]}
+        external, by_model = _project_dispatch_census(events)
+        allowed_models, fable_allowed = _census_config(root, rows)
+        return dispatch_census.decide({
+            "expected_rows": rows,
+            "external_dispatches": external,
+            "by_model": by_model,
+            "traversed_phases": _phases_from_journal(root, wi, spine_lib=spine_lib),
+            "allowed_models": allowed_models,
+            "fable_allowed": fable_allowed,
+        })
+    return _census
+
+
 def real_expected_phases(spine_lib=None):
     return lambda: _read_spine_phases(spine_lib)
 
@@ -1271,6 +1365,8 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None,
         "launcher": real_launcher(root, ceilings=ceilings, spine_lib=spine_lib,
                                   child_model=resolved_child_model),
         "run_outcome": real_run_outcome(
+            root, lambda: (state["stamped"] or {}).get("work_item"), spine_lib=spine_lib),
+        "dispatch_census": real_dispatch_census(
             root, lambda: (state["stamped"] or {}).get("work_item"), spine_lib=spine_lib),
         "gh_reader": gh_reader,
         "expected_phases": real_expected_phases(spine_lib=spine_lib),

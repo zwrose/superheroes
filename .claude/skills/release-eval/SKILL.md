@@ -75,6 +75,18 @@ Resolve the checkout once: `ROOT=$(git rev-parse --show-toplevel)`.
      stop and reconcile (usually: the checkout is not on the released commit). Only a `pass`
      verdict is postable.
 
+     > **Fast engine sanity (#299).** Before committing to the full acceptance run when the
+     > calibration routes any role to an external engine, run the **micro engine check** — one real
+     > `engine_adapter` dispatch (build_argv → engine CLI → parse → commit) per authorized engine
+     > against a throwaway git dir. It's minutes and pennies, and it catches a dead engine binary or
+     > a broken argv/parse chain before you spend a full acceptance run to discover it:
+     > ```bash
+     > python3 "$ROOT/plugins/superheroes/lib/engine_check_cli.py" --root "$ROOT" --json
+     > ```
+     > A non-zero exit (any engine FAIL) means fix the engine wiring first. This is a HOST-side
+     > pre-check; the acceptance dispatch-census (`dispatch_census`) still verifies the in-sandbox
+     > path end-to-end in the full run, so the micro check does not replace the acceptance leg.
+
    - **`benchmark`** — run the review A/B dual-dispatch per
      [`plugins/superheroes/eval/README.md`](../../../plugins/superheroes/eval/README.md), score
      with `plugins/superheroes/eval/score.py`, and **append a dated verdict** to
