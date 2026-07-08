@@ -10,11 +10,13 @@ const DOD_PARK = { ok: false, read_back: false, gate: 'dod', pr: 77, reason: 'Do
 
 function run(plan) {
   const labels = []
+  let fillDodSchema = null
   let gateCalls = 0
   global.log = () => {}
   global.agent = async (_prompt, opts) => {
     const label = (opts && opts.label) || ''
     labels.push(label)
+    if (label === 'fill-dod') fillDodSchema = opts && opts.schema
     if (label === 'mark PR ready') {
       gateCalls += 1
       const out = plan.gateSeq[Math.min(gateCalls - 1, plan.gateSeq.length - 1)]
@@ -49,7 +51,34 @@ function run(plan) {
     throw new Error(`unexpected label ${label || 'none'}`)
   }
   delete require.cache[require.resolve('../showrunner.js')]
-  return { sr: require('../showrunner.js'), labels }
+  const sr = require('../showrunner.js')
+  return { sr, labels, fillDodSchema: () => fillDodSchema }
+}
+
+// Faithful minimal validator for the subset of JSON Schema the fill-dod dispatch declares
+// (object with required+properties, typed array items, string/boolean, enum). It exists ONLY
+// to prove the ENFORCEMENT surface — the real StructuredOutput runtime validates the same
+// shape — so that a payload-free {ok:true} answer (issue #301, run 7) can no longer validate.
+function validate(schema, value) {
+  if (!schema || typeof schema !== 'object') return true
+  if (schema.enum) return schema.enum.includes(value)
+  if (schema.type === 'object') {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+    for (const key of schema.required || []) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) return false
+    }
+    for (const [key, sub] of Object.entries(schema.properties || {})) {
+      if (Object.prototype.hasOwnProperty.call(value, key) && !validate(sub, value[key])) return false
+    }
+    return true
+  }
+  if (schema.type === 'array') {
+    if (!Array.isArray(value)) return false
+    return value.every((item) => validate(schema.items, item))
+  }
+  if (schema.type === 'boolean') return typeof value === 'boolean'
+  if (schema.type === 'string') return typeof value === 'string'
+  return true
 }
 
 ;(async () => {
@@ -125,5 +154,20 @@ function run(plan) {
   assert.strictEqual(out.phaseResult.confidence, 'low')
   assert.ok(out.phaseResult.assumptions[0].includes('DoD gate'), 're-decide transport failure preserves the DoD reason')
 
-  console.log('ok: dod propose->splice->re-decide (happy, reject, empty, crash, non-dod, stringified, ok-false-string, retry-transport)')
+  // #301: the fill-dod leaf schema ENFORCES the payload — a schema-minimal {ok:true} answer
+  // (run 7 dropped the whole payload, coerced to rows:[], gate parked on a coin flip of leaf
+  // verbosity) can no longer validate. Prompts request; schemas enforce. Mutation check:
+  // revert the dispatch schema to {required:['ok']} and the first assertion below MUST fail.
+  const cap = run({ gateSeq: [DOD_PARK], propose: { ok: true, rows: [] }, splice: { ok: true } })
+  await cap.sr.markReadyPhase('wi-dod')
+  const fillSchema = cap.fillDodSchema()
+  assert.ok(fillSchema, 'the fill-dod dispatch carries a StructuredOutput schema')
+  assert.ok(fillSchema.required.includes('rows'), '#301: rows is structurally required (mutation: old schema omits it)')
+  assert.strictEqual(validate(fillSchema, { ok: true }), false, '#301: payload-free {ok:true} is REJECTED (with the old required:[ok] schema this asserts false and FAILS)')
+  assert.strictEqual(validate(fillSchema, { ok: false, rows: [] }), true, 'honest refusal ok:false + rows:[] still validates')
+  assert.strictEqual(validate(fillSchema, { ok: true, rows: [{ bullet: 'b', disposition: 'done', detail: 'e' }] }), true, 'a well-formed disposition validates')
+  assert.strictEqual(validate(fillSchema, { ok: true, rows: [{ bullet: 'b', disposition: 'done' }] }), false, 'a row missing detail is REJECTED (all three fields required per item)')
+  assert.strictEqual(validate(fillSchema, { ok: true, rows: [{ bullet: 'b', disposition: 'maybe', detail: 'e' }] }), false, 'disposition outside {done,deferred} is REJECTED')
+
+  console.log('ok: dod propose->splice->re-decide (happy, reject, empty, crash, non-dod, stringified, ok-false-string, retry-transport) + #301 schema-enforces-payload')
 })().catch((e) => { console.error('FAIL:', e.message || e); process.exit(1) })
