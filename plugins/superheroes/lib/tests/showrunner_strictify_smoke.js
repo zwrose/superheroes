@@ -143,13 +143,18 @@ const STAGE_SCHEMA = {
 }
 
 ;(async () => {
+  // pid-unique work-item so the staged /tmp paths (dispatchExternal derives them from the work-item)
+  // never collide with a concurrent run of this smoke — the repo's shared-machine-global-state flake
+  // convention (new smokes mint pid-unique /tmp names).
+  const WI = `wi-strictify-${process.pid}`
+
   // codex read role: the staged schema file must be strictified.
-  const codexSchemaPath = '/tmp/engine-codex-review-wi-strictify.schema.json'
+  const codexSchemaPath = `/tmp/engine-codex-review-${WI}.schema.json`
   try { fs.unlinkSync(codexSchemaPath) } catch (_) {}
   global.agent = makeStagingAgent(reviewRoutes)
   const rCodex = await d.dispatchExternal({
     engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review please',
-    cwd: '/tmp', schema: STAGE_SCHEMA, timeoutSeconds: 300, workItem: 'wi-strictify',
+    cwd: '/tmp', schema: STAGE_SCHEMA, timeoutSeconds: 300, workItem: WI,
   })
   assert.ok(rCodex && Array.isArray(rCodex.findings), 'codex review dispatch completed: ' + JSON.stringify(rCodex))
   assert.ok(fs.existsSync(codexSchemaPath), 'the codex path must actually WRITE the schema file to disk')
@@ -169,7 +174,7 @@ const STAGE_SCHEMA = {
   console.log('OK: strictify staging round-trip — codex path writes the strictified schema to disk')
 
   // cursor read role: cursor ignores schemas, so the ORIGINAL (unstrictified) schema is staged.
-  const cursorSchemaPath = '/tmp/engine-cursor-review-wi-strictify.schema.json'
+  const cursorSchemaPath = `/tmp/engine-cursor-review-${WI}.schema.json`
   try { fs.unlinkSync(cursorSchemaPath) } catch (_) {}
   global.agent = makeStagingAgent([
     ['engine_adapter.py build-argv', JSON.stringify(['cursor-agent', '--model', 'x', '-p', '--trust', '--mode', 'plan', '--output-format', 'stream-json'])],
@@ -180,7 +185,7 @@ const STAGE_SCHEMA = {
   ])
   await d.dispatchExternal({
     engine: 'cursor', roleKind: 'review', effort: 'high', prompt: 'review please',
-    cwd: '/tmp', schema: STAGE_SCHEMA, timeoutSeconds: 300, workItem: 'wi-strictify',
+    cwd: '/tmp', schema: STAGE_SCHEMA, timeoutSeconds: 300, workItem: WI,
   })
   assert.ok(fs.existsSync(cursorSchemaPath), 'the cursor path stages a schema file too')
   const cursorStaged = JSON.parse(fs.readFileSync(cursorSchemaPath, 'utf8'))

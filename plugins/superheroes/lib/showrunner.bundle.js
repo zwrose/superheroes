@@ -4371,7 +4371,13 @@ const FINAL_REVIEW_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          evidence: { type: 'string' },
+        },
       },
     },
   },
