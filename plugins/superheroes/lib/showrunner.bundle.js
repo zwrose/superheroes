@@ -3787,7 +3787,7 @@ const _WATCH_SCRIPT = [
   'done',
   'wait "$p" 2>/dev/null; ec=$?',
   'cat "$out"',
-  'rm -f "$out" "$err"',
+  'if [ "$killed" -eq 1 ] || [ "$ec" -ne 0 ]; then rm -f "$out"; else rm -f "$out" "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
 async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {

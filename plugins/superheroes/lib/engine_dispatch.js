@@ -153,7 +153,11 @@ const _WATCH_SCRIPT = [
   'done',
   'wait "$p" 2>/dev/null; ec=$?',
   'cat "$out"',
-  'rm -f "$out" "$err"',
+  // Cleanup: the stdout capture is always consumed (cat above) so always remove it; the stderr capture
+  // is KEPT on any failure (idle-kill or non-zero exit) so the engine's own diagnostic survives for
+  // post-mortem on disk (never surfaced to parse-result — the journal outcome points here), and removed
+  // only on success (a clean run's stderr is noise; keeping every one would accumulate per dispatch).
+  'if [ "$killed" -eq 1 ] || [ "$ec" -ne 0 ]; then rm -f "$out"; else rm -f "$out" "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
 

@@ -193,6 +193,7 @@ const d = require('../engine_dispatch.js')
       '#!/bin/sh',
       'sleep 60 &',               // a child that outlives us UNLESS the whole process group is killed
       'echo $! > ' + JSON.stringify(childPidFile),
+      'echo DIAG-ON-STDERR >&2',  // the diagnostic a real wedged CLI leaves — must survive the kill
       'printf x',                 // one byte of output, then silence (a genuine no-output stall)
       'sleep 30',
       'printf done',
@@ -221,7 +222,17 @@ const d = require('../engine_dispatch.js')
       if (!dead) { execSync('sleep 0.1') }
     }
     assert.ok(dead, `the fake CLI's child (pid ${childPid}) must be killed with the group — no orphan`)
-    console.log('OK: real-seam STALL — outcome:stalled journalled + process-group death (child reaped, no orphan)')
+
+    // Post-mortem detectability (round-2 premortem finding): the engine's stderr diagnostic survives a
+    // stall-kill on disk (the $$-suffixed .err capture is kept on failure, removed only on success).
+    const errFiles = fs.readdirSync('/tmp').filter((n) =>
+      n.startsWith(`engine-codex-review-wi-realstall-${process.pid}.run.`) && n.endsWith('.err'))
+    assert.ok(errFiles.length >= 1, 'a stall-killed dispatch keeps its stderr capture on disk for post-mortem')
+    const errContent = fs.readFileSync(path.join('/tmp', errFiles[0]), 'utf8')
+    assert.ok(errContent.includes('DIAG-ON-STDERR'),
+      'the surviving stderr capture carries the engine diagnostic: ' + JSON.stringify(errContent))
+    for (const n of errFiles) { try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {} }
+    console.log('OK: real-seam STALL — outcome:stalled journalled, group death (no orphan), stderr kept for post-mortem')
   }
 
   // (2b) COMPANION — the CLI keeps emitting and finishes under the ceiling -> outcome:ok (the watchdog
@@ -235,6 +246,7 @@ const d = require('../engine_dispatch.js')
     fs.writeFileSync(fakeCli, [
       '#!/bin/sh',
       'printf "PROMPT[%s]" "$(cat)"',   // echo stdin back — proves prompt delivery through the armed path
+      'echo SPINNER >&2',               // stderr noise — must NEVER reach parse-result (code-002 mutation kill)
       'i=0',
       'while [ $i -lt 5 ]; do printf "chunk%s" "$i"; sleep 1; i=$((i+1)); done',
       'printf DONE',
@@ -271,7 +283,11 @@ const d = require('../engine_dispatch.js')
       'the full CLI stdout reaches parse-result')
     assert.ok(!stagedParseInput.includes('__SR_DISPATCH__'),
       'the watchdog control marker is stripped before parse-result ever sees the output')
-    console.log('OK: real-seam OK — prompt delivered on stdin, no false kill, marker stripped from parse input')
+    // code-002 mutation kill: the fake CLI wrote SPINNER to stderr — a 2>&1 revert (merging stderr back
+    // into the parse input) fails HERE, not silently.
+    assert.ok(!stagedParseInput.includes('SPINNER'),
+      'code-002: engine stderr is captured separately and never reaches parse-result')
+    console.log('OK: real-seam OK — prompt delivered on stdin, no false kill, marker stripped, stderr never parsed')
   }
 
   // Drift guard (architecture-001): every dispatchable external engine must carry an explicit
