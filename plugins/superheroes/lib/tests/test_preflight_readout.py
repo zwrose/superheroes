@@ -148,6 +148,57 @@ def test_render_labels_a_default_row():
     assert "[default]" in text
 
 
+def test_render_names_unseeded_permission_rules_loudly():
+    # #311 defect 3: an unseeded project must be LOUD in the readout, not silent — an unseeded
+    # allowance layer never fires, so the operator has to see it and be pointed at configure.
+    snap = _snapshot_default()
+    snap["permission"] = {"seeded": 0}
+    text = preflight_readout.render(snap)
+    assert "Permission rules" in text
+    assert "none seeded for this project" in text
+    assert "configure" in text
+
+
+def test_render_shows_seeded_permission_rule_count():
+    snap = _snapshot_default()
+    snap["permission"] = {"seeded": 4}
+    text = preflight_readout.render(snap)
+    assert "Permission rules   4 seeded" in text
+
+
+def test_render_permission_unavailable_degrades():
+    snap = _snapshot_default()
+    snap["permission"] = {"unavailable": True}
+    text = preflight_readout.render(snap)
+    assert "Permission rules   unavailable" in text
+
+
+def test_render_missing_permission_key_reads_as_unseeded():
+    # A snapshot with no `permission` key (e.g. a pre-#311 persisted snapshot) renders the loud
+    # unseeded note rather than crashing — the fail-soft posture the rest of render() holds.
+    snap = _snapshot_default()
+    snap.pop("permission", None)
+    text = preflight_readout.render(snap)
+    assert "none seeded for this project" in text
+
+
+def test_assemble_reads_seeded_permission_rules(tmp_path, monkeypatch):
+    # #311 defect 3, real read: assemble() surfaces the seeded-rule count from the REAL
+    # permission_rules store (no monkeypatched rules seam). Seed via the sanctioned front door,
+    # then confirm the snapshot's permission.seeded reflects it.
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo, exist_ok=True)
+    # unseeded first
+    snap0 = preflight_readout.assemble("wi-x", repo)
+    assert snap0["permission"]["seeded"] == 0
+    # seed the default families through the real configure path, then re-assemble
+    permission_rules.seed_default_rules(repo)
+    snap1 = preflight_readout.assemble("wi-x", repo)
+    assert snap1["permission"]["seeded"] == len(permission_rules._SEED_FAMILIES)
+
+
 # --- Task 3: validate_override — the pure override gate (FR-10, UFR-6) ---
 
 def _rows_by_role():

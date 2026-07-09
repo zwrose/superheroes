@@ -61,6 +61,53 @@ def test_missing_or_bad_cwd_not_confined(monkeypatch, tmp_path):
     assert pr.worktree_confined("python3 -c 'x'", "") is False
 
 
+# --- #311 defect 2 (FR-5 cwd keying): production leaf shape `cd <wt> && python3 …` ---
+# The managed root is set via the REAL SUPERHEROES_WORKTREES_ROOT env override that
+# buildtree.managed_root() honors (no monkeypatched _worktrees_root seam) — the exact drift that
+# let this survive was seam-only coverage, so this exercises the production resolution path.
+
+
+def test_confined_on_leading_cd_target_not_payload_cwd(monkeypatch, tmp_path):
+    root = tmp_path / "wt"
+    wt = root / "wi-run-1234"
+    wt.mkdir(parents=True)
+    session = tmp_path / "checkout"           # a NON-worktree session dir == the hook payload cwd
+    session.mkdir()
+    monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(root))
+    # production shape: the leaf cd's into the managed worktree from the session cwd
+    cmd = "cd %s && python3 -m pytest -q" % wt
+    assert pr.worktree_confined(cmd, str(session)) is True
+    # quoted cd target confines identically
+    assert pr.worktree_confined('cd "%s" && python3 x.py' % wt, str(session)) is True
+    # the SAME interpreter with NO cd re-root (payload cwd is the non-worktree session) is NOT confined
+    assert pr.worktree_confined("python3 -m pytest -q", str(session)) is False
+
+
+def test_cd_target_outside_managed_root_not_confined(monkeypatch, tmp_path):
+    root = tmp_path / "wt"
+    root.mkdir(parents=True)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    session = tmp_path / "checkout"
+    session.mkdir()
+    monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(root))
+    # a cd into a dir OUTSIDE the managed root earns nothing (fail-safe toward prompting)
+    assert pr.worktree_confined("cd %s && python3 x.py" % outside, str(session)) is False
+
+
+def test_effective_cwd_parsing_edges(tmp_path):
+    # bare cwd fallback when there is no leading cd
+    assert pr._effective_cwd("python3 x.py", "/session") == "/session"
+    # absolute cd target wins over the payload cwd
+    assert pr._effective_cwd("cd /a/b && python3 x.py", "/session") == "/a/b"
+    # only an `&&`-guarded re-root counts (a bare `cd; …` leaves the interpreter in the session dir)
+    assert pr._effective_cwd("cd /a/b ; python3 x.py", "/session") == "/session"
+    # a relative cd target is resolved against the payload cwd
+    assert pr._effective_cwd("cd sub && python3 x.py", "/session") == os.path.join("/session", "sub")
+    # a non-str command falls back to the payload cwd
+    assert pr._effective_cwd(None, "/session") == "/session"
+
+
 # --- Task 2: Rules store paths + provenance-checked read (FR-6 substrate, UFR-9) ---
 
 import json
