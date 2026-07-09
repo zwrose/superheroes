@@ -181,15 +181,17 @@ const d = require('../engine_dispatch.js')
     }
   }
 
-  // (2a) STALL + PROCESS-GROUP DEATH. The fake CLI spawns a child (sleep 300), records its pid, emits
+  // (2a) STALL + PROCESS-GROUP DEATH. The fake CLI spawns a child (sleep 60), records its pid, emits
   // ONE byte, then stalls past the idle window. The watchdog must idle-kill the whole group (child too).
+  // (The child sleeps 60, not longer: if group-kill ever regresses, the orphan assert below still fails
+  // fast and the leaked child self-reaps in a minute instead of squatting for five.)
   {
     const wt = fs.mkdtempSync(path.join(SCRATCH, 'cwd-stall-'))
     const childPidFile = path.join(SCRATCH, 'child.pid')
     const fakeCli = path.join(SCRATCH, 'fakecli_stall.sh')
     fs.writeFileSync(fakeCli, [
       '#!/bin/sh',
-      'sleep 300 &',              // a child that outlives us UNLESS the whole process group is killed
+      'sleep 60 &',               // a child that outlives us UNLESS the whole process group is killed
       'echo $! > ' + JSON.stringify(childPidFile),
       'printf x',                 // one byte of output, then silence (a genuine no-output stall)
       'sleep 30',
@@ -223,30 +225,67 @@ const d = require('../engine_dispatch.js')
   }
 
   // (2b) COMPANION — the CLI keeps emitting and finishes under the ceiling -> outcome:ok (the watchdog
-  // never trips because byte growth keeps resetting the idle timer).
+  // never trips because byte growth keeps resetting the idle timer). The CLI also ECHOES ITS STDIN
+  // first: a POSIX-sh background job's stdin is /dev/null unless explicitly redirected, so this proves
+  // the armed path really delivers the staged prompt to the engine (review finding code-001 — the
+  // exact silent-empty-prompt regression this smoke previously could not see).
   {
     const wt = fs.mkdtempSync(path.join(SCRATCH, 'cwd-ok-'))
     const fakeCli = path.join(SCRATCH, 'fakecli_ok.sh')
     fs.writeFileSync(fakeCli, [
       '#!/bin/sh',
+      'printf "PROMPT[%s]" "$(cat)"',   // echo stdin back — proves prompt delivery through the armed path
       'i=0',
       'while [ $i -lt 5 ]; do printf "chunk%s" "$i"; sleep 1; i=$((i+1)); done',
       'printf DONE',
     ].join('\n'))
 
     const journalSink = []
-    global.agent = realCourier(['/bin/sh', fakeCli], journalSink)
-    // idle window (4) comfortably above the 1s emit cadence -> no false kill; ceiling 60.
+    let stagedParseInput = null   // the rawStdout dispatch staged for parse-result (base64 decoded here)
+    const courier = realCourier(['/bin/sh', fakeCli], journalSink)
+    global.agent = async (prompt) => {
+      if (prompt.includes('engine_adapter.py parse-result')) {
+        const m = prompt.match(/--stdout-path '([^']+)'/)
+        if (m) { try { stagedParseInput = fs.readFileSync(m[1], 'utf8') } catch (_e) { /* asserted below */ } }
+      }
+      return courier(prompt)
+    }
+    // idle window (8) is 8x the 1s emit cadence -> no false kill even under heavy CI load; ceiling 60.
     const r = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
-      prompt: 'go', cwd: wt, schema: {}, timeoutSeconds: 60, idleSeconds: 4, workItem: 'wi-realok-' + process.pid })
+      prompt: 'the-staged-prompt', cwd: wt, schema: {}, timeoutSeconds: 60, idleSeconds: 8, workItem: 'wi-realok-' + process.pid })
 
     assert.ok(r && Array.isArray(r.findings), 'a steadily-emitting CLI under the ceiling completes normally (read role -> findings)')
     const okJournal = journalSink.find((p) => p.outcome === 'ok')
     assert.ok(okJournal, 'a completed run journals outcome:ok')
     assert.strictEqual(okJournal.stallMonitor, 'armed', 'the ok run still had the monitor armed (it just never tripped)')
-    assert.strictEqual(okJournal.idleSeconds, 4, 'the ok run journals its idle threshold')
+    assert.strictEqual(okJournal.idleSeconds, 8, 'the ok run journals its idle threshold')
     assert.ok(!journalSink.some((p) => p.outcome === 'stalled'), 'a steadily-emitting CLI is NEVER stall-killed (no false kill)')
-    console.log('OK: real-seam OK — steadily-emitting CLI under the ceiling is never false-killed')
+    // code-001: the engine really received the staged prompt on stdin (the armed background job would
+    // otherwise read /dev/null and this capture would be PROMPT[]).
+    assert.ok(stagedParseInput != null, 'parse-result received a staged stdout file')
+    assert.ok(stagedParseInput.includes('PROMPT[the-staged-prompt]'),
+      'code-001: the armed CLI received the staged prompt on stdin (not an empty /dev/null): ' + JSON.stringify(stagedParseInput))
+    // marker-strip: what reaches parse-result is the CLI output ONLY — the __SR_DISPATCH__ control line
+    // was stripped in JS, and stderr was captured separately (never fed to the parser).
+    assert.ok(stagedParseInput.includes('chunk4') && stagedParseInput.includes('DONE'),
+      'the full CLI stdout reaches parse-result')
+    assert.ok(!stagedParseInput.includes('__SR_DISPATCH__'),
+      'the watchdog control marker is stripped before parse-result ever sees the output')
+    console.log('OK: real-seam OK — prompt delivered on stdin, no false kill, marker stripped from parse input')
+  }
+
+  // Drift guard (architecture-001): every dispatchable external engine must carry an explicit
+  // streams-when-piped verdict — adding an engine to engine_pref.ENGINES without deciding its
+  // buffering behavior would silently run it monitor-inert. 'claude' never dispatches externally.
+  {
+    const EP = require('../engine_pref.js')
+    for (const eng of EP.ENGINES) {
+      if (eng === 'claude') continue
+      assert.ok(Object.prototype.hasOwnProperty.call(d._STREAMS_WHEN_PIPED, eng) &&
+        typeof d._STREAMS_WHEN_PIPED[eng] === 'boolean',
+        `drift guard: engine '${eng}' needs an explicit _STREAMS_WHEN_PIPED verdict (verify its piped-output behavior, see the receipts note)`)
+    }
+    console.log('OK: every external engine carries an explicit streams-when-piped verdict (no silent inert drift)')
   }
 
   cleanup()

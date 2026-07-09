@@ -122,21 +122,38 @@ function _pollFor(idle) {
   return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
 }
 // The single-quote-free watchdog script (see the header note). Positional args from `sh -c <script> sh`:
-// $1 ceiling, $2 idle, $3 poll, $4 outfile, $5 perlprog; then "$@" (after `shift 5`) = the CLI argv.
+// $1 ceiling, $2 idle, $3 poll, $4 capture-file BASE, $5 prompt-file, $6 perlprog; then "$@" (after
+// `shift 6`) = the CLI argv. Three deliberate mechanics (each answers a review finding):
+//   - The CLI's stdin is redirected from the prompt file EXPLICITLY (`< "$in"`): a POSIX-sh background
+//     job's stdin is /dev/null unless explicitly redirected, so relying on an outer `< promptPath` (the
+//     unarmed path's mechanism) would silently feed the engine an EMPTY prompt (live-verified
+//     2026-07-09; review finding code-001 Critical).
+//   - stdout and stderr are captured to SEPARATE files: the idle poll watches the SUM of both sizes
+//     (activity on EITHER stream resets the timer — a test-runner spinner on stderr is progress), but
+//     only stdout is emitted to parse-result, so the armed path feeds the adapter exactly what the
+//     unarmed path does (stderr never pollutes parsing; review finding code-002).
+//   - The capture files are suffixed with the script's OWN pid (`$$` — a shell token, not a banned
+//     JS time/random global, so FR-8-clean): concurrent same-workItem dispatches (a review panel
+//     fanning out reviewers that share workItem/roleKind/engine and hence a runId) each get a private
+//     capture pair, so one watchdog can never poll another's file (review finding premortem-001).
 const _WATCH_SCRIPT = [
-  'c=$1; idle=$2; poll=$3; out=$4; prog=$5; shift 5',
-  ': > "$out"',
-  'perl -e "$prog" "$c" "$@" > "$out" 2>&1 &',
+  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; shift 6',
+  'out="$base.$$.out"; err="$base.$$.err"',
+  ': > "$out"; : > "$err"',
+  'perl -e "$prog" "$c" "$@" < "$in" > "$out" 2> "$err" &',
   'p=$!',
   'last=-1; idlesec=0; killed=0',
   'while kill -0 "$p" 2>/dev/null; do',
   'sleep "$poll"',
-  'sz=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$sz" ] || sz=0',
+  'szo=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szo" ] || szo=0',
+  'sze=$(wc -c < "$err" 2>/dev/null | tr -d " "); [ -n "$sze" ] || sze=0',
+  'sz=$((szo + sze))',
   'if [ "$sz" -gt "$last" ]; then last=$sz; idlesec=0; else idlesec=$((idlesec + poll)); fi',
   'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
   'done',
   'wait "$p" 2>/dev/null; ec=$?',
   'cat "$out"',
+  'rm -f "$out" "$err"',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
 
@@ -148,10 +165,16 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   if (idleArmed) {
     const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
     const poll = _pollFor(idle)
-    const outFile = promptPath.replace(/\.prompt$/, '') + '.run.out'
+    // Capture-file BASE: the script appends its own `.$$.out`/`.$$.err` (per-sh-process pid) so
+    // concurrent same-runId dispatches never share a capture file (premortem-001).
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
     const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
-    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ${shq(outFile)} ${shq(perlProg)} ${quotedArgv}`
-    cmd = cwd ? `cd ${shq(cwd)} && ${inner} < ${shq(promptPath)}` : `${inner} < ${shq(promptPath)}`
+    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
+      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${quotedArgv}`
+    // No outer stdin redirect: the watchdog feeds the prompt to the (backgrounded) CLI itself via
+    // `< "$in"` — a POSIX-sh async job's stdin is /dev/null unless explicitly redirected, so an outer
+    // redirect would silently deliver an EMPTY prompt (code-001; live-verified 2026-07-09).
+    cmd = cwd ? `cd ${shq(cwd)} && ${inner}` : inner
   } else {
     const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
     cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
@@ -444,4 +467,7 @@ async function dispatchExternal(o) {
 // test-only: reset the once-per-process tripwire memo so a smoke can drive the notice deterministically.
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
+// _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
+// external engine must have an explicit streams-when-piped verdict) — not a public seam.
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+  _STREAMS_WHEN_PIPED }

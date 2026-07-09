@@ -3771,19 +3771,23 @@ function _pollFor(idle) {
   return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
 }
 const _WATCH_SCRIPT = [
-  'c=$1; idle=$2; poll=$3; out=$4; prog=$5; shift 5',
-  ': > "$out"',
-  'perl -e "$prog" "$c" "$@" > "$out" 2>&1 &',
+  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; shift 6',
+  'out="$base.$$.out"; err="$base.$$.err"',
+  ': > "$out"; : > "$err"',
+  'perl -e "$prog" "$c" "$@" < "$in" > "$out" 2> "$err" &',
   'p=$!',
   'last=-1; idlesec=0; killed=0',
   'while kill -0 "$p" 2>/dev/null; do',
   'sleep "$poll"',
-  'sz=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$sz" ] || sz=0',
+  'szo=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szo" ] || szo=0',
+  'sze=$(wc -c < "$err" 2>/dev/null | tr -d " "); [ -n "$sze" ] || sze=0',
+  'sz=$((szo + sze))',
   'if [ "$sz" -gt "$last" ]; then last=$sz; idlesec=0; else idlesec=$((idlesec + poll)); fi',
   'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
   'done',
   'wait "$p" 2>/dev/null; ec=$?',
   'cat "$out"',
+  'rm -f "$out" "$err"',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
 async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
@@ -3794,10 +3798,11 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   if (idleArmed) {
     const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
     const poll = _pollFor(idle)
-    const outFile = promptPath.replace(/\.prompt$/, '') + '.run.out'
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
     const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
-    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ${shq(outFile)} ${shq(perlProg)} ${quotedArgv}`
-    cmd = cwd ? `cd ${shq(cwd)} && ${inner} < ${shq(promptPath)}` : `${inner} < ${shq(promptPath)}`
+    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
+      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${quotedArgv}`
+    cmd = cwd ? `cd ${shq(cwd)} && ${inner}` : inner
   } else {
     const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
     cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
@@ -3970,7 +3975,8 @@ async function dispatchExternal(o) {
   }
 }
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+  _STREAMS_WHEN_PIPED }
 };
 __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel } = require('./review_panel_shell.js')
