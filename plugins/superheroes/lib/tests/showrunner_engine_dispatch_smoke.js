@@ -176,6 +176,43 @@ function makeAgent(routes) {
   console.log('OK: engine_dispatch leaf-default timeout back-compat')
 
   // ---------------------------------------------------------------------
+  // #309/#299: the TIMEOUT-outcome journal enrichment — the exact case resolvedArgv was hoisted for.
+  // A CLI killed at the ceiling must journal outcome:'timeout' WITH the argv it was running and the
+  // effective ceiling, so the audit line reads unambiguously as "killed at ceiling after Ns" (distinct
+  // from a genuine CLI failure) and never records a null argv for a run that really dispatched.
+  // ---------------------------------------------------------------------
+  {
+    const execLogTO = []
+    let argvTO = null
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogTO.push(prompt)
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          argvTO = ['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']
+          return [{ index: 0, ok: true, stdout: JSON.stringify(argvTO) }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return new Promise(() => {})   // CLI wedges -> ceiling kill
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rTO = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build',
+      cwd: '/tmp/wt', schema: {}, timeoutSeconds: 0.05, taskId: 'T1', workItem: 'wi-abc' })
+    assert.strictEqual(rTO.ok, false, '#309: a ceiling kill fails the dispatch')
+    assert.strictEqual(rTO.reason, 'timeout', '#309: the ceiling kill reason is timeout')
+    const journalTO = execLogTO.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    assert.ok(journalTO, '#309: a ceiling-killed dispatch still journals exactly one external_dispatch line')
+    const payloadTO = JSON.parse(journalTO.match(/--payload '(.*)'$/s)[1])
+    assert.strictEqual(payloadTO.outcome, 'timeout', '#299: the journal outcome is timeout (killed at ceiling)')
+    assert.strictEqual(payloadTO.effectiveTimeout, 0.05, '#299: the journal records the ceiling it was killed at')
+    assert.deepStrictEqual(payloadTO.argv, argvTO,
+      '#299: the journal records the REAL argv the CLI was killed while running (resolvedArgv hoist), never null')
+  }
+
+  console.log('OK: engine_dispatch timeout-outcome journal enrichment (killed-at-ceiling audit line)')
+
+  // ---------------------------------------------------------------------
   // #288: HONEST REFUSAL. The external build leaf refuses ({"ok":false,"signal":"plan_wrong"}) —
   // parse-result no longer launders that to ok:true, so dispatchExternal must route it to the
   // write-FAILURE path: return {ok:false, reason:'plan_wrong'} (the caller then discards uncommitted

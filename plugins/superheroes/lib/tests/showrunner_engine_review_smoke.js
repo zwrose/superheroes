@@ -243,11 +243,15 @@ async function partB() {
   assert.ok(regularEfforts.length > 0 && regularEfforts.every((e) => e === 'high'),
     'FAIL (b1g): regular reviewers (code/test/premortem) must dispatch codex at effort high')
 
-  // (b1h/i #308/#309): EVERY review dispatch must thread a resolved model (one of the configured
-  // review-code tiers — never absent, which is exactly the #308 defect that ran cursor on composer)
-  // AND the moderate READ timeout ceiling (900s), never the bare 300s wall-clock default (#309).
-  assert.ok(reviewDispatch.every((c) => c.model === 'sonnet' || c.model === 'opus'),
-    'FAIL (b1h #308): every review dispatch must carry a resolved tier model (sonnet/opus), never undefined: '
+  // (b1h/i #308/#309): EVERY review dispatch must thread its leaf's EXACT scheduled tier model (never
+  // absent — exactly the #308 defect that ran cursor on composer) AND the moderate READ timeout
+  // ceiling (900s), never the bare 300s wall-clock default (#309). Round 1 is the full reviewer-DEEP
+  // panel (the scheduler's roundKind — every leaf's MODEL rides the reviewerDeep tier, opus, while
+  // EFFORT independently follows the reviewer persona, b1f/g above: model tier and effort are
+  // deliberately orthogonal, FR-9). Pinning the exact tier (opus, not merely some model) kills a
+  // swapped reviewer<->reviewerDeep ternary in reviewCodeLeaves, which would dispatch sonnet here.
+  assert.ok(reviewDispatch.every((c) => c.model === 'opus'),
+    'FAIL (b1h #308): every round-1 (full-deep-panel) review dispatch must thread the reviewerDeep tier (opus): '
     + JSON.stringify(reviewDispatch.map((c) => c.model)))
   assert.ok(reviewDispatch.every((c) => c.timeoutSeconds === 900),
     'FAIL (b1i #309): every review dispatch must carry the moderate read ceiling (900s), not the 300s default: '
