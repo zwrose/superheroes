@@ -826,8 +826,14 @@ worker, fixer, and final-review-fix leaves route to the implementation engine, a
 review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_adapter.py`. The engine
 axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
 engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
-Every external dispatch also **threads the role's resolved model** into the engine argv (a cursor
-builder runs the builder tier, not the composer default) and a **role-appropriate timeout ceiling**
+Every external dispatch also **threads the role's resolved model** into the engine argv as a dispatch
+fact — and the adapter's **owner-policy model map** decides what actually runs (owner-ratified
+2026-07-09): **cursor is the token-efficiency engine** — the highly token-efficient composer-2.5 runs
+ALL work roles (build/fix/review/reviewer-deep), and premium Claude models are **never routed through
+cursor by default**. The one deliberate exception is plan authoring: `author-plan: fable` +
+`planAuthor: cursor` dispatches Fable via cursor; every other tier falls through to the pinned
+composer default (that fall-through is the policy, not a gap). Each dispatch also carries a
+**role-appropriate timeout ceiling**
 (`engine_pref.resolve_timeout`): write roles (build/fix/author-plan) get a high ceiling, read roles
 (review) a moderate one — a finite kill, never a borderline wall-clock limit. The high ceiling is
 **paired with a byte-activity stall monitor** (`engine_pref.resolve_idle` + `engine_dispatch`'s shell

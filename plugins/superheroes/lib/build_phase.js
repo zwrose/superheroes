@@ -436,8 +436,9 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   // model-tier _overrides() map (keyed by role->model — resolveEffort could never match it).
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
   // #309: write roles get the HIGH ceiling (resolveTimeout(_,'build'|'fix')); the owner `timeout`
-  // override on __SR_ENGINE_PREFS wins. #308: thread the caller's resolved model so cursor dispatches
-  // the role's real tier (opus/sonnet) instead of the composer default — the readout's promise.
+  // override on __SR_ENGINE_PREFS wins. #308: thread the caller's resolved model as a dispatch FACT —
+  // the adapter's policy map decides what cursor runs (owner policy 2026-07-09: composer for work
+  // roles; only the fable/author-plan exception maps a premium id), and the readout shows the same.
   const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
   // #309: PAIR the high ceiling with the byte-activity stall monitor — the write idle window
   // (resolveIdle(_,'build'|'fix') = 600s, owner `idleTimeout` override wins, clamped ≤ ceiling).
@@ -778,7 +779,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
     const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
-    // #308: thread the reviewer tier (cursor otherwise runs composer, not the readout's sonnet).
+    // #308: thread the reviewer tier as a dispatch fact (the adapter's owner-policy map keeps a
+    // cursor reviewer on composer; the readout shows the same map's truth).
     // #309: read roles get the moderate ceiling; the owner `timeout` override still wins.
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
@@ -919,7 +921,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
-      // #308: thread the reviewer-deep tier (opus) so cursor dispatches it, not the composer default.
+      // #308: thread the reviewer-deep tier as a dispatch fact (the adapter's owner-policy map
+      // keeps a cursor deep-reviewer on composer; the readout shows the same map's truth).
       // #309: read roles get the moderate ceiling (review-deep shares it); owner `timeout` wins.
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,

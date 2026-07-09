@@ -121,7 +121,9 @@ function makeAgent(routes) {
         execLogEnrich.push(prompt)
         if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
         if (prompt.includes('engine_adapter.py build-argv')) {
-          capturedArgv = ['cursor-agent', '--model', 'claude-opus-4-8-thinking-high', '-p', '--trust', '-f', '--output-format', 'stream-json']
+          // What the real adapter emits for a cursor work role under the owner policy (2026-07-09):
+          // the composer default — the threaded tier informs the adapter, the policy map decides.
+          capturedArgv = ['cursor-agent', '--model', 'composer-2.5-fast', '-p', '--trust', '-f', '--output-format', 'stream-json']
           return [{ index: 0, ok: true, stdout: JSON.stringify(capturedArgv) }]
         }
         if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]

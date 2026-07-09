@@ -482,9 +482,10 @@ function reviewCodeLeaves(tiers, opts) {
     const effortKey = REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review'
     if (rEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(rEngine, effortKey, _effortOverrides())
-      // #308: thread the resolved reviewer tier (the same `model` the native path + readout use) so a
-      // cursor reviewer dispatches its real tier, not the composer default. #309: the moderate read
-      // ceiling for effortKey (review/review-deep); the owner `timeout` override still wins.
+      // #308: thread the resolved reviewer tier (the same `model` the native path + readout use) as
+      // a dispatch fact — the adapter's owner-policy map keeps a cursor reviewer on composer, and the
+      // readout shows the same map's truth. #309: the moderate read ceiling for effortKey
+      // (review/review-deep); the owner `timeout` override still wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: typeof workItem === 'string' ? workItem : 'review-code',
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
@@ -538,8 +539,8 @@ function reviewCodeLeaves(tiers, opts) {
     const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
     if (iEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(iEngine, 'fix', _effortOverrides())
-      // #308: thread the resolved fixer tier (sonnet) — cursor otherwise runs composer. #309: the
-      // write ceiling for a fix; the owner `timeout` override still wins.
+      // #308: thread the resolved fixer tier as a dispatch fact (the adapter's owner-policy map
+      // keeps a cursor fixer on composer). #309: the write ceiling for a fix; owner `timeout` wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,

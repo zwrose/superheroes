@@ -26,18 +26,20 @@ TASK_ID_TRAILER = "Task-Id"
 _CODEX_MODEL = "gpt-5.5"
 _CURSOR_MODEL = "composer-2.5-fast"
 
-# Native model-tier short-name -> cursor model id. EVERY external cursor dispatch now threads its
-# role's resolved tier (#308), so this map must cover every tier model_tier(.js) can emit for an
-# engine-routed role — builder/reviewer-deep/author -> opus, reviewer/fixer -> sonnet, plus fable
-# via an owner override. Ids verified live against `cursor-agent models` (fable/opus 2026-07-03;
-# sonnet 2026-07-09). haiku is DELIBERATELY absent: cursor exposes no Haiku model, so a haiku tier
-# (mechanical, or an owner override) falls through build_argv's `.get(..., _CURSOR_MODEL)` to the
-# pinned composer default — honest, and display_model resolves it through this SAME map (SSOT), so
-# the preflight readout row can never disagree with the dispatched argv by construction (#308 / #162).
+# Native model-tier short-name -> cursor model id — the OWNER POLICY map (ratified 2026-07-09).
+# Cursor is the TOKEN-EFFICIENCY engine: its whole point is the highly token-efficient composer-2.5,
+# so ALL work roles (build/fix/review/reviewer-deep) dispatch the pinned _CURSOR_MODEL composer
+# default, and premium Claude models are NEVER routed through cursor by default. The ONE deliberate
+# exception is plan authoring: `author-plan: fable` (model tier) + `planAuthor: cursor` (engine pref)
+# dispatches Fable via cursor — hence `fable` is the map's ONLY entry (id verified live against
+# `cursor-agent models` 2026-07-03). Every other tier (opus/sonnet/haiku, or any owner override)
+# DELIBERATELY falls through build_argv's `.get(..., _CURSOR_MODEL)` to composer — that fall-through
+# IS the policy, not a gap; do not "complete" this map with premium ids. EVERY cursor dispatch
+# threads its role's resolved tier (#308) through this map, and display_model resolves through this
+# SAME map (SSOT), so the preflight readout row shows the composer truth and can never disagree with
+# the dispatched argv by construction (#308 / #162).
 _CURSOR_MODEL_BY_TIER = {
     "fable": "claude-fable-5-thinking-xhigh",
-    "opus": "claude-opus-4-8-thinking-high",
-    "sonnet": "claude-sonnet-5-thinking-high",
 }
 
 
@@ -287,7 +289,7 @@ def main(argv):
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
     b.add_argument("--model", default=None,
-                   help="native tier short name (fable/opus); cursor maps it to its model id")
+                   help="native tier short name; cursor maps ONLY fable (owner policy), else composer")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
     pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))

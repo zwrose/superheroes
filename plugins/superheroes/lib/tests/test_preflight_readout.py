@@ -83,13 +83,16 @@ def test_orchestration_role_inherits_session_model():
 
 def test_display_model_maps_external_engines():
     assert preflight_readout.display_model("codex", "sonnet") == "gpt-5.5"
-    # cursor honors the SAME per-tier map build_argv uses: an unmapped tier (haiku — cursor has no
-    # Haiku model) shows the pinned composer default; a mapped tier shows its resolved cursor id (#308).
-    assert preflight_readout.display_model("cursor", "sonnet") == "claude-sonnet-5-thinking-high"
+    # cursor honors the SAME per-tier map build_argv uses. OWNER POLICY (ratified 2026-07-09): cursor
+    # is the token-efficiency engine — every work-role tier (opus/sonnet/haiku/None) shows the pinned
+    # composer default it really dispatches; ONLY fable (the author-plan exception) maps to a premium
+    # id. The readout row shows the composer truth instead of advertising a premium tier (the #308
+    # defect was the readout side, not the dispatch).
+    assert preflight_readout.display_model("cursor", "sonnet") == "composer-2.5-fast"
+    assert preflight_readout.display_model("cursor", "opus") == "composer-2.5-fast"
     assert preflight_readout.display_model("cursor", "haiku") == "composer-2.5-fast"
     assert preflight_readout.display_model("cursor", None) == "composer-2.5-fast"
     assert preflight_readout.display_model("cursor", "fable") == "claude-fable-5-thinking-xhigh"
-    assert preflight_readout.display_model("cursor", "opus") == "claude-opus-4-8-thinking-high"
     assert preflight_readout.display_model("claude", "opus") == "opus"
     assert preflight_readout.display_model("claude", None) == "inherit"
 
@@ -98,8 +101,9 @@ def test_display_model_never_diverges_from_build_argv_for_every_role_engine():
     """#308/#162 SSOT: for EVERY (engine, model-tier) an engine-routed role can dispatch, the model
     the preflight readout SHOWS must equal the model engine_adapter.build_argv actually embeds in the
     argv — no monkeypatched seams, both real. This is the by-construction guarantee the readout header
-    claims ('the readout cannot drift from dispatch'); it was FALSE for cursor builder/reviewer-deep
-    until the dispatch sites threaded the model. Covers cursor (mapped ids + the composer fallback)
+    claims ('the readout cannot drift from dispatch'); the #308 defect was the READOUT side advertising
+    premium tiers cursor never dispatches (PR #285's display derivation) — the dispatch's composer
+    default was the owner policy. Covers cursor (the fable exception + the composer policy fallback)
     and codex (always its pinned model, tier ignored)."""
     import engine_adapter
 
@@ -109,8 +113,9 @@ def test_display_model_never_diverges_from_build_argv_for_every_role_engine():
         flag = "--model" if engine == "cursor" else "-m"
         return argv[argv.index(flag) + 1]
 
-    # Every model-tier an engine-routed role resolves to (builder/author->opus, reviewer/fixer->sonnet,
-    # reviewer-deep->opus, plus fable via override and haiku via a mechanical/override edge), and None.
+    # Every model-tier an engine-routed role can thread, and None. Under the owner policy
+    # (2026-07-09) every cursor cell except fable resolves to the composer default on BOTH sides —
+    # the property being proven is equality through the one shared map, whatever the policy maps to.
     for engine, role_kind in (("cursor", "build"), ("cursor", "fix"), ("cursor", "review"),
                               ("cursor", "author-plan"), ("codex", "build"), ("codex", "review")):
         for model in ("opus", "sonnet", "fable", "haiku", None):
