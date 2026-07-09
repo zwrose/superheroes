@@ -71,6 +71,16 @@ _LEADING_CD = re.compile(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|[^\s;&|<>]+)\s*&&")
 # boundary in the remainder and fail confinement SAFE: a chained `cd <managed-wt> && cd /outside
 # && python3 …` must never confine on the in-root first hop while the interpreter actually runs
 # outside the managed root (the confinement-bypass the #311 security/premortem review named).
+#
+# SCOPE (deliberate, #311 review round 2): worktree-confinement is a prompt-reduction HEURISTIC
+# for routine spine leaves, NOT a sandbox. It CANNOT be a sandbox: `_INTERPRETER` sanctions
+# `bash -c`/`sh -c`/`env <interp>` probes, and any allowed interpreter can re-root itself at
+# runtime (`os.chdir`, a `bash -c 'cd … && …'` body) regardless of how perfectly the command line
+# is parsed. So this guard closes the one REALISTIC accidental vector (a second top-level `cd`),
+# not every syntactic re-root — `env -C`, a `(cd …)` subshell, or a quoted `cd` inside a `bash -c`
+# body still confine on the first hop (a disclosed residual, bounded by the single-user,
+# non-adversarial threat model AND by the gated owner-authority floor, which scans the FULL
+# command string and is immune to any cwd trick). Fail-direction stays toward prompting.
 _RE_ROOT = re.compile(r"(?:^|&&|\|\||[;&|\n])\s*(?:cd|pushd|popd)(?:\s|$)")
 
 

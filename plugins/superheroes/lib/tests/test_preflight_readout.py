@@ -254,6 +254,7 @@ def _fake_readers(**over):
         "calibration": {"status": "provisional"},
         "verify": "npm test",
         "storage": {"mode": "global", "docsPath": "/proj/docs"},
+        "permission": {"seeded": 0},
     }
     base.update(over)
     return base
@@ -299,6 +300,15 @@ def test_one_field_error_degrades_not_fails(monkeypatch=None):
     snap = preflight_readout.assemble("wi", "/root", readers=readers)
     assert any(d for d in snap["degraded"] if d.get("field") == "storage")
     assert snap["storage"].get("unavailable") is True
+
+
+def test_permission_field_error_degrades_not_fails():
+    # #311 review round 2 (Minor): symmetric with storage — a raising permission-rules read degrades
+    # to unavailable + a degraded[] entry, never a crashed readout.
+    readers = _fake_readers(permission=preflight_readout._RAISE)
+    snap = preflight_readout.assemble("wi", "/root", readers=readers)
+    assert any(d for d in snap["degraded"] if d.get("field") == "permission")
+    assert snap["permission"].get("unavailable") is True
 
 
 def test_total_failure_returns_failure_sentinel():
