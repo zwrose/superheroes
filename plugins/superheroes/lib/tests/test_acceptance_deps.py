@@ -958,3 +958,35 @@ def test_engine_dispatch_tally_missing_journal_is_unreadable_fail_closed(tmp_pat
     assert deps.real_engine_dispatch_tally(root, lambda: None)() == {"unreadable": True}
     empty = deps.real_engine_dispatch_tally(root, lambda: "no-such-wi")()
     assert empty == {"ok": 0, "failed": 0, "by_engine": {}, "acceptable_reasons": []}
+
+
+def test_real_launcher_builds_pref_reader_against_real_store_kills_store_root_mutant(tmp_path, monkeypatch):
+    # #310 mutation guard (review test-001): the leaf-level pref test hardcodes the reader's
+    # args, so a revert of the ONE production line the fix touched — real_launcher's
+    # `_default_engine_pref_reader(root, None)` back to `(root, root)` — would survive the whole
+    # suite. Drive the REAL real_launcher, capture the engine_pref_reader IT builds (a fake `run`
+    # captures it without spawning claude), and evaluate that reader against a real on-disk store.
+    # With the fix, the reader resolves the store's codex/cursor calibration and spend_partial is
+    # True; reverting to (root, root) makes it resolve all-claude and this test FAILS.
+    repo = str(tmp_path / "repo")
+    store = str(tmp_path / "store")
+    os.makedirs(repo)
+    _sp.run(["git", "init", "-q", repo], check=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)
+    _write_store_core(repo, store, {"reviewer": "codex", "implementation": "cursor"})
+
+    captured = {}
+
+    def _fake_run(stamped, ceilings, child_factory, clock, spend_sampler, engine_pref_reader,
+                  budget_consumed=None, attempt=1):
+        captured["reader"] = engine_pref_reader
+        return {"outcome": "exited", "terminal_location": None,
+                "spend_partial": deps.acceptance_launch._compute_spend_partial(engine_pref_reader),
+                "spend": None, "elapsed_sec": 0.0}
+
+    monkeypatch.setattr(deps.acceptance_launch, "run", _fake_run)
+
+    launch = deps.real_launcher(repo)({"stamp": "s1", "work_item": "accept-harness-x"})
+    prefs = captured["reader"]()   # the reader real_launcher built, evaluated against the real store
+    assert (prefs["reviewer"], prefs["implementation"]) == ("codex", "cursor")
+    assert launch["spend_partial"] is True   # the engine-aware signal, through the real wiring

@@ -897,3 +897,31 @@ def test_all_claude_run_never_consults_the_dispatch_tally():
     d = _deps(engine_dispatch_tally=lambda: calls.append(1) or {"unreadable": True})
     r = run.invoke(d)
     assert r["verdict"] == "pass" and calls == []
+
+
+def test_real_dispatch_tally_reader_flows_through_invoke_0_11_0_shape_fails(tmp_path):
+    # #310 review test-002: the run-level tests inject the tally seam and the real-reader test
+    # stops at decide(); neither flows the PRODUCTION real_engine_dispatch_tally through
+    # run.invoke's wiring (external_calibration derivation -> tally read -> verdict). Wire the
+    # REAL reader over a REAL journal written in the 0.11.0 all-failed shape and assert invoke
+    # FAILs end-to-end — no injected tally seam on the dispatch leg.
+    import control_plane
+    import journal
+    root = str(tmp_path / "checkout")
+    os.makedirs(root)
+    wi = "accept-harness-invoke-90fea45e"
+    events = control_plane.paths(root, wi)["events"]
+    journal.append(events, "external_dispatch", root=root,
+                   payload={"engine": "cursor", "roleKind": "build", "outcome": "commit-failed"})
+    for _ in range(8):
+        journal.append(events, "external_dispatch", root=root,
+                       payload={"engine": "codex", "roleKind": "review", "outcome": "unreadable"})
+
+    d = _deps(
+        launcher=lambda stamped, budget_consumed=None, attempt=1: {
+            "outcome": "exited", "terminal_location": "/t.json", "spend_partial": True,
+            "spend": 1.25, "elapsed_sec": 42.0},
+        engine_dispatch_tally=real_deps.real_engine_dispatch_tally(root, lambda: wi))
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert "codex 0/8" in d["_state"]["records_written"][0]["reason"]

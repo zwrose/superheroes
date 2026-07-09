@@ -139,10 +139,22 @@ def test_external_zero_events_is_fail_silent_fallopen():
 
 def test_external_journaled_fallopen_reason_passes():
     # An explicitly journaled authz-denied / engine-unavailable is a VISIBLE, legitimate
-    # fall-open — the run honestly disclosed why it fell open, so it is not failed.
+    # fall-open — the run honestly disclosed why it fell open (and NOTHING genuinely failed),
+    # so it is not failed.
     f = _external_pass(external_dispatch_tally=v.tally_external_dispatches(
         [_dispatch("codex", "authz-denied"), _dispatch("cursor", "engine-unavailable", "build")]))
     assert v.decide(f)["verdict"] == "pass"
+
+
+def test_external_reason_does_not_excuse_a_co_tenant_engines_total_failure():
+    # review #310 (code-001/sec-002): one engine's legitimate fall-open must NOT globally excuse
+    # a DIFFERENT engine that genuinely failed every dispatch. cursor legitimately unavailable +
+    # codex 0/8 genuine failures -> FAIL naming codex's tally (not a pass off cursor's reason).
+    f = _external_pass(external_dispatch_tally=v.tally_external_dispatches(
+        [_dispatch("cursor", "engine-unavailable", "build")]
+        + [_dispatch("codex", "unreadable") for _ in range(8)]))
+    r = v.decide(f)
+    assert r["verdict"] == "fail" and "codex 0/8" in r["reason"]
 
 
 def test_external_unreadable_journal_is_fail_ufr9_never_pass():

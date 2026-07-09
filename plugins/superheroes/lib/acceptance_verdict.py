@@ -88,8 +88,9 @@ def decide(facts):
          must match the live values.
       4. #310 engine authenticity — when the resolved calibration routed any role to an
          external engine (`external_calibration`), the run must show the external dispatch
-         chain actually worked at least once: ≥1 `external_dispatch` with outcome "ok", OR an
-         explicitly journaled fall-open reason (authz-denied / engine-unavailable). A run whose
+         chain actually worked at least once: ≥1 `external_dispatch` with outcome "ok", OR a
+         run whose only external activity was an explicitly journaled fall-open reason
+         (authz-denied / engine-unavailable) with zero genuine dispatch failures. A run whose
          external engines failed every dispatch — or that journaled zero events under external
          calibration — is byte-identical to a healthy all-Claude run in every terminal fact
          above, so without this gate a silent/total fall-open certifies as a passing
@@ -153,7 +154,15 @@ def decide(facts):
                 "unreadable — an unreadable journal cannot certify an authentic external "
                 "dispatch (UFR-9)")
         tally = facts.get("external_dispatch_tally") or {}
-        if not (tally.get("ok") or tally.get("acceptable_reasons")):
+        # Authentic iff the external chain demonstrably worked (>=1 ok), OR the ONLY external
+        # activity was a legitimate journaled fall-open — an acceptable reason with ZERO genuine
+        # dispatch failures. Requiring failed==0 for the reason-only pass stops one engine's
+        # honest unavailability (authz-denied / engine-unavailable) from globally excusing a
+        # co-tenant engine that genuinely failed every dispatch (review #310, code-001/sec-002):
+        # `acceptable_reasons` is a flat cross-engine list, so without this a single legitimate
+        # fall-open would re-open the exact all-failed escape for a multi-engine calibration.
+        authentic = tally.get("ok") or (not tally.get("failed") and tally.get("acceptable_reasons"))
+        if not authentic:
             return _fail(
                 "external-engine calibration, but no authentic external dispatch — "
                 + _dispatch_tally_phrase(tally))
