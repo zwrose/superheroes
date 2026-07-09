@@ -859,3 +859,102 @@ def test_build_escape_hatch_threads_to_a_bypassing_seam(tmp_path):
     res = d["root_ancestry"]()
     assert res["ok"] is True
     assert res.get("bypassed") is True
+
+
+# --- #310 engine-pref store-root read + external-dispatch authenticity ------------------
+import subprocess as _sp
+import acceptance_launch as _al
+import acceptance_verdict as _av
+import core_md as _core_md
+
+
+def _write_store_core(repo, store, prefs):
+    """Write a REAL core.md into the on-disk GLOBAL store at
+    <store>/projects/<config_key(repo)>/config/core.md — the exact layout load_engine_prefs
+    resolves when its store-base arg is the store root (or None -> the default store)."""
+    _core_md.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
+                          "patterns": "", "enginePreferences": prefs}, "confirmed",
+                   root=store, now="2026-07-08")
+
+
+def test_default_engine_pref_reader_reads_real_store_layout_no_monkeypatch(tmp_path, monkeypatch):
+    # #310: the acceptance launcher reads engine prefs via
+    # `_default_engine_pref_reader(root, None)` (the FIXED call). Prove it round-trips a
+    # codex/cursor calibration written into a REAL on-disk store — NO monkeypatched pref
+    # reader (monkeypatched-seam-only coverage is exactly how the store-root bug survived
+    # 2,700 green tests), and prove the BUGGY shape (root, root) degrades to all-claude.
+    repo = str(tmp_path / "repo")
+    store = str(tmp_path / "store")
+    os.makedirs(repo)
+    _sp.run(["git", "init", "-q", repo], check=True)
+    monkeypatch.setenv("SUPERHEROES_STORE_ROOT", store)   # the default store the fix resolves to
+    _write_store_core(repo, store, {"reviewer": "codex", "implementation": "cursor"})
+
+    fixed = _al._default_engine_pref_reader(repo, None)
+    assert (fixed["reviewer"], fixed["implementation"]) == ("codex", "cursor")
+    # spend_partial — the ONE engine-aware signal the harness has — is now True (it read
+    # `false` on the codex/cursor-calibrated 0.11.0 run because of the store-root bug).
+    assert _al._compute_spend_partial(lambda: fixed) is True
+
+    # The pre-#310 shape: the repo root in the STORE-root slot resolves core.md to a
+    # nonexistent <repo>/projects/<key>/config/core.md -> fail-open degenerate all-claude.
+    degraded = _al._default_engine_pref_reader(repo, repo)
+    assert (degraded["reviewer"], degraded["implementation"]) == ("claude", "claude")
+    assert _al._compute_spend_partial(lambda: degraded) is False
+
+
+def _append_dispatch(root, work_item, engine, outcome, role_kind="review"):
+    journal.append(control_plane.paths(root, work_item)["events"], "external_dispatch",
+                   payload={"engine": engine, "roleKind": role_kind, "effort": "high",
+                            "verify": None, "outcome": outcome}, root=root)
+
+
+def test_engine_dispatch_tally_reads_real_journal_and_0_11_0_shape_is_fail(tmp_path):
+    # #310 regression: replay the REAL 0.11.0 journal shape (1 cursor build + 8 codex reviews,
+    # ALL failed) through the PRODUCTION reader (`real_engine_dispatch_tally` reading a real
+    # events.jsonl via control_plane.paths) — no monkeypatch — then feed the tally into the
+    # verdict as an external-calibrated run and assert FAIL. That exact leg PASSED before this
+    # fix; this test is the point of the issue.
+    root = str(tmp_path / "checkout")
+    os.makedirs(root)
+    wi = "accept-harness-90fea45e"
+    _append_dispatch(root, wi, "cursor", "commit-failed", "build")
+    for _ in range(8):
+        _append_dispatch(root, wi, "codex", "unreadable")
+
+    tally = deps.real_engine_dispatch_tally(root, lambda: wi)()
+    assert tally["ok"] == 0
+    assert tally["by_engine"] == {"cursor": {"ok": 0, "total": 1}, "codex": {"ok": 0, "total": 8}}
+
+    facts = {"terminal": "ready", "pr_exists": True, "pr_ready_for_review": True,
+             "checks_green": True, "phases_traversed": ["plan"], "expected_phases": ["plan"],
+             "readout_exists": True, "readout_pr_link": "https://x/pr/1",
+             "readout_claimed_checks_green": True, "live_checks_green": True,
+             "readout_claimed_pr": "https://x/pr/1", "live_pr": "https://x/pr/1", "unreadable": [],
+             "external_calibration": True, "external_dispatch_tally": tally}
+    r = _av.decide(facts)
+    assert r["verdict"] == "fail"
+    assert "codex 0/8" in r["reason"] and "cursor 0/1" in r["reason"]
+
+
+def test_engine_dispatch_tally_one_ok_reads_real_journal(tmp_path):
+    # An authentic external run: ≥1 ok external_dispatch -> the tally reports ok >= 1.
+    root = str(tmp_path / "checkout")
+    os.makedirs(root)
+    wi = "accept-harness-ok"
+    _append_dispatch(root, wi, "codex", "ok")
+    _append_dispatch(root, wi, "cursor", "timeout", "build")
+    tally = deps.real_engine_dispatch_tally(root, lambda: wi)()
+    assert tally["ok"] == 1 and tally["by_engine"]["codex"] == {"ok": 1, "total": 1}
+
+
+def test_engine_dispatch_tally_missing_journal_is_unreadable_fail_closed(tmp_path):
+    # No events.jsonl at all -> fail-closed {"unreadable": True} (an external-calibrated run
+    # whose dispatch record cannot be read must not fake a pass, UFR-9). read_events returns []
+    # for a missing file, which tallies to zero events -> the empty-tally FAIL path; an
+    # unidentifiable work-item is the explicit unreadable signal.
+    root = str(tmp_path / "checkout")
+    os.makedirs(root)
+    assert deps.real_engine_dispatch_tally(root, lambda: None)() == {"unreadable": True}
+    empty = deps.real_engine_dispatch_tally(root, lambda: "no-such-wi")()
+    assert empty == {"ok": 0, "failed": 0, "by_engine": {}, "acceptable_reasons": []}

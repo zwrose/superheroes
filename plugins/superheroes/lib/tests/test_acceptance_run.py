@@ -843,3 +843,57 @@ def test_signal_after_reclaim_still_releases_the_owned_lease():
     r = run.invoke(d)
     assert r["verdict"] == "fail"
     assert d["_state"]["lease_released"] is True
+
+
+# --- #310 engine-authenticity wiring through invoke() -----------------------------------
+
+def _external_launcher():
+    """A happy launcher whose run is EXTERNAL-calibrated (spend_partial True) — the shape the
+    fixed engine-pref store-root read produces on a codex/cursor-calibrated project."""
+    return lambda stamped, budget_consumed=None, attempt=1: {
+        "outcome": "exited", "terminal_location": "/t.json", "spend_partial": True,
+        "spend": 1.25, "elapsed_sec": 42.0}
+
+
+def test_external_run_all_failed_dispatches_fails_the_verdict():
+    # Every terminal fact passes, but the injected dispatch tally shows the external engines
+    # failed every dispatch -> the run FAILS (the 0.11.0 escape, now closed).
+    d = _deps(launcher=_external_launcher(),
+              engine_dispatch_tally=lambda: {"ok": 0, "failed": 9,
+                  "by_engine": {"codex": {"ok": 0, "total": 8}, "cursor": {"ok": 0, "total": 1}},
+                  "acceptable_reasons": []})
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert "codex 0/8" in d["_state"]["records_written"][0]["reason"]
+
+
+def test_external_run_one_ok_dispatch_passes():
+    d = _deps(launcher=_external_launcher(),
+              engine_dispatch_tally=lambda: {"ok": 1, "failed": 0,
+                  "by_engine": {"codex": {"ok": 1, "total": 1}}, "acceptable_reasons": []})
+    r = run.invoke(d)
+    assert r["verdict"] == "pass"
+
+
+def test_external_run_unreadable_journal_fails_closed():
+    d = _deps(launcher=_external_launcher(),
+              engine_dispatch_tally=lambda: {"unreadable": True})
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+    assert "unreadable" in d["_state"]["records_written"][0]["reason"].lower()
+
+
+def test_external_run_missing_tally_seam_fails_closed():
+    # An external-calibrated run with NO tally seam wired must not fake a pass — the fact is
+    # absent, so the verdict's external branch (no ok, no reasons) fails.
+    d = _deps(launcher=_external_launcher())   # no engine_dispatch_tally
+    r = run.invoke(d)
+    assert r["verdict"] == "fail"
+
+
+def test_all_claude_run_never_consults_the_dispatch_tally():
+    # spend_partial False -> the tally seam is never called and the gate is skipped.
+    calls = []
+    d = _deps(engine_dispatch_tally=lambda: calls.append(1) or {"unreadable": True})
+    r = run.invoke(d)
+    assert r["verdict"] == "pass" and calls == []
