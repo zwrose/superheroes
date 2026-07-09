@@ -1,9 +1,14 @@
 // plugins/superheroes/lib/tests/courier_retry_meter_smoke.js
 // B5 (#315): the courier retry meter — a dispatch that needed >1 attempt must be counted, so retry
 // pressure is visible before it becomes an outright failure. The detector this fix ships: drive the
-// REAL runCourierJson/Text/MarkedJson retry loops (no monkeypatched accounting seam — only the
-// injected command runner) with a fail-then-succeed sequence and assert the meter counts exactly one
-// retry per dispatch; a first-try success must count zero.
+// REAL retry loops of ALL FOUR courier variants (runCourierJson, runCourierText, runCourierMarkedJson,
+// runCourierMarkedText — every path carrying a _recordRetry call; no monkeypatched accounting seam,
+// only the injected command runner) with a fail-then-succeed sequence and assert the meter counts
+// exactly one retry per dispatch; a first-try success must count zero.
+//
+// The Marked* variants ride the __SR_EXIT execution-marker protocol, so a "failed" first attempt here
+// is a marker-present answer with EMPTY stdout before the marker (the loop's `empty stdout -> continue`
+// branch), and the retry a marker-present answer with real payload.
 const assert = require('assert')
 const courier = require('../courier_exec.js')
 
@@ -42,6 +47,26 @@ function agentFrom(outputs) {
   const t = await courier.runCourierText('text leaf', 'cmd')
   assert.strictEqual(t, 'the answer')
   assert.strictEqual(courier.courierRetryTotals().retried, 1, 'a fail-then-succeed text dispatch counts one retry')
+
+  // 3b. runCourierMarkedJson: empty-before-marker on attempt 0, real payload on attempt 1 -> one retry.
+  courier.resetCourierMeter()
+  courier.setCourierAgent(agentFrom([
+    [{ ok: true, stdout: '__SR_EXIT:0' }],                                   // marker present, empty stdout
+    [{ ok: true, stdout: JSON.stringify({ ok: true, gate: 'passed' }) + '\n__SR_EXIT:0' }],
+  ]).fn)
+  const mj = await courier.runCourierMarkedJson('read startup state', 'cmd', { require: ['ok', 'gate'] })
+  assert.strictEqual(mj.gate, 'passed')
+  assert.strictEqual(courier.courierRetryTotals().retried, 1, 'a fail-then-succeed marked-JSON dispatch counts one retry')
+
+  // 3c. runCourierMarkedText: same shape over the marker protocol -> one retry.
+  courier.resetCourierMeter()
+  courier.setCourierAgent(agentFrom([
+    [{ ok: true, stdout: '__SR_EXIT:0' }],
+    [{ ok: true, stdout: 'the marked answer\n__SR_EXIT:0' }],
+  ]).fn)
+  const mt = await courier.runCourierMarkedText('read startup state', 'cmd')
+  assert.strictEqual(mt.trim(), 'the marked answer')
+  assert.strictEqual(courier.courierRetryTotals().retried, 1, 'a fail-then-succeed marked-text dispatch counts one retry')
 
   // 4. Aggregate across two retried dispatches accumulates.
   courier.resetCourierMeter()

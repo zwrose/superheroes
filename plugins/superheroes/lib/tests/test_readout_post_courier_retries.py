@@ -29,6 +29,10 @@ def _notifies(repo, work_item):
     return [e for e in events if isinstance(e, dict) and e.get("type") == "notify"]
 
 
+def _events(repo, work_item):
+    return journal.read_events(control_plane.paths(str(repo), work_item)["events"])
+
+
 def test_courier_retries_journaled_and_rendered_in_ctx(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -40,6 +44,17 @@ def test_courier_retries_journaled_and_rendered_in_ctx(tmp_path):
     notes = _notifies(repo, wi)
     assert any("retried" in (e.get("detail") or "") for e in notes), (
         "a courier-retry notify breadcrumb must be journaled, got %r" % notes)
+    # The hand-back readout body (build_readout on the ctx) is journaled as the run_completed detail —
+    # assert the "Couriers: N retried" LINE was actually rendered there, not just the notify. This
+    # exercises the ctx-wiring path (readout_post sets ctx["courierRetries"] -> readout.build_readout),
+    # a separate code path from the notify journal above; a mutant deleting the wiring would survive
+    # the notify assertion alone.
+    completed = [e for e in _events(repo, wi)
+                 if isinstance(e, dict) and e.get("type") == "run_completed"]
+    assert completed, "the completed hand-back must journal a run_completed event"
+    body = completed[-1].get("detail") or ""
+    assert "Couriers" in body and "4 retried" in body, (
+        "the readout body must render the courier retry line, got %r" % body)
 
 
 def test_courier_retries_zero_is_silent(tmp_path):
