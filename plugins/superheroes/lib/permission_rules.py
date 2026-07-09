@@ -66,6 +66,12 @@ _INTERPRETER = re.compile(
 # real re-root). An absolute target is used as-is; a relative target is resolved against the
 # payload cwd (best-effort — realpath's strict-descendant check downstream still decides, UFR-5).
 _LEADING_CD = re.compile(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|[^\s;&|<>]+)\s*&&")
+# A SUBSEQUENT directory change after the leading `cd` re-roots the interpreter again, so the
+# leading target is NOT the real execution dir. Detect a `cd`/`pushd`/`popd` at any command
+# boundary in the remainder and fail confinement SAFE: a chained `cd <managed-wt> && cd /outside
+# && python3 …` must never confine on the in-root first hop while the interpreter actually runs
+# outside the managed root (the confinement-bypass the #311 security/premortem review named).
+_RE_ROOT = re.compile(r"(?:^|&&|\|\||[;&|\n])\s*(?:cd|pushd|popd)(?:\s|$)")
 
 
 def _unquote(tok):
@@ -78,12 +84,21 @@ def _unquote(tok):
 def _effective_cwd(command, cwd):
     """The directory `command` actually executes in. Returns the target of a leading
     `cd <path> &&` (the production spine-leaf shape) when present, else the payload `cwd`
-    (the fallback). Fail-safe: a non-str command, or no leading cd, → `cwd` unchanged."""
+    (the fallback).
+
+    Fail-safe (UFR-2/UFR-5, toward NOT confining):
+    - a non-str command, or no leading cd → `cwd` unchanged;
+    - a leading cd followed by ANY further `cd`/`pushd`/`popd` re-root → `None` (the real exec
+      dir is ambiguous, so confinement must not fire on the first hop). `_cwd_in_managed_worktree`
+      reads `None` as not-confined, so the command falls through to the normal prompt path.
+    """
     if not isinstance(command, str):
         return cwd
     m = _LEADING_CD.match(command)
     if not m:
         return cwd
+    if _RE_ROOT.search(command[m.end():]):
+        return None
     target = _unquote(m.group(1))
     if not target:
         return cwd

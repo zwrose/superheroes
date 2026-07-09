@@ -108,6 +108,33 @@ def test_effective_cwd_parsing_edges(tmp_path):
     assert pr._effective_cwd(None, "/session") == "/session"
 
 
+def test_effective_cwd_chained_cd_is_ambiguous_fail_safe():
+    # #311 security-001 / premortem: a SECOND cd re-roots the interpreter again, so the leading
+    # target is not the real exec dir. Any further cd/pushd/popd -> None (never confinable).
+    assert pr._effective_cwd("cd /a/b && cd /elsewhere && python3 x.py", "/session") is None
+    assert pr._effective_cwd("cd /a/b && echo hi ; cd /elsewhere && python3 x.py", "/session") is None
+    assert pr._effective_cwd("cd /a/b && pushd /elsewhere && python3 x.py", "/session") is None
+    assert pr._effective_cwd("cd /a/b && cd", "/session") is None   # bare `cd` (to home) at the end
+    # a NON-rerooting token that merely contains "cd" is not a re-root (stays confined on the target)
+    assert pr._effective_cwd("cd /a/b && python3 -c 'import cd_utils'", "/session") == "/a/b"
+    assert pr._effective_cwd("cd /a/b && grep -r 'cd ' .", "/session") == "/a/b"
+
+
+def test_chained_cd_out_of_worktree_not_confined(monkeypatch, tmp_path):
+    # The confinement-bypass end to end: `cd <managed-wt> && cd /outside && python3 …` must NOT be
+    # worktree-confined even though the FIRST hop is in-root — the interpreter runs in /outside.
+    root = tmp_path / "wt"
+    wt = root / "wi-run-1234"
+    wt.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    session = tmp_path / "checkout"
+    session.mkdir()
+    monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(root))
+    cmd = "cd %s && cd %s && python3 -m pytest -q" % (wt, outside)
+    assert pr.worktree_confined(cmd, str(session)) is False
+
+
 # --- Task 2: Rules store paths + provenance-checked read (FR-6 substrate, UFR-9) ---
 
 import json
@@ -356,6 +383,25 @@ def test_evaluate_worktree_vcs_allows_from_genuine_managed_worktree(monkeypatch,
     pr.seed_default_rules("/cwd", root=str(tmp_path))
     pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
     assert pr.evaluate("git commit -m 'x'", str(wt), "R", root=str(tmp_path))[0] == "allow"
+
+
+def test_evaluate_worktree_vcs_allows_production_cd_shape_from_session_cwd(monkeypatch, tmp_path):
+    # #311 defect 2 / test-001: the worktree-vcs family gate must confine on the REAL exec dir, so
+    # a production `cd <managed-wt> && git …` leaf whose evaluate cwd is the (non-worktree) SESSION
+    # dir still allows. A mutation reverting that arm to key on the raw cwd would FAIL here — the
+    # gap that let the VCS half of the fix ship inert.
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "config_key", lambda c: "KEY")
+    wt_root = tmp_path / ".superheroes-worktrees"
+    wt = wt_root / "abc123"; wt.mkdir(parents=True)
+    monkeypatch.setattr(pr, "_worktrees_root", lambda: str(wt_root))
+    session = tmp_path / "checkout"; session.mkdir()      # a NON-worktree session cwd
+    pr.seed_default_rules("/cwd", root=str(tmp_path))
+    pr.freeze_run_rules("R", "/cwd", root=str(tmp_path))
+    cmd = "cd %s && git commit -m 'x'" % wt
+    assert pr.evaluate(cmd, str(session), "R", root=str(tmp_path))[0] == "allow"
+    # and the SAME command with the git op run from the non-worktree session (no cd re-root) falls
+    assert pr.evaluate("git commit -m 'x'", str(session), "R", root=str(tmp_path))[0] == "fall"
 
 
 def test_no_pending_request_state_is_ever_persisted(monkeypatch, tmp_path):
