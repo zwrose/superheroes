@@ -130,10 +130,11 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(buildCall.engine, 'codex', 'build dispatch uses the configured implementation engine')
     assert.strictEqual(buildCall.cwd, '/tmp/wt', 'build dispatch cwd is the build worktree')
     assert.strictEqual(buildCall.taskId, '1', 'build dispatch carries the task id')
-    // #308: the build dispatch threads the SAME builder tier the native path + readout resolve (opus),
-    // never the composer default the cursor build silently ran before. #309: the build role carries the
-    // HIGH write ceiling (resolveTimeout(prefs,'build')=2400), never the 300s wall-clock kill. Both
-    // computed via the REAL twins (no monkeypatched resolveModel/resolveTimeout).
+    // #308: the build dispatch threads the SAME builder tier the native path + readout resolve (opus)
+    // as a journalled dispatch fact — the adapter's owner-policy map (2026-07-09) keeps a cursor build
+    // on composer; the map decides what runs, the thread makes it auditable. #309: the build role
+    // carries the HIGH write ceiling (resolveTimeout(prefs,'build')=2400), never the 300s wall-clock
+    // kill. Both computed via the REAL twins (no monkeypatched resolveModel/resolveTimeout).
     const modelTierS1 = require('../model_tier.js')
     const enginePrefS1 = require('../engine_pref.js')
     assert.strictEqual(buildCall.model, modelTierS1.resolveModel('builder', null, null),
@@ -452,8 +453,9 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(reviewDispatches[0].cwd, '/tmp/wt', '#160: the per-task review reads git from the build worktree')
     assert.strictEqual(reviewDispatches[0].taskId, '7', '#160: the per-task review carries the task id')
     assert.strictEqual(nativeReviewFired, 0, '#160: the native per-task reviewer agent() does NOT fire when the reviewer engine is external')
-    // #308: the per-task review dispatch threads the resolved reviewer tier (sonnet) — cursor otherwise
-    // ran composer. #309: the read role carries the moderate ceiling (900s), not the 300s default.
+    // #308: the per-task review dispatch threads the resolved reviewer tier (sonnet) as a dispatch
+    // fact (the adapter's owner-policy map keeps a cursor reviewer on composer; the thread makes the
+    // tier auditable). #309: the read role carries the moderate ceiling (900s), not the 300s default.
     const enginePrefS6 = require('../engine_pref.js')
     assert.strictEqual(reviewDispatches[0].model, modelTier.resolveModel('reviewer', null, null),
       '#308: the per-task review dispatch carries the resolved reviewer tier (sonnet)')
