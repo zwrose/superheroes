@@ -52,11 +52,18 @@ the task-granularity research recommendation.
 
 ## How work is tracked
 
-- **Epics, off-board:** one epic issue per release — scope checklist, claims→receipts,
-  an at-cut assessment prompt a fresh agent can execute, blocked-by links to every
-  constituent. The epic closes only when the post-release first-run diagnosis is clean.
-- **Dependencies:** issues carry GitHub's native blocked-by/blocking links; an epic's
-  dependency graph is its bundle's completion state.
+- **Epics, off-board:** one epic issue per release — its constituents attached as
+  GitHub **native sub-issues** (the epic's sub-issue progress is the bundle's
+  completion state), the claims→receipts table, and an at-cut assessment prompt a
+  fresh agent can execute. The epic closes only when the post-release first-run
+  diagnosis is clean.
+- **Dependencies:** real technical dependencies between work items carry GitHub's
+  native blocked-by/blocking links — and **the train itself is serialized through the
+  epics**: every constituent of a release's epic is blocked-by the *previous* release's
+  epic, so the next bundle formally unblocks only when the prior release closes clean
+  (cut rule 3, encoded mechanically). Discovery-framed items may run their *discovery*
+  while formally blocked — the block gates build/landing, not thinking. (Keeping this
+  wiring true by hand is toil a future backlog/TPM hero should own — #28.)
 - **Discovery first where it's earned:** fuzzy items file as discovery issues (problem
   + evidence + open questions, no prescribed solution) and build only after an
   owner-approved spec. Currently: the spec-fidelity instrument and the
