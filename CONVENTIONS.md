@@ -829,10 +829,17 @@ engine is `claude`; when the engine is external, `engine_pref.resolve_effort` go
 Every external dispatch also **threads the role's resolved model** into the engine argv (a cursor
 builder runs the builder tier, not the composer default) and a **role-appropriate timeout ceiling**
 (`engine_pref.resolve_timeout`): write roles (build/fix/author-plan) get a high ceiling, read roles
-(review) a moderate one — a finite kill, never a borderline wall-clock limit. An owner may override the
-ceiling with a positive-int `enginePreferences.timeout` (seconds); unset, the role ceiling stands. The
-preflight readout's per-role model shares `engine_adapter`'s single cursor-tier map, so the row can
-never disagree with the dispatched argv.
+(review) a moderate one — a finite kill, never a borderline wall-clock limit. The high ceiling is
+**paired with a byte-activity stall monitor** (`engine_pref.resolve_idle` + `engine_dispatch`'s shell
+watchdog): the CLI runs as its own process group under an idle watchdog that kills the whole group
+(CLI + children) when no output bytes arrive for the role's idle window (write 600s, read 300s), well
+before the ceiling — a `stalled` outcome, distinct from a ceiling `timeout`. Both limits are always
+armed and `monitor ≤ ceiling`; the monitor is armed only for an engine that streams when piped (a
+fully-buffering engine is left inert, journalled `stall_monitor:"inert (engine buffers)"`, to avoid
+false-killing it). An owner may override either limit with a positive-int `enginePreferences.timeout`
+or `enginePreferences.idleTimeout` (seconds); unset, the role values stand, and an override never
+disables the ceiling. The preflight readout's per-role model shares `engine_adapter`'s single
+cursor-tier map, so the row can never disagree with the dispatched argv.
 
 **Plan-author contract.** Showrunner's produce phase routes ONLY the **plan** doc through
 `enginePreferences.planAuthor` (the **`author-plan`** role kind). Tasks authoring always stays native

@@ -3682,6 +3682,11 @@ const WRITE_TIMEOUT_SECONDS = 2400   // build/fix/author-plan: a full test-first
 const READ_TIMEOUT_SECONDS = 900     // review/review-deep: a read-only review pass
 const _ROLE_TIMEOUT = { build: WRITE_TIMEOUT_SECONDS, fix: WRITE_TIMEOUT_SECONDS,
   'author-plan': WRITE_TIMEOUT_SECONDS, review: READ_TIMEOUT_SECONDS, 'review-deep': READ_TIMEOUT_SECONDS }
+const WRITE_IDLE_SECONDS = 600   // build/fix/author-plan: no-output-bytes stall kill
+const READ_IDLE_SECONDS = 300    // review/review-deep: no-output-bytes stall kill
+const DEFAULT_IDLE_SECONDS = 300 // no-role fallback (conservative read-level idle)
+const _ROLE_IDLE = { build: WRITE_IDLE_SECONDS, fix: WRITE_IDLE_SECONDS,
+  'author-plan': WRITE_IDLE_SECONDS, review: READ_IDLE_SECONDS, 'review-deep': READ_IDLE_SECONDS }
 const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
 const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low',
@@ -3718,13 +3723,23 @@ function resolveTimeout(overrides, roleKind) {
   if (roleKind != null && hasOwn(_ROLE_TIMEOUT, roleKind)) return _ROLE_TIMEOUT[roleKind]
   return DEFAULT_STALL_LIMIT_SECONDS
 }
-module.exports = { resolveEngine, resolveEffort, resolveTimeout, ENGINES, DEFAULT_STALL_LIMIT_SECONDS,
-  WRITE_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS }
+function resolveIdle(overrides, roleKind) {
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, 'idleTimeout')) {
+    const v = overrides.idleTimeout
+    if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
+  }
+  if (roleKind != null && hasOwn(_ROLE_IDLE, roleKind)) return _ROLE_IDLE[roleKind]
+  return DEFAULT_IDLE_SECONDS
+}
+module.exports = { resolveEngine, resolveEffort, resolveTimeout, resolveIdle, ENGINES,
+  DEFAULT_STALL_LIMIT_SECONDS, WRITE_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS,
+  WRITE_IDLE_SECONDS, READ_IDLE_SECONDS, DEFAULT_IDLE_SECONDS }
 };
 __modules["engine_dispatch"] = function (module, exports, require) {
 const { libPath } = require('./lib_root.js')
 const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
+const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function _stageCmd(path, content) {
   const encoded = b64(content == null ? '' : String(content))
@@ -3752,15 +3767,57 @@ async function _captureHead(wt) {
   if (r0 && r0.ok) { const s = (r0.stdout == null ? '' : String(r0.stdout)).trim(); if (s) return s }
   return null
 }
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds) {
+function _pollFor(idle) {
+  return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
+}
+const _WATCH_SCRIPT = [
+  'c=$1; idle=$2; poll=$3; out=$4; prog=$5; shift 5',
+  ': > "$out"',
+  'perl -e "$prog" "$c" "$@" > "$out" 2>&1 &',
+  'p=$!',
+  'last=-1; idlesec=0; killed=0',
+  'while kill -0 "$p" 2>/dev/null; do',
+  'sleep "$poll"',
+  'sz=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$sz" ] || sz=0',
+  'if [ "$sz" -gt "$last" ]; then last=$sz; idlesec=0; else idlesec=$((idlesec + poll)); fi',
+  'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
+  'done',
+  'wait "$p" 2>/dev/null; ec=$?',
+  'cat "$out"',
+  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
+].join('\n')
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
-  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-  const cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  let cmd
+  if (idleArmed) {
+    const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
+    const poll = _pollFor(idle)
+    const outFile = promptPath.replace(/\.prompt$/, '') + '.run.out'
+    const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
+    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ${shq(outFile)} ${shq(perlProg)} ${quotedArgv}`
+    cmd = cwd ? `cd ${shq(cwd)} && ${inner} < ${shq(promptPath)}` : `${inner} < ${shq(promptPath)}`
+  } else {
+    const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+    cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  }
   const res = await _exec([cmd])
   const r0 = res && res[0]
-  if (r0 && r0.ok) return (r0.stdout == null ? '' : String(r0.stdout))
-  return null
+  if (!(r0 && r0.ok)) return { ok: false }
+  let out = (r0.stdout == null ? '' : String(r0.stdout))
+  if (idleArmed) {
+    const m = out.match(/\n?__SR_DISPATCH__(\{[^\n]*\})\s*$/)
+    if (m) {
+      let verdict = null
+      try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
+      out = out.slice(0, m.index)
+      if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
+        return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
+      }
+    }
+  }
+  return { ok: true, stdout: out }
 }
 async function _journalExternal(payload) {
   return _execJson(
@@ -3770,6 +3827,8 @@ async function _journalExternal(payload) {
       model: payload.model == null ? null : payload.model,
       argv: Array.isArray(payload.argv) ? payload.argv : null,
       effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
+      stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
+      idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
       verify: payload.verify, outcome: payload.outcome })))
 }
 async function _scrubReason(reason) {
@@ -3785,9 +3844,16 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  const idleRequested = Number(o.idleSeconds) > 0 ? Math.ceil(Number(o.idleSeconds)) : null
+  const engineStreams = _STREAMS_WHEN_PIPED[engine] === true
+  const armIdle = engineStreams && idleRequested != null
+  const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
+  const stallMonitor = armIdle ? 'armed'
+    : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
   const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
     model: (typeof model === 'string' && model) ? model : null,
-    argv: resolvedArgv, effectiveTimeout: limitSeconds })
+    argv: resolvedArgv, effectiveTimeout: limitSeconds,
+    stallMonitor, idleSeconds })
   const isAuthor = (roleKind === 'author-plan')
   const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
@@ -3815,8 +3881,10 @@ async function _dispatchExternalInner(o) {
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
-    const rawStdout = await _runArgv(argv, promptPath, cwd, limitSeconds)
-    if (rawStdout == null) return { ok: false, reason: 'external-run-failed' }
+    const runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
+    if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
+    const rawStdout = runRes.stdout
     const rawPath = `/tmp/engine-${runId}.out`
     const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
     if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
@@ -4169,9 +4237,10 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   if (!(await _implWriteAuthorized(engine, wt))) return nativeAgentCall()
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
   const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
+  const idleSeconds = enginePrefTwin.resolveIdle(_enginePrefs(), roleKind)
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem, model, timeoutSeconds,
+    taskId, workItem, model, timeoutSeconds, idleSeconds,
   })
   if (res && res.ok) return res
   await resetUncommitted(wt, branch)
@@ -4353,6 +4422,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
       model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
+      idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review'),   // #309 read stall monitor
     })
     if (res && Array.isArray(res.findings)) {
       const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
@@ -4456,6 +4526,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
         model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review-deep'),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
@@ -5143,6 +5214,7 @@ function reviewCodeLeaves(tiers, opts) {
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
         model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
@@ -5185,6 +5257,7 @@ function reviewCodeLeaves(tiers, opts) {
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
         model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
@@ -5554,6 +5627,7 @@ async function producePhase(phase, workItem) {
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
         timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
       const afterSnap = await _snapshotGitPorcelain()
       const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
@@ -6088,6 +6162,9 @@ async function showrunner({ workItem }) {
     }
     if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
       _epMap.timeout = _epParsed.timeout
+    }
+    if (typeof _epParsed.idleTimeout === 'number' && Number.isInteger(_epParsed.idleTimeout) && _epParsed.idleTimeout > 0) {
+      _epMap.idleTimeout = _epParsed.idleTimeout
     }
   }
   const _frozenSnapshot = _coerceObj((startupFacts && startupFacts.frozen_snapshot) || null)

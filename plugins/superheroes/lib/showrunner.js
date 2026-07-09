@@ -491,6 +491,7 @@ function reviewCodeLeaves(tiers, opts) {
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
         model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
@@ -543,6 +544,7 @@ function reviewCodeLeaves(tiers, opts) {
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
         model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
@@ -1022,6 +1024,7 @@ async function producePhase(phase, workItem) {
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
         timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
       const afterSnap = await _snapshotGitPorcelain()
       const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
@@ -1850,6 +1853,11 @@ async function showrunner({ workItem }) {
     // role) honors it at dispatch (load_engine_prefs already validated it; guard again defensively).
     if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
       _epMap.timeout = _epParsed.timeout
+    }
+    // #309 owner stall-monitor override: carry the positive-int `idleTimeout` so resolveIdle honors it
+    // at dispatch (same validated shape as `timeout`; the dispatch still clamps it to the ceiling).
+    if (typeof _epParsed.idleTimeout === 'number' && Number.isInteger(_epParsed.idleTimeout) && _epParsed.idleTimeout > 0) {
+      _epMap.idleTimeout = _epParsed.idleTimeout
     }
   }
   // FR-8 / UFR-2 (second clause): the pin-or-resolve fork. The frozen preflight-readout snapshot for

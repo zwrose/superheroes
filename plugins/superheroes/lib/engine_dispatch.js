@@ -8,6 +8,17 @@ const { libPath } = require('./lib_root.js')
 const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
+// #309: engines that emit output INCREMENTALLY when piped to a file (not a TTY) — verified 2026-07-09
+// by piping each CLI's stdout+stderr to a file and observing byte growth BEFORE completion (codex `exec
+// --sandbox read-only -`: first bytes ~1s, chunks throughout a ~20s run, max inter-chunk gap ~8s;
+// cursor-agent `-p --trust --output-format stream-json`: first bytes ~2s, a mid-run chunk, done ~6s).
+// For a streaming engine the byte-activity stall monitor observes real progress and only fires on a
+// genuine no-output wedge. A hypothetical engine that FULLY BUFFERS until completion would be
+// false-killed by a byte-growth watchdog, so it is marked `false` here — the monitor is left INERT for
+// it (ceiling only, journalled stall_monitor:"inert (engine buffers)") rather than armed-and-dangerous.
+// Both current engines stream, so both arm the monitor.
+const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
@@ -87,16 +98,83 @@ async function _captureHead(wt) {
 // stays, so a slow-to-signal-death CLI still can't hang the caller past limitMs) — the perl layer's job
 // is only to make sure the CLI is actually DEAD, not just unwaited-on. perl/alarm/exec are ordinary CLI
 // tokens (not Node/JS globals), so they don't trip the bundle's banned-global static check.
-// Returns the raw stdout string (or null on fail).
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds) {
+//
+// #309 STALL MONITOR (the ceiling+monitor pair): the perl alarm is a wall-clock CEILING (worst case).
+// When the caller arms the byte-activity monitor (`armIdle`), the CLI is instead wrapped in a shell
+// watchdog that reaps a *wedged* CLI far sooner: run the alarmed CLI in the BACKGROUND as its own
+// process group (`setpgrp(0,0)` in the perl wrapper — so a group-kill reaches the CLI AND its children;
+// a silently-stalled writer never gets SIGPIPE, so byte-growth is the only observable signal), poll the
+// captured-output file's byte size every `poll` seconds, and if it does not grow for `idleSeconds`,
+// TERM-then-KILL the whole process group. Both limits are ALWAYS armed — the perl alarm ceiling stays
+// inside the wrapper, and the monitor (≤ ceiling) fires first on a true stall. The watchdog emits the
+// captured CLI output followed by a trailing `__SR_DISPATCH__{...}` control line JS strips + reads for
+// the idle-kill verdict. The whole watchdog is composed into ONE shell command because the spine's exec
+// courier runs one command and returns its complete stdout in one shot — there is no Node child_process
+// in the Workflow sandbox to attach per-chunk data listeners to (FR-8), so the progress observation has
+// to live shell-side, next to the CLI. The script body carries NO single quotes so it survives shq's
+// single-quote wrapping intact.
+//
+// Returns an object: {ok:true, stdout} on a completed run; {ok:false, stalled:true, idleSeconds} when
+// the monitor idle-killed the CLI; {ok:false} on a courier-level failure.
+function _pollFor(idle) {
+  // Poll cadence: fine enough to honor a small (test-scale) idle window, capped at 10s so a production
+  // 300–600s window costs at most ~60 cheap `wc -c` samples. Effective kill latency ≈ idle + one poll.
+  return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
+}
+// The single-quote-free watchdog script (see the header note). Positional args from `sh -c <script> sh`:
+// $1 ceiling, $2 idle, $3 poll, $4 outfile, $5 perlprog; then "$@" (after `shift 5`) = the CLI argv.
+const _WATCH_SCRIPT = [
+  'c=$1; idle=$2; poll=$3; out=$4; prog=$5; shift 5',
+  ': > "$out"',
+  'perl -e "$prog" "$c" "$@" > "$out" 2>&1 &',
+  'p=$!',
+  'last=-1; idlesec=0; killed=0',
+  'while kill -0 "$p" 2>/dev/null; do',
+  'sleep "$poll"',
+  'sz=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$sz" ] || sz=0',
+  'if [ "$sz" -gt "$last" ]; then last=$sz; idlesec=0; else idlesec=$((idlesec + poll)); fi',
+  'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
+  'done',
+  'wait "$p" 2>/dev/null; ec=$?',
+  'cat "$out"',
+  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
+].join('\n')
+
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
-  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-  const cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  let cmd
+  if (idleArmed) {
+    const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
+    const poll = _pollFor(idle)
+    const outFile = promptPath.replace(/\.prompt$/, '') + '.run.out'
+    const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
+    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ${shq(outFile)} ${shq(perlProg)} ${quotedArgv}`
+    cmd = cwd ? `cd ${shq(cwd)} && ${inner} < ${shq(promptPath)}` : `${inner} < ${shq(promptPath)}`
+  } else {
+    const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+    cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  }
   const res = await _exec([cmd])
   const r0 = res && res[0]
-  if (r0 && r0.ok) return (r0.stdout == null ? '' : String(r0.stdout))
-  return null
+  if (!(r0 && r0.ok)) return { ok: false }
+  let out = (r0.stdout == null ? '' : String(r0.stdout))
+  if (idleArmed) {
+    // Strip the trailing control line and read the idle-kill verdict. The marker is OUR sentinel on its
+    // own final line; match the LAST occurrence so any legitimate look-alike earlier in CLI output can't
+    // shadow it. A stall returns {stalled:true} so the caller journals outcome:'stalled' + falls open.
+    const m = out.match(/\n?__SR_DISPATCH__(\{[^\n]*\})\s*$/)
+    if (m) {
+      let verdict = null
+      try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
+      out = out.slice(0, m.index)
+      if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
+        return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
+      }
+    }
+  }
+  return { ok: true, stdout: out }
 }
 
 async function _journalExternal(payload) {
@@ -115,6 +193,12 @@ async function _journalExternal(payload) {
       model: payload.model == null ? null : payload.model,
       argv: Array.isArray(payload.argv) ? payload.argv : null,
       effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
+      // #309 stall-monitor audit: `stallMonitor` names the monitor state (armed / inert (engine
+      // buffers) / unarmed) and `idleSeconds` is the armed idle threshold (null when not armed). A
+      // `stalled` outcome + idleSeconds together read as "no output for Ns -> killed" — distinct from a
+      // `timeout` outcome (killed at the wall-clock ceiling) or a genuine CLI failure.
+      stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
+      idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
       verify: payload.verify, outcome: payload.outcome })))
 }
 
@@ -140,13 +224,29 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // #309 STALL MONITOR resolution — the monitor half of the ceiling+monitor pair. The caller resolves
+  // the idle threshold (resolveIdle: role default or owner override) and passes it as o.idleSeconds; a
+  // dispatch with no idle passed (the engine_authz probe / any pre-#309 caller) runs ceiling-only. The
+  // monitor is armed ONLY for an engine that streams output when piped — a hypothetical fully-buffering
+  // engine would be FALSE-KILLED by a byte-growth watchdog, so we leave it inert (ceiling only) and say
+  // so in the journal, rather than arm a dangerous monitor. Both current engines stream (verified
+  // 2026-07-09). The threshold is clamped to the ceiling in _runArgv (monitor ≤ ceiling); an override
+  // never disables the ceiling — the perl alarm stays inside the wrapper regardless.
+  const idleRequested = Number(o.idleSeconds) > 0 ? Math.ceil(Number(o.idleSeconds)) : null
+  const engineStreams = _STREAMS_WHEN_PIPED[engine] === true
+  const armIdle = engineStreams && idleRequested != null
+  const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
+  const stallMonitor = armIdle ? 'armed'
+    : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
   // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
-  // resolved model, effective timeout ceiling, and (once build-argv resolves) the exact argv. Read at
-  // journal time so `argv` reflects resolvedArgv whenever it is available. Each outcome-specific call
-  // overlays its own {verify, outcome}. `model` is a native tier short-name or null (session inherit).
+  // resolved model, effective timeout ceiling, (once build-argv resolves) the exact argv, and the
+  // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
+  // it is available. Each outcome-specific call overlays its own {verify, outcome}. `model` is a native
+  // tier short-name or null (session inherit).
   const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
     model: (typeof model === 'string' && model) ? model : null,
-    argv: resolvedArgv, effectiveTimeout: limitSeconds })
+    argv: resolvedArgv, effectiveTimeout: limitSeconds,
+    stallMonitor, idleSeconds })
   // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
   // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
   // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
@@ -199,10 +299,13 @@ async function _dispatchExternalInner(o) {
 
     // Feed the staged prompt file to the external process stdin (the argv itself carries no prompt).
     // cwd is threaded through so _runArgv can confine the run to the worktree (FR-8; see _runArgv).
-    // limitSeconds is threaded through so _runArgv can OS-level-kill a stalled CLI (FIX 2 below) —
-    // the same value that bounds the JS Promise.race, so the perl alarm and the race agree.
-    const rawStdout = await _runArgv(argv, promptPath, cwd, limitSeconds)
-    if (rawStdout == null) return { ok: false, reason: 'external-run-failed' }
+    // limitSeconds bounds the perl-alarm ceiling (belt-and-suspenders with the JS race); idleSeconds +
+    // armIdle arm the #309 byte-activity stall monitor (≤ ceiling). A monitor idle-kill returns
+    // {stalled:true} -> outcome:'stalled' (distinct from the ceiling 'timeout'); the caller falls open.
+    const runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
+    if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
+    const rawStdout = runRes.stdout
 
     // parse-result SCRUBS external free-text at the adapter boundary (Task 6); pass raw stdout by file.
     const rawPath = `/tmp/engine-${runId}.out`

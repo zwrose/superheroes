@@ -118,10 +118,52 @@ def test_load_engine_prefs_surfaces_positive_timeout_override(tmp_path, monkeypa
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
+def test_resolve_idle_role_windows_and_default():
+    # #309 the stall-monitor half of the ceiling+monitor pair. WRITE roles get the longer idle window,
+    # READ roles the shorter; both under their role ceiling (monitor ≤ ceiling). These are the values
+    # the production dispatch sites pass alongside resolve_timeout.
+    for role in ("build", "fix", "author-plan"):
+        assert EP.resolve_idle(None, role) == EP.WRITE_IDLE_SECONDS == 600
+        assert EP.resolve_idle(None, role) < EP.resolve_timeout(None, role)   # monitor < ceiling
+    for role in ("review", "review-deep"):
+        assert EP.resolve_idle(None, role) == EP.READ_IDLE_SECONDS == 300
+        assert EP.resolve_idle(None, role) < EP.resolve_timeout(None, role)
+    # No role / unknown role -> the conservative default idle window.
+    assert EP.resolve_idle() == EP.DEFAULT_IDLE_SECONDS == 300
+    assert EP.resolve_idle(None, "mechanical") == 300
+
+
+def test_resolve_idle_owner_override_wins_over_role_window():
+    # The owner `idleTimeout` override beats the role window at dispatch (same guard shape as `timeout`).
+    assert EP.resolve_idle({"idleTimeout": 45}, "build") == 45
+    assert EP.resolve_idle({"idleTimeout": 120}, "review") == 120
+    # A malformed override falls back to the role window (never leaks past), and bool is rejected.
+    assert EP.resolve_idle({"idleTimeout": 0}, "build") == 600
+    assert EP.resolve_idle({"idleTimeout": -5}, "build") == 600
+    assert EP.resolve_idle({"idleTimeout": "60"}, "build") == 600
+    assert EP.resolve_idle({"idleTimeout": True}, "review") == 300
+    assert EP.resolve_idle("not-a-dict") == 300
+
+
+def test_load_engine_prefs_surfaces_positive_idle_override(tmp_path, monkeypatch):
+    # #309 owner stall-monitor channel end to end: a positive-int enginePreferences.idleTimeout is
+    # surfaced by load_engine_prefs so resolve_idle(prefs, role) honors it; a bool/non-positive is dropped.
+    import core_md
+    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": 90}})
+    prefs = EP.load_engine_prefs(str(tmp_path))
+    assert prefs.get("idleTimeout") == 90
+    assert EP.resolve_idle(prefs, "review") == 90
+    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": True}})
+    assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"idleTimeout": -1}})
+    assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
+
+
 def test_never_raises_on_garbage():
     assert EP.resolve_engine(None, None) == "claude"
     assert EP.resolve_effort(None, None, None) is None
     assert EP.resolve_timeout(None) == 300
+    assert EP.resolve_idle(None) == 300
 
 
 import subprocess
