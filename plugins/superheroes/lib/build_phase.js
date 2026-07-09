@@ -426,7 +426,7 @@ async function _implWriteAuthorized(engine, wt) {
 // Route the write role (build|fix) to the chosen implementation engine. claude -> the existing agent()
 // path, BYTE-UNCHANGED. external -> dispatchExternal; on ANY non-success reset uncommitted edits (UFR-2)
 // and fall open to the native agent() (UFR-1). preSHA/commit-discipline live inside dispatchExternal.
-async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall }) {
+async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall, model }) {
   const engine = enginePrefTwin.resolveEngine(roleKind, _enginePrefs())
   if (engine === 'claude') return nativeAgentCall()
   // UFR-4: before the FIRST external WRITE, confirm the host grants this engine write authority.
@@ -435,9 +435,13 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   // FR-9: effort override comes from the engine-prefs effort sub-map (keyed by role_kind), NOT the
   // model-tier _overrides() map (keyed by role->model — resolveEffort could never match it).
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
+  // #309: write roles get the HIGH ceiling (resolveTimeout(_,'build'|'fix')); the owner `timeout`
+  // override on __SR_ENGINE_PREFS wins. #308: thread the caller's resolved model so cursor dispatches
+  // the role's real tier (opus/sonnet) instead of the composer default — the readout's promise.
+  const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem,
+    taskId, workItem, model, timeoutSeconds,
   })
   if (res && res.ok) return res
   // UFR-2: a failed/stalled external write left only uncommitted edits -> discard, then redo on Claude.
@@ -620,7 +624,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt,
+      prompt, model: builderModel,   // #308: same tier the readout's builder row promises
       nativeAgentCall: () => agent(
         prompt,
         { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
@@ -771,9 +775,12 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
     const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+    // #308: thread the reviewer tier (cursor otherwise runs composer, not the readout's sonnet).
+    // #309: read roles get the moderate ceiling; the owner `timeout` override still wins.
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
+      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
     })
     // The engine adapter's review parse yields {findings} only (parse_result role_kind='review'
     // discards verdicts), so synthesize the two required verdicts from the findings. The task_review
@@ -849,7 +856,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     }
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: task.id, wt, branch,
+      workItem, roleKind: 'fix', taskId: task.id, wt, branch, model: fixerModel,  // #308
       prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
@@ -908,9 +915,12 @@ async function runFinalReview(workItem, generation, branch, wt) {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
+      // #308: thread the reviewer-deep tier (opus) so cursor dispatches it, not the composer default.
+      // #309: read roles get the moderate ceiling (review-deep shares it); owner `timeout` wins.
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
+        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
@@ -945,7 +955,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // The whole-branch final review has NO per-task id in scope (mirror the real 504-511 closure):
     // use the work-item as the fix dispatch's task id for the trailer/journal.
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch,
+      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
       prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,

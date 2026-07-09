@@ -157,7 +157,10 @@ function stubConfigVerifyGit(promptLog, synthesisCalls) {
     if (opts && opts.courier && prompt.includes('git -C')) return 'head-1\n'
     if (label === 'resume') return '1'
     if (opts && opts.courier && prompt.includes('review_code_config.py')) {
-      return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q', tiers: {} })
+      // #308: real per-tier models so the model threaded into each review/fix dispatch is observable
+      // (before the fix, no model was passed at all — the cursor reviewer silently ran composer).
+      return JSON.stringify({ verifyCommand: 'python3 -m pytest targeted-tests -q',
+        tiers: { reviewer: 'sonnet', reviewerDeep: 'opus', synthesis: 'opus', fixer: 'sonnet' } })
     }
     if (label && (label.startsWith('verify') || label === 'run verify')) {
       const m = String(prompt).match(/--out '([^']+)'/)
@@ -239,6 +242,16 @@ async function partB() {
     'FAIL (b1f): deep reviewers (security/architecture) must dispatch codex at effort xhigh')
   assert.ok(regularEfforts.length > 0 && regularEfforts.every((e) => e === 'high'),
     'FAIL (b1g): regular reviewers (code/test/premortem) must dispatch codex at effort high')
+
+  // (b1h/i #308/#309): EVERY review dispatch must thread a resolved model (one of the configured
+  // review-code tiers — never absent, which is exactly the #308 defect that ran cursor on composer)
+  // AND the moderate READ timeout ceiling (900s), never the bare 300s wall-clock default (#309).
+  assert.ok(reviewDispatch.every((c) => c.model === 'sonnet' || c.model === 'opus'),
+    'FAIL (b1h #308): every review dispatch must carry a resolved tier model (sonnet/opus), never undefined: '
+    + JSON.stringify(reviewDispatch.map((c) => c.model)))
+  assert.ok(reviewDispatch.every((c) => c.timeoutSeconds === 900),
+    'FAIL (b1i #309): every review dispatch must carry the moderate read ceiling (900s), not the 300s default: '
+    + JSON.stringify(reviewDispatch.map((c) => c.timeoutSeconds)))
 
   // (b2) UFR-7: dispatchExternal for roleKind:review returns unreadable -> the native reviewer agent()
   // fires for that reviewer as the fall-open path, and the round is not recorded clean.
@@ -323,6 +336,13 @@ async function partB() {
     'FAIL (b3a): reviewer dispatch must use engine:codex, roleKind:review')
   assert.ok(fixDispatch3.length > 0 && fixDispatch3.every((c) => c.engine === 'cursor'),
     'FAIL (b3b): fixStep dispatch must use engine:cursor, roleKind:fix (FR-15 split)')
+  // #308/#309: the review-code fixer threads the resolved fixer tier (sonnet) + the WRITE ceiling.
+  assert.ok(fixDispatch3.every((c) => c.model === 'sonnet'),
+    'FAIL (b3b1 #308): the review-code fix dispatch must carry the resolved fixer tier (sonnet): '
+    + JSON.stringify(fixDispatch3.map((c) => c.model)))
+  assert.ok(fixDispatch3.every((c) => c.timeoutSeconds === 2400),
+    'FAIL (b3b2 #309): the review-code fix dispatch must carry the high write ceiling (2400s): '
+    + JSON.stringify(fixDispatch3.map((c) => c.timeoutSeconds)))
   assert.strictEqual(nativeFixerFired, false, 'FAIL (b3c): the native code-fixer agent() must not fire when the external fix succeeds')
   assert.strictEqual(r3.gate, 'passed', 'FAIL (b3d): a successfully-fixed round advances to passed')
   // synthesis stays loop-owned (native agent()) even under a mixed reviewer=codex/implementation=cursor

@@ -826,6 +826,13 @@ worker, fixer, and final-review-fix leaves route to the implementation engine, a
 review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_adapter.py`. The engine
 axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
 engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
+Every external dispatch also **threads the role's resolved model** into the engine argv (a cursor
+builder runs the builder tier, not the composer default) and a **role-appropriate timeout ceiling**
+(`engine_pref.resolve_timeout`): write roles (build/fix/author-plan) get a high ceiling, read roles
+(review) a moderate one — a finite kill, never a borderline wall-clock limit. An owner may override the
+ceiling with a positive-int `enginePreferences.timeout` (seconds); unset, the role ceiling stands. The
+preflight readout's per-role model shares `engine_adapter`'s single cursor-tier map, so the row can
+never disagree with the dispatched argv.
 
 **Plan-author contract.** Showrunner's produce phase routes ONLY the **plan** doc through
 `enginePreferences.planAuthor` (the **`author-plan`** role kind). Tasks authoring always stays native

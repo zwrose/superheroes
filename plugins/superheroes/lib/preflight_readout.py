@@ -155,8 +155,8 @@ def display_model(engine, model):
     """The model string to SHOW for (engine, model). External engines show the SAME model id
     engine_adapter.build_argv would actually dispatch (single source of truth): codex ignores the
     tier and shows its pinned constant; cursor maps the native tier short-name through
-    engine_adapter._CURSOR_MODEL_BY_TIER exactly as build_argv does (fable/opus → their cursor ids;
-    an unmapped/None tier → the pinned composer default) — so a per-role model override (e.g.
+    engine_adapter._CURSOR_MODEL_BY_TIER exactly as build_argv does (fable/opus/sonnet → their
+    cursor ids; an unmapped/None tier such as haiku → the pinned composer default) — so a per-role model override (e.g.
     author-plan: fable + planAuthor: cursor) is shown honestly, not flattened to the default.
     claude shows the resolved tier model, or 'inherit' for a None (session-inherited) model. An
     unknown engine shows its resolved model raw (UFR-5 handled by the caller's 'unrecognized'

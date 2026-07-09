@@ -26,13 +26,18 @@ TASK_ID_TRAILER = "Task-Id"
 _CODEX_MODEL = "gpt-5.5"
 _CURSOR_MODEL = "composer-2.5-fast"
 
-# Native tier short-name -> cursor model id, for roles that carry a model override (today only
-# author-plan, the plan-author leaf: `author-plan: fable` + `planAuthor: cursor` = Fable via
-# Cursor). Ids verified live 2026-07-03 against cursor-agent 2026.07.01 `models`. An unmapped or
-# absent override keeps the pinned composer default — never the developer's ambient default.
+# Native model-tier short-name -> cursor model id. EVERY external cursor dispatch now threads its
+# role's resolved tier (#308), so this map must cover every tier model_tier(.js) can emit for an
+# engine-routed role — builder/reviewer-deep/author -> opus, reviewer/fixer -> sonnet, plus fable
+# via an owner override. Ids verified live against `cursor-agent models` (fable/opus 2026-07-03;
+# sonnet 2026-07-09). haiku is DELIBERATELY absent: cursor exposes no Haiku model, so a haiku tier
+# (mechanical, or an owner override) falls through build_argv's `.get(..., _CURSOR_MODEL)` to the
+# pinned composer default — honest, and display_model resolves it through this SAME map (SSOT), so
+# the preflight readout row can never disagree with the dispatched argv by construction (#308 / #162).
 _CURSOR_MODEL_BY_TIER = {
     "fable": "claude-fable-5-thinking-xhigh",
     "opus": "claude-opus-4-8-thinking-high",
+    "sonnet": "claude-sonnet-5-thinking-high",
 }
 
 

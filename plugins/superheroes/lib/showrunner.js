@@ -482,11 +482,15 @@ function reviewCodeLeaves(tiers, opts) {
     const effortKey = REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review'
     if (rEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(rEngine, effortKey, _effortOverrides())
+      // #308: thread the resolved reviewer tier (the same `model` the native path + readout use) so a
+      // cursor reviewer dispatches its real tier, not the composer default. #309: the moderate read
+      // ceiling for effortKey (review/review-deep); the owner `timeout` override still wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: typeof workItem === 'string' ? workItem : 'review-code',
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
+        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
@@ -533,9 +537,12 @@ function reviewCodeLeaves(tiers, opts) {
     const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
     if (iEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(iEngine, 'fix', _effortOverrides())
+      // #308: thread the resolved fixer tier (sonnet) — cursor otherwise runs composer. #309: the
+      // write ceiling for a fix; the owner `timeout` override still wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
+        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
@@ -1014,6 +1021,7 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
       })
       const afterSnap = await _snapshotGitPorcelain()
       const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
@@ -1837,6 +1845,11 @@ async function showrunner({ workItem }) {
       implementation: _epParsed.implementation || 'claude',
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
+    }
+    // #309 owner timeout override: carry the positive-int `timeout` so resolveTimeout(_enginePrefs(),
+    // role) honors it at dispatch (load_engine_prefs already validated it; guard again defensively).
+    if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
+      _epMap.timeout = _epParsed.timeout
     }
   }
   // FR-8 / UFR-2 (second clause): the pin-or-resolve fork. The frozen preflight-readout snapshot for

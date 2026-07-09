@@ -3678,6 +3678,10 @@ module.exports = { decide }
 __modules["engine_pref"] = function (module, exports, require) {
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
+const WRITE_TIMEOUT_SECONDS = 2400   // build/fix/author-plan: a full test-first build (write→run→impl→run→commit)
+const READ_TIMEOUT_SECONDS = 900     // review/review-deep: a read-only review pass
+const _ROLE_TIMEOUT = { build: WRITE_TIMEOUT_SECONDS, fix: WRITE_TIMEOUT_SECONDS,
+  'author-plan': WRITE_TIMEOUT_SECONDS, review: READ_TIMEOUT_SECONDS, 'review-deep': READ_TIMEOUT_SECONDS }
 const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
 const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low',
@@ -3706,14 +3710,16 @@ function resolveEffort(engine, roleKind, overrides) {
   }
   return def
 }
-function resolveTimeout(overrides) {
+function resolveTimeout(overrides, roleKind) {
   if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, 'timeout')) {
     const v = overrides.timeout
     if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
   }
+  if (roleKind != null && hasOwn(_ROLE_TIMEOUT, roleKind)) return _ROLE_TIMEOUT[roleKind]
   return DEFAULT_STALL_LIMIT_SECONDS
 }
-module.exports = { resolveEngine, resolveEffort, resolveTimeout, ENGINES, DEFAULT_STALL_LIMIT_SECONDS }
+module.exports = { resolveEngine, resolveEffort, resolveTimeout, ENGINES, DEFAULT_STALL_LIMIT_SECONDS,
+  WRITE_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS }
 };
 __modules["engine_dispatch"] = function (module, exports, require) {
 const { libPath } = require('./lib_root.js')
@@ -3761,6 +3767,9 @@ async function _journalExternal(payload) {
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
     `--event-type external_dispatch --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
+      model: payload.model == null ? null : payload.model,
+      argv: Array.isArray(payload.argv) ? payload.argv : null,
+      effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
       verify: payload.verify, outcome: payload.outcome })))
 }
 async function _scrubReason(reason) {
@@ -3776,6 +3785,9 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
+    model: (typeof model === 'string' && model) ? model : null,
+    argv: resolvedArgv, effectiveTimeout: limitSeconds })
   const isAuthor = (roleKind === 'author-plan')
   const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
@@ -3793,6 +3805,7 @@ async function _dispatchExternalInner(o) {
     preSha = await _captureHead(cwd)
     if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
   }
+  let resolvedArgv = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -3801,6 +3814,7 @@ async function _dispatchExternalInner(o) {
       (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
+    resolvedArgv = argv
     const rawStdout = await _runArgv(argv, promptPath, cwd, limitSeconds)
     if (rawStdout == null) return { ok: false, reason: 'external-run-failed' }
     const rawPath = `/tmp/engine-${runId}.out`
@@ -3824,20 +3838,20 @@ async function _dispatchExternalInner(o) {
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
   if (isAuthor) {
-    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
   }
   if (!isWrite) {
-    const jRead = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jRead = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jRead && jRead.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { findings: parsed.findings || [] } : { ok: false, reason: parsed.reason }
   }
   if (!parsed.ok) {
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.reason || 'failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.reason || 'failed' }))
     return { ok: false, reason: parsed.reason }
   }
   const commit = await _execJson(
@@ -3845,12 +3859,12 @@ async function _dispatchExternalInner(o) {
     `--pre-sha ${shq(preSha)}`)
   if (!commit || commit.ok !== true) {
     const reason = (commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed'
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: 'commit-failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: 'commit-failed' }))
     return { ok: false, reason }
   }
-  const j = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind,
-    verify: 'pending', outcome: 'ok' })
+  const j = await _journalExternal(Object.assign(_jbase(), {
+    verify: 'pending', outcome: 'ok' }))
   if (!(j && j.ok)) return { ok: false, reason: 'unauditable' }
   return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
 }
@@ -4149,14 +4163,15 @@ async function _implWriteAuthorized(engine, wt) {
   }
   return _writeAuthOk
 }
-async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall }) {
+async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall, model }) {
   const engine = enginePrefTwin.resolveEngine(roleKind, _enginePrefs())
   if (engine === 'claude') return nativeAgentCall()
   if (!(await _implWriteAuthorized(engine, wt))) return nativeAgentCall()
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
+  const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem,
+    taskId, workItem, model, timeoutSeconds,
   })
   if (res && res.ok) return res
   await resetUncommitted(wt, branch)
@@ -4250,7 +4265,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt,
+      prompt, model: builderModel,   // #308: same tier the readout's builder row promises
       nativeAgentCall: () => agent(
         prompt,
         { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
@@ -4337,6 +4352,7 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
+      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
     })
     if (res && Array.isArray(res.findings)) {
       const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
@@ -4385,7 +4401,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     }
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: task.id, wt, branch,
+      workItem, roleKind: 'fix', taskId: task.id, wt, branch, model: fixerModel,  // #308
       prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
@@ -4439,6 +4455,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
+        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
       })
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
@@ -4459,7 +4476,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch,
+      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
       prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
@@ -5125,6 +5142,7 @@ function reviewCodeLeaves(tiers, opts) {
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
+        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
@@ -5166,6 +5184,7 @@ function reviewCodeLeaves(tiers, opts) {
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
+        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
@@ -5534,6 +5553,7 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
       })
       const afterSnap = await _snapshotGitPorcelain()
       const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
@@ -6065,6 +6085,9 @@ async function showrunner({ workItem }) {
       implementation: _epParsed.implementation || 'claude',
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
+    }
+    if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
+      _epMap.timeout = _epParsed.timeout
     }
   }
   const _frozenSnapshot = _coerceObj((startupFacts && startupFacts.frozen_snapshot) || null)

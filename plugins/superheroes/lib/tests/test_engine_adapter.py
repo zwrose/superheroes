@@ -330,6 +330,21 @@ def test_build_argv_cursor_author_plan_maps_opus_model():
     assert argv[argv.index("--model") + 1] == "claude-opus-4-8-thinking-high"
 
 
+def test_build_argv_cursor_maps_sonnet_model():
+    # #308: the reviewer/fixer tiers resolve to sonnet; now that every dispatch threads its model,
+    # a cursor reviewer/fixer must run the real Sonnet id, not the composer default.
+    for role in ("review", "build", "fix"):
+        argv = EA.build_argv("cursor", role, "composer", {"cwd": "/wt", "model": "sonnet"})
+        assert argv[argv.index("--model") + 1] == "claude-sonnet-5-thinking-high"
+
+
+def test_build_argv_cursor_haiku_has_no_cursor_model_falls_to_composer():
+    # cursor exposes no Haiku model (verified `cursor-agent models`) — a haiku tier keeps the pinned
+    # composer default via the .get() fallback (honest; display_model resolves it identically).
+    argv = EA.build_argv("cursor", "review", "composer", {"model": "haiku"})
+    assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
+
+
 def test_build_argv_cursor_unmapped_model_keeps_composer_default():
     for model in (None, "", "bogus-tier"):
         argv = EA.build_argv("cursor", "author-plan", "composer", {"model": model})

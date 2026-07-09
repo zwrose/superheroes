@@ -102,12 +102,19 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds) {
 async function _journalExternal(payload) {
   // Journal the external action as a FIRST-CLASS `external_dispatch` event (FR-6): the audit line's
   // `type` is external_dispatch (Task 4 added the type + the journal_entry.py --event-type flag), and
-  // the payload is written AS-IS (non-secret {engine,effort,roleKind,verify,outcome}). A failed durable
-  // append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
+  // the payload is written AS-IS. #308/#309 enrich it with the RESOLVED `model`, the final `argv`
+  // (both engine-controlled config, never external free-text), and the `effectiveTimeout` in seconds,
+  // so #299's expected-vs-actual audit can prove the dispatched model/timeout match the readout's
+  // promise, and a `timeout` outcome + effectiveTimeout together read as "killed at ceiling after Ns"
+  // — distinct from a genuine CLI failure (external-run-failed / unreadable / commit-failed). A failed
+  // durable append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
   return _execJson(
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
     `--event-type external_dispatch --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
+      model: payload.model == null ? null : payload.model,
+      argv: Array.isArray(payload.argv) ? payload.argv : null,
+      effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
       verify: payload.verify, outcome: payload.outcome })))
 }
 
@@ -133,6 +140,13 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
+  // resolved model, effective timeout ceiling, and (once build-argv resolves) the exact argv. Read at
+  // journal time so `argv` reflects resolvedArgv whenever it is available. Each outcome-specific call
+  // overlays its own {verify, outcome}. `model` is a native tier short-name or null (session inherit).
+  const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
+    model: (typeof model === 'string' && model) ? model : null,
+    argv: resolvedArgv, effectiveTimeout: limitSeconds })
   // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
   // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
   // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
@@ -168,6 +182,11 @@ async function _dispatchExternalInner(o) {
   }
 
   // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
+  // resolvedArgv is hoisted so the journal (below, on EVERY outcome incl. a ceiling timeout) can record
+  // the exact argv that was dispatched (#308). It is set synchronously inside `run` right after
+  // build-argv resolves, so by the time the race's timeout branch fires (limitMs later, during the CLI
+  // run) it already holds the real argv — a timeout journals the argv the CLI was killed while running.
+  let resolvedArgv = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -176,6 +195,7 @@ async function _dispatchExternalInner(o) {
       (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
+    resolvedArgv = argv
 
     // Feed the staged prompt file to the external process stdin (the argv itself carries no prompt).
     // cwd is threaded through so _runArgv can confine the run to the worktree (FR-8; see _runArgv).
@@ -216,8 +236,8 @@ async function _dispatchExternalInner(o) {
   // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
   // back; the caller's usableDraft post-check decides acceptance and falls open on failure.
   if (isAuthor) {
-    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
   }
@@ -227,16 +247,16 @@ async function _dispatchExternalInner(o) {
   // append itself fails — mirror the write-role check below (a failed journal -> {ok:false,
   // reason:'unauditable'}) instead of discarding the append's own success/failure unchecked.
   if (!isWrite) {
-    const jRead = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jRead = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jRead && jRead.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { findings: parsed.findings || [] } : { ok: false, reason: parsed.reason }
   }
 
   // 5. Write role failure -> only uncommitted edits exist; caller reuses resetUncommitted + falls open (UFR-2).
   if (!parsed.ok) {
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.reason || 'failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.reason || 'failed' }))
     return { ok: false, reason: parsed.reason }
   }
 
@@ -250,14 +270,14 @@ async function _dispatchExternalInner(o) {
     // sec-101: the engine DID run and edited the worktree here, so this outcome must ALSO leave exactly
     // one audit line — otherwise commit-failure is the single external-dispatch outcome with no journal
     // entry (FR-6/UFR-6 symmetry gap). Journal BEFORE returning; the reason is already scrubbed above.
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: 'commit-failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: 'commit-failed' }))
     return { ok: false, reason }
   }
 
   // 7. Journal BEFORE returning the native worker shape (UFR-6: unauditable -> the caller fails closed).
-  const j = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind,
-    verify: 'pending', outcome: 'ok' })
+  const j = await _journalExternal(Object.assign(_jbase(), {
+    verify: 'pending', outcome: 'ok' }))
   if (!(j && j.ok)) return { ok: false, reason: 'unauditable' }
   return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
 }

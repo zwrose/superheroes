@@ -74,12 +74,48 @@ def test_resolve_effort_author_plan():
 
 
 def test_resolve_timeout_default_and_override():
+    # Legacy back-compat: NO role supplied -> the finite 300s default (engine_authz probe path).
     assert EP.resolve_timeout() == EP.DEFAULT_STALL_LIMIT_SECONDS == 300
     assert EP.resolve_timeout({"timeout": 5}) == 5
     assert EP.resolve_timeout({"timeout": 0}) == 300       # non-positive → default
     assert EP.resolve_timeout({"timeout": -1}) == 300
     assert EP.resolve_timeout({"timeout": "5"}) == 300      # non-int → default
     assert EP.resolve_timeout("not-a-dict") == 300
+
+
+def test_resolve_timeout_role_ceilings():
+    # #309: write roles get the HIGH ceiling, read roles the moderate one (owner policy: high
+    # ceilings, never borderline limits). These are the values the production dispatch sites pass.
+    for role in ("build", "fix", "author-plan"):
+        assert EP.resolve_timeout(None, role) == EP.WRITE_TIMEOUT_SECONDS == 2400
+    for role in ("review", "review-deep"):
+        assert EP.resolve_timeout(None, role) == EP.READ_TIMEOUT_SECONDS == 900
+    # An unknown role falls to the legacy default (never a borderline surprise).
+    assert EP.resolve_timeout(None, "mechanical") == 300
+
+
+def test_resolve_timeout_owner_override_wins_over_role_ceiling():
+    # The owner `timeout` override (the UFR-5 channel) beats the role ceiling at real dispatch —
+    # BOTH higher and lower than the ceiling, so a project can raise OR tighten it deliberately.
+    assert EP.resolve_timeout({"timeout": 3600}, "build") == 3600
+    assert EP.resolve_timeout({"timeout": 120}, "review") == 120
+    # A malformed override does NOT leak past — it falls back to the role ceiling, not the 300 default.
+    assert EP.resolve_timeout({"timeout": 0}, "build") == 2400
+    assert EP.resolve_timeout({"timeout": True}, "build") == 2400   # bool rejected, ceiling stands
+
+
+def test_load_engine_prefs_surfaces_positive_timeout_override(tmp_path, monkeypatch):
+    # #309 owner channel end to end: a positive-int enginePreferences.timeout is surfaced by
+    # load_engine_prefs so resolve_timeout(prefs, role) honors it; a bool/non-positive is dropped.
+    import core_md
+    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"timeout": 1800}})
+    prefs = EP.load_engine_prefs(str(tmp_path))
+    assert prefs.get("timeout") == 1800
+    assert EP.resolve_timeout(prefs, "review") == 1800
+    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {"timeout": True}})
+    assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(core_md, "read", lambda *a, **k: {"enginePreferences": {}})
+    assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
 
 
 def test_never_raises_on_garbage():
