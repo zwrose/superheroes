@@ -61,9 +61,10 @@ the task-granularity research recommendation.
   native blocked-by/blocking links — and **the train itself is serialized through the
   epics**: every constituent of a release's epic is blocked-by the *previous* release's
   epic, so the next bundle formally unblocks only when the prior release closes clean
-  (cut rule 3, encoded mechanically). Discovery-framed items may run their *discovery*
-  while formally blocked — the block gates build/landing, not thinking. (Keeping this
-  wiring true by hand is toil a future backlog/TPM hero should own — #28.)
+  (cut rule 3, encoded mechanically). **Full-discovery issues are exempt** — discovery
+  runs in parallel with the train, so they carry no precursor-epic block; only
+  build-carrying issues (including quick-route discovery+build items) take it. (Keeping
+  this wiring true by hand is toil a future backlog/TPM hero should own — #28.)
 - **Discovery first where it's earned:** fuzzy items file as discovery issues (problem
   + evidence + open questions, no prescribed solution) and build only after an
   owner-approved spec. Currently: the spec-fidelity instrument and the

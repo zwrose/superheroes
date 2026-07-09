@@ -74,3 +74,14 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
 diagnose clean) re-opens the growth posture; #184's checkpoint re-opens
 panel-composition; a real four-layer escape re-opens gate questions (spent once, see
 above).
+
+## 3. Accepted residual risks
+
+Known, owner-accepted gaps between a guarantee's prose and its enforcement — each with
+its bound, why it was accepted, and the trigger that reopens it. Promise 5 applied to
+ourselves: a residual risk we carry knowingly is a trade; one nobody wrote down is a
+costume. The orientation review walks this section too.
+
+| Residual | Bound | Why accepted (owner-ratified) | Re-check trigger |
+|---|---|---|---|
+| **Worktree-confinement is a heuristic, not a sandbox** (2026-07-09, #311/PR #335). The enforcer's auto-allow for "runs only inside the disposable build worktree" decides by parsing the command text for known directory-changing shapes (`cd X && …`); exotic shapes (`env -C`, subshells, `cd` inside a sanctioned interpreter call) could pass as confined while running elsewhere — i.e. silently allowed where a prompt was owed | Only the prompt-reduction layer is exposed. The owner-authority floor (merge/release/publish) scans the full command string, is immune to directory tricks, and always asks/denies. Commands come from our own convention-following agents, not adversaries; realistic failure is a rare malformed command touching paths outside the worktree without a prompt | Closing every syntactic hole means rebuilding a shell sandbox the platform should own; the blacklist covers observed shapes and grows on evidence | Claude Code ships a native sandboxing/confinement primitive (walk with the enforcer's bespoke-vs-platform entry above); OR any observed in-the-wild evasion, which upgrades this from residual to defect |
