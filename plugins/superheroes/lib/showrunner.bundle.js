@@ -3724,6 +3724,60 @@ function _stageCmd(path, content) {
   const encoded = b64(content == null ? '' : String(content))
   return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
 }
+function _typeWithNull(type) {
+  if (type == null) return type
+  if (Array.isArray(type)) return type.indexOf('null') >= 0 ? type : type.concat(['null'])
+  return type === 'null' ? type : [type, 'null']
+}
+function _jsonType(v) {
+  if (v === null) return 'null'
+  if (typeof v === 'string') return 'string'
+  if (typeof v === 'boolean') return 'boolean'
+  if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number'
+  return null
+}
+function _nullableProp(propSchema) {
+  if (!propSchema || typeof propSchema !== 'object' || Array.isArray(propSchema)) return propSchema
+  const p = Object.assign({}, propSchema)
+  const hasEnum = Array.isArray(p.enum)
+  if (hasEnum && p.enum.indexOf(null) < 0) p.enum = p.enum.concat([null])
+  if (p.type !== undefined) {
+    p.type = _typeWithNull(p.type)
+  } else if (hasEnum) {
+    const types = []
+    for (const v of p.enum) {
+      const t = _jsonType(v)
+      if (t && types.indexOf(t) < 0) types.push(t)
+    }
+    if (types.length) p.type = types
+  }
+  return p
+}
+function _isObjectNode(node) {
+  if (!node || typeof node !== 'object') return false
+  if (node.type === 'object') return true
+  return Array.isArray(node.type) && node.type.indexOf('object') >= 0
+}
+function strictify(schema) {
+  if (Array.isArray(schema)) return schema.map(strictify)
+  if (!schema || typeof schema !== 'object') return schema
+  const out = {}
+  for (const k of Object.keys(schema)) out[k] = strictify(schema[k])
+  if (_isObjectNode(out)) {
+    const props = (out.properties && typeof out.properties === 'object' && !Array.isArray(out.properties))
+      ? out.properties : null
+    const propKeys = props ? Object.keys(props) : []
+    const originalRequired = Array.isArray(schema.required) ? schema.required : []
+    if (props) {
+      for (const key of propKeys) {
+        if (originalRequired.indexOf(key) < 0) props[key] = _nullableProp(props[key])
+      }
+    }
+    out.additionalProperties = false
+    out.required = propKeys
+  }
+  return out
+}
 let _execFn = null
 function _exec(commands) {
   if (!_execFn) _execFn = require('./showrunner.js').exec
@@ -3781,9 +3835,10 @@ async function _dispatchExternalInner(o) {
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   const writeInputs = await _exec([
     _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(schema || {})),
+    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
   ])
   if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
     return { ok: false, reason: 'could-not-stage-external-inputs' }
@@ -3888,7 +3943,7 @@ async function dispatchExternal(o) {
   }
 }
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice, strictify }
 };
 __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel } = require('./review_panel_shell.js')
@@ -4842,15 +4897,37 @@ const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings', 'confidence'],
   properties: {
-    findings: { type: 'array' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          severity: { type: 'string' },
+          evidence: { type: 'string' },
+          suggestion: { type: 'string' },
+          dimension: { type: 'string' },
+          classKey: { type: 'string' },
+          taxonomy: { type: 'string' },
+          tradeoff: { type: 'boolean' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
     confidence: { enum: ['high', 'low'] },
     verificationReceipt: {
       type: 'object',
       required: ['artifact', 'chain', 'coverageDecisionIds'],
       properties: {
         artifact: { type: 'string' },
-        chain: { type: 'array' },
-        coverageDecisionIds: { type: 'array' },
+        chain: {
+          type: 'array',
+          items: { type: 'object', properties: { step: { type: 'string' }, evidence: { type: 'string' } } },
+        },
+        coverageDecisionIds: { type: 'array', items: { type: 'string' } },
       },
     },
     usage: { type: 'object' },
