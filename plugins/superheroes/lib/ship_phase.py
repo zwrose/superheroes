@@ -34,6 +34,18 @@ def _git(args, cwd=None):
         return 2, ""
 
 
+def _journal_note(work_item, detail):
+    """B3 (#315): best-effort disclosure breadcrumb for a swallowed ship-freshen event (a failed
+    `git fetch`). Journals a `notify` (run_watch renders it) so a network failure that leaves the
+    local base ref stale is visible, never masqueraded as freshness. Never raises — disclosure is
+    not a gate; a journal-write failure must not derail the ship mechanics."""
+    try:
+        paths = control_plane.paths(os.getcwd(), work_item)
+        journal.append(paths["events"], "notify", detail=detail, root=os.getcwd())
+    except Exception:
+        pass
+
+
 def _local_head(cwd=None):
     rc, out = _git(["rev-parse", "HEAD"], cwd=cwd)
     return out if rc == 0 and out else None
@@ -311,7 +323,15 @@ elif a.step == "freshen":
         print(json.dumps({"ok": False, "head": _local_head(wt), "conflict": False,
                           "reason": base_ref.unresolvable_reason(base_name, wt)}))
         sys.exit(0)
-    _git(["fetch", "--quiet", "origin"], cwd=wt)                  # best-effort; local resolve still works
+    fetch_rc, _ = _git(["fetch", "--quiet", "origin"], cwd=wt)    # best-effort; local resolve still works
+    fetch_failed = fetch_rc != 0
+    if fetch_failed:
+        # B3 (#315) disclosure only: a failed fetch leaves the local base ref STALE, so the merge
+        # below can be a no-op against an outdated base — which must NOT be reported as freshness.
+        # Behavior (best-effort local resolve) is unchanged; only the owner-facing outcome is honest.
+        _journal_note(a.work_item,
+                      "ship-freshen: `git fetch origin` failed — base freshness could not be "
+                      "confirmed against the remote (local base ref may be stale)")
     before_head = _local_head(wt)
     rc, _ = _git(["merge", "--no-edit", resolved], cwd=wt)
     if rc != 0:
@@ -330,8 +350,15 @@ elif a.step == "freshen":
             print(json.dumps({"ok": False, "head": after_head, "conflict": False,
                               "reason": "merged base but push failed — reconcile on resume"}))
             sys.exit(0)
-    print(json.dumps({"ok": True, "head": after_head, "conflict": False,
-                      "reason": "base integrated" if after_head != before_head else "already up to date"}))
+    # B3 (#315): a fetch-failed no-op is NOT freshness — say so instead of "already up to date".
+    if after_head != before_head:
+        reason = "base integrated"
+    elif fetch_failed:
+        reason = ("fetch failed — could not confirm freshness against the remote base "
+                  "(local base unchanged)")
+    else:
+        reason = "already up to date"
+    print(json.dumps({"ok": True, "head": after_head, "conflict": False, "reason": reason}))
 elif a.step == "ci-decide":
     # FR-3/FR-4/UFR-5: replay the write-ahead round count from the journal (survives a crash),
     # then let ci_loop.decide (parity-locked) choose fix vs revert_and_gate.
@@ -561,7 +588,13 @@ elif a.step == "ship-readiness":
                               "checks": {"error": "CI status could not be read"}}))
             sys.exit(0)
         resolved = base_ref.resolve_configured_base(wt, base_name)
-        _git(["fetch", "--quiet", "origin"], cwd=wt)
+        catchup_fetch_rc, _ = _git(["fetch", "--quiet", "origin"], cwd=wt)
+        if catchup_fetch_rc != 0:
+            # B3 (#315) disclosure only: a swallowed fetch here leaves the local base stale; journal
+            # it so retry pressure is visible (behavior — the local-resolve catch-up — is unchanged).
+            _journal_note(a.work_item,
+                          "ship-readiness catch-up: `git fetch origin` failed — base freshness "
+                          "may be judged against a stale local base ref")
         before_head = _local_head(wt)
         rc, _ = _git(["merge", "--no-edit", resolved], cwd=wt)
         if rc != 0:

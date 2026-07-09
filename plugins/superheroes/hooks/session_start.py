@@ -31,14 +31,18 @@ _SOURCES = {"startup", "resume", "clear", "compact"}
 
 
 def _bootstrap(cwd, transcript_path, host):
-    """The always-on project-context block (or '' on any failure)."""
+    """The always-on project-context block. On a TOTAL failure (assemble unimportable/raised),
+    return a minimal in-context breadcrumb (B6, #315) rather than '' — so a fully-failed bootstrap
+    still leaves the running agent something to read back, not silence (stderr is invisible to it)."""
     try:
         import session_context
         block = session_context.assemble(cwd, transcript_path, _PLUGIN_ROOT, host)
         return block if (block and block.strip()) else ""
     except Exception as exc:
         sys.stderr.write("superheroes session_start: bootstrap skipped (%s)\n" % type(exc).__name__)
-        return ""
+        return ("## Superheroes session bootstrap\n\n### Bootstrap diagnostics\n"
+                "Session bootstrap failed to assemble (%s) — project-context layer not injected."
+                % type(exc).__name__)
 
 
 def _resume_brief(cwd, source):

@@ -10,14 +10,25 @@ import control_plane
 
 
 def read(path):
+    findings, _corrupt = read_status(path)
+    return findings
+
+
+def read_status(path):
+    """(findings, corrupt): findings is the fail-closed [] on any unreadable/garbled file (unchanged
+    behavior). corrupt is True ONLY when the file EXISTS but could not be parsed into a list — a
+    silent loss of carried-forward Minor findings the owner must be told about (B4, #315). A missing
+    file (nothing was ever rolled up) is NOT corruption; corrupt stays False."""
     if not os.path.isfile(path):
-        return []
+        return [], False
     try:
         with open(path, encoding="utf-8") as fh:
             obj = json.load(fh)
     except (OSError, ValueError):
-        return []
-    return obj if isinstance(obj, list) else []
+        return [], True
+    if not isinstance(obj, list):
+        return [], True
+    return obj, False
 
 
 def append(path, findings):

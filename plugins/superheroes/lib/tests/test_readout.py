@@ -130,3 +130,19 @@ def test_readout_post_caller_supplied_permission_denials_wins(tmp_path, monkeypa
     body = open(paths["resume_brief"]).read()
     assert "explicit-override" in body
     assert "build:real-step" not in body
+
+
+def test_build_readout_renders_courier_retry_pressure():
+    # B5 (#315): a run with courier retries surfaces a "Couriers: N retried" line.
+    body = readout.build_readout({
+        "ci_status": "green",
+        "courierRetries": {"retried": 3, "byLabel": {"read startup state": 2, "post readout": 1}},
+    })
+    assert "Couriers" in body and "3 retried" in body
+
+
+def test_build_readout_omits_courier_line_when_no_retries():
+    body = readout.build_readout({"ci_status": "green", "courierRetries": {"retried": 0, "byLabel": {}}})
+    assert "Couriers" not in body
+    # and absent entirely (byte-compatible with a clean run)
+    assert "Couriers" not in readout.build_readout({"ci_status": "green"})
