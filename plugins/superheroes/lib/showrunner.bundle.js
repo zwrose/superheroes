@@ -4465,13 +4465,33 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
     + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
     + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
-    + `Co-Authored-By). ${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
+    + `Co-Authored-By). ${workerContractTail()}`
+    + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+function workerContractTail() {
+  return (
+    `${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
     + `fired on ANY substantive step (not a verification probe — an actual implementation/commit action), set `
     + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
     + `to null — never fabricate a completed step you were denied. Return JSON `
     + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
-    + (retryNote || '')
-    + (deniedNote || '')
+  )
+}
+function fixTaskPrompt(task, branch, wt, findingsJson) {
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with `
+    + `trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message `
+    + `with no blank line before other trailers such as Co-Authored-By): ${findingsJson} `
+    + workerContractTail()
+  )
+}
+function fixBranchPrompt(branch, wt, blockersJson) {
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: `
+    + `${blockersJson} `
+    + workerContractTail()
   )
 }
 function buildDeniedNote(deniedActions) {
@@ -4677,7 +4697,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: task.id, wt, branch, model: fixerModel,  // #308
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
+      prompt: fixTaskPrompt(task, branch, wt, _fixFindings),   // #357: external prompt states the contract
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
         + `"Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
@@ -4753,7 +4773,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+      prompt: fixBranchPrompt(branch, wt, JSON.stringify(blockers)),   // #357: contract stated
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
         { label: 'fix-branch', model: fixerModel }),
@@ -4769,6 +4789,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
 }
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.fixTaskPrompt = fixTaskPrompt
+module.exports.fixBranchPrompt = fixBranchPrompt
+module.exports.workerContractTail = workerContractTail
 module.exports.buildDeniedNote = buildDeniedNote
 module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
