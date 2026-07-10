@@ -260,6 +260,21 @@ def _run_one_attempt(deps, stamped, budget_consumed, attempt):
         "live_pr": gh.get("live_pr"),
         "unreadable": gh.get("unreadable") or [],
     }
+    # #310 engine authenticity: an external-calibrated run (spend_partial — derived from the
+    # now-fixed engine-pref store-root read) must prove its external dispatch chain worked at
+    # least once, else a silent/total fall-open to Claude certifies as a passing external run.
+    # Only read the dispatch journal when calibration is external — an all-Claude run has no
+    # external chain to prove. A missing tally seam (older injected deps) leaves the fact absent
+    # → the verdict fails closed on the external branch, never fakes a pass.
+    external_calibration = bool(launch.get("spend_partial"))
+    facts["external_calibration"] = external_calibration
+    if external_calibration:
+        tally_reader = deps.get("engine_dispatch_tally")
+        tally = tally_reader() if callable(tally_reader) else None
+        if isinstance(tally, dict) and tally.get("unreadable"):
+            facts["external_dispatch_unreadable"] = True
+        else:
+            facts["external_dispatch_tally"] = tally or {}
     verdict = acceptance_verdict.decide(facts)
     return launch, outcome, verdict
 

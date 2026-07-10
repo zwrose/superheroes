@@ -141,6 +141,10 @@ SHOWRUNNER_SMOKES = [
     # NO Buffer global (the exact sandbox condition that made external dispatch dead). Prefixed
     # showrunner_ so the discovery-equality guard below auto-matches it.
     "plugins/superheroes/lib/tests/showrunner_bytes_smoke.js",
+    # #307: engine_dispatch.strictify() — OpenAI-strict `--output-schema` transformer (unit: nested/
+    # arrays-of-objects/enum/no-mutation/idempotent) + a REAL-file staging round-trip (the base64 stage
+    # runs against /tmp, the schema file is read back and asserted strict; cursor stages the original).
+    "plugins/superheroes/lib/tests/showrunner_strictify_smoke.js",
     # #38: engine_dispatch.js dispatchExternal — review/build happy paths, stdin-redirect delivery,
     # UFR-5 timeout, UFR-6 unauditable, sec-101 commit-failure audit symmetry. Named
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality

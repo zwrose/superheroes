@@ -739,6 +739,14 @@ const REVIEW_TASK_SCHEMA = {
 // foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
 // instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
 // sites in runFinalReview's reviewerAgent.
+// #307: the finding item MUST declare every field the reviewerAgent prompt asks for
+// ({file,line,title,severity,evidence}). Under codex's OpenAI-strict `--output-schema` (staged through
+// engine_dispatch.strictify), an object with `additionalProperties:false` lets the engine emit ONLY the
+// declared keys — a `severity`-only item would force codex to drop file/line, and reviewPanel's
+// compileFindings discards any finding missing file/line, so a codex whole-branch review would report a
+// false clean and a defective branch would ship. The extra fields stay Anthropic-permissive here (no
+// `additionalProperties:false`, no `required` beyond none) so the native path is unconstrained;
+// strictify tightens them for codex, where they come back as explicit null when unset.
 const FINAL_REVIEW_SCHEMA = {
   type: 'object',
   required: ['findings'],
@@ -747,7 +755,13 @@ const FINAL_REVIEW_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          evidence: { type: 'string' },
+        },
       },
     },
   },

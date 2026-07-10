@@ -796,7 +796,8 @@ def test_allowance_journal_failure_never_affects_decision(tmp_path, monkeypatch)
 def test_hook_journals_allowance_via_active_run(tmp_path, monkeypatch, capsys):
     # End-to-end through hook(): an active run (the lease resolves to the (work_item, run_id)
     # pair via the shared permission_rules.resolve_active_lease seam hook() actually calls) + an
-    # auto-allowance leaves the allowance_fired record AND stays silent (allow == silent).
+    # auto-allowance leaves the allowance_fired record AND now EMITS an explicit `allow` (#311
+    # defect 1 — the layer must override a harness ask rule for the confined command).
     import journal
     import control_plane
     monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
@@ -806,7 +807,10 @@ def test_hook_journals_allowance_via_active_run(tmp_path, monkeypatch, capsys):
     cwd = str(tmp_path)
     rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
                                    "tool_input": {"command": "python3 build.py"}}), host="claude")
-    assert rc == 0 and capsys.readouterr().out.strip() == ""   # allow is silent
+    out = json.loads(capsys.readouterr().out)   # #311: allowance-layer allow is now emitted
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "auto-allowed (composed-exact)" in out["hookSpecificOutput"]["permissionDecisionReason"]
     events = control_plane.paths(cwd, "wi-x")["events"]
     fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
     assert len(fired) == 1 and fired[0]["payload"]["reason"] == "composed-exact"
@@ -863,8 +867,9 @@ def test_active_run_id_none_when_lease_stale(tmp_path, monkeypatch):
 def test_hook_allowance_fires_end_to_end_through_real_lease(tmp_path, monkeypatch, capsys):
     # (a) THE load-bearing integration test. A real live lease + a frozen routine rule for that
     # run's generation; hook() resolves run_id INTERNALLY via the real _active_run_id and the
-    # allowance fires end-to-end: allow (silent) AND one allowance_fired line in the resolved
-    # run's OWN journal (real _active_work_item). NOTHING in the resolution chain is stubbed.
+    # allowance fires end-to-end: an EMITTED `allow` (#311 defect 1) AND one allowance_fired line
+    # in the resolved run's OWN journal (real _active_work_item). NOTHING in the resolution chain
+    # is stubbed.
     import control_plane
     import journal
     cwd, generation, _store = _real_lease_cwd(tmp_path, monkeypatch, "wi-run")
@@ -875,7 +880,10 @@ def test_hook_allowance_fires_end_to_end_through_real_lease(tmp_path, monkeypatc
     cmd = "python3 -m pytest -q"
     rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
                                    "tool_input": {"command": cmd}}), host="claude")
-    assert rc == 0 and capsys.readouterr().out.strip() == ""     # allowance allow == silent
+    out = json.loads(capsys.readouterr().out)     # #311: allowance-layer allow is emitted, not silent
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "auto-allowed (routine:test-run)" in out["hookSpecificOutput"]["permissionDecisionReason"]
     events = control_plane.paths(cwd, "wi-run")["events"]
     fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
     assert len(fired) == 1, "the repaired seam must let the allowance fire+journal end-to-end"
@@ -990,3 +998,114 @@ def test_evaluate_uses_injected_gated_check_and_lazy_fallback(tmp_path, monkeypa
     # fallback: no injection -> lazy enforcer import still gates a real owner-role command
     verdict2, why2 = permission_rules.evaluate("gh pr " + "merge 1", None, "RUN1")
     assert verdict2 == "fall" and "floor owns it" in why2
+
+
+# --- #311 defect 1: the allowance-layer allow is EMITTED (overrides a harness ask rule) --------
+
+
+def test_hook_emits_allow_for_allowance_layer_allow(tmp_path, monkeypatch, capsys):
+    # An allowance-layer allow must emit `permissionDecision: "allow"` so it OVERRIDES a
+    # harness-level ask rule for the confined command (owner ruling 2026-07-09). Before #311 this
+    # was silent, so the harness's own ask rules always decided and the layer was a no-op.
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: ("wi-x", "RUN1"))
+    monkeypatch.setattr(enforcer.permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "worktree-confined"))
+    monkeypatch.setattr(enforcer, "_journal_allowance", lambda *a, **k: None)
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": str(tmp_path),
+                                   "tool_input": {"command": "cd /wt && python3 x.py"}}), host="claude")
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+    assert "auto-allowed (worktree-confined)" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_default_allow_stays_silent(tmp_path, monkeypatch, capsys):
+    # The default-allow fall-through (evaluate -> 'fall', reason "") must stay SILENT — a blanket
+    # allow emitted here would wrongly override every legitimate harness ask rule.
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: (None, None))
+    monkeypatch.setattr(enforcer.permission_rules, "evaluate", lambda *a, **k: ("fall", "no match"))
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": str(tmp_path),
+                                   "tool_input": {"command": "python3 x.py"}}), host="claude")
+    assert rc == 0 and capsys.readouterr().out.strip() == ""
+
+
+def test_hook_gated_with_matching_allowance_rule_still_asks(tmp_path, monkeypatch, capsys):
+    # UFR-1 re-assertion at the emission layer: even if a (hypothetical) allowance rule WOULD match
+    # a gated owner-authority command, the gated arm resolves FIRST (ask on claude) and the allowance
+    # layer is never consulted — the emitted decision is `ask`, never an `allow`. A broken evaluate
+    # that tried to allow the gated command would be a loud failure here.
+    def _boom_allow(*a, **k):
+        return ("allow", "routine:should-never-win")
+    monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
+                        lambda cwd, run_id=None: ("wi-x", "RUN1"))
+    monkeypatch.setattr(enforcer.permission_rules, "evaluate", _boom_allow)
+    repo = tmp_path / "repo" / "docs" / "superheroes"
+    repo.mkdir(parents=True)   # in a superheroes repo -> the gated set is in scope
+    cwd = str(tmp_path / "repo")
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                                   "tool_input": {"command": "gh pr merge 12"}}), host="claude")
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+# --- #311 defect 5: NO-monkeypatch subprocess integration (the exact hooks.json call shape) ------
+# #286 shipped inert because EVERY test monkeypatched the lease / rules / worktree seams. This
+# drives `python3 lib/enforcer.py hook --host claude` as a subprocess (re-imported fresh — an
+# in-process monkeypatch cannot reach it), with the payload on stdin exactly as hooks.json wires
+# it, against a REAL ref_lock lease + REAL managed worktree on disk. Nothing is stubbed.
+
+
+def _spawn_hook(payload, env):
+    import subprocess
+    return subprocess.run(
+        ["python3", _ENFORCER, "hook", "--host", "claude"],
+        input=json.dumps(payload), capture_output=True, text=True, env=env)
+
+
+def test_hook_subprocess_emits_allow_for_worktree_confined_production_shape(tmp_path, monkeypatch):
+    # The load-bearing integration test (defects 1+2+5 together): a real live lease makes the run
+    # active; a production `cd <managed-wt> && python3 …` leaf whose PAYLOAD cwd is the (non-worktree)
+    # session dir is worktree-confined on its REAL exec dir and the hook EMITS an allow on stdout.
+    import control_plane
+    import ref_lock
+    store_root = tmp_path / "store"
+    wt_root = tmp_path / "wt"
+    # Pin both roots via env so the IN-PROCESS lease acquire and the SUBPROCESS hook share one store.
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(store_root))
+    monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(wt_root))
+    monkeypatch.delenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", raising=False)
+    # a real managed build worktree under the pinned worktrees root (strict descendant)
+    managed_wt = wt_root / "wi-run-1234"
+    managed_wt.mkdir(parents=True)
+    # a real live ref_lock lease so the run is active (FR-3), in the same real store the hook reads.
+    session = str(tmp_path / "checkout")
+    os.makedirs(session, exist_ok=True)
+    store = control_plane.ensure_store(session)
+    ok, generation, _ = ref_lock.acquire(store, "wi-run")
+    assert ok
+    cmd = "cd %s && python3 -m pytest -q" % managed_wt
+    payload = {"tool_name": "Bash", "cwd": session, "tool_input": {"command": cmd}}
+    proc = _spawn_hook(payload, dict(os.environ))
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "auto-allowed (worktree-confined)" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_subprocess_gated_merge_still_asks_no_monkeypatch(tmp_path, monkeypatch):
+    # UFR-1 through the real subprocess: an owner-authority command in a real superheroes repo
+    # (docs/superheroes/ present) emits `ask` on claude — the gated floor is untouched by #311.
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "wt"))
+    monkeypatch.delenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", raising=False)
+    repo = tmp_path / "repo"
+    (repo / "docs" / "superheroes").mkdir(parents=True)
+    payload = {"tool_name": "Bash", "cwd": str(repo),
+               "tool_input": {"command": "gh pr merge 12"}}
+    proc = _spawn_hook(payload, dict(os.environ))
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "ask"

@@ -37,6 +37,82 @@ function _stageCmd(path, content) {
   return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
 }
 
+// #307: codex's `--output-schema` rides OpenAI STRICT structured outputs, whose two hard rules the
+// Anthropic-authored schema literals (FINDINGS_SCHEMA / REVIEW_TASK_SCHEMA / FINAL_REVIEW_SCHEMA)
+// were never written for: EVERY object must carry `additionalProperties:false` AND a `required` array
+// naming EVERY property key. Sent verbatim these 400 with `invalid_json_schema` before any review
+// work, so every codex review dispatch has silently fallen open to Claude since the engine onboarding
+// (0 successes ever — see #307). We fix at the STAGING seam, not the literals: one transform corrects
+// all three senders (and any future one), and the NATIVE Claude path keeps receiving the original
+// permissive schema (Anthropic rejects some strict shapes). `strictify` deep-walks the schema and on
+// every object node sets `additionalProperties:false` + `required = every property key`; a property
+// that was NOT originally required is widened to a NULLABLE union (`type:["string","null"]`, or a
+// `null` member added to an `enum`) so a field that used to be omittable stays semantically optional
+// (the engine emits explicit `null` instead of dropping the key). PURE — never mutates its input (the
+// literals are module-level constants also handed to the native agent() path). Idempotent: a second
+// pass finds every key already in `required`, so nothing is re-widened.
+function _typeWithNull(type) {
+  if (type == null) return type
+  if (Array.isArray(type)) return type.indexOf('null') >= 0 ? type : type.concat(['null'])
+  return type === 'null' ? type : [type, 'null']
+}
+
+function _jsonType(v) {
+  if (v === null) return 'null'
+  if (typeof v === 'string') return 'string'
+  if (typeof v === 'boolean') return 'boolean'
+  if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number'
+  return null
+}
+
+// Make a single property schema accept explicit null (so a previously-optional field can be present-
+// but-null under strict mode). Widens a `type` to a null union; for an enum-only property, adds a
+// `null` member AND an inferred nullable `type` union (the OpenAI-documented nullable-enum shape).
+function _nullableProp(propSchema) {
+  if (!propSchema || typeof propSchema !== 'object' || Array.isArray(propSchema)) return propSchema
+  const p = Object.assign({}, propSchema)
+  const hasEnum = Array.isArray(p.enum)
+  if (hasEnum && p.enum.indexOf(null) < 0) p.enum = p.enum.concat([null])
+  if (p.type !== undefined) {
+    p.type = _typeWithNull(p.type)
+  } else if (hasEnum) {
+    const types = []
+    for (const v of p.enum) {
+      const t = _jsonType(v)
+      if (t && types.indexOf(t) < 0) types.push(t)
+    }
+    if (types.length) p.type = types
+  }
+  return p
+}
+
+function _isObjectNode(node) {
+  if (!node || typeof node !== 'object') return false
+  if (node.type === 'object') return true
+  return Array.isArray(node.type) && node.type.indexOf('object') >= 0
+}
+
+function strictify(schema) {
+  if (Array.isArray(schema)) return schema.map(strictify)
+  if (!schema || typeof schema !== 'object') return schema
+  const out = {}
+  for (const k of Object.keys(schema)) out[k] = strictify(schema[k])
+  if (_isObjectNode(out)) {
+    const props = (out.properties && typeof out.properties === 'object' && !Array.isArray(out.properties))
+      ? out.properties : null
+    const propKeys = props ? Object.keys(props) : []
+    const originalRequired = Array.isArray(schema.required) ? schema.required : []
+    if (props) {
+      for (const key of propKeys) {
+        if (originalRequired.indexOf(key) < 0) props[key] = _nullableProp(props[key])
+      }
+    }
+    out.additionalProperties = false
+    out.required = propKeys
+  }
+  return out
+}
+
 // Reuse the spine's exec dumb-pipe (lazy require avoids a load-time cycle: showrunner requires the
 // bundle graph; deferring keeps engine_dispatch's require surface minimal for the smokes).
 let _execFn = null
@@ -293,9 +369,14 @@ async function _dispatchExternalInner(o) {
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
+  // #307: codex reads this file as an OpenAI-STRICT `--output-schema`; strictify it so it validates
+  // (see strictify above). ONLY on the codex path — cursor ignores the schema entirely, and the
+  // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
+  // which Anthropic's tool input_schema requires and which strict shapes would break).
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   const writeInputs = await _exec([
     _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(schema || {})),
+    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
   ])
   if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
     return { ok: false, reason: 'could-not-stage-external-inputs' }
@@ -474,4 +555,4 @@ function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 // _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
 // external engine must have an explicit streams-when-piped verdict) — not a public seam.
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
-  _STREAMS_WHEN_PIPED }
+  _STREAMS_WHEN_PIPED, strictify }
