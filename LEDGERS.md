@@ -8,7 +8,7 @@ deliberately do not build are a first-class artifact, cited instead of re-litiga
 The **orientation review** (standing monthly-ish routine, deliberately independent of
 the release path) walks both ledgers each pass: the first against the platform's current
 primitives, the second against its own unlock conditions. Changes land by PR. An entry
-nobody has re-checked in months is drift wearing a ledger costume.
+nobody has re-checked in months is just drift with a paper trail.
 
 ## 1. Bespoke-vs-platform ledger
 
@@ -80,7 +80,7 @@ above).
 Known, owner-accepted gaps between a guarantee's prose and its enforcement — each with
 its bound, why it was accepted, and the trigger that reopens it. Promise 5 applied to
 ourselves: a residual risk we carry knowingly is a trade; one nobody wrote down is a
-costume. The orientation review walks this section too.
+hidden defect. The orientation review walks this section too.
 
 | Residual | Bound | Why accepted (owner-ratified) | Re-check trigger |
 |---|---|---|---|
