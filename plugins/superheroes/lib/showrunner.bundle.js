@@ -3906,7 +3906,6 @@ const _WATCH_SCRIPT = [
   'wait "$p" 2>/dev/null; ec=$?',
   'szf=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szf" ] || szf=0',
   'if [ "$szf" -gt "$cap" ]; then trunc=1; tail -c "$cap" "$out"; else trunc=0; cat "$out"; fi',
-  'if [ "$trunc" -eq 0 ]; then rm -f "$out"; fi',
   'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
 ].join('\n')
@@ -3950,10 +3949,10 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       let verdict = null
       try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
       out = out.slice(0, m.index)
-      const relay = (verdict && String(verdict.truncated) === '1')
-        ? { truncated: true,
+      const relay = (verdict && typeof verdict.outPath === 'string' && verdict.outPath)
+        ? { truncated: String(verdict.truncated) === '1',
             outBytes: Number(verdict.outBytes) || null,
-            outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null }
+            outPath: verdict.outPath }
         : null
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
         return Object.assign({ ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null },
@@ -4010,7 +4009,8 @@ async function _dispatchExternalInner(o) {
     model: (typeof model === 'string' && model) ? model : null,
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
     stallMonitor, idleSeconds },
-    relayMeta ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
+    (relayMeta && relayMeta.truncated)
+      ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
   const isAuthor = (roleKind === 'author-plan')
   const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
@@ -4069,12 +4069,16 @@ async function _dispatchExternalInner(o) {
     }
     if (runRes.relay) relayMeta = runRes.relay
     const rawStdout = runRes.stdout
-    const rawPath = `/tmp/engine-${runId}.out`
-    const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
-    if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+    let parsePath = relayMeta && relayMeta.outPath ? relayMeta.outPath : null
+    if (!parsePath) {
+      const rawPath = `/tmp/engine-${runId}.out`
+      const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
+      if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+      parsePath = rawPath
+    }
     const parsed = await _execJson(
       `python3 ${libPath('engine_adapter.py')} parse-result --engine ${shq(engine)} --role ${shq(roleKind)} ` +
-      `--stdout-path ${shq(rawPath)}`)
+      `--stdout-path ${shq(parsePath)}`)
     if (!parsed || parsed.ok !== true) return { ok: false, reason: (parsed && parsed.reason) || 'unreadable' }
     return parsed
   })()
