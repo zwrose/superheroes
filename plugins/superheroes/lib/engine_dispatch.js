@@ -290,6 +290,12 @@ const _WATCH_SCRIPT = [
   // is consumed above so it is removed. The stderr capture is KEPT on any failure (idle-kill or
   // non-zero exit) so the engine's own diagnostic survives for post-mortem (never surfaced to
   // parse-result), and removed only on success (a clean run's stderr is noise).
+  // Accumulation bound (PR-348 review): kept captures (~hundreds of KB per truncated dispatch) are
+  // NOT reaped here — a reap at dispatch start could delete a CONCURRENT same-runId sibling's
+  // in-flight capture (the exact race the $$-suffix exists for, premortem-001). The bound is the
+  // OS /tmp reaper (macOS purges /tmp every ~3 days; linux tmpfiles.d similar), the same bound the
+  // pre-existing .prompt/.schema staging litter already relies on. Revisit if a run ever needs its
+  // captures to outlive that window.
   'if [ "$trunc" -eq 0 ]; then rm -f "$out"; fi',
   'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
@@ -298,10 +304,13 @@ const _WATCH_SCRIPT = [
 // The emission cap for the watchdog's stdout relay (#347). Must sit WELL under the leaf harness's
 // persist-to-file threshold (observed: a 37KB tool result persisted in the PR-343 vet; 100KB+ always
 // persists) with margin for the __SR_DISPATCH__ footer, the __SR_EXIT marker line, and any leaf
-// framing around the answer. 16000 bytes carries every legitimate terminal payload we parse (a codex
-// findings object or a cursor result envelope — KBs, not hundreds of KBs) without ever approaching
-// the wall.
-const EMIT_TAIL_BYTES = 16000
+// framing around the answer. 24000 bytes carries every legitimate terminal payload we parse (a codex
+// findings object, or a cursor result envelope whose escaped inner text roughly doubles a large
+// findings list — PR-348 review sized the cap up from 16000 for exactly that case) while keeping
+// >10KB of margin under the observed wall. A payload that still exceeds the cap chops the envelope's
+// FRONT → the parse is `unreadable` → the dispatch falls open — fail-safe, and NOT silent: the
+// outcome line journals outputTruncated + outPath for the post-mortem.
+const EMIT_TAIL_BYTES = 24000
 
 // _composeDispatchCommand: PURE composer of the exact shell command _runArgv dispatches — the
 // perl-alarm ceiling (unarmed) or the #309 background watchdog (armed), confined to cwd. Exported
@@ -390,17 +399,21 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       let verdict = null
       try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
       out = out.slice(0, m.index)
-      if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
-        return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
-      }
       // #347 bounded-relay disclosure: the watchdog emitted only the stdout TAIL (the full capture
       // stayed on disk at outPath). Surface the relay facts so the dispatch journal can disclose the
       // truncation — a silently-shortened relay would be a hidden fact about what the parser saw.
-      if (verdict && String(verdict.truncated) === '1') {
-        return { ok: true, stdout: out, relay: { truncated: true,
-          outBytes: Number(verdict.outBytes) || null,
-          outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null } }
+      // Carried on the STALLED return too (PR-348 review nit): a stall that had already flooded past
+      // the cap keeps its capture, and the stalled journal line should name that receipt.
+      const relay = (verdict && String(verdict.truncated) === '1')
+        ? { truncated: true,
+            outBytes: Number(verdict.outBytes) || null,
+            outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null }
+        : null
+      if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
+        return Object.assign({ ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null },
+          relay ? { relay } : {})
       }
+      if (relay) return { ok: true, stdout: out, relay }
     }
   }
   return { ok: true, stdout: out }
@@ -608,6 +621,7 @@ async function _dispatchExternalInner(o) {
       }
     }
     if (runRes && runRes.stalled) {
+      if (runRes.relay) relayMeta = runRes.relay   // #347: the stalled line still names the kept capture
       return priorDeclines.length ? { ok: false, reason: 'stalled', declinePrefixes: priorDeclines }
         : { ok: false, reason: 'stalled' }
     }

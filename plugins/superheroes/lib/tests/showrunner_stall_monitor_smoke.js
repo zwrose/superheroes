@@ -287,6 +287,9 @@ const d = require('../engine_dispatch.js')
     assert.ok(okJournal, 'a completed run journals outcome:ok')
     assert.strictEqual(okJournal.stallMonitor, 'armed', 'the ok run still had the monitor armed (it just never tripped)')
     assert.strictEqual(okJournal.idleSeconds, 8, 'the ok run journals its idle threshold')
+    // #347: a small (fully-relayed) dispatch journals NO relay keys — pre-#347 payloads byte-identical
+    assert.ok(!('outputTruncated' in okJournal) && !('outPath' in okJournal),
+      'an untruncated dispatch journals no #347 relay keys: ' + JSON.stringify(okJournal))
     assert.ok(!journalSink.some((p) => p.outcome === 'stalled'), 'a steadily-emitting CLI is NEVER stall-killed (no false kill)')
     // code-001: the engine really received the staged prompt on stdin (the armed background job would
     // otherwise read /dev/null and this capture would be PROMPT[]).
@@ -365,8 +368,8 @@ const d = require('../engine_dispatch.js')
     assert.ok(kept.includes('noise-0-') && kept.includes('envelope-finding'),
       'the kept capture is the COMPLETE stream (head and tail)')
     try { fs.unlinkSync(okJournal.outPath) } catch (_) {}
-    // a small (un-truncated) dispatch journals NO relay keys — pre-#347 payloads stay byte-identical
-    assert.ok(!('outputTruncated' in (journalSink.find((p) => p.outcome !== 'ok') || {})), 'no stray relay keys')
+    // (the no-relay-keys-when-untruncated guarantee is pinned by test 2b's journal — see below — and
+    // by _journalExternal's conditional spread; asserting it on THIS sink would be vacuous, PR-348 nit)
     console.log('OK: real-seam FLOOD — bounded tail relayed, envelope unwrapped by the REAL parser, truncation disclosed, full capture kept')
   }
 

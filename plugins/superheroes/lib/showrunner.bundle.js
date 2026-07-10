@@ -3910,7 +3910,7 @@ const _WATCH_SCRIPT = [
   'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
 ].join('\n')
-const EMIT_TAIL_BYTES = 16000
+const EMIT_TAIL_BYTES = 24000
 function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
@@ -3950,14 +3950,16 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       let verdict = null
       try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
       out = out.slice(0, m.index)
+      const relay = (verdict && String(verdict.truncated) === '1')
+        ? { truncated: true,
+            outBytes: Number(verdict.outBytes) || null,
+            outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null }
+        : null
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
-        return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
+        return Object.assign({ ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null },
+          relay ? { relay } : {})
       }
-      if (verdict && String(verdict.truncated) === '1') {
-        return { ok: true, stdout: out, relay: { truncated: true,
-          outBytes: Number(verdict.outBytes) || null,
-          outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null } }
-      }
+      if (relay) return { ok: true, stdout: out, relay }
     }
   }
   return { ok: true, stdout: out }
@@ -4057,6 +4059,7 @@ async function _dispatchExternalInner(o) {
       }
     }
     if (runRes && runRes.stalled) {
+      if (runRes.relay) relayMeta = runRes.relay   // #347: the stalled line still names the kept capture
       return priorDeclines.length ? { ok: false, reason: 'stalled', declinePrefixes: priorDeclines }
         : { ok: false, reason: 'stalled' }
     }
