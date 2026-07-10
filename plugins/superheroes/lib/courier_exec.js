@@ -196,6 +196,19 @@ function badCourierAnswer(a) {
   return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
 }
 
+// executedMarker (#343): TRUE when the answer carries a runtime-EXPANDED digit marker (__SR_EXIT:<n>)
+// — positive execution evidence an echoed/quoted command can never carry by accident, because the
+// command TEXT only ever contains the literal '__SR_EXIT:$?'. Distinct from !badCourierAnswer: an
+// answer holding BOTH an echoed command (the $? literal) AND the real expanded marker fails
+// badCourierAnswer yet IS executed — executedMarker is the tiebreaker for callers whose retry would
+// RE-EXECUTE a non-idempotent command (the engine write dispatch). Like the whole marker protocol this
+// proves marker-shape, not cryptographic execution (a leaf could fabricate digits); the error direction
+// is safe — a fabricated "executed" is never retried (no double-run) and its garbage payload fails
+// downstream parsing into an honest fall-open.
+function executedMarker(a) {
+  return /__SR_EXIT:\d/.test(String(a == null ? '' : a))
+}
+
 // markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
 // helperResult wraps this for the bundle __runHelperCommand / stageAndRunHelper result shape.
 function markerSliceStdout(s) {
@@ -232,13 +245,25 @@ function wrapMarkedCommand(command) {
 // Each outer attempt calls dispatchMarked once; dispatchMarked itself retries up to 3 dispatches
 // (courier agent → courier agent → default agent) when badCourierAnswer fires — 2×3 total before
 // CourierTransportError. That chain bounds residual simulation (see badCourierAnswer / libRootProbe).
-async function dispatchMarked(label, markedCmd) {
+// opts (#343, for NON-IDEMPOTENT commands — the engine write dispatch):
+//   single: true         — exactly ONE dispatch, no marker-retry, no fallback. Every extra dispatch
+//                          hands the command to a NEW leaf that RE-RUNS it; safe for the idempotent
+//                          spine couriers this chain was built for, but a double-execution hazard for
+//                          an engine write. The caller owns any retry decision.
+//   acceptExecuted: true — a marker-retry never fires on an answer carrying the runtime-expanded
+//                          digit marker (executedMarker): the command EXECUTED, so re-dispatching
+//                          would re-run it just because the answer ALSO echoed the '$?' literal.
+function _isBadAnswer(ans, opts) {
+  return badCourierAnswer(ans) && !((opts && opts.acceptExecuted) && executedMarker(ans))
+}
+async function dispatchMarked(label, markedCmd, opts) {
   const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
   const prompt = markedPromptFor(markedCmd)
   let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
-  if (badCourierAnswer(ans)) {
+  if (opts && opts.single) return ans
+  if (_isBadAnswer(ans, opts)) {
     ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
-    if (badCourierAnswer(ans)) {
+    if (_isBadAnswer(ans, opts)) {
       const fo = Object.assign({}, baseOpts)
       delete fo.agentType
       ans = stdoutOf(await currentAgent()(prompt, fo))
@@ -248,15 +273,20 @@ async function dispatchMarked(label, markedCmd) {
 }
 
 // runCourierMarkedText: dumb-pipe a shell command through the __SR_EXIT marker protocol and return
-// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218).
-async function runCourierMarkedText(label, command) {
+// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218) and (#341/#343,
+// with opts) the engine CLI dispatch. opts.single limits the WHOLE call to ONE leaf dispatch (one
+// outer attempt over a single-dispatch dispatchMarked); opts.acceptExecuted accepts an answer whose
+// runtime-expanded digit marker proves execution even when an echoed '$?' literal rides along (see
+// dispatchMarked). Defaults preserve the pre-#343 idempotent-courier behavior exactly.
+async function runCourierMarkedText(label, command, opts) {
   const markedCmd = wrapMarkedCommand(command)
+  const attempts = (opts && opts.single) ? 1 : 2
   let last = 'empty stdout'
   let lastAns = ''
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const ans = await dispatchMarked(label, markedCmd)
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd, opts)
     lastAns = ans
-    if (badCourierAnswer(ans)) {
+    if (_isBadAnswer(ans, opts)) {
       last = 'missing execution marker'
       continue
     }
@@ -365,6 +395,7 @@ async function runCourierBatchJson(label, commands, opts) {
 module.exports = {
   CourierTransportError,
   badCourierAnswer,
+  executedMarker,
   extractJson,
   extractJsonStrict,
   helperResult,

@@ -1937,6 +1937,9 @@ function badCourierAnswer(a) {
   const s = String(a == null ? '' : a)
   return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
 }
+function executedMarker(a) {
+  return /__SR_EXIT:\d/.test(String(a == null ? '' : a))
+}
 function markerSliceStdout(s) {
   s = String(s || '')
   const re = /__SR_EXIT:(\d+)/g
@@ -1962,13 +1965,17 @@ function markedPromptFor(command) {
 function wrapMarkedCommand(command) {
   return String(command) + ' 2>&1; echo __SR_EXIT:$?'
 }
-async function dispatchMarked(label, markedCmd) {
+function _isBadAnswer(ans, opts) {
+  return badCourierAnswer(ans) && !((opts && opts.acceptExecuted) && executedMarker(ans))
+}
+async function dispatchMarked(label, markedCmd, opts) {
   const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
   const prompt = markedPromptFor(markedCmd)
   let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
-  if (badCourierAnswer(ans)) {
+  if (opts && opts.single) return ans
+  if (_isBadAnswer(ans, opts)) {
     ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
-    if (badCourierAnswer(ans)) {
+    if (_isBadAnswer(ans, opts)) {
       const fo = Object.assign({}, baseOpts)
       delete fo.agentType
       ans = stdoutOf(await currentAgent()(prompt, fo))
@@ -1976,14 +1983,15 @@ async function dispatchMarked(label, markedCmd) {
   }
   return ans
 }
-async function runCourierMarkedText(label, command) {
+async function runCourierMarkedText(label, command, opts) {
   const markedCmd = wrapMarkedCommand(command)
+  const attempts = (opts && opts.single) ? 1 : 2
   let last = 'empty stdout'
   let lastAns = ''
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const ans = await dispatchMarked(label, markedCmd)
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd, opts)
     lastAns = ans
-    if (badCourierAnswer(ans)) {
+    if (_isBadAnswer(ans, opts)) {
       last = 'missing execution marker'
       continue
     }
@@ -2079,6 +2087,7 @@ async function runCourierBatchJson(label, commands, opts) {
 module.exports = {
   CourierTransportError,
   badCourierAnswer,
+  executedMarker,
   extractJson,
   extractJsonStrict,
   helperResult,
@@ -3858,6 +3867,18 @@ async function _execJson(cmd) {
   }
   return null
 }
+async function _executionEvidence(wt, preSha, captureBase) {
+  const cmd = `printf '__SR_PROBE__ %s %s %s\\n' ` +
+    `"$(git -C ${shq(wt)} status --porcelain | wc -l | tr -d ' ')" ` +
+    `"$(git -C ${shq(wt)} rev-parse HEAD)" ` +
+    `"$(ls ${shq(captureBase)}.* 2>/dev/null | wc -l | tr -d ' ')"`
+  const res = await _exec([cmd])
+  const r0 = res && res[0]
+  if (!(r0 && r0.ok)) return true
+  const m = String(r0.stdout == null ? '' : r0.stdout).match(/__SR_PROBE__ (\d+) (\S+) (\d+)/)
+  if (!m) return true
+  return Number(m[1]) > 0 || (preSha != null && m[2] !== preSha) || Number(m[3]) > 0
+}
 async function _captureHead(wt) {
   const res = await _exec([`git -C ${shq(wt)} rev-parse HEAD`])
   const r0 = res && res[0]
@@ -3903,12 +3924,13 @@ function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeco
   const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
   return cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
 }
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle, nonIdempotent) {
   const idleArmed = armIdle === true && Number(idleSeconds) > 0
   const cmd = _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle)
   let out
   try {
-    out = await _courier().runCourierMarkedText('dispatch external CLI', cmd)
+    out = await _courier().runCourierMarkedText('dispatch external CLI', cmd,
+      { single: nonIdempotent === true, acceptExecuted: true })
   } catch (e) {
     const c = _courier()
     if (c.CourierTransportError && e instanceof c.CourierTransportError) {
@@ -4001,17 +4023,32 @@ async function _dispatchExternalInner(o) {
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
-    let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    const nonIdempotent = isWrite || isAuthor
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
+    let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle, nonIdempotent)
+    const priorDeclines = []
     if (runRes && runRes.declined) {
-      const declinePrefixes = [_declinePrefix(runRes.answer)]
-      runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+      if (isWrite && await _executionEvidence(cwd, preSha, captureBase)) {
+        return { ok: false, reason: 'external-run-failed' }
+      }
+      priorDeclines.push(_declinePrefix(runRes.answer))
+      runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle, nonIdempotent)
       if (runRes && runRes.declined) {
-        declinePrefixes.push(_declinePrefix(runRes.answer))
-        return { ok: false, reason: COURIER_DECLINED_OUTCOME, declined: true, declinePrefixes }
+        if (isWrite && await _executionEvidence(cwd, preSha, captureBase)) {
+          return { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
+        }
+        priorDeclines.push(_declinePrefix(runRes.answer))
+        return { ok: false, reason: COURIER_DECLINED_OUTCOME, declined: true, declinePrefixes: priorDeclines }
       }
     }
-    if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
-    if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
+    if (runRes && runRes.stalled) {
+      return priorDeclines.length ? { ok: false, reason: 'stalled', declinePrefixes: priorDeclines }
+        : { ok: false, reason: 'stalled' }
+    }
+    if (!runRes || !runRes.ok) {
+      return priorDeclines.length ? { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
+        : { ok: false, reason: 'external-run-failed' }
+    }
     const rawStdout = runRes.stdout
     const rawPath = `/tmp/engine-${runId}.out`
     const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
@@ -4033,13 +4070,13 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
-  if (parsed && parsed.declined) {
-    for (const prefix of (parsed.declinePrefixes || [])) {
+  if (parsed && Array.isArray(parsed.declinePrefixes)) {
+    for (const prefix of parsed.declinePrefixes) {
       await _journalExternal(Object.assign(_jbase(), { verify: null,
         outcome: COURIER_DECLINED_OUTCOME, declinePrefix: prefix }))
     }
-    return { ok: false, reason: COURIER_DECLINED_OUTCOME }
   }
+  if (parsed && parsed.declined) return { ok: false, reason: COURIER_DECLINED_OUTCOME }
   if (isAuthor) {
     const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
