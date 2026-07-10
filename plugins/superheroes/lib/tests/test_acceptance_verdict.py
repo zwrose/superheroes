@@ -1,7 +1,23 @@
 # plugins/superheroes/lib/tests/test_acceptance_verdict.py
-import os, sys
+import os, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_verdict as v
+
+_LIB = os.path.join(os.path.dirname(__file__), "..")
+
+
+def test_courier_declined_token_matches_js_producer_no_drift():
+    # #341 / CONVENTIONS §11.2 drift guard: the `courier-declined` outcome token is a cross-boundary
+    # contract — engine_dispatch.js emits it into the external_dispatch journal and acceptance_verdict.py
+    # must recognize it EXACTLY. Read the JS producer's home (the exported const) and assert it equals the
+    # Python consumer's home; a rename on either side (which would fail-CLOSED but degrade the readout
+    # phrasing) fails here loudly instead.
+    js_token = subprocess.run(
+        ["node", "-e", "process.stdout.write(require('./engine_dispatch.js').COURIER_DECLINED_OUTCOME)"],
+        cwd=_LIB, text=True, capture_output=True, timeout=30).stdout.strip()
+    assert js_token == v.COURIER_DECLINED_OUTCOME == "courier-declined", (
+        "courier-declined token drift: engine_dispatch.js=%r acceptance_verdict.py=%r"
+        % (js_token, v.COURIER_DECLINED_OUTCOME))
 
 # These phase names are arbitrary self-consistent verdict-logic inputs; the real
 # pipeline phase list is read from showrunner.js via acceptance_phases.

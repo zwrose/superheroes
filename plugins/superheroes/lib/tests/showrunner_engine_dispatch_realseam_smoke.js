@@ -73,12 +73,21 @@ function cleanup(scratch) { try { fs.rmSync(scratch, { recursive: true, force: t
   cleanup(scratch)
   if (res.error) { console.error('live dispatch failed to launch claude:', res.error); process.exit(1) }
   const answer = String(res.stdout || '') + String(res.stderr || '')
-  // The load-bearing assertion: the REAL cheap leaf EXECUTED the shell — its answer carries the
-  // __SR_EXIT execution marker (and the watchdog's __SR_DISPATCH__ control line). A prose DECLINE
-  // (the a7bade9a bug) carries neither. This is the assertion that would have failed on the original.
-  assert.ok(answer.includes('__SR_EXIT'),
-    '#341: the real cheapest-model leaf RAN the composed cursor build command (answer carries the ' +
-    '__SR_EXIT execution marker) rather than declining with prose. Answer was:\n' + answer.slice(0, 2000))
+  // The load-bearing assertion must be AT LEAST as strong as the PRODUCTION execution predicate — a
+  // weaker `answer.includes('__SR_EXIT')` would FALSE-PASS on a decline-by-quoting, since the composed
+  // prompt itself contains the literal '__SR_EXIT:$?' a leaf can echo without ever running (the
+  // wf_1494a8fa-e28 shape badCourierAnswer exists to catch; review finding test-001). So:
+  //   (1) reuse the PRODUCTION predicate: !badCourierAnswer rejects both a missing marker AND the
+  //       unexpanded '__SR_EXIT:$?' of an echoed/quoted command; AND
+  //   (2) require the watchdog's own runtime-EXPANDED control line __SR_DISPATCH__{"idleKilled":N,…},
+  //       which only the actually-executed `printf` emits (the quoted command carries the %s format
+  //       string, never expanded digits) — bulletproof that the shell RAN, not a quoted-command echo.
+  assert.ok(!courier.badCourierAnswer(answer),
+    '#341: the real cheapest-model leaf produced a marker-shape (executed) answer, not a decline — ' +
+    'badCourierAnswer must be false. Answer was:\n' + answer.slice(0, 2000))
+  assert.ok(/__SR_DISPATCH__\{"idleKilled":\d/.test(answer),
+    '#341: the real leaf RAN the composed cursor build watchdog — its answer carries the runtime-' +
+    'expanded __SR_DISPATCH__ control line (digits, not the %s format string). Answer was:\n' + answer.slice(0, 2000))
   console.log('OK: #341 real-seam — a real cheapest-model claude leaf executed the production cursor ' +
-    'build watchdog command (marker-proven), not a fixture-injected courier')
+    'build watchdog command (badCourierAnswer=false + expanded __SR_DISPATCH__), not a fixture courier')
 })().catch((e) => { console.error(e && e.stack || e); process.exit(1) })

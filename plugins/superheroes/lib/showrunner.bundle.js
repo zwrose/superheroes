@@ -3777,6 +3777,7 @@ const { libPath } = require('./lib_root.js')
 const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
+const COURIER_DECLINED_OUTCOME = 'courier-declined'
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function _stageCmd(path, content) {
   const encoded = b64(content == null ? '' : String(content))
@@ -3911,7 +3912,10 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   } catch (e) {
     const c = _courier()
     if (c.CourierTransportError && e instanceof c.CourierTransportError) {
-      return { ok: false, declined: true, reason: e.reason || 'courier-declined', answer: e.answer || '' }
+      if (e.reason === 'missing execution marker') {
+        return { ok: false, declined: true, answer: e.answer || '' }
+      }
+      return { ok: false }
     }
     throw e
   }
@@ -3999,13 +4003,11 @@ async function _dispatchExternalInner(o) {
     resolvedArgv = argv
     let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
     if (runRes && runRes.declined) {
-      await _journalExternal(Object.assign(_jbase(), { verify: null,
-        outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
+      const declinePrefixes = [_declinePrefix(runRes.answer)]
       runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
       if (runRes && runRes.declined) {
-        await _journalExternal(Object.assign(_jbase(), { verify: null,
-          outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
-        return { ok: false, reason: 'courier-declined', declined: true }
+        declinePrefixes.push(_declinePrefix(runRes.answer))
+        return { ok: false, reason: COURIER_DECLINED_OUTCOME, declined: true, declinePrefixes }
       }
     }
     if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
@@ -4031,7 +4033,13 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
-  if (parsed && parsed.declined) return { ok: false, reason: 'courier-declined' }
+  if (parsed && parsed.declined) {
+    for (const prefix of (parsed.declinePrefixes || [])) {
+      await _journalExternal(Object.assign(_jbase(), { verify: null,
+        outcome: COURIER_DECLINED_OUTCOME, declinePrefix: prefix }))
+    }
+    return { ok: false, reason: COURIER_DECLINED_OUTCOME }
+  }
   if (isAuthor) {
     const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
@@ -4099,6 +4107,7 @@ async function dispatchExternal(o) {
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
   _STREAMS_WHEN_PIPED, strictify,
+  COURIER_DECLINED_OUTCOME,
   _composeDispatchCommand }
 };
 __modules["build_phase"] = function (module, exports, require) {

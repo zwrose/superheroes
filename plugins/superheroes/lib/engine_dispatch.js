@@ -19,6 +19,13 @@ const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable
 // Both current engines stream, so both arm the monitor.
 const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 
+// #341: the courier-declined outcome token — a cross-boundary contract (this JS producer writes it into
+// the external_dispatch journal; acceptance_verdict.py's COURIER_DECLINED_OUTCOME must match it exactly
+// to classify it as neither-attempt-nor-excuse). Single JS home + exported so a drift guard asserts the
+// two homes agree (CONVENTIONS §11.2). Fail-closed if they ever diverge: an unrecognized token lands in
+// acceptance_verdict's generic `failed` bucket, so a decline-only engine still fails the gate.
+const COURIER_DECLINED_OUTCOME = 'courier-declined'
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
@@ -286,13 +293,30 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
   // dispatch) and (b) PROVES execution — a persistent missing `__SR_EXIT` marker means the shell
   // never ran (a decline), surfaced here as {declined:true} carrying the leaf's refusal prose, which
   // the caller journals as the honest `courier-declined` outcome instead of an engine failure.
+  // STDERR NOTE (review code-002/premortem-004): the marker protocol's wrapMarkedCommand appends
+  // `2>&1`, which merges stderr into the parsed stdout. On the ARMED watchdog path — the ONLY
+  // production dispatch path, since resolveIdle always returns a positive idle and both engines stream
+  // — the watchdog captures the CLI's stdout/stderr into SEPARATE files and emits only stdout, so the
+  // `2>&1` catches only the (empty) sh-script stderr (proven by the stall-monitor real-seam smoke's
+  // stderr-never-parsed assertion). The unarmed path (authz probe / a hypothetical non-streaming
+  // engine) is never a production write, and parse-result's _last_json_object is noise-tolerant.
   let out
   try {
     out = await _courier().runCourierMarkedText('dispatch external CLI', cmd)
   } catch (e) {
     const c = _courier()
     if (c.CourierTransportError && e instanceof c.CourierTransportError) {
-      return { ok: false, declined: true, reason: e.reason || 'courier-declined', answer: e.answer || '' }
+      // ONLY a missing execution marker proves the shell NEVER RAN (a genuine courier decline). The
+      // courier's other transport reason — 'empty stdout' — means the marker WAS present, i.e. the
+      // command DID execute but printed nothing before the marker; that is an engine outcome, not a
+      // decline (code-001/premortem-001). Mislabeling it courier-declined would (a) journal a
+      // dishonest "engine never tried" line and (b) retry a possibly-mutating write on an already-
+      // edited worktree. So only the marker-absent case declines; anything else falls open as a
+      // plain engine failure (no retry, no courier-declined outcome), matching the pre-#341 behavior.
+      if (e.reason === 'missing execution marker') {
+        return { ok: false, declined: true, answer: e.answer || '' }
+      }
+      return { ok: false }
     }
     throw e
   }
@@ -462,19 +486,19 @@ async function _dispatchExternalInner(o) {
     // retry/fallback chain) that the shell NEVER RAN — a safety-trained cheapest-model leaf refused
     // the autonomous engine command and answered prose. The engine was NEVER TRIED, so this is NOT an
     // `external-run-failed` engine failure (promise 4/5: never blame the engine for a courier's
-    // refusal). Journal it as the honest `courier-declined` outcome carrying the refusal prose, then
-    // retry ONCE through the hardened path (safe: the CLI never executed, so there are no partial
-    // side-effects to repeat). Journal BOTH attempts so the audit trail shows the decline count. On a
-    // second decline, fall open with reason `courier-declined` (the caller discards nothing new and
-    // falls open to Claude, exactly as any dispatch failure).
+    // refusal). Retry ONCE through the hardened path (safe: the CLI never executed, so there are no
+    // partial side-effects to repeat; the refusal is stochastic — root-cause #341 saw a cursor-build
+    // dispatch refuse 2/4 and comply 2/4, so a retry can recover). COLLECT both attempts' refusal
+    // prose here but do NOT journal inline: journaling stays on the single POST-RACE settled path
+    // (see the `parsed.declined` handler below) so a `Promise.race` timeout win can never interleave a
+    // stray courier-declined line after the dispatch already returned (premortem-002). On a second
+    // decline, fall open with reason `courier-declined`, carrying both attempts' prefixes.
     if (runRes && runRes.declined) {
-      await _journalExternal(Object.assign(_jbase(), { verify: null,
-        outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
+      const declinePrefixes = [_declinePrefix(runRes.answer)]
       runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
       if (runRes && runRes.declined) {
-        await _journalExternal(Object.assign(_jbase(), { verify: null,
-          outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
-        return { ok: false, reason: 'courier-declined', declined: true }
+        declinePrefixes.push(_declinePrefix(runRes.answer))
+        return { ok: false, reason: COURIER_DECLINED_OUTCOME, declined: true, declinePrefixes }
       }
     }
     if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
@@ -509,11 +533,18 @@ async function _dispatchExternalInner(o) {
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
 
-  // #341: a fully-declined dispatch already journaled BOTH courier-declined attempts inline (above,
-  // in `run`) — the engine was never tried, so there is no ok/timeout/commit outcome to record here.
-  // Return the fall-open reason WITHOUT re-journaling (which would add a spurious third audit line for
-  // the same never-executed dispatch). The caller falls open to Claude exactly as for any failure.
-  if (parsed && parsed.declined) return { ok: false, reason: 'courier-declined' }
+  // #341: a fully-declined dispatch (engine never tried — both hardened-path attempts refused).
+  // Journal BOTH courier-declined attempts HERE, on the single post-race settled path (never inline in
+  // the raced `run`), so a timeout win cannot interleave a stray audit line after this returned
+  // (premortem-002). Each carries that attempt's clamped refusal prose as honest reason-context. No
+  // ok/timeout/commit outcome is recorded — the engine never ran. The caller falls open to Claude.
+  if (parsed && parsed.declined) {
+    for (const prefix of (parsed.declinePrefixes || [])) {
+      await _journalExternal(Object.assign(_jbase(), { verify: null,
+        outcome: COURIER_DECLINED_OUTCOME, declinePrefix: prefix }))
+    }
+    return { ok: false, reason: COURIER_DECLINED_OUTCOME }
+  }
 
   // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
   // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
@@ -628,6 +659,9 @@ function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 // external engine must have an explicit streams-when-piped verdict) — not a public seam.
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
   _STREAMS_WHEN_PIPED, strictify,
+  // #341: the courier-declined outcome token, exported so the JS↔Python drift guard (CONVENTIONS
+  // §11.2) can assert this producer home matches acceptance_verdict.COURIER_DECLINED_OUTCOME.
+  COURIER_DECLINED_OUTCOME,
   // #341 test-only: the pure production command composer, exported so the real-seam detector
   // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
   _composeDispatchCommand }

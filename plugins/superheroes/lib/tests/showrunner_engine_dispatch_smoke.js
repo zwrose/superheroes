@@ -729,5 +729,76 @@ function makeAgent(routes) {
       '#341: the courier-declined audit line still carries the engine + resolved argv')
     console.log('OK: engine_dispatch #341 courier-declined (honest outcome, retry-once, both attempts journaled, never external-run-failed)')
   }
+
+  // ---------------------------------------------------------------------
+  // #341 DECLINE-THEN-RECOVER (review finding test-002). The retry-once exists because the refusal is
+  // STOCHASTIC — a first-attempt decline that RECOVERS on the retry must complete the dispatch
+  // normally (engine ran), journaling the engine outcome, NOT courier-declined. Guards a broken-recovery
+  // mutant (a retry that silently drops the recovered result).
+  // ---------------------------------------------------------------------
+  {
+    const REFUSAL = "I won't run this."
+    const journalP = []
+    let runLeaf = 0
+    global.agent = async (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+      if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      // The first hardened dispatch (its whole 2×3 marker chain) refuses; once that first _runArgv has
+      // given up (>=6 leaves), the retry's leaf succeeds with a marker answer.
+      if (prompt.includes('Execute this exact shell command')) {
+        runLeaf += 1
+        return runLeaf <= 6 ? REFUSAL : markedStdout('{"ok":true,"signal":"ok"}')
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rRecover = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-recover' })
+    assert.strictEqual(rRecover.ok, true, '#341: a decline that recovers on the retry completes the dispatch normally')
+    assert.ok(runLeaf > 6, '#341: the retry actually re-dispatched after the first decline: ' + runLeaf)
+    const recJournals = journalP.filter((p) => p.engine === 'cursor')
+    assert.strictEqual(recJournals.length, 1, '#341: a recovered dispatch journals exactly ONE external_dispatch line (the engine outcome): ' + JSON.stringify(recJournals.map((p) => p.outcome)))
+    assert.strictEqual(recJournals[0].outcome, 'ok', '#341: the recovered dispatch journals the engine outcome (ok), NOT courier-declined')
+    console.log('OK: engine_dispatch #341 decline-then-recover (retry recovers -> normal completion, engine outcome journaled)')
+  }
+
+  // ---------------------------------------------------------------------
+  // #341 EMPTY-STDOUT IS NOT A DECLINE (review finding code-001/premortem-001). A courier answer that
+  // CARRIES the __SR_EXIT marker but has empty stdout proves the shell EXECUTED (marker present) and
+  // simply printed nothing — an engine outcome, NOT a courier decline. It must map to
+  // external-run-failed (engine ran, no usable output), NEVER courier-declined, and must NOT retry a
+  // possibly-mutating write. Guards the mislabel that would journal a dishonest "engine never tried".
+  // ---------------------------------------------------------------------
+  {
+    const journalP = []
+    let runLeaf = 0
+    global.agent = async (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      // Marker PRESENT (executed) but stdout empty -> runCourierMarkedText throws
+      // CourierTransportError('empty stdout'), which is NOT the marker-absent decline signal.
+      if (prompt.includes('Execute this exact shell command')) { runLeaf += 1; return markedStdout('') }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rEmpty = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-empty' })
+    assert.strictEqual(rEmpty.reason, 'external-run-failed',
+      '#341: a marker-present empty-stdout run is an engine failure, NOT a courier decline: ' + rEmpty.reason)
+    assert.ok(!journalP.some((p) => p.outcome === 'courier-declined'),
+      '#341: a run that EXECUTED (marker present) is NEVER journaled courier-declined (the engine WAS tried)')
+    assert.ok(runLeaf <= 6, '#341: an empty-stdout (executed) run does NOT trigger the decline retry (no re-run of a possibly-mutating write): ' + runLeaf)
+    console.log('OK: engine_dispatch #341 empty-stdout is an engine failure, not a courier decline (no mislabel, no unsafe retry)')
+  }
 })()
 
