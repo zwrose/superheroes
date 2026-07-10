@@ -34,9 +34,10 @@ process, which only sees exported variables.
 
    One exception to "stop": if you are the harness's OWN spawned driver child — the marker
    `SUPERHEROES_ACCEPTANCE_CONTEXT` is set in your environment and your prompt hands you a stamped
-   `accept-harness-` work-item — this front door is not for you. Your protocol is the repo-local
-   **`acceptance-driver`** skill (issue #344): follow it instead of refusing outright, and never
-   start a second run from in here.
+   `accept-harness-` work-item — this front door is not for you at all: leave this skill NOW,
+   without running the nesting check below (for you it would correctly say "refuse", because it
+   guards against starting a SECOND run — which you must not do either). Your protocol is the
+   repo-local **`acceptance-driver`** skill (issue #344): follow it instead of refusing outright.
 
    ```bash
    python3 - <<'PY'
