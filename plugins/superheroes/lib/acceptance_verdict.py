@@ -19,6 +19,63 @@ def _fail(reason):
     return {"verdict": "fail", "reason": reason}
 
 
+# #310: external_dispatch outcomes that are a LEGITIMATE, VISIBLE fall-open reason — the
+# owner's environment cannot run the engine (its CLI is absent, or the owner's settings deny
+# the engine's Bash verb). A run that journals one of these has HONESTLY disclosed why it fell
+# open to Claude (the "fall-open must be visible" principle, #288/#292/#299), so it does not
+# fail the authenticity gate. EVERY other non-"ok" outcome (timeout, unreadable, commit-failed,
+# could-not-stage-*, dispatch-error, an engine parse reason, a bare "failed") is a genuine
+# dispatch FAILURE and counts against the tally. These clean markers are emitted by the spine's
+# dispatch path (the #299 fall-open-visibility work); until then the only authentic path is an
+# outcome of "ok". #308 adds a resolved `model` field to these payloads — this reader ignores
+# unknown payload keys, so it extends without change.
+ACCEPTABLE_FALLOPEN_OUTCOMES = frozenset({"authz-denied", "engine-unavailable"})
+
+
+def tally_external_dispatches(events):
+    """Pure tally of a run's `external_dispatch` journal events (#310).
+
+    Returns `{"ok": int, "failed": int, "by_engine": {engine: {"ok": n, "total": m}},
+    "acceptable_reasons": [outcome, ...]}` where `total` counts genuine dispatch ATTEMPTS
+    (ok + failed) per engine, EXCLUDING the acceptable fall-open outcomes (authz-denied /
+    engine-unavailable), which are recorded separately as visible, legitimate reasons — never
+    as failures. Never raises: a non-dict event or payload contributes nothing.
+    """
+    ok = 0
+    failed = 0
+    by_engine = {}
+    reasons = []
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("type") != "external_dispatch":
+            continue
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        outcome = payload.get("outcome")
+        engine = payload.get("engine") or "external"
+        if outcome in ACCEPTABLE_FALLOPEN_OUTCOMES:
+            reasons.append(outcome)
+            continue
+        slot = by_engine.setdefault(engine, {"ok": 0, "total": 0})
+        slot["total"] += 1
+        if outcome == "ok":
+            ok += 1
+            slot["ok"] += 1
+        else:
+            failed += 1
+    return {"ok": ok, "failed": failed, "by_engine": by_engine, "acceptable_reasons": reasons}
+
+
+def _dispatch_tally_phrase(tally):
+    """Human phrase naming the per-engine ok/total tallies for a FAIL reason, e.g.
+    `external engines failed every dispatch: codex 0/8, cursor 0/2`. Zero attempts is the
+    silent-fall-open shape."""
+    by_engine = (tally or {}).get("by_engine") or {}
+    if not by_engine:
+        return "zero external_dispatch events were journaled (a silent fall-open to Claude)"
+    parts = ", ".join("%s %d/%d" % (eng, d.get("ok", 0), d.get("total", 0))
+                      for eng, d in sorted(by_engine.items()))
+    return "external engines failed every dispatch: " + parts
+
+
 def decide(facts):
     """Pure verdict over the assembled facts dict.
 
@@ -29,6 +86,18 @@ def decide(facts):
          with a PR link).
       3. FR-4 — readout-vs-reality consistency: the readout's claimed checks-green and PR
          must match the live values.
+      4. #310 engine authenticity — when the resolved calibration routed any role to an
+         external engine (`external_calibration`), the run must show the external dispatch
+         chain actually worked at least once: ≥1 `external_dispatch` with outcome "ok", OR a
+         run whose only external activity was an explicitly journaled fall-open reason
+         (authz-denied / engine-unavailable) with zero genuine dispatch failures. A run whose
+         external engines failed every dispatch — or that journaled zero events under external
+         calibration — is byte-identical to a healthy all-Claude run in every terminal fact
+         above, so without this gate a silent/total fall-open certifies as a passing
+         "external-engine" run (the 0.11.0 escape: 9 dispatches, all failed, passed). An
+         unreadable dispatch journal (`external_dispatch_unreadable`) cannot certify authentic
+         dispatch and fails here (UFR-9). Judged LAST so a run that already fails a terminal
+         fact keeps that headline reason rather than being masked by the engine reason.
     Otherwise: pass.
     """
     if not isinstance(facts, dict):
@@ -75,5 +144,27 @@ def decide(facts):
             "readout's claimed PR (%r) is inconsistent with reality (%r)"
             % (facts.get("readout_claimed_pr"), facts.get("live_pr"))
         )
+
+    # 4. #310 engine authenticity — only gates a run whose calibration routed a role
+    # externally; an all-Claude run has no external chain to prove.
+    if facts.get("external_calibration"):
+        if facts.get("external_dispatch_unreadable"):
+            return _fail(
+                "external-engine calibration, but the run's external-dispatch journal was "
+                "unreadable — an unreadable journal cannot certify an authentic external "
+                "dispatch (UFR-9)")
+        tally = facts.get("external_dispatch_tally") or {}
+        # Authentic iff the external chain demonstrably worked (>=1 ok), OR the ONLY external
+        # activity was a legitimate journaled fall-open — an acceptable reason with ZERO genuine
+        # dispatch failures. Requiring failed==0 for the reason-only pass stops one engine's
+        # honest unavailability (authz-denied / engine-unavailable) from globally excusing a
+        # co-tenant engine that genuinely failed every dispatch (review #310, code-001/sec-002):
+        # `acceptable_reasons` is a flat cross-engine list, so without this a single legitimate
+        # fall-open would re-open the exact all-failed escape for a multi-engine calibration.
+        authentic = tally.get("ok") or (not tally.get("failed") and tally.get("acceptable_reasons"))
+        if not authentic:
+            return _fail(
+                "external-engine calibration, but no authentic external dispatch — "
+                + _dispatch_tally_phrase(tally))
 
     return _pass()
