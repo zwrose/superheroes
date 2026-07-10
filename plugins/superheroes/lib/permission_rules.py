@@ -57,6 +57,68 @@ _INTERPRETER = re.compile(
 )
 
 
+# #311 defect 2 (FR-5 cwd keying): a spine leaf's REAL execution dir is NOT the hook payload's
+# cwd. Production leaves run `cd <build-worktree> && <cmd>` from the SESSION cwd, so the payload
+# cwd is the session dir (never a managed worktree) and the strict-descendant confinement check
+# never matched a single production leaf. Parse a leading `cd <path> &&` and confine on that
+# target instead. Quoted (single/double) or bare; the `&&` chain is required (a bare `cd; …`
+# would leave the interpreter running in the session dir too, so only the `&&`-guarded form is a
+# real re-root). An absolute target is used as-is; a relative target is resolved against the
+# payload cwd (best-effort — realpath's strict-descendant check downstream still decides, UFR-5).
+_LEADING_CD = re.compile(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|[^\s;&|<>]+)\s*&&")
+# A SUBSEQUENT directory change after the leading `cd` re-roots the interpreter again, so the
+# leading target is NOT the real execution dir. Detect a `cd`/`pushd`/`popd` at any command
+# boundary in the remainder and fail confinement SAFE: a chained `cd <managed-wt> && cd /outside
+# && python3 …` must never confine on the in-root first hop while the interpreter actually runs
+# outside the managed root (the confinement-bypass the #311 security/premortem review named).
+#
+# SCOPE (deliberate, #311 review round 2): worktree-confinement is a prompt-reduction HEURISTIC
+# for routine spine leaves, NOT a sandbox. It CANNOT be a sandbox: `_INTERPRETER` sanctions
+# `bash -c`/`sh -c`/`env <interp>` probes, and any allowed interpreter can re-root itself at
+# runtime (`os.chdir`, a `bash -c 'cd … && …'` body) regardless of how perfectly the command line
+# is parsed. So this guard closes the one REALISTIC accidental vector (a second top-level `cd`),
+# not every syntactic re-root — `env -C`, a `(cd …)` subshell, or a quoted `cd` inside a `bash -c`
+# body still confine on the first hop (a disclosed residual, bounded by the single-user,
+# non-adversarial threat model AND by the gated owner-authority floor, which scans the FULL
+# command string and is immune to any cwd trick). Fail-direction stays toward prompting.
+_RE_ROOT = re.compile(r"(?:^|&&|\|\||[;&|\n])\s*(?:cd|pushd|popd)(?:\s|$)")
+
+
+def _unquote(tok):
+    """Strip a single matched surrounding quote pair from a `cd` target."""
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+        return tok[1:-1]
+    return tok
+
+
+def _effective_cwd(command, cwd):
+    """The directory `command` actually executes in. Returns the target of a leading
+    `cd <path> &&` (the production spine-leaf shape) when present, else the payload `cwd`
+    (the fallback).
+
+    Fail-safe (UFR-2/UFR-5, toward NOT confining):
+    - a non-str command, or no leading cd → `cwd` unchanged;
+    - a leading cd followed by ANY further `cd`/`pushd`/`popd` re-root → `None` (the real exec
+      dir is ambiguous, so confinement must not fire on the first hop). `_cwd_in_managed_worktree`
+      reads `None` as not-confined, so the command falls through to the normal prompt path.
+    """
+    if not isinstance(command, str):
+        return cwd
+    m = _LEADING_CD.match(command)
+    if not m:
+        return cwd
+    if _RE_ROOT.search(command[m.end():]):
+        return None
+    target = _unquote(m.group(1))
+    if not target:
+        return cwd
+    if os.path.isabs(target):
+        return target
+    if cwd:
+        return os.path.join(cwd, target)
+    return target
+
+
 def _cwd_in_managed_worktree(cwd):
     """True iff `cwd` realpaths to a STRICT descendant of the managed-worktree root.
 
@@ -85,10 +147,14 @@ def worktree_confined(command, cwd):
     """True iff `cwd` is a real managed build worktree (`_cwd_in_managed_worktree`) AND
     `command` is an interpreter invocation.
 
-    Fail-safe (UFR-2/UFR-5): a cwd that is not a strict descendant of the managed-worktree
-    root, or a non-str `command`, → False (never toward allowing).
+    Confinement keys on the command's REAL execution dir (`_effective_cwd`) — a leading
+    `cd <build-worktree> &&` re-roots the leaf, so a payload cwd that is the session dir still
+    confines when the command cd's into a managed worktree (#311 defect 2, FR-5).
+
+    Fail-safe (UFR-2/UFR-5): an effective cwd that is not a strict descendant of the
+    managed-worktree root, or a non-str `command`, → False (never toward allowing).
     """
-    if not _cwd_in_managed_worktree(cwd):
+    if not _cwd_in_managed_worktree(_effective_cwd(command, cwd)):
         return False
     try:
         return bool(_INTERPRETER.search(command))
@@ -385,9 +451,12 @@ def evaluate(command, cwd, run_id, root=None, work_item=None, gated_check=None):
                 # FR-6: "version-control operations confined to managed build worktrees." The
                 # seeded worktree-vcs family is confined only by branch-ref regex, not by cwd;
                 # additionally require the command's cwd to be a real managed build worktree
-                # (the same strict-descendant realpath check `worktree_confined` uses, UFR-5).
-                # A worktree-vcs match from outside a managed worktree earns nothing → fall.
-                if family == "worktree-vcs" and not _cwd_in_managed_worktree(cwd):
+                # (the same strict-descendant realpath check `worktree_confined` uses, UFR-5),
+                # keyed on the REAL execution dir so a leading `cd <wt> &&` re-root confines
+                # (#311 defect 2). A worktree-vcs match from outside a managed worktree earns
+                # nothing → fall.
+                if family == "worktree-vcs" and not _cwd_in_managed_worktree(
+                        _effective_cwd(command, cwd)):
                     continue
                 return ("allow", "routine:%s" % family)
         # Worktree-confined (FR-5): an interpreter probe inside a real managed worktree.
