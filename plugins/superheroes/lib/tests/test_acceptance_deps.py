@@ -924,7 +924,8 @@ def test_engine_dispatch_tally_reads_real_journal_and_0_11_0_shape_is_fail(tmp_p
 
     tally = deps.real_engine_dispatch_tally(root, lambda: wi)()
     assert tally["ok"] == 0
-    assert tally["by_engine"] == {"cursor": {"ok": 0, "total": 1}, "codex": {"ok": 0, "total": 8}}
+    assert tally["by_engine"] == {"cursor": {"ok": 0, "total": 1, "declined": 0},
+                                  "codex": {"ok": 0, "total": 8, "declined": 0}}
 
     facts = {"terminal": "ready", "pr_exists": True, "pr_ready_for_review": True,
              "checks_green": True, "phases_traversed": ["plan"], "expected_phases": ["plan"],
@@ -945,7 +946,7 @@ def test_engine_dispatch_tally_one_ok_reads_real_journal(tmp_path):
     _append_dispatch(root, wi, "codex", "ok")
     _append_dispatch(root, wi, "cursor", "timeout", "build")
     tally = deps.real_engine_dispatch_tally(root, lambda: wi)()
-    assert tally["ok"] == 1 and tally["by_engine"]["codex"] == {"ok": 1, "total": 1}
+    assert tally["ok"] == 1 and tally["by_engine"]["codex"] == {"ok": 1, "total": 1, "declined": 0}
 
 
 def test_engine_dispatch_tally_missing_journal_is_unreadable_fail_closed(tmp_path):
@@ -957,7 +958,7 @@ def test_engine_dispatch_tally_missing_journal_is_unreadable_fail_closed(tmp_pat
     os.makedirs(root)
     assert deps.real_engine_dispatch_tally(root, lambda: None)() == {"unreadable": True}
     empty = deps.real_engine_dispatch_tally(root, lambda: "no-such-wi")()
-    assert empty == {"ok": 0, "failed": 0, "by_engine": {}, "acceptable_reasons": []}
+    assert empty == {"ok": 0, "failed": 0, "declined": 0, "by_engine": {}, "acceptable_reasons": []}
 
 
 def test_real_launcher_builds_pref_reader_against_real_store_kills_store_root_mutant(tmp_path, monkeypatch):

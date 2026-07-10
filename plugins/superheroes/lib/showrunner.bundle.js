@@ -1817,10 +1817,11 @@ module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA,
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
 class CourierTransportError extends Error {
-  constructor(label, reason) {
+  constructor(label, reason, answer) {
     super(`courier transport failed after retry (${label}): ${reason}`)
     this.label = label
     this.reason = reason
+    this.answer = answer == null ? '' : String(answer)
   }
 }
 function setCourierAgent(fn) { injectedAgent = fn }
@@ -1978,8 +1979,10 @@ async function dispatchMarked(label, markedCmd) {
 async function runCourierMarkedText(label, command) {
   const markedCmd = wrapMarkedCommand(command)
   let last = 'empty stdout'
+  let lastAns = ''
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
+    lastAns = ans
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -1988,14 +1991,16 @@ async function runCourierMarkedText(label, command) {
     if (sliced.stdout.trim() !== '') { _recordRetry(label, attempt); return sliced.stdout }
     last = 'empty stdout'
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 async function runCourierMarkedJson(label, command, opts) {
   const options = opts || {}
   const markedCmd = wrapMarkedCommand(command)
   let last = 'empty stdout'
+  let lastAns = ''
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
+    lastAns = ans
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -2019,7 +2024,7 @@ async function runCourierMarkedJson(label, command, opts) {
     _recordRetry(label, attempt)
     return parsed
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 async function runCourierText(label, command) {
   let last = 'empty stdout'
@@ -2086,6 +2091,8 @@ module.exports = {
   setCourierAgent,
   courierRetryTotals,
   resetCourierMeter,
+  wrapMarkedCommand,
+  markedPromptFor,
 }
 };
 __modules["pr_comment_scrub"] = function (module, exports, require) {
@@ -3834,6 +3841,11 @@ function _exec(commands) {
   if (!_execFn) _execFn = require('./showrunner.js').exec
   return _execFn(commands)
 }
+let _courierMod = null
+function _courier() {
+  if (!_courierMod) _courierMod = require('./courier_exec.js')
+  return _courierMod
+}
 async function _execJson(cmd) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await _exec([cmd])
@@ -3874,11 +3886,10 @@ const _WATCH_SCRIPT = [
   'if [ "$killed" -eq 1 ] || [ "$ec" -ne 0 ]; then rm -f "$out"; else rm -f "$out" "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
+function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
   const idleArmed = armIdle === true && Number(idleSeconds) > 0
-  let cmd
   if (idleArmed) {
     const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
     const poll = _pollFor(idle)
@@ -3886,15 +3897,24 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
     const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
     const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
       `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${quotedArgv}`
-    cmd = cwd ? `cd ${shq(cwd)} && ${inner}` : inner
-  } else {
-    const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-    cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+    return cwd ? `cd ${shq(cwd)} && ${inner}` : inner
   }
-  const res = await _exec([cmd])
-  const r0 = res && res[0]
-  if (!(r0 && r0.ok)) return { ok: false }
-  let out = (r0.stdout == null ? '' : String(r0.stdout))
+  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+  return cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+}
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  const cmd = _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle)
+  let out
+  try {
+    out = await _courier().runCourierMarkedText('dispatch external CLI', cmd)
+  } catch (e) {
+    const c = _courier()
+    if (c.CourierTransportError && e instanceof c.CourierTransportError) {
+      return { ok: false, declined: true, reason: e.reason || 'courier-declined', answer: e.answer || '' }
+    }
+    throw e
+  }
   if (idleArmed) {
     const m = out.match(/\n?__SR_DISPATCH__(\{[^\n]*\})\s*$/)
     if (m) {
@@ -3918,7 +3938,13 @@ async function _journalExternal(payload) {
       effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
       stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
       idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
+      declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
       verify: payload.verify, outcome: payload.outcome })))
+}
+function _declinePrefix(answer) {
+  const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
+  if (!s) return 'courier returned no execution marker'
+  return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
 async function _scrubReason(reason) {
   const s = reason == null ? '' : String(reason)
@@ -3971,7 +3997,17 @@ async function _dispatchExternalInner(o) {
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
-    const runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    if (runRes && runRes.declined) {
+      await _journalExternal(Object.assign(_jbase(), { verify: null,
+        outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
+      runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+      if (runRes && runRes.declined) {
+        await _journalExternal(Object.assign(_jbase(), { verify: null,
+          outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
+        return { ok: false, reason: 'courier-declined', declined: true }
+      }
+    }
     if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
     if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
     const rawStdout = runRes.stdout
@@ -3995,6 +4031,7 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+  if (parsed && parsed.declined) return { ok: false, reason: 'courier-declined' }
   if (isAuthor) {
     const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
@@ -4061,7 +4098,8 @@ async function dispatchExternal(o) {
 }
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
-  _STREAMS_WHEN_PIPED, strictify }
+  _STREAMS_WHEN_PIPED, strictify,
+  _composeDispatchCommand }
 };
 __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel } = require('./review_panel_shell.js')

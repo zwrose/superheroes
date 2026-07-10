@@ -3,8 +3,13 @@
 // makeAgent(routes)/execRoute idiom (route by exact label, then prompt substring), plus an ordered
 // execLog so the stdin-redirect / audit-event assertions can inspect the exact dispatch-run command.
 const assert = require('assert')
+const { markedStdout } = require('./_marked_stdout.js')
 const logs = []
 global.log = (m) => logs.push(m)
+// #341: the CLI-run dispatch now rides the HARDENED courier (superheroes:courier + __SR_EXIT marker),
+// so a stubbed run leaf must return a MARKER-carrying answer (a bare array reads as a courier decline).
+// Non-run exec leaves (staging/build-argv/parse-result/commit/journal) still ride the plain exec()
+// dumb-pipe and keep their bare-array shape.
 
 // Route an agent() call by the first matching needle found in its prompt OR its label.
 function makeAgent(routes) {
@@ -34,7 +39,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external review output"}' }]
+        return markedStdout('{"raw":"external review output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -78,7 +83,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return markedStdout('{"raw":"external build output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -97,8 +102,10 @@ function makeAgent(routes) {
     'FR-6: the journal call must carry the first-class external_dispatch event type')
   // FR-8: a WRITE dispatch's exec command must be confined to the target cwd via a `cd <cwd> &&`
   // prefix — cursor's argv carries no -C flag of its own, so without this the run would execute at
-  // __SR_ROOT (the repo root) instead of the per-task build worktree.
-  assert.ok(/(^|\n)\d+\.\s*cd '\/tmp\/wt' && /.test(runCmd2), 'write dispatch must confine the run to cwd via cd <cwd> &&: ' + runCmd2)
+  // __SR_ROOT (the repo root) instead of the per-task build worktree. #341: the run now rides the
+  // hardened marker courier (markedPromptFor: "Execute this exact shell command…\n\n<cmd>"), so the
+  // confinement prefix follows the blank line rather than a numbered-list marker.
+  assert.ok(/\n\ncd '\/tmp\/wt' && /.test(runCmd2), 'write dispatch must confine the run to cwd via cd <cwd> &&: ' + runCmd2)
   // FIX 2: the perl-alarm kill guard must ALSO wrap a write-role dispatch, threaded with the same
   // timeoutSeconds (300) used to bound the JS race for this call.
   assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 300 'codex' 'exec'/.test(runCmd2),
@@ -129,7 +136,7 @@ function makeAgent(routes) {
         if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
         if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-        if (prompt.includes('--model')) return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        if (prompt.includes('--model')) return markedStdout('{"raw":"external build output"}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -163,7 +170,7 @@ function makeAgent(routes) {
         if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
         if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -241,7 +248,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"ok":false,"signal":"plan_wrong"}' }]
+        return markedStdout('{"ok":false,"signal":"plan_wrong"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -265,7 +272,7 @@ function makeAgent(routes) {
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
       if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{"ok":false,"signal":"plan_wrong"}' }]
+      if (prompt.includes('--sandbox')) return markedStdout('{"ok":false,"signal":"plan_wrong"}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
   ])
@@ -288,11 +295,16 @@ function makeAgent(routes) {
       if (prompt.includes('engine_adapter.py build-argv')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
       }
-      if (prompt.includes('--sandbox')) {
-        // Simulate a hang: resolve far later than the wrapper's own timeout, via an unref'd timer
+      // The timeout-path journal payload embeds the resolved argv (which contains '--sandbox'), so this
+      // MUST be matched before the '--sandbox' run-hang branch below — otherwise the timeout journal
+      // itself hangs and dispatchExternal never returns (a latent smoke hang that silently exited the
+      // process at 6 OKs under HEAD; every block below here previously never ran).
+      if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('Execute this exact shell command')) {
+        // Simulate a run-hang: resolve far later than the wrapper's own timeout, via an unref'd timer
         // so the never-taken branch doesn't pin the node process alive after the test moves on.
         return new Promise((resolve) => {
-          const t = setTimeout(() => resolve([{ index: 0, ok: true, stdout: '{"raw":"late"}' }]), 3600000)
+          const t = setTimeout(() => resolve(markedStdout('{"raw":"late"}')), 3600000)
           if (t.unref) t.unref()
         })
       }
@@ -322,7 +334,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return markedStdout('{"raw":"external build output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -356,7 +368,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return markedStdout('{"raw":"external build output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -412,7 +424,7 @@ function makeAgent(routes) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
         }
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -501,8 +513,10 @@ function makeAgent(routes) {
       ['exec', (prompt) => {
         if (prompt.includes('base64 -d >') && prompt.includes('.out')) return [{ index: 0, ok: false, stdout: '' }]
         if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
-        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+        // journal BEFORE the '--sandbox' run branch: the journal payload embeds the resolved argv
+        // (which contains '--sandbox'), so a run-branch checked first would mis-route the journal leaf.
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return markedStdout('{"ok":true}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -538,7 +552,7 @@ function makeAgent(routes) {
         if (prompt.includes('journal_entry.py')) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
         }
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -649,7 +663,7 @@ function makeAgent(routes) {
         if (prompt.includes('journal_entry.py')) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
         }
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{"raw":"external review output"}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{"raw":"external review output"}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -659,5 +673,61 @@ function makeAgent(routes) {
   }
 
   console.log('OK: engine_dispatch UFR-6 fail-closed symmetry (read role also fails closed on a failed journal append)')
+
+  // ---------------------------------------------------------------------
+  // #341 COURIER DECLINE. A safety-trained cheapest-model courier leaf REFUSES the autonomous engine
+  // command and answers prose instead of running it (the a7bade9a escape: cursor 0/2 in-child). The
+  // hardened marker courier proves non-execution (a missing __SR_EXIT marker after its retry/fallback
+  // chain), so the dispatch must journal the HONEST `courier-declined` outcome (NEVER external-run-failed
+  // — the engine was never tried), retry ONCE through the hardened path, and journal BOTH attempts.
+  // ---------------------------------------------------------------------
+  {
+    const REFUSAL = "I can't proceed with this request as written. This pattern — an autonomous " +
+      'agent invoked with --trust -f — raises concerns, so I will not run it.'
+    const journalPayloads = []
+    let runLeafDispatches = 0
+    global.agent = async (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--model', 'composer-2.5-fast', '-p', '--trust', '-f', '--output-format', 'stream-json']) }]
+      }
+      // journal BEFORE the run branch (the payload embeds the '--trust'/'-f' argv).
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        // The refusal declinePrefix carries an apostrophe ("can't"), which shq escapes as '\'' — undo
+        // that shell quoting before parsing (proves the prose survives the shq round-trip intact).
+        if (m) { try { journalPayloads.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      // The hardened marker-courier run dispatch (markedPromptFor). REFUSE with prose — no __SR_EXIT
+      // marker — exactly the cheapest-model decline this fix exists for.
+      if (prompt.includes('Execute this exact shell command')) {
+        runLeafDispatches += 1
+        return REFUSAL
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rDecline = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-decline' })
+    // Honest distinct outcome — NEVER external-run-failed (promise 4/5: don't blame the engine).
+    assert.strictEqual(rDecline.ok, false, '#341: a persistent courier decline fails the dispatch (falls open to Claude)')
+    assert.strictEqual(rDecline.reason, 'courier-declined',
+      '#341: a courier decline surfaces the honest courier-declined reason, not external-run-failed: ' + rDecline.reason)
+    // BOTH attempts journaled as courier-declined proves the retry-once fired; NONE as
+    // external-run-failed. Each hardened dispatch also ran the marker retry/fallback chain (2×3), so
+    // two full attempts dispatch well over two run leaves.
+    const declined = journalPayloads.filter((p) => p.outcome === 'courier-declined')
+    assert.strictEqual(declined.length, 2, '#341: a decline retries ONCE — BOTH attempts are journaled as courier-declined: ' + JSON.stringify(journalPayloads.map((p) => p.outcome)))
+    assert.ok(runLeafDispatches > 2, '#341: each hardened dispatch ran the marker retry/fallback chain (>1 leaf per attempt): ' + runLeafDispatches)
+    assert.ok(!journalPayloads.some((p) => p.outcome === 'external-run-failed'),
+      '#341: a courier decline is NEVER journaled as external-run-failed (the engine was never tried)')
+    // The refusal prose is carried as clamped reason-context (audit line self-identifies the decline).
+    assert.ok(declined.every((p) => typeof p.declinePrefix === 'string' && p.declinePrefix.includes("I can't proceed")),
+      '#341: the courier-declined journal carries a prefix of the leaf refusal prose: ' + JSON.stringify(declined.map((p) => p.declinePrefix)))
+    // The enriched engine/model/argv fields still ride the decline audit line (not a bare failure).
+    assert.ok(declined.every((p) => p.engine === 'cursor' && Array.isArray(p.argv) && p.argv.includes('--trust')),
+      '#341: the courier-declined audit line still carries the engine + resolved argv')
+    console.log('OK: engine_dispatch #341 courier-declined (honest outcome, retry-once, both attempts journaled, never external-run-failed)')
+  }
 })()
 

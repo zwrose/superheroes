@@ -121,6 +121,16 @@ function _exec(commands) {
   return _execFn(commands)
 }
 
+// #341: the HARDENED courier discipline (superheroes:courier agentType + __SR_EXIT marker guard +
+// dispatchMarked retry/fallback chain) — reused, not reinvented, for the reliability-critical engine
+// CLI dispatch. courier_exec has no cyclic dependency on showrunner (it is a standalone leaf helper),
+// so a direct require is safe; kept lazy only for symmetry with _exec's minimal load surface.
+let _courierMod = null
+function _courier() {
+  if (!_courierMod) _courierMod = require('./courier_exec.js')
+  return _courierMod
+}
+
 // Run ONE command through the exec dumb-pipe and parse its JSON stdout. Mirrors the canonical
 // build_phase.js:43-64 `execJson` contract: the cheap haiku courier occasionally drops/garbles a
 // command's stdout even though it ran (live: a journal_entry.py leaf returned stdout:"" with ok:true,
@@ -237,11 +247,14 @@ const _WATCH_SCRIPT = [
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
 
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
+// _composeDispatchCommand: PURE composer of the exact shell command _runArgv dispatches — the
+// perl-alarm ceiling (unarmed) or the #309 background watchdog (armed), confined to cwd. Exported
+// (test-only) so the #341 real-seam detector can build the byte-faithful production command and drive
+// it through a REAL cheapest-model leaf without a fixture-injected courier (CONVENTIONS §12.2).
+function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
   const idleArmed = armIdle === true && Number(idleSeconds) > 0
-  let cmd
   if (idleArmed) {
     const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
     const poll = _pollFor(idle)
@@ -254,15 +267,35 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
     // No outer stdin redirect: the watchdog feeds the prompt to the (backgrounded) CLI itself via
     // `< "$in"` — a POSIX-sh async job's stdin is /dev/null unless explicitly redirected, so an outer
     // redirect would silently deliver an EMPTY prompt (code-001; live-verified 2026-07-09).
-    cmd = cwd ? `cd ${shq(cwd)} && ${inner}` : inner
-  } else {
-    const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-    cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+    return cwd ? `cd ${shq(cwd)} && ${inner}` : inner
   }
-  const res = await _exec([cmd])
-  const r0 = res && res[0]
-  if (!(r0 && r0.ok)) return { ok: false }
-  let out = (r0.stdout == null ? '' : String(r0.stdout))
+  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+  return cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+}
+
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  const cmd = _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle)
+  // #341: dispatch the reliability-critical engine CLI through the HARDENED courier discipline
+  // (superheroes:courier agentType + __SR_EXIT marker guard + dispatchMarked's retry/fallback chain),
+  // NOT the plain exec() dumb-pipe. A safety-trained cheapest-model leaf stochastically REFUSES an
+  // autonomous `cursor-agent --trust -f` write-watchdog and answers prose; the plain exec collapsed
+  // that refusal into `external-run-failed` (line 415), mis-blaming the ENGINE for a courier's
+  // decline (the a7bade9a escape: cursor 0/2 in-child while codex went 8/8). The marker protocol both
+  // (a) REDUCES the refusal (the lean dumb-pipe framing reads as infrastructure, not a suspicious
+  // dispatch) and (b) PROVES execution — a persistent missing `__SR_EXIT` marker means the shell
+  // never ran (a decline), surfaced here as {declined:true} carrying the leaf's refusal prose, which
+  // the caller journals as the honest `courier-declined` outcome instead of an engine failure.
+  let out
+  try {
+    out = await _courier().runCourierMarkedText('dispatch external CLI', cmd)
+  } catch (e) {
+    const c = _courier()
+    if (c.CourierTransportError && e instanceof c.CourierTransportError) {
+      return { ok: false, declined: true, reason: e.reason || 'courier-declined', answer: e.answer || '' }
+    }
+    throw e
+  }
   if (idleArmed) {
     // Strip the trailing control line and read the idle-kill verdict. The marker is OUR sentinel on its
     // own final line; match the LAST occurrence so any legitimate look-alike earlier in CLI output can't
@@ -302,7 +335,21 @@ async function _journalExternal(payload) {
       // `timeout` outcome (killed at the wall-clock ceiling) or a genuine CLI failure.
       stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
       idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
+      // #341: on a `courier-declined` outcome, carry a CLAMPED prefix of the leaf's refusal prose as
+      // honest reason-context (the courier hedged instead of running the CLI — the engine was never
+      // tried). Present only on the decline path; absent (null) on every other outcome. It is the
+      // cheap COURIER leaf's own prose (not engine stdout), clamped to a short prefix so no long or
+      // secret-bearing text lands in the audit line.
+      declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
       verify: payload.verify, outcome: payload.outcome })))
+}
+
+// #341: clamp the courier's refusal prose to a short single-line prefix for the courier-declined
+// journal reason-context. Collapses whitespace and truncates — never surfaces a long blob.
+function _declinePrefix(answer) {
+  const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
+  if (!s) return 'courier returned no execution marker'
+  return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
 
 // Scrub external-derived free-text (git stderr in a commit/dispatch-failure reason) BEFORE it enters
@@ -410,7 +457,26 @@ async function _dispatchExternalInner(o) {
     // limitSeconds bounds the perl-alarm ceiling (belt-and-suspenders with the JS race); idleSeconds +
     // armIdle arm the #309 byte-activity stall monitor (≤ ceiling). A monitor idle-kill returns
     // {stalled:true} -> outcome:'stalled' (distinct from the ceiling 'timeout'); the caller falls open.
-    const runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    // #341 COURIER DECLINE: the hardened courier proved (via a missing __SR_EXIT marker after its own
+    // retry/fallback chain) that the shell NEVER RAN — a safety-trained cheapest-model leaf refused
+    // the autonomous engine command and answered prose. The engine was NEVER TRIED, so this is NOT an
+    // `external-run-failed` engine failure (promise 4/5: never blame the engine for a courier's
+    // refusal). Journal it as the honest `courier-declined` outcome carrying the refusal prose, then
+    // retry ONCE through the hardened path (safe: the CLI never executed, so there are no partial
+    // side-effects to repeat). Journal BOTH attempts so the audit trail shows the decline count. On a
+    // second decline, fall open with reason `courier-declined` (the caller discards nothing new and
+    // falls open to Claude, exactly as any dispatch failure).
+    if (runRes && runRes.declined) {
+      await _journalExternal(Object.assign(_jbase(), { verify: null,
+        outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
+      runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+      if (runRes && runRes.declined) {
+        await _journalExternal(Object.assign(_jbase(), { verify: null,
+          outcome: 'courier-declined', declinePrefix: _declinePrefix(runRes.answer) }))
+        return { ok: false, reason: 'courier-declined', declined: true }
+      }
+    }
     if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
     if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
     const rawStdout = runRes.stdout
@@ -442,6 +508,12 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // #341: a fully-declined dispatch already journaled BOTH courier-declined attempts inline (above,
+  // in `run`) — the engine was never tried, so there is no ok/timeout/commit outcome to record here.
+  // Return the fall-open reason WITHOUT re-journaling (which would add a spurious third audit line for
+  // the same never-executed dispatch). The caller falls open to Claude exactly as for any failure.
+  if (parsed && parsed.declined) return { ok: false, reason: 'courier-declined' }
 
   // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
   // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
@@ -555,4 +627,7 @@ function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 // _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
 // external engine must have an explicit streams-when-piped verdict) — not a public seam.
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
-  _STREAMS_WHEN_PIPED, strictify }
+  _STREAMS_WHEN_PIPED, strictify,
+  // #341 test-only: the pure production command composer, exported so the real-seam detector
+  // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
+  _composeDispatchCommand }

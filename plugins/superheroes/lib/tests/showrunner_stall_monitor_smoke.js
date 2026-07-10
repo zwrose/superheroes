@@ -16,9 +16,13 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { execSync } = require('child_process')
+const { markedStdout } = require('./_marked_stdout.js')
 
 const logs = []
 global.log = (m) => logs.push(m)
+// #341: the CLI run rides the hardened marker courier (markedPromptFor + __SR_EXIT). A stubbed run
+// leaf returns a MARKER-carrying answer; the real-seam courier really runs the marked command (whose
+// wrapMarkedCommand tail emits __SR_EXIT naturally). Non-run exec leaves keep their bare-array shape.
 
 // pid-unique scratch dir (test isolation) — fake CLI scripts, child-pid receipts, and the (real) cwd.
 const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), `stall-smoke-${process.pid}-`))
@@ -62,8 +66,9 @@ const d = require('../engine_dispatch.js')
       if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--model', 'x', '-p', '--trust', '--output-format', 'stream-json']) }]
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      // the run command carries the watchdog (idle armed) — return a clean canned stdout (no marker ->
-      // treated as a completed run) so the dispatch reaches parse-result.
+      // the run command rides the hardened marker courier — return a MARKER-carrying canned stdout so
+      // the dispatch reads it as a completed run (no __SR_DISPATCH__ -> no idle-kill) and reaches parse-result.
+      if (prompt.includes('Execute this exact shell command')) return markedStdout('{}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     // Armed: cursor is a streaming engine, idleSeconds passed -> monitor armed, clamped ≤ ceiling.
@@ -96,6 +101,7 @@ const d = require('../engine_dispatch.js')
       if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('Execute this exact shell command')) return markedStdout('{}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review',
@@ -117,6 +123,7 @@ const d = require('../engine_dispatch.js')
       if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('Execute this exact shell command')) return markedStdout('{}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review',
@@ -143,6 +150,7 @@ const d = require('../engine_dispatch.js')
       if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['some-buffering-cli', '-']) }]
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('Execute this exact shell command')) return markedStdout('{}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }
     await d.dispatchExternal({ engine: 'buffered-engine', roleKind: 'review', effort: 'high', prompt: 'review',
@@ -175,7 +183,15 @@ const d = require('../engine_dispatch.js')
       }
       if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(fakeArgv) }]
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
-      // staging (base64 -d > file) and the run command (__SR_DISPATCH__): really run them in a shell.
+      // #341: the run command now rides the hardened marker courier (markedPromptFor: "Execute this
+      // exact shell command…\n\n<cmd>"). The command follows the blank line; wrapMarkedCommand already
+      // appended `2>&1; echo __SR_EXIT:$?`, so REALLY running it in a shell yields the __SR_EXIT marker
+      // (proving execution) alongside the watchdog's __SR_DISPATCH__ line — exactly the production seam.
+      if (prompt.includes('Execute this exact shell command')) {
+        const runCmd = prompt.slice(prompt.indexOf('\n\n') + 2)
+        return realExec(runCmd, 0).stdout
+      }
+      // staging (base64 -d > file): the plain exec() dumb-pipe (numbered list) — really run it in a shell.
       const cmds = extractCommands(prompt)
       return cmds.map((c, i) => realExec(c, i))
     }

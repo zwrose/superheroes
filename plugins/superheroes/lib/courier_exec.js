@@ -1,10 +1,15 @@
 let injectedAgent = null
 
 class CourierTransportError extends Error {
-  constructor(label, reason) {
+  constructor(label, reason, answer) {
     super(`courier transport failed after retry (${label}): ${reason}`)
     this.label = label
     this.reason = reason
+    // #341: the leaf's LAST raw answer (verbatim), so a caller that treats a persistent transport
+    // failure as a courier DECLINE (a safety-trained cheap leaf answering prose instead of running
+    // the command) can journal the refusal prose as honest reason-context — distinct from an engine
+    // failure. Empty string when no answer was produced (never null).
+    this.answer = answer == null ? '' : String(answer)
   }
 }
 
@@ -247,8 +252,10 @@ async function dispatchMarked(label, markedCmd) {
 async function runCourierMarkedText(label, command) {
   const markedCmd = wrapMarkedCommand(command)
   let last = 'empty stdout'
+  let lastAns = ''
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
+    lastAns = ans
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -257,7 +264,7 @@ async function runCourierMarkedText(label, command) {
     if (sliced.stdout.trim() !== '') { _recordRetry(label, attempt); return sliced.stdout }
     last = 'empty stdout'
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 
 // runCourierMarkedJson: runCourierJson semantics over the __SR_EXIT marker protocol — execution is
@@ -267,8 +274,10 @@ async function runCourierMarkedJson(label, command, opts) {
   const options = opts || {}
   const markedCmd = wrapMarkedCommand(command)
   let last = 'empty stdout'
+  let lastAns = ''
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
+    lastAns = ans
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -292,7 +301,7 @@ async function runCourierMarkedJson(label, command, opts) {
     _recordRetry(label, attempt)
     return parsed
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
@@ -368,4 +377,8 @@ module.exports = {
   setCourierAgent,
   courierRetryTotals,
   resetCourierMeter,
+  // #341: the production marker framing — exported so the real-seam detector (CONVENTIONS §12.2) can
+  // compose the exact prompt a courier leaf receives and drive it through a REAL cheapest-model agent.
+  wrapMarkedCommand,
+  markedPromptFor,
 }
