@@ -32,6 +32,12 @@ process, which only sees exported variables.
    environment flag the launcher sets on the child, so a nested invocation refuses without touching
    any state.
 
+   One exception to "stop": if you are the harness's OWN spawned driver child — the marker
+   `SUPERHEROES_ACCEPTANCE_CONTEXT` is set in your environment and your prompt hands you a stamped
+   `accept-harness-` work-item — this front door is not for you. Your protocol is the repo-local
+   **`acceptance-driver`** skill (issue #344): follow it instead of refusing outright, and never
+   start a second run from in here.
+
    ```bash
    python3 - <<'PY'
    import os, sys
