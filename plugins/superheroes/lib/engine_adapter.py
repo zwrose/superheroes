@@ -133,6 +133,27 @@ def _last_json_array(stdout):
     return _last_top_level_json(stdout, list)
 
 
+def _unwrap_stream_envelope(stdout):
+    """Unwrap a stream-json RESULT ENVELOPE before the role parsers scan for the leaf's
+    payload (#347). cursor-agent `--output-format stream-json` (the format the byte-activity
+    stall monitor NEEDS — a buffering format would run monitor-inert) wraps ALL leaf text in
+    line-delimited events; the final event is `{"type":"result","result":"<all leaf text as
+    ONE escaped string>",...}`. The leaf's real verdict/findings JSON therefore sits
+    JSON-escaped INSIDE that string — invisible to a top-level scan, which sees only the
+    envelope (no `ok` key -> build/fix coerced to a refusal; live: every in-child cursor
+    dispatch ever recorded, issue #347). When — and only when — the LAST top-level object is
+    such an envelope (`type=="result"`, a string `result`, and NOT itself a leaf verdict: no
+    `ok` key), return the inner text for re-scanning; otherwise return stdout unchanged
+    (codex output and native shapes are byte-identical through here). An error envelope whose
+    inner text carries no JSON still ends `unreadable` downstream — the honest fail
+    direction."""
+    obj = _last_json_object(stdout)
+    if (isinstance(obj, dict) and obj.get("type") == "result"
+            and isinstance(obj.get("result"), str) and "ok" not in obj):
+        return obj["result"]
+    return stdout
+
+
 def _scrub(text):
     if not isinstance(text, str) or not text:
         return text
@@ -185,6 +206,7 @@ def parse_result(engine, role_kind, stdout):
     defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
     scrubbed HERE (Secret-hygiene). Never raises."""
     try:
+        stdout = _unwrap_stream_envelope(stdout)   # #347: see the unwrap's docstring
         obj = _last_json_object(stdout)
         if role_kind == "review":
             findings = obj.get("findings") if isinstance(obj, dict) else None

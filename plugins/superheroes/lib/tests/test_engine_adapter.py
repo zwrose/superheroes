@@ -431,3 +431,82 @@ def test_engine_dispatch_timeout_expiry_contract_is_stated_in_dispatch_reference
     assert "reviewer" in text and "fixer" in text
     # the expiry contract: an expired slot is `unreadable`, routed to UFR-7
     assert "unreadable" in text and "UFR-7" in text
+
+
+# ---------------------------------------------------------------------------
+# #347: the stream-json RESULT-ENVELOPE unwrap. Real cursor-agent stream-json wraps ALL
+# leaf text inside the final result event as ONE escaped string — the leaf's verdict:
+# {"type":"result","result":"...\n```json\n{\"ok\":true,...}\n```\n\nSummary...","session_id":"..."}
+# A top-level scan sees only the envelope (no "ok" key), so before this unwrap every
+# in-child cursor build/fix parsed as a refusal (live: run accept-harness-84251c…, 2026-07-10).
+
+
+def _envelope(inner_text, **extra):
+    ev = {"type": "result", "subtype": "success", "is_error": False,
+          "duration_ms": 12345, "session_id": "0aae943d", "result": inner_text}
+    ev.update(extra)
+    return ('{"type":"system","subtype":"init","model":"Composer 2.5 Fast"}\n'
+            '{"type":"thinking","text":"..."}\n' + json.dumps(ev) + "\n")
+
+
+def test_parse_result_cursor_build_verdict_inside_stream_envelope():
+    # The live shape: verdict JSON in a fenced block INSIDE the envelope's result string,
+    # followed by a prose summary (exactly what Composer emitted in the 2026-07-10 run).
+    inner = ('Test failed as expected. Implementing the append.\n```json\n'
+             '{"ok":true,"signal":"ok","evidence":{"testFailed":true,"testPassed":true},'
+             '"deniedAction":null}\n```\n\n**Task 1 complete.** Summary of the TDD steps.')
+    res = EA.parse_result("cursor", "build", _envelope(inner))
+    assert res == {"ok": True, "signal": "ok",
+                   "evidence": {"testFailed": True, "testPassed": True}}
+
+
+def test_parse_result_cursor_fix_honest_refusal_inside_stream_envelope():
+    # An honest leaf refusal inside the envelope must SURVIVE as a refusal (#288 semantics
+    # through the unwrap) — never unreadable, never coerced ok.
+    inner = 'I cannot apply this plan.\n{"ok":false,"signal":"plan_wrong","evidence":{}}'
+    res = EA.parse_result("cursor", "fix", _envelope(inner))
+    assert res["ok"] is False and res["signal"] == "plan_wrong"
+
+
+def test_parse_result_cursor_review_findings_inside_stream_envelope():
+    inner = ('Reviewed the diff.\n{"findings":[{"severity":"Important","title":"t",'
+             '"file":"a.py","line":3,"body":"b","suggestion":"s"}]}\nDone.')
+    res = EA.parse_result("cursor", "review", _envelope(inner))
+    assert res["ok"] is True
+    assert res["findings"][0]["severity"] == "Important"
+
+
+def test_parse_result_error_envelope_with_no_inner_json_is_unreadable():
+    # An error envelope whose inner text carries no JSON parses unreadable — the honest
+    # fail direction (falls open / UFR-7), never a silent pass.
+    res = EA.parse_result("cursor", "build",
+                          _envelope("fatal: model quota exceeded", is_error=True, subtype="error"))
+    assert res == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_envelope_unwrap_tolerates_truncated_leading_noise():
+    # #347 bounded relay: the watchdog emits only the stdout TAIL, so the first line may be
+    # chopped mid-JSON. The noise-tolerant scan must still find the final envelope and unwrap it.
+    inner = '{"ok":true,"signal":"ok","evidence":{"testFailed":true,"testPassed":true}}'
+    chopped = 'l","text":"...chopped mid-event..."}\n' + _envelope(inner)
+    res = EA.parse_result("cursor", "build", chopped)
+    assert res["ok"] is True and res["signal"] == "ok"
+
+
+def test_parse_result_top_level_verdict_with_result_key_is_not_unwrapped():
+    # A leaf verdict that happens to carry a type/result-looking shape but HAS an "ok" key is
+    # the verdict itself — never unwrapped away.
+    stdout = json.dumps({"type": "result", "result": "prose", "ok": True, "signal": "ok",
+                         "evidence": {"testFailed": True, "testPassed": True}})
+    res = EA.parse_result("cursor", "build", stdout)
+    assert res["ok"] is True
+
+
+def test_parse_result_codex_shapes_are_byte_identical_through_the_unwrap():
+    # codex never emits the envelope shape — its parses must be unchanged by #347.
+    stdout = json.dumps({"findings": [{"severity": "Minor", "title": "t", "body": "b",
+                                       "suggestion": "s"}]})
+    assert EA.parse_result("codex", "review", stdout)["ok"] is True
+    verdict = json.dumps({"ok": True, "signal": "ok",
+                          "evidence": {"testFailed": True, "testPassed": True}})
+    assert EA.parse_result("codex", "build", verdict)["ok"] is True

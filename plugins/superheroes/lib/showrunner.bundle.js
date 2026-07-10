@@ -3889,7 +3889,7 @@ function _pollFor(idle) {
   return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
 }
 const _WATCH_SCRIPT = [
-  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; shift 6',
+  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; cap=$7; shift 7',
   'out="$base.$$.out"; err="$base.$$.err"',
   ': > "$out"; : > "$err"',
   'perl -e "$prog" "$c" "$@" < "$in" > "$out" 2> "$err" &',
@@ -3904,10 +3904,13 @@ const _WATCH_SCRIPT = [
   'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
   'done',
   'wait "$p" 2>/dev/null; ec=$?',
-  'cat "$out"',
-  'if [ "$killed" -eq 1 ] || [ "$ec" -ne 0 ]; then rm -f "$out"; else rm -f "$out" "$err"; fi',
-  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
+  'szf=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szf" ] || szf=0',
+  'if [ "$szf" -gt "$cap" ]; then trunc=1; tail -c "$cap" "$out"; else trunc=0; cat "$out"; fi',
+  'if [ "$trunc" -eq 0 ]; then rm -f "$out"; fi',
+  'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
+  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
 ].join('\n')
+const EMIT_TAIL_BYTES = 16000
 function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
@@ -3918,7 +3921,7 @@ function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeco
     const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
     const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
     const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
-      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${quotedArgv}`
+      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${EMIT_TAIL_BYTES} ${quotedArgv}`
     return cwd ? `cd ${shq(cwd)} && ${inner}` : inner
   }
   const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
@@ -3950,6 +3953,11 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
         return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
       }
+      if (verdict && String(verdict.truncated) === '1') {
+        return { ok: true, stdout: out, relay: { truncated: true,
+          outBytes: Number(verdict.outBytes) || null,
+          outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null } }
+      }
     }
   }
   return { ok: true, stdout: out }
@@ -3965,7 +3973,12 @@ async function _journalExternal(payload) {
       stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
       idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
       declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
-      verify: payload.verify, outcome: payload.outcome })))
+      verify: payload.verify, outcome: payload.outcome,
+      ...(payload.outputTruncated === true
+        ? { outputTruncated: true,
+            outBytes: payload.outBytes == null ? null : payload.outBytes,
+            outPath: payload.outPath == null ? null : payload.outPath }
+        : {}) })))
 }
 function _declinePrefix(answer) {
   const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
@@ -3991,10 +4004,11 @@ async function _dispatchExternalInner(o) {
   const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
   const stallMonitor = armIdle ? 'armed'
     : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
-  const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
+  const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
     model: (typeof model === 'string' && model) ? model : null,
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
-    stallMonitor, idleSeconds })
+    stallMonitor, idleSeconds },
+    relayMeta ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
   const isAuthor = (roleKind === 'author-plan')
   const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
@@ -4014,6 +4028,7 @@ async function _dispatchExternalInner(o) {
     if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
   }
   let resolvedArgv = null
+  let relayMeta = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -4049,6 +4064,7 @@ async function _dispatchExternalInner(o) {
       return priorDeclines.length ? { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
         : { ok: false, reason: 'external-run-failed' }
     }
+    if (runRes.relay) relayMeta = runRes.relay
     const rawStdout = runRes.stdout
     const rawPath = `/tmp/engine-${runId}.out`
     const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
@@ -4145,7 +4161,8 @@ function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
   _STREAMS_WHEN_PIPED, strictify,
   COURIER_DECLINED_OUTCOME,
-  _composeDispatchCommand }
+  _composeDispatchCommand,
+  EMIT_TAIL_BYTES }
 };
 __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel } = require('./review_panel_shell.js')

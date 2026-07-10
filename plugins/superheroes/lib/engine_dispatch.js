@@ -262,7 +262,7 @@ function _pollFor(idle) {
 //     fanning out reviewers that share workItem/roleKind/engine and hence a runId) each get a private
 //     capture pair, so one watchdog can never poll another's file (review finding premortem-001).
 const _WATCH_SCRIPT = [
-  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; shift 6',
+  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; cap=$7; shift 7',
   'out="$base.$$.out"; err="$base.$$.err"',
   ': > "$out"; : > "$err"',
   'perl -e "$prog" "$c" "$@" < "$in" > "$out" 2> "$err" &',
@@ -277,14 +277,31 @@ const _WATCH_SCRIPT = [
   'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
   'done',
   'wait "$p" 2>/dev/null; ec=$?',
-  'cat "$out"',
-  // Cleanup: the stdout capture is always consumed (cat above) so always remove it; the stderr capture
-  // is KEPT on any failure (idle-kill or non-zero exit) so the engine's own diagnostic survives for
-  // post-mortem on disk (never surfaced to parse-result — the journal outcome points here), and removed
-  // only on success (a clean run's stderr is noise; keeping every one would accumulate per dispatch).
-  'if [ "$killed" -eq 1 ] || [ "$ec" -ne 0 ]; then rm -f "$out"; else rm -f "$out" "$err"; fi',
-  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
+  // BOUNDED emission (#347): NEVER relay the full capture — a leaf harness persists any tool result
+  // past its size cap to a file and hands the leaf a pointer instead, destroying both the payload AND
+  // the trailing markers (live: cursor stream-json at 472KB/400KB; the PR-343 vet saw 37KB persist).
+  // Emit only the LAST $cap bytes: every parser scans for the LAST JSON value (engine_adapter's
+  // noise-tolerant last-object scan skips a chopped leading line), so the tail is sufficient by
+  // construction. The full stream is not lost — see retention below.
+  'szf=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szf" ] || szf=0',
+  'if [ "$szf" -gt "$cap" ]; then trunc=1; tail -c "$cap" "$out"; else trunc=0; cat "$out"; fi',
+  // Retention: a TRUNCATED stdout capture is kept on disk on every exit path (it is the only complete
+  // record of the engine run — post-mortem + receipts; the footer names its path); a fully-emitted one
+  // is consumed above so it is removed. The stderr capture is KEPT on any failure (idle-kill or
+  // non-zero exit) so the engine's own diagnostic survives for post-mortem (never surfaced to
+  // parse-result), and removed only on success (a clean run's stderr is noise).
+  'if [ "$trunc" -eq 0 ]; then rm -f "$out"; fi',
+  'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
+  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
 ].join('\n')
+
+// The emission cap for the watchdog's stdout relay (#347). Must sit WELL under the leaf harness's
+// persist-to-file threshold (observed: a 37KB tool result persisted in the PR-343 vet; 100KB+ always
+// persists) with margin for the __SR_DISPATCH__ footer, the __SR_EXIT marker line, and any leaf
+// framing around the answer. 16000 bytes carries every legitimate terminal payload we parse (a codex
+// findings object or a cursor result envelope — KBs, not hundreds of KBs) without ever approaching
+// the wall.
+const EMIT_TAIL_BYTES = 16000
 
 // _composeDispatchCommand: PURE composer of the exact shell command _runArgv dispatches — the
 // perl-alarm ceiling (unarmed) or the #309 background watchdog (armed), confined to cwd. Exported
@@ -302,7 +319,7 @@ function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeco
     const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
     const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
     const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
-      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${quotedArgv}`
+      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${EMIT_TAIL_BYTES} ${quotedArgv}`
     // No outer stdin redirect: the watchdog feeds the prompt to the (backgrounded) CLI itself via
     // `< "$in"` — a POSIX-sh async job's stdin is /dev/null unless explicitly redirected, so an outer
     // redirect would silently deliver an EMPTY prompt (code-001; live-verified 2026-07-09).
@@ -376,6 +393,14 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
         return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
       }
+      // #347 bounded-relay disclosure: the watchdog emitted only the stdout TAIL (the full capture
+      // stayed on disk at outPath). Surface the relay facts so the dispatch journal can disclose the
+      // truncation — a silently-shortened relay would be a hidden fact about what the parser saw.
+      if (verdict && String(verdict.truncated) === '1') {
+        return { ok: true, stdout: out, relay: { truncated: true,
+          outBytes: Number(verdict.outBytes) || null,
+          outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null } }
+      }
     }
   }
   return { ok: true, stdout: out }
@@ -409,7 +434,15 @@ async function _journalExternal(payload) {
       // cheap COURIER leaf's own prose (not engine stdout), clamped to a short prefix so no long or
       // secret-bearing text lands in the audit line.
       declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
-      verify: payload.verify, outcome: payload.outcome })))
+      verify: payload.verify, outcome: payload.outcome,
+      // #347: bounded-relay disclosure — present ONLY when the watchdog truncated the stdout relay
+      // (the parser saw the tail; outPath is the kept full capture). Spread so pre-#347 payloads
+      // stay byte-identical (no new always-null keys).
+      ...(payload.outputTruncated === true
+        ? { outputTruncated: true,
+            outBytes: payload.outBytes == null ? null : payload.outBytes,
+            outPath: payload.outPath == null ? null : payload.outPath }
+        : {}) })))
 }
 
 // #341: clamp the courier's refusal prose to a short single-line prefix for the courier-declined
@@ -461,10 +494,13 @@ async function _dispatchExternalInner(o) {
   // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
   // it is available. Each outcome-specific call overlays its own {verify, outcome}. `model` is a native
   // tier short-name or null (session inherit).
-  const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
+  const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
     model: (typeof model === 'string' && model) ? model : null,
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
-    stallMonitor, idleSeconds })
+    stallMonitor, idleSeconds },
+    // #347: disclose a bounded relay on EVERY outcome line for this dispatch — the parser saw only
+    // the stdout tail; the full capture's on-disk path is the receipt.
+    relayMeta ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
   // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
   // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
   // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
@@ -510,6 +546,9 @@ async function _dispatchExternalInner(o) {
   // build-argv resolves, so by the time the race's timeout branch fires (limitMs later, during the CLI
   // run) it already holds the real argv — a timeout journals the argv the CLI was killed while running.
   let resolvedArgv = null
+  // #347: relay facts from the LAST completed _runArgv (set synchronously inside `run`, read by
+  // _jbase at journal time — same hoisting pattern as resolvedArgv).
+  let relayMeta = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -576,6 +615,7 @@ async function _dispatchExternalInner(o) {
       return priorDeclines.length ? { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
         : { ok: false, reason: 'external-run-failed' }
     }
+    if (runRes.relay) relayMeta = runRes.relay
     const rawStdout = runRes.stdout
 
     // parse-result SCRUBS external free-text at the adapter boundary (Task 6); pass raw stdout by file.
@@ -742,4 +782,6 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   COURIER_DECLINED_OUTCOME,
   // #341 test-only: the pure production command composer, exported so the real-seam detector
   // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
-  _composeDispatchCommand }
+  _composeDispatchCommand,
+  // #347 test-only: the watchdog's stdout-relay cap, exported so the flood smoke pins the bound.
+  EMIT_TAIL_BYTES }
