@@ -35,12 +35,31 @@ import store_core
 _MEMORY_HEAD_LINES = 200
 _HEADER = "## Superheroes session bootstrap\n"
 
+# B6 (#315): per-assemble collector for GENUINE-FAILURE breadcrumbs (a read/git/probe ERROR, or a
+# source dropped for budget) — the ones an owner's agent must be able to read back. A plain ABSENCE
+# (no user CLAUDE.md, no MEMORY.md) is normal and is NOT collected. assemble() resets this at entry
+# and folds any collected failures into an in-block diagnostics line, so a half-bootstrapped session
+# leaves a breadcrumb IN the injected context (what the agent reads), not only in the hook's stderr.
+# Reasons carry source names, paths, and exception *types* only — never file contents (the same
+# diagnosable-not-leaky bar the stderr breadcrumb holds), so surfacing them in-block is safe.
+_FAILURES = []
+
 
 def _breadcrumb(source, reason):
     """One-line diagnostic to stderr (the hook log). Reason carries source names,
     paths, and exception *types* only — never file contents or secret values."""
     try:
         sys.stderr.write("superheroes bootstrap: %s — %s\n" % (source, reason))
+    except Exception:
+        pass
+
+
+def _note_failure(source, reason):
+    """A GENUINE bootstrap failure (an error, not a mere absence): breadcrumb it to stderr AND
+    record it for the in-block diagnostics line so the running agent can read it back (B6, #315)."""
+    _breadcrumb(source, reason)
+    try:
+        _FAILURES.append((source, reason))
     except Exception:
         pass
 
@@ -104,7 +123,7 @@ def _read_claude_chain(chain):
         try:
             out.append(_read_text(f))
         except Exception as exc:
-            _breadcrumb("Project CLAUDE.md", "read error for %s (%s)" % (f, type(exc).__name__))
+            _note_failure("Project CLAUDE.md", "read error for %s (%s)" % (f, type(exc).__name__))
     return "\n\n".join(t for t in out if t).rstrip("\n")
 
 
@@ -127,7 +146,7 @@ def user_memory():
     try:
         return _read_text(path).rstrip("\n")
     except Exception as exc:
-        _breadcrumb("User CLAUDE.md", "read error (%s)" % type(exc).__name__)
+        _note_failure("User CLAUDE.md", "read error (%s)" % type(exc).__name__)
         return ""
 
 
@@ -140,12 +159,12 @@ def env_block(cwd):
     try:
         parts.append("Today's date: %s" % datetime.date.today().isoformat())
     except Exception as exc:
-        _breadcrumb("Environment", "date unavailable (%s)" % type(exc).__name__)
+        _note_failure("Environment", "date unavailable (%s)" % type(exc).__name__)
     try:
         email = store_core.run_git(cwd or ".", "config", "user.email")
     except Exception as exc:
         email = None
-        _breadcrumb("Environment", "git config user.email errored (%s)" % type(exc).__name__)
+        _note_failure("Environment", "git config user.email errored (%s)" % type(exc).__name__)
     if email:
         parts.append("Git user email: %s" % email)
     else:
@@ -190,7 +209,7 @@ def _main_repo_root(cwd):
                 return os.path.dirname(gitdir)
             return gitdir
     except Exception as exc:
-        _breadcrumb("Auto-memory (MEMORY.md head)", "gitdir resolve errored (%s)" % type(exc).__name__)
+        _note_failure("Auto-memory (MEMORY.md head)", "gitdir resolve errored (%s)" % type(exc).__name__)
     return os.environ.get("CLAUDE_PROJECT_DIR") or os.path.abspath(cwd or ".")
 
 
@@ -219,7 +238,7 @@ def _read_memory_head(path):
                 lines.append(line)
         return "".join(lines).rstrip("\n")
     except Exception as exc:
-        _breadcrumb("Auto-memory (MEMORY.md head)", "read error (%s)" % type(exc).__name__)
+        _note_failure("Auto-memory (MEMORY.md head)", "read error (%s)" % type(exc).__name__)
         return ""
 
 
@@ -229,7 +248,7 @@ def auto_memory_head(cwd, transcript_path):
     try:
         path = _memory_md_path(cwd, transcript_path)
     except Exception as exc:
-        _breadcrumb("Auto-memory (MEMORY.md head)", "path resolve errored (%s)" % type(exc).__name__)
+        _note_failure("Auto-memory (MEMORY.md head)", "path resolve errored (%s)" % type(exc).__name__)
         return ""
     return _read_memory_head(path)
 
@@ -253,7 +272,7 @@ def review_discipline(cwd, plugin_root):
             verdict = mode_registry.evidence_verdict(mode_registry.hero_evidence(cwd))
             calibrated = verdict != "none"
     except Exception as exc:
-        _breadcrumb("Review discipline", "calibration probe errored (%s)" % type(exc).__name__)
+        _note_failure("Review discipline", "calibration probe errored (%s)" % type(exc).__name__)
         return ""
     if not calibrated:
         return ""
@@ -281,7 +300,13 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
-    (finding C2)."""
+    (finding C2).
+
+    B6 (#315): any GENUINE-failure breadcrumb collected during this assemble (a read/git/probe
+    ERROR, or a budget drop) is also folded into an in-block "bootstrap diagnostics" line, so a
+    half-bootstrapped session leaves a breadcrumb the running agent can read back — not only in the
+    hook's stderr (which an owner's agent cannot see)."""
+    del _FAILURES[:]                                  # reset the per-assemble failure collector
     try:
         # Resolve the multi-call source locations ONCE and reuse them for both the
         # section text and the _Rec.hint, so the Auto-memory git resolution
@@ -292,7 +317,7 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
         try:
             mem_path = _memory_md_path(cwd, transcript_path)
         except Exception as exc:
-            _breadcrumb("Auto-memory (MEMORY.md head)", "path resolve errored (%s)" % type(exc).__name__)
+            _note_failure("Auto-memory (MEMORY.md head)", "path resolve errored (%s)" % type(exc).__name__)
             mem_path = None
         records = [
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
@@ -309,8 +334,8 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
             _Rec("Auto-memory (MEMORY.md head)", _read_memory_head(mem_path), mem_path),
         ]
     except Exception as exc:
-        _breadcrumb("assemble", "source gather errored (%s)" % type(exc).__name__)
-        return _HEADER
+        _note_failure("assemble", "source gather errored (%s)" % type(exc).__name__)
+        return "".join([_HEADER] + _diagnostics_lines()).rstrip("\n") + "\n"
 
     out = [_HEADER]
     running = len(_HEADER)
@@ -341,6 +366,19 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
         out.append("\n…(%d source(s) omitted for space: %s — at %s)\n"
                    % (len(omitted), names, paths))
         for r in omitted:
-            _breadcrumb(r.name, "omitted for space (budget=%d) at %s" % (char_budget, r.hint or "n/a"))
+            _note_failure(r.name, "omitted for space (budget=%d) at %s" % (char_budget, r.hint or "n/a"))
 
+    out += _diagnostics_lines()
     return "".join(out).rstrip("\n") + "\n"
+
+
+def _diagnostics_lines():
+    """B6 (#315): render the collected genuine-failure breadcrumbs as an in-block diagnostics line
+    (source names + reasons only — never file contents). '' (no lines) when nothing failed, so a
+    clean bootstrap is byte-identical to before."""
+    if not _FAILURES:
+        return []
+    items = "; ".join("%s: %s" % (src, reason) for src, reason in _FAILURES)
+    return ["\n### Bootstrap diagnostics\n",
+            "Some bootstrap sources did not load fully (names/reasons only, no contents): "
+            + items + "\n"]

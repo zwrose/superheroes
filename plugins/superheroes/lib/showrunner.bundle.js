@@ -1824,6 +1824,30 @@ class CourierTransportError extends Error {
   }
 }
 function setCourierAgent(fn) { injectedAgent = fn }
+function _courierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  if (!g.__SR_COURIER || typeof g.__SR_COURIER !== 'object') g.__SR_COURIER = { retried: 0, byLabel: {} }
+  if (!g.__SR_COURIER.byLabel) g.__SR_COURIER.byLabel = {}
+  return g.__SR_COURIER
+}
+function _recordRetry(label, attempt) {
+  if (!(attempt > 0)) return
+  try {
+    const s = _courierMeter()
+    s.retried += 1
+    const key = label || 'unknown'
+    s.byLabel[key] = (s.byLabel[key] || 0) + 1
+  } catch (_) { /* meter is best-effort */ }
+}
+function courierRetryTotals() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  const s = (g.__SR_COURIER && typeof g.__SR_COURIER === 'object') ? g.__SR_COURIER : {}
+  return { retried: s.retried || 0, byLabel: Object.assign({}, s.byLabel || {}) }
+}
+function resetCourierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  g.__SR_COURIER = { retried: 0, byLabel: {} }
+}
 function currentAgent() {
   if (injectedAgent) return injectedAgent
   const root = typeof globalThis !== 'undefined' ? globalThis : undefined
@@ -1961,7 +1985,7 @@ async function runCourierMarkedText(label, command) {
       continue
     }
     const sliced = markerSliceStdout(ans)
-    if (sliced.stdout.trim() !== '') return sliced.stdout
+    if (sliced.stdout.trim() !== '') { _recordRetry(label, attempt); return sliced.stdout }
     last = 'empty stdout'
   }
   throw new CourierTransportError(label, last)
@@ -1986,12 +2010,13 @@ async function runCourierMarkedJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
   throw new CourierTransportError(label, last)
@@ -2001,10 +2026,11 @@ async function runCourierText(label, command) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
     const out = stdoutOf(raw)
-    if (out.trim() !== '') return out
+    if (out.trim() !== '') { _recordRetry(label, attempt); return out }
     last = 'empty stdout'
   }
   throw new CourierTransportError(label, last)
@@ -2017,6 +2043,7 @@ async function runCourierJson(label, command, opts) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }
     if (out.trim() === '') {
@@ -2028,12 +2055,13 @@ async function runCourierJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
   throw new CourierTransportError(label, last)
@@ -2056,6 +2084,8 @@ module.exports = {
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
+  courierRetryTotals,
+  resetCourierMeter,
 }
 };
 __modules["pr_comment_scrub"] = function (module, exports, require) {
@@ -7173,9 +7203,11 @@ async function postReadout(workItem, pr, args) {
   const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
   const termArg = args.terminal ? ` --terminal ${shq(args.terminal)}` : ''
   const costArg = args.costBody ? ` --cost-payload ${shq(JSON.stringify(args.costBody))}` : ''
+  const retries = (typeof courier.courierRetryTotals === 'function') ? courier.courierRetryTotals() : null
+  const retriesArg = (retries && retries.retried > 0) ? ` --courier-retries ${shq(JSON.stringify(retries))}` : ''
   const cmd = args.ctx
-    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg} --ctx ${shq(JSON.stringify(args.ctx))}`
-    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}`
+    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg}${retriesArg} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}${retriesArg}`
   try {
     return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
   } catch (_e) {

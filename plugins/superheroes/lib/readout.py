@@ -46,6 +46,13 @@ def build_readout(ctx):
     if ctx.get("dev_url"):
         lines.append("- **Live dev server:** %s" % ctx["dev_url"])
     lines.append("- **CI:** %s" % ctx.get("ci_status", "CI not detected"))
+    # B5 (#315) disclosure: surface aggregate courier retry pressure (a courier that needed >1 attempt
+    # reads identically to a first-try success until it becomes an outright failure). Structured,
+    # Workhorse-authored counts (not CI/env free-text), so no scrub. Omitted when there were none.
+    retries = ctx.get("courierRetries")
+    if isinstance(retries, dict) and isinstance(retries.get("retried"), int) and retries["retried"] > 0:
+        lines.append("- **Couriers:** %d retried (dispatches that needed more than one attempt)"
+                     % retries["retried"])
     if ctx.get("built_vs_acceptance"):
         lines += ["", "### Built vs. acceptance", _safe(ctx["built_vs_acceptance"])]
     if ctx.get("test_results"):

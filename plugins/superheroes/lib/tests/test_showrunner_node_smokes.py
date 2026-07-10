@@ -8,6 +8,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
 
 SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/courier_exec_smoke.js",
+    # B5 (#315): the courier retry meter counts a dispatch that needed >1 attempt (retry pressure).
+    "plugins/superheroes/lib/tests/courier_retry_meter_smoke.js",
     "plugins/superheroes/lib/tests/test_pilot_deciders_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",

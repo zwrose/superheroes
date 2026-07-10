@@ -3185,9 +3185,14 @@ async function postReadout(workItem, pr, args) {
   // ship rides no new courier leaf (#118). Both are best-effort inside readout_post.py.
   const termArg = args.terminal ? ` --terminal ${shq(args.terminal)}` : ''
   const costArg = args.costBody ? ` --cost-payload ${shq(JSON.stringify(args.costBody))}` : ''
+  // B5 (#315): fold the run's courier retry pressure into the terminal hand-back leaf (no new leaf —
+  // #118). readout_post journals a `notify` and renders a "couriers: N retried" line so a courier that
+  // needed >1 attempt is visible before it becomes an outright failure. Omitted entirely when N == 0.
+  const retries = (typeof courier.courierRetryTotals === 'function') ? courier.courierRetryTotals() : null
+  const retriesArg = (retries && retries.retried > 0) ? ` --courier-retries ${shq(JSON.stringify(retries))}` : ''
   const cmd = args.ctx
-    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg} --ctx ${shq(JSON.stringify(args.ctx))}`
-    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}`
+    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg}${retriesArg} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}${retriesArg}`
   try {
     return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
   } catch (_e) {

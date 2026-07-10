@@ -10,6 +10,44 @@ class CourierTransportError extends Error {
 
 function setCourierAgent(fn) { injectedAgent = fn }
 
+// B5 (#315) courier retry meter — a per-run, in-memory accumulator (globalThis.__SR_COURIER, mirroring
+// cost_meter.js). Every courier loop below records ONE retry when a dispatch finally returns a usable
+// answer after >1 attempt (attempt index > 0). A courier that needed 3 tries otherwise reads identically
+// to one that worked first try, so retry pressure is invisible until it becomes an outright failure; the
+// terminal readout leaf reads courierRetryTotals() to disclose "couriers: N retried" + a journal note.
+function _courierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  if (!g.__SR_COURIER || typeof g.__SR_COURIER !== 'object') g.__SR_COURIER = { retried: 0, byLabel: {} }
+  if (!g.__SR_COURIER.byLabel) g.__SR_COURIER.byLabel = {}
+  return g.__SR_COURIER
+}
+
+// _recordRetry(label, attempt): attempt is the 0-based loop index that finally produced a usable
+// answer; >0 means the dispatch needed a retry. A no-op on the first-try success (attempt 0), so a
+// clean run records nothing. Never throws (disclosure must not derail a courier dispatch).
+function _recordRetry(label, attempt) {
+  if (!(attempt > 0)) return
+  try {
+    const s = _courierMeter()
+    s.retried += 1
+    const key = label || 'unknown'
+    s.byLabel[key] = (s.byLabel[key] || 0) + 1
+  } catch (_) { /* meter is best-effort */ }
+}
+
+// courierRetryTotals(): { retried, byLabel } snapshot for the readout/journal. Never throws.
+function courierRetryTotals() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  const s = (g.__SR_COURIER && typeof g.__SR_COURIER === 'object') ? g.__SR_COURIER : {}
+  return { retried: s.retried || 0, byLabel: Object.assign({}, s.byLabel || {}) }
+}
+
+// resetCourierMeter(): clear the accumulator (new-run guard / test helper).
+function resetCourierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  g.__SR_COURIER = { retried: 0, byLabel: {} }
+}
+
 function currentAgent() {
   if (injectedAgent) return injectedAgent
   const root = typeof globalThis !== 'undefined' ? globalThis : undefined
@@ -216,7 +254,7 @@ async function runCourierMarkedText(label, command) {
       continue
     }
     const sliced = markerSliceStdout(ans)
-    if (sliced.stdout.trim() !== '') return sliced.stdout
+    if (sliced.stdout.trim() !== '') { _recordRetry(label, attempt); return sliced.stdout }
     last = 'empty stdout'
   }
   throw new CourierTransportError(label, last)
@@ -245,12 +283,13 @@ async function runCourierMarkedJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
   throw new CourierTransportError(label, last)
@@ -264,10 +303,11 @@ async function runCourierText(label, command) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
     const out = stdoutOf(raw)
-    if (out.trim() !== '') return out
+    if (out.trim() !== '') { _recordRetry(label, attempt); return out }
     last = 'empty stdout'
   }
   throw new CourierTransportError(label, last)
@@ -281,6 +321,7 @@ async function runCourierJson(label, command, opts) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }
     if (out.trim() === '') {
@@ -294,12 +335,13 @@ async function runCourierJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
   throw new CourierTransportError(label, last)
@@ -324,4 +366,6 @@ module.exports = {
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
+  courierRetryTotals,
+  resetCourierMeter,
 }
