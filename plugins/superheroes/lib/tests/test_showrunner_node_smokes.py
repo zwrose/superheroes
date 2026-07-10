@@ -131,6 +131,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_denial_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
+    # #357: the worker output-contract drift guard (build + both external fix prompts share the tail).
+    "plugins/superheroes/lib/tests/build_phase_fix_contract_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
     "plugins/superheroes/lib/tests/showrunner_base_smoke.js",
     # FIX A: resolveTarget seam targets build worktree + null-resolver parks (never reviews root).
