@@ -152,6 +152,11 @@ SHOWRUNNER_SMOKES = [
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # #341: the engine CLI dispatch rides the HARDENED marker courier — a real cheapest-model claude
+    # leaf must actually RUN the composed cursor build watchdog command (answer carries __SR_EXIT)
+    # rather than declining with prose. LIVE-GATED (SUPERHEROES_LIVE_COURIER=1): a no-op SKIP in CI
+    # (its composition assertions still run); the live round-trip receipt rides the PR body (§12.2).
+    "plugins/superheroes/lib/tests/showrunner_engine_dispatch_realseam_smoke.js",
     # #309: the byte-activity stall monitor paired with the high ceiling — command shape (setpgrp
     # group-kill + byte-growth watchdog, monitor ≤ ceiling), armed/unarmed/inert journal states, and a
     # REAL-seam run of a fake CLI (stall -> outcome:stalled + process-group death; steady emit -> ok).

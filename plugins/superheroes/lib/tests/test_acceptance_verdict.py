@@ -1,7 +1,23 @@
 # plugins/superheroes/lib/tests/test_acceptance_verdict.py
-import os, sys
+import os, subprocess, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import acceptance_verdict as v
+
+_LIB = os.path.join(os.path.dirname(__file__), "..")
+
+
+def test_courier_declined_token_matches_js_producer_no_drift():
+    # #341 / CONVENTIONS §11.2 drift guard: the `courier-declined` outcome token is a cross-boundary
+    # contract — engine_dispatch.js emits it into the external_dispatch journal and acceptance_verdict.py
+    # must recognize it EXACTLY. Read the JS producer's home (the exported const) and assert it equals the
+    # Python consumer's home; a rename on either side (which would fail-CLOSED but degrade the readout
+    # phrasing) fails here loudly instead.
+    js_token = subprocess.run(
+        ["node", "-e", "process.stdout.write(require('./engine_dispatch.js').COURIER_DECLINED_OUTCOME)"],
+        cwd=_LIB, text=True, capture_output=True, timeout=30).stdout.strip()
+    assert js_token == v.COURIER_DECLINED_OUTCOME == "courier-declined", (
+        "courier-declined token drift: engine_dispatch.js=%r acceptance_verdict.py=%r"
+        % (js_token, v.COURIER_DECLINED_OUTCOME))
 
 # These phase names are arbitrary self-consistent verdict-logic inputs; the real
 # pipeline phase list is read from showrunner.js via acceptance_phases.
@@ -81,20 +97,34 @@ def test_tally_counts_ok_failed_by_engine_and_reasons():
               _dispatch("cursor", "engine-unavailable", "build"),
               {"type": "phase_record", "payload": {"phase": "review"}}]  # non-dispatch ignored
     t = v.tally_external_dispatches(events)
-    assert t["ok"] == 1 and t["failed"] == 2
-    assert t["by_engine"] == {"codex": {"ok": 1, "total": 2}, "cursor": {"ok": 0, "total": 1}}
+    assert t["ok"] == 1 and t["failed"] == 2 and t["declined"] == 0
+    assert t["by_engine"] == {"codex": {"ok": 1, "total": 2, "declined": 0},
+                              "cursor": {"ok": 0, "total": 1, "declined": 0}}
     assert t["acceptable_reasons"] == ["engine-unavailable"]   # not counted as a failure
 
 
 def test_tally_never_raises_on_garbage():
-    assert v.tally_external_dispatches(None) == {"ok": 0, "failed": 0, "by_engine": {},
-                                                 "acceptable_reasons": []}
+    assert v.tally_external_dispatches(None) == {"ok": 0, "failed": 0, "declined": 0,
+                                                 "by_engine": {}, "acceptable_reasons": []}
     # Two malformed external_dispatch events (no payload / non-dict payload) each read as an
     # unnamed "external" engine with a None (=> failed) outcome; non-dispatch garbage is skipped.
     assert v.tally_external_dispatches([None, "x", {"type": "external_dispatch"},
                                         {"type": "external_dispatch", "payload": "nope"}]) == \
-        {"ok": 0, "failed": 2, "by_engine": {"external": {"ok": 0, "total": 2}},
+        {"ok": 0, "failed": 2, "declined": 0,
+         "by_engine": {"external": {"ok": 0, "total": 2, "declined": 0}},
          "acceptable_reasons": []}
+
+
+def test_tally_courier_declined_is_neither_attempt_nor_excuse():
+    # #341: courier-declined is its own count — NOT a genuine attempt (not in `total`), NOT a
+    # failure, NOT an acceptable reason. An engine seen only via courier-declines has zero attempts
+    # and zero oks (surfaced per engine as `declined`).
+    events = [_dispatch("cursor", "courier-declined", "build"),
+              _dispatch("cursor", "courier-declined", "build")]
+    t = v.tally_external_dispatches(events)
+    assert t["ok"] == 0 and t["failed"] == 0 and t["declined"] == 2
+    assert t["by_engine"] == {"cursor": {"ok": 0, "total": 0, "declined": 2}}
+    assert t["acceptable_reasons"] == []
 
 
 def _external_pass(**over):
@@ -114,10 +144,23 @@ def test_external_calibration_absent_ignores_engine_facts_backward_compat():
     assert v.decide(f)["verdict"] == "pass"
 
 
-def test_external_with_one_ok_dispatch_passes():
+def test_external_every_engine_ok_passes():
+    # Every engine with events shows >=1 ok -> pass (per-engine authenticity, #341).
+    f = _external_pass(external_dispatch_tally=v.tally_external_dispatches(
+        [_dispatch("codex", "ok"), _dispatch("cursor", "ok", "build")]))
+    assert v.decide(f)["verdict"] == "pass"
+
+
+def test_external_one_ok_does_not_excuse_a_co_tenant_failure_per_engine():
+    # #341 core: a co-tenant engine's success no longer globally excuses another engine's total
+    # failure. codex 1/1 ok + cursor 0/1 failed -> FAIL naming cursor (regardless of codex's ok).
+    # This is the exact 2026-07-10 a7bade9a asymmetry the fix closes.
     f = _external_pass(external_dispatch_tally=v.tally_external_dispatches(
         [_dispatch("codex", "ok"), _dispatch("cursor", "timeout", "build")]))
-    assert v.decide(f)["verdict"] == "pass"
+    r = v.decide(f)
+    assert r["verdict"] == "fail"
+    assert "cursor 0/1" in r["reason"] and "codex" not in r["reason"]
+    assert "never authentically dispatched" in r["reason"]
 
 
 def test_external_all_failed_is_fail_naming_the_tallies():
@@ -127,7 +170,29 @@ def test_external_all_failed_is_fail_naming_the_tallies():
     r = v.decide(f)
     assert r["verdict"] == "fail"
     assert "codex 0/8" in r["reason"] and "cursor 0/1" in r["reason"]
-    assert "failed every dispatch" in r["reason"]
+    assert "never authentically dispatched" in r["reason"]
+
+
+def test_external_courier_declined_only_engine_is_fail_naming_the_count():
+    # #341: an engine seen only via courier-declines has zero attempts and zero oks — the engine was
+    # never tried (the cheap courier refused). It must FAIL (not silently pass), and the FAIL reason
+    # names the courier-declined count. Even alongside a co-tenant engine that went 8/8 ok.
+    f = _external_pass(external_dispatch_tally=v.tally_external_dispatches(
+        [_dispatch("codex", "ok") for _ in range(8)]
+        + [_dispatch("cursor", "courier-declined", "build") for _ in range(2)]))
+    r = v.decide(f)
+    assert r["verdict"] == "fail"
+    assert "cursor 0/0 (2 courier-declined)" in r["reason"]
+    assert "codex" not in r["reason"]  # the 8/8-ok co-tenant is not blamed
+
+
+def test_external_engine_authz_denied_only_plus_co_tenant_ok_passes():
+    # #341: engine B's activity is ONLY an acceptable fall-open (authz-denied) while engine A is 8/8
+    # ok -> pass. B never entered by_engine, so it is excused by absence; A is authentic.
+    f = _external_pass(external_dispatch_tally=v.tally_external_dispatches(
+        [_dispatch("codex", "ok") for _ in range(8)]
+        + [_dispatch("cursor", "authz-denied", "build")]))
+    assert v.decide(f)["verdict"] == "pass"
 
 
 def test_external_zero_events_is_fail_silent_fallopen():
@@ -178,9 +243,23 @@ def test_0_11_0_journal_shape_9_failed_dispatches_is_fail():
     events = [_dispatch("cursor", "commit-failed", "build")] + \
              [_dispatch("codex", "unreadable") for _ in range(8)]
     tally = v.tally_external_dispatches(events)
-    assert tally["ok"] == 0 and tally["by_engine"] == {"cursor": {"ok": 0, "total": 1},
-                                                       "codex": {"ok": 0, "total": 8}}
+    assert tally["ok"] == 0 and tally["by_engine"] == {
+        "cursor": {"ok": 0, "total": 1, "declined": 0},
+        "codex": {"ok": 0, "total": 8, "declined": 0}}
     f = _external_pass(external_dispatch_tally=tally)
     r = v.decide(f)
     assert r["verdict"] == "fail"
     assert "codex 0/8" in r["reason"] and "cursor 0/1" in r["reason"]
+
+
+def test_2026_07_10_a7bade9a_journal_shape_cursor_0_2_codex_8_8_is_fail():
+    # The exact 2026-07-10 a7bade9a acceptance journal replayed as a fixture (#341): codex went 8/8
+    # ok while both cursor build dispatches failed (0/2). Under the OLD global >=1-ok gate this PASSED
+    # (codex's 8 oks). Under the per-engine gate it must FAIL naming cursor — and NOT blame codex.
+    events = [_dispatch("codex", "ok") for _ in range(8)] + \
+             [_dispatch("cursor", "external-run-failed", "build") for _ in range(2)]
+    tally = v.tally_external_dispatches(events)
+    assert tally["ok"] == 8 and tally["by_engine"]["cursor"] == {"ok": 0, "total": 2, "declined": 0}
+    r = v.decide(_external_pass(external_dispatch_tally=tally))
+    assert r["verdict"] == "fail"
+    assert "cursor 0/2" in r["reason"] and "codex" not in r["reason"]

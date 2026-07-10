@@ -13,6 +13,7 @@ const assert = require('assert')
 const fs = require('fs')
 const path = require('path')
 const { execSync } = require('child_process')
+const { markedStdout } = require('./_marked_stdout.js')
 const d = require('../engine_dispatch.js')
 const guard = require('./structured_output_schema_guard.js')
 const strictify = d.strictify
@@ -129,7 +130,8 @@ const reviewRoutes = [
   ['engine_adapter.py build-argv', JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '--output-schema', '/tmp/x', '-'])],
   ['engine_adapter.py parse-result', JSON.stringify({ ok: true, findings: [] })],
   ['journal_entry.py', JSON.stringify({ ok: true })],
-  ['--sandbox', '{"findings":[]}'],
+  // #341: the codex CLI run rides the hardened marker courier — the run leaf must carry __SR_EXIT.
+  ['--sandbox', markedStdout('{"findings":[]}')],
 ]
 
 // A schema with an OPTIONAL object property + an OPTIONAL enum inside an array item — the shapes the
@@ -180,8 +182,9 @@ const STAGE_SCHEMA = {
     ['engine_adapter.py build-argv', JSON.stringify(['cursor-agent', '--model', 'x', '-p', '--trust', '--mode', 'plan', '--output-format', 'stream-json'])],
     ['engine_adapter.py parse-result', JSON.stringify({ ok: true, findings: [] })],
     ['journal_entry.py', JSON.stringify({ ok: true })],
-    ['--output-format', '{"findings":[]}'],
-    ['--trust', '{"findings":[]}'],
+    // #341: the cursor CLI run rides the hardened marker courier — the run leaf must carry __SR_EXIT.
+    ['--output-format', markedStdout('{"findings":[]}')],
+    ['--trust', markedStdout('{"findings":[]}')],
   ])
   await d.dispatchExternal({
     engine: 'cursor', roleKind: 'review', effort: 'high', prompt: 'review please',

@@ -19,6 +19,13 @@ const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable
 // Both current engines stream, so both arm the monitor.
 const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 
+// #341: the courier-declined outcome token — a cross-boundary contract (this JS producer writes it into
+// the external_dispatch journal; acceptance_verdict.py's COURIER_DECLINED_OUTCOME must match it exactly
+// to classify it as neither-attempt-nor-excuse). Single JS home + exported so a drift guard asserts the
+// two homes agree (CONVENTIONS §11.2). Fail-closed if they ever diverge: an unrecognized token lands in
+// acceptance_verdict's generic `failed` bucket, so a decline-only engine still fails the gate.
+const COURIER_DECLINED_OUTCOME = 'courier-declined'
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
@@ -121,6 +128,16 @@ function _exec(commands) {
   return _execFn(commands)
 }
 
+// #341: the HARDENED courier discipline (superheroes:courier agentType + __SR_EXIT marker guard +
+// dispatchMarked retry/fallback chain) — reused, not reinvented, for the reliability-critical engine
+// CLI dispatch. courier_exec has no cyclic dependency on showrunner (it is a standalone leaf helper),
+// so a direct require is safe; kept lazy only for symmetry with _exec's minimal load surface.
+let _courierMod = null
+function _courier() {
+  if (!_courierMod) _courierMod = require('./courier_exec.js')
+  return _courierMod
+}
+
 // Run ONE command through the exec dumb-pipe and parse its JSON stdout. Mirrors the canonical
 // build_phase.js:43-64 `execJson` contract: the cheap haiku courier occasionally drops/garbles a
 // command's stdout even though it ran (live: a journal_entry.py leaf returned stdout:"" with ok:true,
@@ -142,6 +159,38 @@ async function _execJson(cmd) {
     // exec-level failure or empty/garbled -> retry once, then give up
   }
   return null
+}
+
+// #343: execution-evidence probe — the independent, on-disk corroborator for a write-role dispatch
+// whose courier answer carried no execution marker. Marker absence does NOT prove the engine never ran
+// (a leaf can execute the command and answer with a file-pointer sentence when the output is huge —
+// live-observed in the PR-343 vet), but the disk can't lie. THREE signals, any one of which means the
+// engine may have executed (delta-review premortem-001/code-001/code-002/premortem-002):
+//   1. uncommitted edits (`git status --porcelain` count > 0) — the normal engine-edited shape;
+//   2. HEAD moved off preSha — an engine that SELF-COMMITTED reads porcelain-clean (the adapter's own
+//      commit fold anticipates stray engine commits), so cleanliness alone would retry on top of a
+//      committed attempt;
+//   3. watchdog capture files exist (`<captureBase>.*`) — the armed watchdog's first act creates them
+//      and a clean SUCCESS removes them, so their presence means the run STARTED and either failed or
+//      is still running (an orphaned CLI whose leaf died) — either way, executed.
+// The probe answer is SENTINEL-PREFIXED and POSITIVE ("__SR_PROBE__ <edits> <head> <captures>"): a
+// clean verdict must be the explicit shape, so the exec courier's known drop (ok:true, empty stdout —
+// see _execJson) can never impersonate "clean" and green-light a double execution. Any probe failure,
+// drop, or garble returns true — fail toward "may have executed": the cost of a wrong true is one lost
+// retry (fall open, UFR-2 resets), a wrong false is a DOUBLE-EXECUTED write. Residuals (accepted,
+// fail-direction safe): a pre-dirty worktree or stale same-runId capture file loses the retry, never
+// double-executes — build worktrees are clean at dispatch and capture files are per-sh-pid.
+async function _executionEvidence(wt, preSha, captureBase) {
+  const cmd = `printf '__SR_PROBE__ %s %s %s\\n' ` +
+    `"$(git -C ${shq(wt)} status --porcelain | wc -l | tr -d ' ')" ` +
+    `"$(git -C ${shq(wt)} rev-parse HEAD)" ` +
+    `"$(ls ${shq(captureBase)}.* 2>/dev/null | wc -l | tr -d ' ')"`
+  const res = await _exec([cmd])
+  const r0 = res && res[0]
+  if (!(r0 && r0.ok)) return true
+  const m = String(r0.stdout == null ? '' : r0.stdout).match(/__SR_PROBE__ (\d+) (\S+) (\d+)/)
+  if (!m) return true
+  return Number(m[1]) > 0 || (preSha != null && m[2] !== preSha) || Number(m[3]) > 0
 }
 
 // preSHA capture for write roles — the established spine pattern (showrunner.js:1226).
@@ -237,11 +286,14 @@ const _WATCH_SCRIPT = [
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
 ].join('\n')
 
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
+// _composeDispatchCommand: PURE composer of the exact shell command _runArgv dispatches — the
+// perl-alarm ceiling (unarmed) or the #309 background watchdog (armed), confined to cwd. Exported
+// (test-only) so the #341 real-seam detector can build the byte-faithful production command and drive
+// it through a REAL cheapest-model leaf without a fixture-injected courier (CONVENTIONS §12.2).
+function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
   const idleArmed = armIdle === true && Number(idleSeconds) > 0
-  let cmd
   if (idleArmed) {
     const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
     const poll = _pollFor(idle)
@@ -254,15 +306,64 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
     // No outer stdin redirect: the watchdog feeds the prompt to the (backgrounded) CLI itself via
     // `< "$in"` — a POSIX-sh async job's stdin is /dev/null unless explicitly redirected, so an outer
     // redirect would silently deliver an EMPTY prompt (code-001; live-verified 2026-07-09).
-    cmd = cwd ? `cd ${shq(cwd)} && ${inner}` : inner
-  } else {
-    const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-    cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+    return cwd ? `cd ${shq(cwd)} && ${inner}` : inner
   }
-  const res = await _exec([cmd])
-  const r0 = res && res[0]
-  if (!(r0 && r0.ok)) return { ok: false }
-  let out = (r0.stdout == null ? '' : String(r0.stdout))
+  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+  return cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+}
+
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle, nonIdempotent) {
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  const cmd = _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle)
+  // #341: dispatch the reliability-critical engine CLI through the HARDENED courier discipline
+  // (superheroes:courier agentType + __SR_EXIT marker guard + dispatchMarked's retry/fallback chain),
+  // NOT the plain exec() dumb-pipe. A safety-trained cheapest-model leaf stochastically REFUSES an
+  // autonomous `cursor-agent --trust -f` write-watchdog and answers prose; the plain exec collapsed
+  // that refusal into `external-run-failed` (line 415), mis-blaming the ENGINE for a courier's
+  // decline (the a7bade9a escape: cursor 0/2 in-child while codex went 8/8). The marker protocol both
+  // (a) REDUCES the refusal (the lean dumb-pipe framing reads as infrastructure, not a suspicious
+  // dispatch) and (b) PROVES execution — a persistent missing `__SR_EXIT` marker means the shell
+  // never ran (a decline), surfaced here as {declined:true} carrying the leaf's refusal prose, which
+  // the caller journals as the honest `courier-declined` outcome instead of an engine failure.
+  // STDERR NOTE (review code-002/premortem-004): the marker protocol's wrapMarkedCommand appends
+  // `2>&1`, which merges stderr into the parsed stdout. On the ARMED watchdog path — the ONLY
+  // production dispatch path, since resolveIdle always returns a positive idle and both engines stream
+  // — the watchdog captures the CLI's stdout/stderr into SEPARATE files and emits only stdout, so the
+  // `2>&1` catches only the (empty) sh-script stderr (proven by the stall-monitor real-seam smoke's
+  // stderr-never-parsed assertion). The unarmed path (authz probe / a hypothetical non-streaming
+  // engine) is never a production write, and parse-result's _last_json_object is noise-tolerant.
+  // #343 NON-IDEMPOTENCE GUARD (PR-343 vet): the marked-courier retry chain hands the command to a
+  // NEW leaf on every retry, and each leaf RE-RUNS it. Safe for the idempotent spine couriers the
+  // chain was built for; a double-execution hazard for any FILESYSTEM-WRITING engine dispatch. A live
+  // vet run proved the hazard is real in a way marker-absence cannot see: the leaf EXECUTED the
+  // watchdog, but its 37KB output was persisted by the leaf harness to a tool-results file and the
+  // answer was just a file-pointer sentence — NO markers — indistinguishable from a decline by the
+  // answer alone. So every non-idempotent dispatch (write roles AND author-plan, whose argv is also
+  // workspace-write — delta-review premortem-003) runs SINGLE: one leaf, no chain retries; the caller
+  // owns the retry decision (corroborated by the execution-evidence probe for write roles). Only true
+  // read roles (review: codex read-only sandbox / cursor plan mode) keep the full chain — re-running a
+  // read-only sandbox is harmless. acceptExecuted (all roles): an answer carrying the runtime-expanded
+  // digit marker EXECUTED — never re-dispatched just because an echoed '$?' literal rides along.
+  let out
+  try {
+    out = await _courier().runCourierMarkedText('dispatch external CLI', cmd,
+      { single: nonIdempotent === true, acceptExecuted: true })
+  } catch (e) {
+    const c = _courier()
+    if (c.CourierTransportError && e instanceof c.CourierTransportError) {
+      // ONLY a missing execution marker is even a CANDIDATE courier decline (the shell probably never
+      // ran). The courier's other transport reason — 'empty stdout' — means the marker WAS present,
+      // i.e. the command DID execute but printed nothing before the marker; that is an engine outcome,
+      // not a decline (code-001/premortem-001). Marker absence is NECESSARY but not SUFFICIENT proof
+      // of non-execution (the vet's executed-but-pointer-answer case), so for write roles the CALLER
+      // must corroborate with the worktree dirty-probe before journaling a decline or retrying.
+      if (e.reason === 'missing execution marker') {
+        return { ok: false, declined: true, answer: e.answer || '' }
+      }
+      return { ok: false }
+    }
+    throw e
+  }
   if (idleArmed) {
     // Strip the trailing control line and read the idle-kill verdict. The marker is OUR sentinel on its
     // own final line; match the LAST occurrence so any legitimate look-alike earlier in CLI output can't
@@ -302,7 +403,21 @@ async function _journalExternal(payload) {
       // `timeout` outcome (killed at the wall-clock ceiling) or a genuine CLI failure.
       stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
       idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
+      // #341: on a `courier-declined` outcome, carry a CLAMPED prefix of the leaf's refusal prose as
+      // honest reason-context (the courier hedged instead of running the CLI — the engine was never
+      // tried). Present only on the decline path; absent (null) on every other outcome. It is the
+      // cheap COURIER leaf's own prose (not engine stdout), clamped to a short prefix so no long or
+      // secret-bearing text lands in the audit line.
+      declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
       verify: payload.verify, outcome: payload.outcome })))
+}
+
+// #341: clamp the courier's refusal prose to a short single-line prefix for the courier-declined
+// journal reason-context. Collapses whitespace and truncates — never surfaces a long blob.
+function _declinePrefix(answer) {
+  const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
+  if (!s) return 'courier returned no execution marker'
+  return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
 
 // Scrub external-derived free-text (git stderr in a commit/dispatch-failure reason) BEFORE it enters
@@ -410,9 +525,57 @@ async function _dispatchExternalInner(o) {
     // limitSeconds bounds the perl-alarm ceiling (belt-and-suspenders with the JS race); idleSeconds +
     // armIdle arm the #309 byte-activity stall monitor (≤ ceiling). A monitor idle-kill returns
     // {stalled:true} -> outcome:'stalled' (distinct from the ceiling 'timeout'); the caller falls open.
-    const runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
-    if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
-    if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
+    // #343: non-idempotent dispatches (write roles + the workspace-write author-plan) run SINGLE
+    // through the marker courier — every chain retry would hand the command to a new leaf that
+    // RE-RUNS it (see _runArgv). captureBase mirrors _composeDispatchCommand's derivation so the
+    // evidence probe can see the watchdog's capture files (signal 3).
+    const nonIdempotent = isWrite || isAuthor
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
+    let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle, nonIdempotent)
+    // #341 COURIER DECLINE: the answer carried no execution marker — a safety-trained cheapest-model
+    // leaf likely refused the autonomous engine command and answered prose. The engine was NEVER
+    // TRIED, so this is NOT an `external-run-failed` engine failure (promise 4/5: never blame the
+    // engine for a courier's refusal). Retry ONCE through the hardened path (the refusal is
+    // stochastic — root-cause #341 saw a cursor-build dispatch refuse 2/4 and comply 2/4).
+    // #343 CORROBORATION (write roles): marker absence is NOT proof of non-execution — a leaf can
+    // execute the command and answer with a file-pointer sentence when the output is huge (live-
+    // observed in the PR-343 vet). Before treating a write-role marker-less answer as a decline
+    // (journal + retry), corroborate with the execution-evidence probe (uncommitted edits, a moved
+    // HEAD from an engine self-commit, or watchdog capture files): evidence means the engine may have
+    // run — that is an ENGINE failure (external-run-failed; the caller falls open and UFR-2 resets
+    // the uncommitted edits), NEVER a courier-declined and NEVER retried (a retry would double-
+    // execute on the already-edited tree). Probed before EACH decline classification. author-plan has
+    // no probe surface (its cwd is the repo root, legitimately dirty mid-run), so its decline retry
+    // stands on the doc-overwrite idempotence of the author leaf plus the caller's usableDraft gate.
+    // COLLECT the attempts' refusal prose in priorDeclines but do NOT journal inline: journaling
+    // stays on the single POST-RACE settled path (the declinePrefixes handler below) so a
+    // `Promise.race` timeout win can never interleave a stray courier-declined line after the
+    // dispatch already returned (premortem-002). priorDeclines rides EVERY failure return from here
+    // on, so an attempt-1 decline is still audited when attempt 2 lands on a different failure
+    // (delta-review code-003).
+    const priorDeclines = []
+    if (runRes && runRes.declined) {
+      if (isWrite && await _executionEvidence(cwd, preSha, captureBase)) {
+        return { ok: false, reason: 'external-run-failed' }
+      }
+      priorDeclines.push(_declinePrefix(runRes.answer))
+      runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle, nonIdempotent)
+      if (runRes && runRes.declined) {
+        if (isWrite && await _executionEvidence(cwd, preSha, captureBase)) {
+          return { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
+        }
+        priorDeclines.push(_declinePrefix(runRes.answer))
+        return { ok: false, reason: COURIER_DECLINED_OUTCOME, declined: true, declinePrefixes: priorDeclines }
+      }
+    }
+    if (runRes && runRes.stalled) {
+      return priorDeclines.length ? { ok: false, reason: 'stalled', declinePrefixes: priorDeclines }
+        : { ok: false, reason: 'stalled' }
+    }
+    if (!runRes || !runRes.ok) {
+      return priorDeclines.length ? { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
+        : { ok: false, reason: 'external-run-failed' }
+    }
     const rawStdout = runRes.stdout
 
     // parse-result SCRUBS external free-text at the adapter boundary (Task 6); pass raw stdout by file.
@@ -442,6 +605,24 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+
+  // #341/#343: journal every corroborated courier-declined attempt HERE, on the single post-race
+  // settled path (never inline in the raced `run`), so a timeout win cannot interleave a stray audit
+  // line after this returned (premortem-002). declinePrefixes rides ANY failure shape (not only the
+  // fully-declined one): an attempt-1 decline followed by an attempt-2 non-decline failure still
+  // audits the refusal (delta-review code-003). Each line carries that attempt's clamped refusal
+  // prose as honest reason-context.
+  if (parsed && Array.isArray(parsed.declinePrefixes)) {
+    for (const prefix of parsed.declinePrefixes) {
+      await _journalExternal(Object.assign(_jbase(), { verify: null,
+        outcome: COURIER_DECLINED_OUTCOME, declinePrefix: prefix }))
+    }
+  }
+  // A fully-declined dispatch (engine never tried — both attempts refused, both corroborated clean):
+  // no ok/timeout/commit outcome is recorded — the engine never ran. The caller falls open to Claude.
+  // A non-declined failure falls THROUGH to the role-specific journaling below (its engine outcome —
+  // e.g. external-run-failed — is the dispatch's own audit line).
+  if (parsed && parsed.declined) return { ok: false, reason: COURIER_DECLINED_OUTCOME }
 
   // 4a. Author role: no commit (see isAuthor above). Journal first (UFR-6 symmetry — an
   // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
@@ -555,4 +736,10 @@ function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 // _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
 // external engine must have an explicit streams-when-piped verdict) — not a public seam.
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
-  _STREAMS_WHEN_PIPED, strictify }
+  _STREAMS_WHEN_PIPED, strictify,
+  // #341: the courier-declined outcome token, exported so the JS↔Python drift guard (CONVENTIONS
+  // §11.2) can assert this producer home matches acceptance_verdict.COURIER_DECLINED_OUTCOME.
+  COURIER_DECLINED_OUTCOME,
+  // #341 test-only: the pure production command composer, exported so the real-seam detector
+  // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
+  _composeDispatchCommand }
