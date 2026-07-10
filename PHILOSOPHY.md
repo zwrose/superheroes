@@ -53,8 +53,8 @@ What the owner may trust, in order of what they'd feel most betrayed by if broke
    Harmless workarounds (a retry, a slower path) it takes and discloses. A fallback that
    costs something promised — an independent checker, a skipped verification — follows a
    policy the owner set in advance, or it parks and asks. Nothing degrades invisibly,
-   and when it can't deliver truthfully at all, it parks with the reason — never a
-   costume.
+   and when it can't deliver truthfully at all, it parks with the reason — it never
+   pretends the work happened.
 6. **It leaves a trail the owner's agent can read back to them.** Every run's
    decisions, dispatches, and gates are on disk — and the owner is never alone with
    them: their agent follows along, translates, and answers *what happened, and why?*
@@ -104,8 +104,8 @@ redundant, we retire ours (see B6).
 survive what can be survived without forfeiting anything promised; a fallback that
 costs more than that follows an owner-declared policy or doesn't happen. Every
 degradation is journaled, counted, and disclosed where the owner actually reads — and
-one that recurs 100% of the time isn't degradation, it's a broken subsystem wearing a
-costume.
+one that recurs 100% of the time isn't degradation, it's a broken subsystem whose
+failure nothing is reporting.
 *Re-check:* any release whose first real run surfaces a fidelity-class surprise means
 this bet's enforcement has a hole; treat it as a broken guarantee, not a bug.
 
