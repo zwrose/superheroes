@@ -130,6 +130,18 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(buildCall.engine, 'codex', 'build dispatch uses the configured implementation engine')
     assert.strictEqual(buildCall.cwd, '/tmp/wt', 'build dispatch cwd is the build worktree')
     assert.strictEqual(buildCall.taskId, '1', 'build dispatch carries the task id')
+    // #308: the build dispatch threads the SAME builder tier the native path + readout resolve (opus)
+    // as a journalled dispatch fact — the adapter's owner-policy map (2026-07-09) keeps a cursor build
+    // on composer; the map decides what runs, the thread makes it auditable. #309: the build role
+    // carries the HIGH write ceiling (resolveTimeout(prefs,'build')=2400), never the 300s wall-clock
+    // kill. Both computed via the REAL twins (no monkeypatched resolveModel/resolveTimeout).
+    const modelTierS1 = require('../model_tier.js')
+    const enginePrefS1 = require('../engine_pref.js')
+    assert.strictEqual(buildCall.model, modelTierS1.resolveModel('builder', null, null),
+      '#308: the build dispatch carries the resolved builder tier (opus)')
+    assert.strictEqual(buildCall.timeoutSeconds, enginePrefS1.resolveTimeout(globalThis.__SR_ENGINE_PREFS, 'build'),
+      '#309: the build dispatch carries the high write ceiling from the REAL resolveTimeout')
+    assert.strictEqual(buildCall.timeoutSeconds, 2400, '#309: the write ceiling is 2400s (owner HIGH-ceiling policy)')
     // the verify-gate + trailer-gather ran unchanged: build_state_cli.py gather fired.
     let gatherFired = false
     global.agent = makeAgent([
@@ -238,6 +250,12 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     const fixCall = dispatchCalls.find((o) => o.roleKind === 'fix')
     assert.ok(fixCall, 'the fixer dispatched externally')
     assert.strictEqual(fixCall.engine, 'cursor', 'FR-15: the fixer routes to the implementation engine (cursor)')
+    // #308/#309: the fix dispatch threads the resolved fixer tier (sonnet, code context) + the HIGH
+    // write ceiling (2400s) — a fix is a write role, so it needs the same generous budget as a build.
+    const modelTierS2 = require('../model_tier.js')
+    assert.strictEqual(fixCall.model, modelTierS2.resolveModel('fixer', null, 'code'),
+      '#308: the fix dispatch carries the resolved fixer tier (sonnet)')
+    assert.strictEqual(fixCall.timeoutSeconds, 2400, '#309: the fix dispatch carries the high write ceiling (2400s)')
     dispatchCalls.length = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
@@ -250,6 +268,11 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     const reviewCall = dispatchCalls.find((o) => o.roleKind === 'review')
     assert.ok(reviewCall, 'the reviewer leaf dispatched externally')
     assert.strictEqual(reviewCall.engine, 'codex', 'FR-15: the reviewer leaf routes to the reviewer engine (codex)')
+    // #308/#309: the whole-branch (deep) reviewer threads the reviewer-deep tier (opus) + the moderate
+    // read ceiling (900s). reviewer-deep is a read role — it shares the read ceiling with review.
+    assert.strictEqual(reviewCall.model, modelTierS2.resolveModel('reviewer-deep', null, null),
+      '#308: the whole-branch reviewer dispatch carries the resolved reviewer-deep tier (opus)')
+    assert.strictEqual(reviewCall.timeoutSeconds, 900, '#309: the whole-branch reviewer carries the moderate read ceiling (900s)')
     console.log('OK: fail-closed trio + UFR-2 discard + UFR-4 write-preflight-denied fall-open + final-fixer {fixed,deferred} contract + mixed reviewer!=impl')
   }
 
@@ -430,6 +453,15 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(reviewDispatches[0].cwd, '/tmp/wt', '#160: the per-task review reads git from the build worktree')
     assert.strictEqual(reviewDispatches[0].taskId, '7', '#160: the per-task review carries the task id')
     assert.strictEqual(nativeReviewFired, 0, '#160: the native per-task reviewer agent() does NOT fire when the reviewer engine is external')
+    // #308: the per-task review dispatch threads the resolved reviewer tier (sonnet) as a dispatch
+    // fact (the adapter's owner-policy map keeps a cursor reviewer on composer; the thread makes the
+    // tier auditable). #309: the read role carries the moderate ceiling (900s), not the 300s default.
+    const enginePrefS6 = require('../engine_pref.js')
+    assert.strictEqual(reviewDispatches[0].model, modelTier.resolveModel('reviewer', null, null),
+      '#308: the per-task review dispatch carries the resolved reviewer tier (sonnet)')
+    assert.strictEqual(reviewDispatches[0].timeoutSeconds, enginePrefS6.resolveTimeout(globalThis.__SR_ENGINE_PREFS, 'review'),
+      '#309: the per-task review dispatch carries the moderate read ceiling from the REAL resolveTimeout')
+    assert.strictEqual(reviewDispatches[0].timeoutSeconds, 900, '#309: the read ceiling is 900s')
 
     // (b) an external review that returns a BLOCKING finding -> synthesized verdict drives a fix round,
     //     then a clean round-2 external review -> complete. Proves the decision rides the FINDINGS.
@@ -529,6 +561,39 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(capturedBuilderModelOv, 'sonnet', 'the builder override value (sonnet) is what the dispatch carries')
     delete globalThis.__SR_OVERRIDES
     console.log('OK: native builder dispatch carries an explicit model equal to the readout builder-row model')
+  }
+
+  // ===========================================================================
+  // Scenario 8 (#309): the owner `timeout` override on __SR_ENGINE_PREFS REACHES the real build
+  // dispatch — the UFR-5 override channel that was production-dead code. resolveTimeout is NOT
+  // monkeypatched here (the production _implDispatch calls the REAL twin); only the dispatch is
+  // captured. Without the override the build gets the 2400s ceiling; WITH it, the owner value wins.
+  // ===========================================================================
+  {
+    delete require.cache[require.resolve('../build_phase.js')]
+    delete require.cache[require.resolve('../engine_dispatch.js')]
+    const engineDispatch = require('../engine_dispatch.js')
+    const dispatchCalls = []
+    engineDispatch.dispatchExternal = async (o) => {
+      dispatchCalls.push(o)
+      return { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }
+    }
+    const bp = require('../build_phase.js')
+    // owner override: a tighter-than-ceiling budget the owner deliberately set — it must beat 2400.
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {}, timeout: 1800 }
+    global.agent = makeAgent([
+      execRoute((p) => standardLeaf(p)),
+      ['implement-task', () => ({ ok: true, signal: 'ok', evidence: {} })],
+      ['review', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+    ])
+    const r = await bp.buildOneTask('wi', 5, { id: '13', title: 'Thirteen' }, 'br', '13', '/tmp/wt', 1)
+    assert.strictEqual(r.parked, false, 'the build completes under an owner timeout override')
+    const buildCall = dispatchCalls.find((o) => o.roleKind === 'build')
+    assert.ok(buildCall, 'the build dispatched externally')
+    assert.strictEqual(buildCall.timeoutSeconds, 1800,
+      '#309: the owner enginePreferences.timeout override reaches the real build dispatch (not the 2400 ceiling)')
+    delete globalThis.__SR_ENGINE_PREFS
+    console.log('OK: #309 owner timeout override reaches the real production build dispatch')
   }
 
   delete globalThis.__SR_ENGINE_PREFS

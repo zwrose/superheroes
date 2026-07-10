@@ -107,6 +107,114 @@ function makeAgent(routes) {
   console.log('OK: engine_dispatch write-path')
 
   // ---------------------------------------------------------------------
+  // #308/#309: the enriched external_dispatch journal + threaded model/timeout. This exercises the
+  // REAL dispatchExternal with NO monkeypatched internal seam (only the outermost exec courier is
+  // stubbed, exactly as production runs it), so it pins the ACTUAL argv/journal the dispatch emits:
+  //   - the resolved `model` is forwarded to build-argv (`--model 'opus'`);
+  //   - the perl-alarm OS-kill guard carries the caller's effective timeout (2400s here);
+  //   - the external_dispatch journal payload records model + argv + effectiveTimeout (what #299 audits).
+  {
+    const execLogEnrich = []
+    let capturedArgv = null
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogEnrich.push(prompt)
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          // What the real adapter emits for a cursor work role under the owner policy (2026-07-09):
+          // the composer default — the threaded tier informs the adapter, the policy map decides.
+          capturedArgv = ['cursor-agent', '--model', 'composer-2.5-fast', '-p', '--trust', '-f', '--output-format', 'stream-json']
+          return [{ index: 0, ok: true, stdout: JSON.stringify(capturedArgv) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+        if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--model')) return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rEnrich = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, model: 'opus', taskId: 'T1', workItem: 'wi-abc' })
+    assert.strictEqual(rEnrich.ok, true, '#308/#309: the enriched write dispatch still succeeds')
+    // build-argv received the resolved model (the #308 fix: dispatch forwards the tier).
+    const argvCmd = execLogEnrich.find((c) => c.includes('engine_adapter.py build-argv'))
+    assert.ok(argvCmd.includes("--model 'opus'"), '#308: dispatch forwards the resolved model to build-argv: ' + argvCmd)
+    // the perl-alarm OS-kill guard carries the caller's effective timeout (#309), not the 300s default.
+    const runCmd = execLogEnrich.find((c) => c.includes('--model') && c.includes(' < '))
+    assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 2400 /.test(runCmd),
+      '#309: the perl-alarm guard carries the threaded timeout (2400s): ' + runCmd)
+    // the external_dispatch journal payload is enriched with model + argv + effectiveTimeout (#299 audit).
+    const journalCmd = execLogEnrich.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    const pm = journalCmd.match(/--payload '(.*)'$/s)
+    const payload = JSON.parse(pm[1])
+    assert.strictEqual(payload.model, 'opus', '#308: the journal records the resolved model')
+    assert.strictEqual(payload.effectiveTimeout, 2400, '#309: the journal records the effective timeout ceiling')
+    assert.deepStrictEqual(payload.argv, capturedArgv, '#308: the journal records the exact dispatched argv')
+    console.log('OK: engine_dispatch enriched journal (model + argv + effectiveTimeout) + threaded timeout')
+  }
+
+  // #309: with NO timeoutSeconds supplied the dispatch keeps the legacy finite default (300s) — the
+  // per-role ceilings live in the CALLERS (build_phase/showrunner), so the leaf itself stays back-compat.
+  {
+    const execLogDef = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogDef.push(prompt)
+        if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, workItem: 'wi-abc' })
+    const runCmd = execLogDef.find((c) => c.includes('--sandbox') && c.includes(' < '))
+    assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 300 /.test(runCmd),
+      '#309: absent timeoutSeconds keeps the leaf-level 300s finite default: ' + runCmd)
+    const journalCmd = execLogDef.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    assert.ok(/"effectiveTimeout":300/.test(journalCmd), '#309: the journal records the 300s default when nothing was passed')
+  }
+
+  console.log('OK: engine_dispatch leaf-default timeout back-compat')
+
+  // ---------------------------------------------------------------------
+  // #309/#299: the TIMEOUT-outcome journal enrichment — the exact case resolvedArgv was hoisted for.
+  // A CLI killed at the ceiling must journal outcome:'timeout' WITH the argv it was running and the
+  // effective ceiling, so the audit line reads unambiguously as "killed at ceiling after Ns" (distinct
+  // from a genuine CLI failure) and never records a null argv for a run that really dispatched.
+  // ---------------------------------------------------------------------
+  {
+    const execLogTO = []
+    let argvTO = null
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogTO.push(prompt)
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          argvTO = ['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']
+          return [{ index: 0, ok: true, stdout: JSON.stringify(argvTO) }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return new Promise(() => {})   // CLI wedges -> ceiling kill
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rTO = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build',
+      cwd: '/tmp/wt', schema: {}, timeoutSeconds: 0.05, taskId: 'T1', workItem: 'wi-abc' })
+    assert.strictEqual(rTO.ok, false, '#309: a ceiling kill fails the dispatch')
+    assert.strictEqual(rTO.reason, 'timeout', '#309: the ceiling kill reason is timeout')
+    const journalTO = execLogTO.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    assert.ok(journalTO, '#309: a ceiling-killed dispatch still journals exactly one external_dispatch line')
+    const payloadTO = JSON.parse(journalTO.match(/--payload '(.*)'$/s)[1])
+    assert.strictEqual(payloadTO.outcome, 'timeout', '#299: the journal outcome is timeout (killed at ceiling)')
+    assert.strictEqual(payloadTO.effectiveTimeout, 0.05, '#299: the journal records the ceiling it was killed at')
+    assert.deepStrictEqual(payloadTO.argv, argvTO,
+      '#299: the journal records the REAL argv the CLI was killed while running (resolvedArgv hoist), never null')
+  }
+
+  console.log('OK: engine_dispatch timeout-outcome journal enrichment (killed-at-ceiling audit line)')
+
+  // ---------------------------------------------------------------------
   // #288: HONEST REFUSAL. The external build leaf refuses ({"ok":false,"signal":"plan_wrong"}) —
   // parse-result no longer launders that to ok:true, so dispatchExternal must route it to the
   // write-FAILURE path: return {ok:false, reason:'plan_wrong'} (the caller then discards uncommitted

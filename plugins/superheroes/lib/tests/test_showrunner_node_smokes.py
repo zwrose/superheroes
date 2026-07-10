@@ -150,6 +150,10 @@ SHOWRUNNER_SMOKES = [
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # #309: the byte-activity stall monitor paired with the high ceiling — command shape (setpgrp
+    # group-kill + byte-growth watchdog, monitor ≤ ceiling), armed/unarmed/inert journal states, and a
+    # REAL-seam run of a fake CLI (stall -> outcome:stalled + process-group death; steady emit -> ok).
+    "plugins/superheroes/lib/tests/showrunner_stall_monitor_smoke.js",
     # plan-author engine route: author-plan external dispatch (commit-free write, --model
     # threading, notify, UFR-6) + producePhase planAuthor wiring (plan-only, fall-open).
     "plugins/superheroes/lib/tests/showrunner_engine_author_smoke.js",

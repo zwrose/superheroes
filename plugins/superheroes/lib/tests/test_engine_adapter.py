@@ -325,13 +325,28 @@ def test_build_argv_cursor_author_plan_maps_fable_model():
     assert "--mode" not in argv               # not the read-only plan mode
 
 
-def test_build_argv_cursor_author_plan_maps_opus_model():
-    argv = EA.build_argv("cursor", "author-plan", "composer", {"model": "opus"})
-    assert argv[argv.index("--model") + 1] == "claude-opus-4-8-thinking-high"
+def test_build_argv_cursor_work_roles_stay_on_composer_for_every_premium_tier():
+    # OWNER POLICY (ratified 2026-07-09): cursor is the token-efficiency engine — composer-2.5 for
+    # ALL work roles; premium Claude models are NEVER routed through cursor by default. A threaded
+    # opus/sonnet/haiku tier deliberately falls through to the pinned composer default (the map's
+    # only entry is fable, the author-plan exception). This is the policy, not a coverage gap.
+    for role in ("review", "build", "fix"):
+        for tier in ("opus", "sonnet", "haiku"):
+            argv = EA.build_argv("cursor", role, "composer", {"cwd": "/wt", "model": tier})
+            assert argv[argv.index("--model") + 1] == "composer-2.5-fast", (role, tier)
+
+
+def test_build_argv_cursor_fable_is_the_only_mapped_tier():
+    # The one deliberate exception: author-plan: fable + planAuthor: cursor dispatches Fable via
+    # cursor. The map contains fable and NOTHING else — adding premium ids would invert the owner
+    # policy (see _CURSOR_MODEL_BY_TIER's comment).
+    assert EA._CURSOR_MODEL_BY_TIER == {"fable": "claude-fable-5-thinking-xhigh"}
 
 
 def test_build_argv_cursor_unmapped_model_keeps_composer_default():
-    for model in (None, "", "bogus-tier"):
+    # opus included: even author-plan only gets a premium model via the fable exception — an opus
+    # author-plan tier stays on composer per the owner policy.
+    for model in (None, "", "bogus-tier", "opus"):
         argv = EA.build_argv("cursor", "author-plan", "composer", {"model": model})
         assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
     # non-author roles without a model override are unchanged

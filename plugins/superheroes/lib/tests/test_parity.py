@@ -26,6 +26,7 @@ PARITY_TWINS = [
     ("engine_pref", "resolveEngine", "engine_pref", "resolve_engine"),
     ("engine_pref", "resolveEffort", "engine_pref", "resolve_effort"),
     ("engine_pref", "resolveTimeout", "engine_pref", "resolve_timeout"),
+    ("engine_pref", "resolveIdle", "engine_pref", "resolve_idle"),
     ("circuit_breaker", "normalizeTitle", "circuit_breaker", "normalize_title"),
     ("circuit_breaker", "findingIdentity", "circuit_breaker", "finding_identity"),
     ("circuit_breaker", "checkCircuitBreaker", "circuit_breaker", "check_circuit_breaker"),

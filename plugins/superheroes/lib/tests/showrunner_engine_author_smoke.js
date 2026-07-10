@@ -56,6 +56,14 @@ async function dispatchSmokes() {
   const argvCmd = execLogA.find((c) => c.includes('engine_adapter.py build-argv'))
   assert.ok(argvCmd.includes("--model 'fable'"), 'model tier short name is threaded into build-argv: ' + argvCmd)
   assert.ok(execLogA.some((c) => c.includes('journal_entry.py')), 'author-plan dispatch is journaled')
+  // #308/#309: the author-plan external_dispatch journal records the resolved model + effective timeout.
+  const journalCmdA = execLogA.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+  const payloadA = JSON.parse(journalCmdA.match(/--payload '(.*)'$/s)[1])
+  assert.strictEqual(payloadA.model, 'fable', '#308: the author-plan journal records the resolved model tier')
+  assert.strictEqual(payloadA.effectiveTimeout, 300, '#309: the author-plan journal records the effective timeout')
+  assert.deepStrictEqual(payloadA.argv,
+    ['cursor-agent', '--model', 'claude-fable-5-thinking-xhigh', '-p', '--trust', '-f', '--output-format', 'stream-json'],
+    '#308: the author-plan journal records the exact dispatched argv')
 
   // UFR-6: a failed journal append fails the author-plan dispatch closed (unauditable).
   global.agent = makeAgent([
@@ -98,7 +106,7 @@ const CONTENT_READY_SIGNAL = JSON.stringify(
 function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCalls = [], notifyLedger = [],
   events = [], gitSnapshots = null, strayPath = null, untrackedStray = false, preExistingDirty = null,
   revertPrompts = [], resetPrompts = [], writeMarkerPrompts = [], stagedExternalPrompts = null,
-  revertFail = false, postRevertStray = false,
+  revertFail = false, postRevertStray = false, journalCmds = null,
   docsSnapshots = null, docsNewer = null, docsStrayPath = null, docsModifiedPath = null }) {
   const seq = usableSeq.slice()
   let gitSnapIdx = 0
@@ -203,7 +211,10 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
           externalOk ? { ok: true, notify: [{ identity: 'n-ext', message: 'external default' }] }
             : { ok: false, reason: 'unreadable' }) }]
       }
-      if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('journal_entry.py')) {
+        if (journalCmds && prompt.includes('external_dispatch')) journalCmds.push(prompt)
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
       if (prompt.includes('cursor-agent')) return [{ index: 0, ok: true, stdout: '{"status":"ok"}' }]
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
@@ -223,14 +234,22 @@ async function produceSmokes() {
 
     // (1) plan doc + planAuthor:cursor + external ok -> external authored, native author NOT called.
     let externalRuns = [], nativeCalls = [], notifyLedger = [], events = [], writeMarkerPrompts = []
+    const journalCmds1 = []
     global.agent = produceAgent({ usableSeq: [false, CONTENT_READY_SIGNAL, USABLE_SIGNAL, USABLE_SIGNAL],
-      externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger, events, writeMarkerPrompts })
+      externalOk: true, externalRuns, nativeAuthorCalls: nativeCalls, notifyLedger, events, writeMarkerPrompts,
+      journalCmds: journalCmds1 })
     let r = await sr.producePhase('plan', 'wi-ext')
     assert.strictEqual(r.confidence, 'high', '(1) external author + usable -> high')
     assert.strictEqual(externalRuns.length, 1, '(1) exactly one external dispatch')
     assert.strictEqual(nativeCalls.length, 0, '(1) native author is NOT dispatched when external succeeds')
     assert.ok(externalRuns[0].includes("--role 'author-plan'"), '(1) dispatch carries the author-plan role')
     assert.ok(externalRuns[0].includes("--model 'fable'"), '(1) dispatch threads the resolved author-plan tier: ' + externalRuns[0])
+    // #309: the author-plan production dispatch resolves the WRITE ceiling (2400s) through the real
+    // resolveTimeout — proven end to end via the enriched external_dispatch journal (not monkeypatched).
+    assert.ok(journalCmds1.length >= 1, '(1) the author-plan dispatch journals an external_dispatch event')
+    const payload1 = JSON.parse(journalCmds1[0].match(/--payload '(.*)'$/s)[1])
+    assert.strictEqual(payload1.effectiveTimeout, 2400,
+      '#309(1): the author-plan dispatch carries the high write ceiling (2400s) from the real resolveTimeout')
     assert.ok(!externalRuns[0].includes('--write-marker'),
       '(1) external author prompt must NOT include --write-marker')
     assert.ok(events.includes('write-marker'), '(1) showrunner stamps marker after confinement')
