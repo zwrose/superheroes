@@ -170,9 +170,13 @@ async function _execJson(cmd) {
 //   2. HEAD moved off preSha — an engine that SELF-COMMITTED reads porcelain-clean (the adapter's own
 //      commit fold anticipates stray engine commits), so cleanliness alone would retry on top of a
 //      committed attempt;
-//   3. watchdog capture files exist (`<captureBase>.*`) — the armed watchdog's first act creates them
-//      and a clean SUCCESS removes them, so their presence means the run STARTED and either failed or
-//      is still running (an orphaned CLI whose leaf died) — either way, executed.
+//   3. watchdog STDERR captures exist (`<captureBase>.*.err`) — the armed watchdog's first act
+//      creates them and a clean SUCCESS removes them, so their presence means the run STARTED and
+//      either failed or is still running (an orphaned CLI whose leaf died) — either way, executed.
+//      `.err` ONLY (PR-351 review): #349 retains the `.out` capture on clean success too (it is the
+//      parse input now), so globbing `.out` would let a PRIOR same-runId success within the /tmp
+//      window mis-blame a genuinely-declined later attempt as external-run-failed — the #341
+//      anti-goal. The stderr capture keeps the exact original failed-or-running semantics.
 // The probe answer is SENTINEL-PREFIXED and POSITIVE ("__SR_PROBE__ <edits> <head> <captures>"): a
 // clean verdict must be the explicit shape, so the exec courier's known drop (ok:true, empty stdout —
 // see _execJson) can never impersonate "clean" and green-light a double execution. Any probe failure,
@@ -184,7 +188,7 @@ async function _executionEvidence(wt, preSha, captureBase) {
   const cmd = `printf '__SR_PROBE__ %s %s %s\\n' ` +
     `"$(git -C ${shq(wt)} status --porcelain | wc -l | tr -d ' ')" ` +
     `"$(git -C ${shq(wt)} rev-parse HEAD)" ` +
-    `"$(ls ${shq(captureBase)}.* 2>/dev/null | wc -l | tr -d ' ')"`
+    `"$(ls ${shq(captureBase)}.*.err 2>/dev/null | wc -l | tr -d ' ')"`
   const res = await _exec([cmd])
   const r0 = res && res[0]
   if (!(r0 && r0.ok)) return true
@@ -406,7 +410,7 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       // kept capture.
       const relay = (verdict && typeof verdict.outPath === 'string' && verdict.outPath)
         ? { truncated: String(verdict.truncated) === '1',
-            outBytes: Number(verdict.outBytes) || null,
+            outBytes: Number.isFinite(Number(verdict.outBytes)) ? Number(verdict.outBytes) : null,
             outPath: verdict.outPath }
         : null
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {

@@ -3871,7 +3871,7 @@ async function _executionEvidence(wt, preSha, captureBase) {
   const cmd = `printf '__SR_PROBE__ %s %s %s\\n' ` +
     `"$(git -C ${shq(wt)} status --porcelain | wc -l | tr -d ' ')" ` +
     `"$(git -C ${shq(wt)} rev-parse HEAD)" ` +
-    `"$(ls ${shq(captureBase)}.* 2>/dev/null | wc -l | tr -d ' ')"`
+    `"$(ls ${shq(captureBase)}.*.err 2>/dev/null | wc -l | tr -d ' ')"`
   const res = await _exec([cmd])
   const r0 = res && res[0]
   if (!(r0 && r0.ok)) return true
@@ -3951,7 +3951,7 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       out = out.slice(0, m.index)
       const relay = (verdict && typeof verdict.outPath === 'string' && verdict.outPath)
         ? { truncated: String(verdict.truncated) === '1',
-            outBytes: Number(verdict.outBytes) || null,
+            outBytes: Number.isFinite(Number(verdict.outBytes)) ? Number(verdict.outBytes) : null,
             outPath: verdict.outPath }
         : null
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
