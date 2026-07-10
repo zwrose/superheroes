@@ -7,9 +7,13 @@
 // (tasks always authors native), and a failed external dispatch falls open to the native
 // author within the same attempt.
 const assert = require('assert')
+const { markedStdout } = require('./_marked_stdout.js')
 const logs = []
 global.log = (m) => logs.push(m)
 global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
+// #341: the CLI-run dispatch now rides the hardened marker courier (__SR_EXIT), so a stubbed run leaf
+// must return a MARKER-carrying answer; a bare array reads as a courier decline. Non-run exec leaves
+// (build-argv/parse-result/journal) still ride the plain exec() dumb-pipe (bare arrays).
 
 // Route an agent() call by exact label, then prompt substring (the dispatch-smoke idiom).
 function makeAgent(routes) {
@@ -40,7 +44,7 @@ async function dispatchSmokes() {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('cursor-agent')) {
-        return [{ index: 0, ok: true, stdout: '{"status":"ok"}' }]
+        return markedStdout('{"status":"ok"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -77,7 +81,7 @@ async function dispatchSmokes() {
       if (prompt.includes('journal_entry.py')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
       }
-      if (prompt.includes('cursor-agent')) return [{ index: 0, ok: true, stdout: '{"status":"ok"}' }]
+      if (prompt.includes('cursor-agent')) return markedStdout('{"status":"ok"}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
   ])
@@ -215,7 +219,7 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         if (journalCmds && prompt.includes('external_dispatch')) journalCmds.push(prompt)
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
-      if (prompt.includes('cursor-agent')) return [{ index: 0, ok: true, stdout: '{"status":"ok"}' }]
+      if (prompt.includes('cursor-agent')) return markedStdout('{"status":"ok"}')
       return [{ index: 0, ok: true, stdout: '' }, { index: 1, ok: true, stdout: '' }]
     }
     if (label === 'lib') return { ok: true }
