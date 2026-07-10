@@ -248,6 +248,11 @@ const d = require('../engine_dispatch.js')
     assert.ok(errContent.includes('DIAG-ON-STDERR'),
       'the surviving stderr capture carries the engine diagnostic: ' + JSON.stringify(errContent))
     for (const n of errFiles) { try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {} }
+    // #349 retention keeps the stdout capture too — clean this test's own /tmp files
+    for (const n of fs.readdirSync('/tmp').filter((x) =>
+      x.startsWith(`engine-codex-review-wi-realstall-${process.pid}.run.`))) {
+      try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {}
+    }
     console.log('OK: real-seam STALL — outcome:stalled journalled, group death (no orphan), stderr kept for post-mortem')
   }
 
@@ -290,6 +295,11 @@ const d = require('../engine_dispatch.js')
     // #347: a small (fully-relayed) dispatch journals NO relay keys — pre-#347 payloads byte-identical
     assert.ok(!('outputTruncated' in okJournal) && !('outPath' in okJournal),
       'an untruncated dispatch journals no #347 relay keys: ' + JSON.stringify(okJournal))
+    // #349 retention keeps this test's stdout capture too — clean it up
+    for (const n of fs.readdirSync('/tmp').filter((x) =>
+      x.startsWith(`engine-codex-review-wi-realok-${process.pid}.run.`))) {
+      try { fs.unlinkSync(path.join('/tmp', n)) } catch (_) {}
+    }
     assert.ok(!journalSink.some((p) => p.outcome === 'stalled'), 'a steadily-emitting CLI is NEVER stall-killed (no false kill)')
     // code-001: the engine really received the staged prompt on stdin (the armed background job would
     // otherwise read /dev/null and this capture would be PROMPT[]).
@@ -309,12 +319,13 @@ const d = require('../engine_dispatch.js')
     console.log('OK: real-seam OK — prompt delivered on stdin, no false kill, marker stripped, stderr never parsed')
   }
 
-  // (2c) #347 BOUNDED RELAY + ENVELOPE UNWRAP — a fake CLI floods well past EMIT_TAIL_BYTES of
-  // stream-json noise and ends with the REAL cursor result envelope (findings JSON escaped INSIDE
-  // the envelope's `result` string — the live shape from run accept-harness-84251c…, where a 472KB
-  // relay hit the leaf harness's persist-to-file wall and destroyed the answer). The watchdog must
-  // relay only the stdout TAIL, the REAL parser (engine_adapter.py, actually executed) must unwrap
-  // the envelope, the journal must disclose the truncation, and the full capture must survive on disk.
+  // (2c) #347/#349 FLOOD — a fake CLI floods well past EMIT_TAIL_BYTES of stream-json noise and
+  // ends with the REAL cursor result envelope (findings JSON escaped INSIDE the envelope's `result`
+  // string). The watchdog must relay only the stdout TAIL to the leaf (the persist-wall bound,
+  // #347), but the REAL parser (engine_adapter.py, actually executed) must read the on-disk capture
+  // DIRECTLY — the COMPLETE stream, never a courier-retyped copy (#349: a leaf re-typing the ~31KB
+  // base64 re-stage live-corrupted every large payload) — unwrap the envelope, and the journal must
+  // disclose the truncated relay.
   {
     const wt = fs.mkdtempSync(path.join(SCRATCH, 'cwd-flood-'))
     const payloadFile = path.join(SCRATCH, 'flood_payload.jsonl')
@@ -325,21 +336,29 @@ const d = require('../engine_dispatch.js')
       duration_ms: 1, session_id: 'smoke', result: innerText })
     const noise = []
     for (let i = 0; i < 700; i++) noise.push(JSON.stringify({ type: 'thinking', text: 'noise-' + i + '-' + 'x'.repeat(40) }))
-    fs.writeFileSync(payloadFile, noise.join('\n') + '\n' + envelope + '\n')   // ~45KB >> the 16KB cap
+    fs.writeFileSync(payloadFile, noise.join('\n') + '\n' + envelope + '\n')   // ~45KB >> the cap
     assert.ok(fs.statSync(payloadFile).size > 2 * d.EMIT_TAIL_BYTES, 'the flood really exceeds the cap')
     const fakeCli = path.join(SCRATCH, 'fakecli_flood.sh')
     fs.writeFileSync(fakeCli, '#!/bin/sh\ncat ' + JSON.stringify(payloadFile) + '\n')
 
     const journalSink = []
-    let stagedParseInput = null
+    let parsePath = null, parseInput = null, courierAnswerBytes = null
+    const restageCmds = []   // any courier command that re-stages engine stdout (must stay empty, #349)
     const courier = realCourier(['/bin/sh', fakeCli], journalSink)
     global.agent = async (prompt) => {
-      // parse-result runs FOR REAL here — the envelope unwrap under test is the actual python parser,
-      // fed the actual bounded relay (not a canned verdict).
+      // parse-result runs FOR REAL here — the envelope unwrap under test is the actual python parser.
       if (prompt.includes('engine_adapter.py parse-result')) {
         const m = prompt.match(/--stdout-path '([^']+)'/)
-        if (m) { try { stagedParseInput = fs.readFileSync(m[1], 'utf8') } catch (_e) { /* asserted below */ } }
+        if (m) { parsePath = m[1]; try { parseInput = fs.readFileSync(m[1], 'utf8') } catch (_e) { /* asserted below */ } }
         return extractCommands(prompt).map((c, i) => realExec(c, i))
+      }
+      // #349 corruption-vector guard: engine STDOUT must never be re-staged through a courier
+      // (prompt/schema INPUT staging is ours and small — only the rawPath re-stage is the hazard).
+      if (/base64 -d > '\/tmp\/engine-[^']*\.out'/.test(prompt)) restageCmds.push(prompt.slice(0, 120))
+      if (prompt.includes('Execute this exact shell command')) {
+        const answer = await courier(prompt)
+        courierAnswerBytes = String(answer).length
+        return answer
       }
       return courier(prompt)
     }
@@ -347,30 +366,27 @@ const d = require('../engine_dispatch.js')
       prompt: 'go', cwd: wt, schema: {}, timeoutSeconds: 60, idleSeconds: 8, workItem: 'wi-flood-' + process.pid })
 
     assert.ok(r && Array.isArray(r.findings),
-      'a flooding CLI still completes: bounded relay + real-parser envelope unwrap: ' + JSON.stringify(r))
+      'a flooding CLI still completes: bounded relay + direct capture parse: ' + JSON.stringify(r))
     assert.strictEqual(r.findings[0].title, 'envelope-finding',
       'the findings were recovered from INSIDE the stream envelope by the real parser')
-    // bounded relay: the parser saw the TAIL only, and it stayed under the cap (+ small strip slack)
-    assert.ok(stagedParseInput != null, 'parse-result received a staged stdout file')
-    assert.ok(stagedParseInput.length <= d.EMIT_TAIL_BYTES + 200,
-      'the relay is bounded (never the full stream): ' + stagedParseInput.length)
-    assert.ok(!stagedParseInput.includes('noise-0-'), 'the flood head never reached the parser')
-    // disclosure: the ok journal line names the truncation + the kept capture
+    // #347: what the LEAF relayed stays bounded (the persist-wall bound)…
+    assert.ok(courierAnswerBytes != null && courierAnswerBytes <= d.EMIT_TAIL_BYTES + 400,
+      'the courier ANSWER is bounded (never the full stream): ' + courierAnswerBytes)
+    // …but #349: what the PARSER read is the on-disk capture — COMPLETE (head AND tail), unretyped.
+    assert.ok(parsePath && parsePath.includes('.run.'),
+      'parse-result reads the shell-written capture directly: ' + parsePath)
+    assert.ok(parseInput != null && parseInput.includes('noise-0-') && parseInput.includes('envelope-finding'),
+      'the parser saw the COMPLETE stream from disk (head and tail)')
+    assert.strictEqual(restageCmds.length, 0,
+      'engine stdout is NEVER re-staged through a courier (the #349 corruption vector): ' + restageCmds[0])
+    // disclosure: the ok journal line names the truncated RELAY + the capture receipt
     const okJournal = journalSink.find((p) => p.outcome === 'ok')
     assert.ok(okJournal && okJournal.outputTruncated === true,
       'the ok journal discloses the bounded relay: ' + JSON.stringify(okJournal))
     assert.ok(Number(okJournal.outBytes) > d.EMIT_TAIL_BYTES, 'outBytes names the true capture size')
-    assert.ok(typeof okJournal.outPath === 'string' && okJournal.outPath.includes('.run.'),
-      'outPath names the kept capture file')
-    // retention: the FULL stream survives on disk for post-mortem/receipts
-    assert.ok(fs.existsSync(okJournal.outPath), 'the truncated capture file is kept on disk')
-    const kept = fs.readFileSync(okJournal.outPath, 'utf8')
-    assert.ok(kept.includes('noise-0-') && kept.includes('envelope-finding'),
-      'the kept capture is the COMPLETE stream (head and tail)')
+    assert.ok(fs.existsSync(okJournal.outPath), 'the capture file is kept on disk')
     try { fs.unlinkSync(okJournal.outPath) } catch (_) {}
-    // (the no-relay-keys-when-untruncated guarantee is pinned by test 2b's journal — see below — and
-    // by _journalExternal's conditional spread; asserting it on THIS sink would be vacuous, PR-348 nit)
-    console.log('OK: real-seam FLOOD — bounded tail relayed, envelope unwrapped by the REAL parser, truncation disclosed, full capture kept')
+    console.log('OK: real-seam FLOOD — bounded leaf relay, parser read the COMPLETE capture from disk (no courier re-stage), truncation disclosed')
   }
 
   // Drift guard (architecture-001): every dispatchable external engine must carry an explicit

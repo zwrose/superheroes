@@ -170,9 +170,13 @@ async function _execJson(cmd) {
 //   2. HEAD moved off preSha — an engine that SELF-COMMITTED reads porcelain-clean (the adapter's own
 //      commit fold anticipates stray engine commits), so cleanliness alone would retry on top of a
 //      committed attempt;
-//   3. watchdog capture files exist (`<captureBase>.*`) — the armed watchdog's first act creates them
-//      and a clean SUCCESS removes them, so their presence means the run STARTED and either failed or
-//      is still running (an orphaned CLI whose leaf died) — either way, executed.
+//   3. watchdog STDERR captures exist (`<captureBase>.*.err`) — the armed watchdog's first act
+//      creates them and a clean SUCCESS removes them, so their presence means the run STARTED and
+//      either failed or is still running (an orphaned CLI whose leaf died) — either way, executed.
+//      `.err` ONLY (PR-351 review): #349 retains the `.out` capture on clean success too (it is the
+//      parse input now), so globbing `.out` would let a PRIOR same-runId success within the /tmp
+//      window mis-blame a genuinely-declined later attempt as external-run-failed — the #341
+//      anti-goal. The stderr capture keeps the exact original failed-or-running semantics.
 // The probe answer is SENTINEL-PREFIXED and POSITIVE ("__SR_PROBE__ <edits> <head> <captures>"): a
 // clean verdict must be the explicit shape, so the exec courier's known drop (ok:true, empty stdout —
 // see _execJson) can never impersonate "clean" and green-light a double execution. Any probe failure,
@@ -184,7 +188,7 @@ async function _executionEvidence(wt, preSha, captureBase) {
   const cmd = `printf '__SR_PROBE__ %s %s %s\\n' ` +
     `"$(git -C ${shq(wt)} status --porcelain | wc -l | tr -d ' ')" ` +
     `"$(git -C ${shq(wt)} rev-parse HEAD)" ` +
-    `"$(ls ${shq(captureBase)}.* 2>/dev/null | wc -l | tr -d ' ')"`
+    `"$(ls ${shq(captureBase)}.*.err 2>/dev/null | wc -l | tr -d ' ')"`
   const res = await _exec([cmd])
   const r0 = res && res[0]
   if (!(r0 && r0.ok)) return true
@@ -285,18 +289,17 @@ const _WATCH_SCRIPT = [
   // construction. The full stream is not lost — see retention below.
   'szf=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szf" ] || szf=0',
   'if [ "$szf" -gt "$cap" ]; then trunc=1; tail -c "$cap" "$out"; else trunc=0; cat "$out"; fi',
-  // Retention: a TRUNCATED stdout capture is kept on disk on every exit path (it is the only complete
-  // record of the engine run — post-mortem + receipts; the footer names its path); a fully-emitted one
-  // is consumed above so it is removed. The stderr capture is KEPT on any failure (idle-kill or
-  // non-zero exit) so the engine's own diagnostic survives for post-mortem (never surfaced to
-  // parse-result), and removed only on success (a clean run's stderr is noise).
-  // Accumulation bound (PR-348 review): kept captures (~hundreds of KB per truncated dispatch) are
-  // NOT reaped here — a reap at dispatch start could delete a CONCURRENT same-runId sibling's
-  // in-flight capture (the exact race the $$-suffix exists for, premortem-001). The bound is the
-  // OS /tmp reaper (macOS purges /tmp every ~3 days; linux tmpfiles.d similar), the same bound the
-  // pre-existing .prompt/.schema staging litter already relies on. Revisit if a run ever needs its
-  // captures to outlive that window.
-  'if [ "$trunc" -eq 0 ]; then rm -f "$out"; fi',
+  // Retention (#349): the stdout capture is kept on disk on EVERY armed dispatch — it is the
+  // byte-perfect, shell-written record that parse-result reads DIRECTLY (the footer names its path).
+  // Engine output must never round-trip through a courier leaf's typing again: the 2026-07-10 run
+  // proved a leaf re-typing a ~31KB base64 re-stage mangles it (issue #349). The stderr capture is
+  // KEPT on any failure (idle-kill or non-zero exit) so the engine's own diagnostic survives for
+  // post-mortem (never surfaced to parse-result), and removed only on success.
+  // Accumulation bound (PR-348 review): kept captures are NOT reaped here — a reap at dispatch start
+  // could delete a CONCURRENT same-runId sibling's in-flight capture (the exact race the $$-suffix
+  // exists for, premortem-001). The bound is the OS /tmp reaper (macOS purges /tmp every ~3 days;
+  // linux tmpfiles.d similar), the same bound the pre-existing .prompt/.schema staging litter already
+  // relies on. Revisit if a run ever needs its captures to outlive that window.
   'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
   'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
 ].join('\n')
@@ -399,15 +402,16 @@ async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armI
       let verdict = null
       try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
       out = out.slice(0, m.index)
-      // #347 bounded-relay disclosure: the watchdog emitted only the stdout TAIL (the full capture
-      // stayed on disk at outPath). Surface the relay facts so the dispatch journal can disclose the
-      // truncation — a silently-shortened relay would be a hidden fact about what the parser saw.
-      // Carried on the STALLED return too (PR-348 review nit): a stall that had already flooded past
-      // the cap keeps its capture, and the stalled journal line should name that receipt.
-      const relay = (verdict && String(verdict.truncated) === '1')
-        ? { truncated: true,
-            outBytes: Number(verdict.outBytes) || null,
-            outPath: typeof verdict.outPath === 'string' ? verdict.outPath : null }
+      // #347/#349 relay facts: EVERY armed dispatch's footer names the on-disk capture (outPath) —
+      // the byte-perfect record parse-result reads DIRECTLY (never a courier-retyped copy, #349) —
+      // plus the true size and whether the RELAYED stdout was truncated to the tail (journal
+      // disclosure: a silently-shortened relay would be a hidden fact about what the leaf saw).
+      // Carried on the STALLED return too (PR-348 review nit): the stalled journal line names the
+      // kept capture.
+      const relay = (verdict && typeof verdict.outPath === 'string' && verdict.outPath)
+        ? { truncated: String(verdict.truncated) === '1',
+            outBytes: Number.isFinite(Number(verdict.outBytes)) ? Number(verdict.outBytes) : null,
+            outPath: verdict.outPath }
         : null
       if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
         return Object.assign({ ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null },
@@ -513,7 +517,8 @@ async function _dispatchExternalInner(o) {
     stallMonitor, idleSeconds },
     // #347: disclose a bounded relay on EVERY outcome line for this dispatch — the parser saw only
     // the stdout tail; the full capture's on-disk path is the receipt.
-    relayMeta ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
+    (relayMeta && relayMeta.truncated)
+      ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
   // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
   // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
   // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
@@ -632,13 +637,24 @@ async function _dispatchExternalInner(o) {
     if (runRes.relay) relayMeta = runRes.relay
     const rawStdout = runRes.stdout
 
-    // parse-result SCRUBS external free-text at the adapter boundary (Task 6); pass raw stdout by file.
-    const rawPath = `/tmp/engine-${runId}.out`
-    const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
-    if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+    // parse-result SCRUBS external free-text at the adapter boundary (Task 6); it reads by file.
+    // #349: on the armed path the shell-written capture at relay.outPath IS that file — byte-perfect,
+    // complete (head AND tail), and never touched by a model. Parse it DIRECTLY. Re-staging the
+    // relayed stdout through a courier means a leaf re-TYPES a ~30KB base64 command, which live-
+    // corrupted every large payload (issue #349: a mangled staged copy parsed `unreadable` while the
+    // on-disk capture parsed ok:true). The _stageCmd path remains ONLY for a dispatch with no capture
+    // file (the unarmed path — authz probes / a hypothetical non-streaming engine — whose outputs are
+    // small and never production payloads).
+    let parsePath = relayMeta && relayMeta.outPath ? relayMeta.outPath : null
+    if (!parsePath) {
+      const rawPath = `/tmp/engine-${runId}.out`
+      const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
+      if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+      parsePath = rawPath
+    }
     const parsed = await _execJson(
       `python3 ${libPath('engine_adapter.py')} parse-result --engine ${shq(engine)} --role ${shq(roleKind)} ` +
-      `--stdout-path ${shq(rawPath)}`)
+      `--stdout-path ${shq(parsePath)}`)
     if (!parsed || parsed.ok !== true) return { ok: false, reason: (parsed && parsed.reason) || 'unreadable' }
     return parsed
   })()
