@@ -1190,3 +1190,41 @@ nothing. This is how #205's 172 green tests locked the defect in: they asserted 
 passed while the two real homes disagreed. A drift test that reads one copy and asserts against
 a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
 must trace back to the authoritative home (directly, or via the fixture the home also feeds).
+
+## 12. Verification contracts (fix-ships-its-detector, real-seam tests)
+
+> **Repo-specific convention for us as builders of superheroes**, like §11 — not (yet) a
+> portable band contract. Provenance: the 2026-07-08 engine-fidelity escape
+> ([#307](https://github.com/zwrose/superheroes/issues/307)–[#311](https://github.com/zwrose/superheroes/issues/311)),
+> which penetrated all four verification layers (CI/parity green, review loops passed,
+> acceptance live-runs passed, release-evidence gate green): codex review dispatch had
+> failed 32/32 times across the product's entire recorded history without any surface
+> noticing, because every test of the seam stubbed the seam. These two rules are the
+> layer-independent part of the fix; their productized siblings (reviewer rubric
+> questions, trap-taxonomy classes) ride the release train. Grounding:
+> [PHILOSOPHY.md](PHILOSOPHY.md) promises 2 (judgment the owner isn't expected to have)
+> and 4 (never claim more than verified).
+
+### 12.1 A fix ships its detector
+
+**A PR that fixes an observed-in-production failure must ship the assertion that would
+have caught the original escape** — at whichever tier fits the escape: a CI test, an
+acceptance-harness fact, a readout consistency check. "Fixed" without a detector is a
+claim without a receipt (promise 4): the class stays open even when the instance closes.
+This generalizes the named-risk-needs-tripwire rule from owner-named risks to every
+escape-class fix. A reviewer seeing a production-failure fix with no accompanying
+detector now has a rule to object with, citable by name (this §).
+
+### 12.2 At least one test exercises the real seam
+
+**Every feature carries at least one test that runs the production call shape — real
+store, real payload, real argv — without monkeypatching the seam under change.**
+Monkeypatched-seam-only coverage is how thousands of green tests shipped an inert
+feature: a suite that stubs the very boundary being changed verifies the stub, not the
+behavior (promise 2's flagship trap — "the test suite that mocks the very thing it
+claims to test"). Where the seam's far side is genuinely unreachable in CI (a paid
+external engine, a login), the rule is satisfied by a **contract test against the far
+side's real rules** (e.g. a validator enforcing the foreign schema dialect) plus a
+**live round-trip receipt recorded in the PR** — not by asserting the near side's argv
+alone. The review question is: *which test would have failed if this seam were broken
+the way it actually broke?*

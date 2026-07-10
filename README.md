@@ -10,6 +10,10 @@ reviewing, testing, planning, and running the build loop themselves. One plugin,
 /plugin install superheroes@superheroes
 ```
 
+**Why it exists and where it's going:** [PHILOSOPHY.md](PHILOSOPHY.md) — who superheroes
+is for, what its owner may trust, and the bets behind it — and [ROADMAP.md](ROADMAP.md) —
+the release train delivering those promises.
+
 ---
 
 ## Getting set up
