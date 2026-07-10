@@ -84,19 +84,49 @@ const FIX_REPORT_SCHEMA = {
 // a receipt-less high to low+receiptMissing; _reviewerReceiptIssue/_valid_final_receipt fail closed),
 // now with a corrective (non-blind) retry (reviewerRetryCorrection). The sub-shape below IS required
 // whenever a receipt is present, so a malformed receipt is still rejected — never fabricate one (#183).
+// #307: every `type:'array'` here declares typed `items`. OpenAI-strict structured outputs (codex's
+// `--output-schema`, staged through engine_dispatch.strictify) reject an array with no `items` — the
+// THIRD strict rule the day-one 400 surfaced beyond additionalProperties/required (verified live, see
+// the PR receipt). The items stay Anthropic-PERMISSIVE (documented property types only, no
+// `additionalProperties:false`, no `required`) so the native reviewer path is unconstrained — a
+// reviewer may still omit any field or add its own; strictify tightens these to the closed OpenAI
+// shape ONLY on the codex path. `findings` item severity stays a free string (the review-code panel
+// normalizes/fails-closed via isBlocking), unlike REVIEW_TASK/FINAL_REVIEW's enum.
 const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings', 'confidence'],
   properties: {
-    findings: { type: 'array' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          severity: { type: 'string' },
+          evidence: { type: 'string' },
+          suggestion: { type: 'string' },
+          dimension: { type: 'string' },
+          classKey: { type: 'string' },
+          taxonomy: { type: 'string' },
+          tradeoff: { type: 'boolean' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
     confidence: { enum: ['high', 'low'] },
     verificationReceipt: {
       type: 'object',
       required: ['artifact', 'chain', 'coverageDecisionIds'],
       properties: {
         artifact: { type: 'string' },
-        chain: { type: 'array' },
-        coverageDecisionIds: { type: 'array' },
+        chain: {
+          type: 'array',
+          items: { type: 'object', properties: { step: { type: 'string' }, evidence: { type: 'string' } } },
+        },
+        coverageDecisionIds: { type: 'array', items: { type: 'string' } },
       },
     },
     usage: { type: 'object' },
