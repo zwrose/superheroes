@@ -434,7 +434,9 @@ def _journal_allowance(command, cwd, run_id, reason, work_item=None):
 
 
 def hook(stdin_text, host="codex"):
-    """Read a PreToolUse payload; emit allow (silent) / ask / deny. Fail-CLOSED: an
+    """Read a PreToolUse payload; emit ask / deny, an EXPLICIT allow for an allowance-layer
+    allow (#311 defect 1 — it must override a harness-level `ask` rule for a confined command),
+    or nothing for the default allow (silent — never a blanket allow). Fail-CLOSED: an
     unparseable payload denies. The gated set is host- and scope-aware; on the deny-only
     (Codex) path it runs the single-use allowance overlay (consume → allow, else issue a
     challenge and deny)."""
@@ -479,6 +481,21 @@ def hook(stdin_text, host="codex"):
         decision, reason = ("allow", "")
     if decision in ("deny", "ask"):
         _emit(decision, reason)
+    elif decision == "allow" and reason:
+        # #311 defect 1: the allowance layer's allow (a reason-carrying `auto-allowed (…)`) is
+        # the ONLY allow with a non-empty reason. Emit it explicitly as `permissionDecision:
+        # "allow"` so it OVERRIDES a harness-level `ask` rule (incl. the owner's own `Bash(rm *)`
+        # / `Bash(rm -rf *)` style rules) for a worktree-confined / composed-exact / seeded-family
+        # command — the owner's explicit 2026-07-09 ruling. Without this the layer is a production
+        # no-op: a silent allow lets the harness's normal permission flow (and its ask rules) decide,
+        # so the layer could never turn a would-be prompt into an allow.
+        #
+        # The default-allow fall-through (`("allow", "")`) stays SILENT — never a blanket allow
+        # that would override an ask rule the harness legitimately owns. The gated (owner-authority)
+        # arms all resolve to ask/deny above and can NEVER reach here (UFR-1: a gated command with a
+        # matching allowance rule still emits ask/deny — the allowance layer is consulted only on the
+        # non-gated branch, and its floor re-check drops any gated command back to `fall`).
+        _emit("allow", reason)
     return 0
 
 

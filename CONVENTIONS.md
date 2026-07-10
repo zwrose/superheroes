@@ -826,6 +826,26 @@ worker, fixer, and final-review-fix leaves route to the implementation engine, a
 review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_adapter.py`. The engine
 axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
 engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
+Every external dispatch also **threads the role's resolved model** into the engine argv as a dispatch
+fact — and the adapter's **owner-policy model map** decides what actually runs (owner-ratified
+2026-07-09): **cursor is the token-efficiency engine** — the highly token-efficient composer-2.5 runs
+ALL work roles (build/fix/review/reviewer-deep), and premium Claude models are **never routed through
+cursor by default**. The one deliberate exception is plan authoring: `author-plan: fable` +
+`planAuthor: cursor` dispatches Fable via cursor; every other tier falls through to the pinned
+composer default (that fall-through is the policy, not a gap). Each dispatch also carries a
+**role-appropriate timeout ceiling**
+(`engine_pref.resolve_timeout`): write roles (build/fix/author-plan) get a high ceiling, read roles
+(review) a moderate one — a finite kill, never a borderline wall-clock limit. The high ceiling is
+**paired with a byte-activity stall monitor** (`engine_pref.resolve_idle` + `engine_dispatch`'s shell
+watchdog): the CLI runs as its own process group under an idle watchdog that kills the whole group
+(CLI + children) when no output bytes arrive for the role's idle window (write 600s, read 300s), well
+before the ceiling — a `stalled` outcome, distinct from a ceiling `timeout`. Both limits are always
+armed and `monitor ≤ ceiling`; the monitor is armed only for an engine that streams when piped (a
+fully-buffering engine is left inert, journalled `stall_monitor:"inert (engine buffers)"`, to avoid
+false-killing it). An owner may override either limit with a positive-int `enginePreferences.timeout`
+or `enginePreferences.idleTimeout` (seconds); unset, the role values stand, and an override never
+disables the ceiling. The preflight readout's per-role model shares `engine_adapter`'s single
+cursor-tier map, so the row can never disagree with the dispatched argv.
 
 **Plan-author contract.** Showrunner's produce phase routes ONLY the **plan** doc through
 `enginePreferences.planAuthor` (the **`author-plan`** role kind). Tasks authoring always stays native
@@ -1190,3 +1210,41 @@ nothing. This is how #205's 172 green tests locked the defect in: they asserted 
 passed while the two real homes disagreed. A drift test that reads one copy and asserts against
 a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
 must trace back to the authoritative home (directly, or via the fixture the home also feeds).
+
+## 12. Verification contracts (fix-ships-its-detector, real-seam tests)
+
+> **Repo-specific convention for us as builders of superheroes**, like §11 — not (yet) a
+> portable band contract. Provenance: the 2026-07-08 engine-fidelity escape
+> ([#307](https://github.com/zwrose/superheroes/issues/307)–[#311](https://github.com/zwrose/superheroes/issues/311)),
+> which penetrated all four verification layers (CI/parity green, review loops passed,
+> acceptance live-runs passed, release-evidence gate green): codex review dispatch had
+> failed 32/32 times across the product's entire recorded history without any surface
+> noticing, because every test of the seam stubbed the seam. These two rules are the
+> layer-independent part of the fix; their productized siblings (reviewer rubric
+> questions, trap-taxonomy classes) ride the release train. Grounding:
+> [PHILOSOPHY.md](PHILOSOPHY.md) promises 2 (judgment the owner isn't expected to have)
+> and 4 (never claim more than verified).
+
+### 12.1 A fix ships its detector
+
+**A PR that fixes an observed-in-production failure must ship the assertion that would
+have caught the original escape** — at whichever tier fits the escape: a CI test, an
+acceptance-harness fact, a readout consistency check. "Fixed" without a detector is a
+claim without a receipt (promise 4): the class stays open even when the instance closes.
+This generalizes the named-risk-needs-tripwire rule from owner-named risks to every
+escape-class fix. A reviewer seeing a production-failure fix with no accompanying
+detector now has a rule to object with, citable by name (this §).
+
+### 12.2 At least one test exercises the real seam
+
+**Every feature carries at least one test that runs the production call shape — real
+store, real payload, real argv — without monkeypatching the seam under change.**
+Monkeypatched-seam-only coverage is how thousands of green tests shipped an inert
+feature: a suite that stubs the very boundary being changed verifies the stub, not the
+behavior (promise 2's flagship trap — "the test suite that mocks the very thing it
+claims to test"). Where the seam's far side is genuinely unreachable in CI (a paid
+external engine, a login), the rule is satisfied by a **contract test against the far
+side's real rules** (e.g. a validator enforcing the foreign schema dialect) plus a
+**live round-trip receipt recorded in the PR** — not by asserting the near side's argv
+alone. The review question is: *which test would have failed if this seam were broken
+the way it actually broke?*

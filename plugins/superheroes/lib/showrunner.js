@@ -84,19 +84,49 @@ const FIX_REPORT_SCHEMA = {
 // a receipt-less high to low+receiptMissing; _reviewerReceiptIssue/_valid_final_receipt fail closed),
 // now with a corrective (non-blind) retry (reviewerRetryCorrection). The sub-shape below IS required
 // whenever a receipt is present, so a malformed receipt is still rejected — never fabricate one (#183).
+// #307: every `type:'array'` here declares typed `items`. OpenAI-strict structured outputs (codex's
+// `--output-schema`, staged through engine_dispatch.strictify) reject an array with no `items` — the
+// THIRD strict rule the day-one 400 surfaced beyond additionalProperties/required (verified live, see
+// the PR receipt). The items stay Anthropic-PERMISSIVE (documented property types only, no
+// `additionalProperties:false`, no `required`) so the native reviewer path is unconstrained — a
+// reviewer may still omit any field or add its own; strictify tightens these to the closed OpenAI
+// shape ONLY on the codex path. `findings` item severity stays a free string (the review-code panel
+// normalizes/fails-closed via isBlocking), unlike REVIEW_TASK/FINAL_REVIEW's enum.
 const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings', 'confidence'],
   properties: {
-    findings: { type: 'array' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          severity: { type: 'string' },
+          evidence: { type: 'string' },
+          suggestion: { type: 'string' },
+          dimension: { type: 'string' },
+          classKey: { type: 'string' },
+          taxonomy: { type: 'string' },
+          tradeoff: { type: 'boolean' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
     confidence: { enum: ['high', 'low'] },
     verificationReceipt: {
       type: 'object',
       required: ['artifact', 'chain', 'coverageDecisionIds'],
       properties: {
         artifact: { type: 'string' },
-        chain: { type: 'array' },
-        coverageDecisionIds: { type: 'array' },
+        chain: {
+          type: 'array',
+          items: { type: 'object', properties: { step: { type: 'string' }, evidence: { type: 'string' } } },
+        },
+        coverageDecisionIds: { type: 'array', items: { type: 'string' } },
       },
     },
     usage: { type: 'object' },
@@ -482,11 +512,17 @@ function reviewCodeLeaves(tiers, opts) {
     const effortKey = REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review'
     if (rEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(rEngine, effortKey, _effortOverrides())
+      // #308: thread the resolved reviewer tier (the same `model` the native path + readout use) as
+      // a dispatch fact — the adapter's owner-policy map keeps a cursor reviewer on composer, and the
+      // readout shows the same map's truth. #309: the moderate read ceiling for effortKey
+      // (review/review-deep); the owner `timeout` override still wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: typeof workItem === 'string' ? workItem : 'review-code',
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
+        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
@@ -533,9 +569,13 @@ function reviewCodeLeaves(tiers, opts) {
     const iEngine = enginePrefTwin.resolveEngine('fix', _enginePrefs())
     if (iEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(iEngine, 'fix', _effortOverrides())
+      // #308: thread the resolved fixer tier as a dispatch fact (the adapter's owner-policy map
+      // keeps a cursor fixer on composer). #309: the write ceiling for a fix; owner `timeout` wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
+        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
@@ -1014,6 +1054,8 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
       const afterSnap = await _snapshotGitPorcelain()
       const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
@@ -1837,6 +1879,16 @@ async function showrunner({ workItem }) {
       implementation: _epParsed.implementation || 'claude',
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
+    }
+    // #309 owner timeout override: carry the positive-int `timeout` so resolveTimeout(_enginePrefs(),
+    // role) honors it at dispatch (load_engine_prefs already validated it; guard again defensively).
+    if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
+      _epMap.timeout = _epParsed.timeout
+    }
+    // #309 owner stall-monitor override: carry the positive-int `idleTimeout` so resolveIdle honors it
+    // at dispatch (same validated shape as `timeout`; the dispatch still clamps it to the ceiling).
+    if (typeof _epParsed.idleTimeout === 'number' && Number.isInteger(_epParsed.idleTimeout) && _epParsed.idleTimeout > 0) {
+      _epMap.idleTimeout = _epParsed.idleTimeout
     }
   }
   // FR-8 / UFR-2 (second clause): the pin-or-resolve fork. The frozen preflight-readout snapshot for

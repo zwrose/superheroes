@@ -8,6 +8,17 @@ const { libPath } = require('./lib_root.js')
 const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
+// #309: engines that emit output INCREMENTALLY when piped to a file (not a TTY) — verified 2026-07-09
+// by piping each CLI's stdout+stderr to a file and observing byte growth BEFORE completion (codex `exec
+// --sandbox read-only -`: first bytes ~1s, chunks throughout a ~20s run, max inter-chunk gap ~8s;
+// cursor-agent `-p --trust --output-format stream-json`: first bytes ~2s, a mid-run chunk, done ~6s).
+// For a streaming engine the byte-activity stall monitor observes real progress and only fires on a
+// genuine no-output wedge. A hypothetical engine that FULLY BUFFERS until completion would be
+// false-killed by a byte-growth watchdog, so it is marked `false` here — the monitor is left INERT for
+// it (ceiling only, journalled stall_monitor:"inert (engine buffers)") rather than armed-and-dangerous.
+// Both current engines stream, so both arm the monitor.
+const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
@@ -24,6 +35,82 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function _stageCmd(path, content) {
   const encoded = b64(content == null ? '' : String(content))
   return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
+}
+
+// #307: codex's `--output-schema` rides OpenAI STRICT structured outputs, whose two hard rules the
+// Anthropic-authored schema literals (FINDINGS_SCHEMA / REVIEW_TASK_SCHEMA / FINAL_REVIEW_SCHEMA)
+// were never written for: EVERY object must carry `additionalProperties:false` AND a `required` array
+// naming EVERY property key. Sent verbatim these 400 with `invalid_json_schema` before any review
+// work, so every codex review dispatch has silently fallen open to Claude since the engine onboarding
+// (0 successes ever — see #307). We fix at the STAGING seam, not the literals: one transform corrects
+// all three senders (and any future one), and the NATIVE Claude path keeps receiving the original
+// permissive schema (Anthropic rejects some strict shapes). `strictify` deep-walks the schema and on
+// every object node sets `additionalProperties:false` + `required = every property key`; a property
+// that was NOT originally required is widened to a NULLABLE union (`type:["string","null"]`, or a
+// `null` member added to an `enum`) so a field that used to be omittable stays semantically optional
+// (the engine emits explicit `null` instead of dropping the key). PURE — never mutates its input (the
+// literals are module-level constants also handed to the native agent() path). Idempotent: a second
+// pass finds every key already in `required`, so nothing is re-widened.
+function _typeWithNull(type) {
+  if (type == null) return type
+  if (Array.isArray(type)) return type.indexOf('null') >= 0 ? type : type.concat(['null'])
+  return type === 'null' ? type : [type, 'null']
+}
+
+function _jsonType(v) {
+  if (v === null) return 'null'
+  if (typeof v === 'string') return 'string'
+  if (typeof v === 'boolean') return 'boolean'
+  if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number'
+  return null
+}
+
+// Make a single property schema accept explicit null (so a previously-optional field can be present-
+// but-null under strict mode). Widens a `type` to a null union; for an enum-only property, adds a
+// `null` member AND an inferred nullable `type` union (the OpenAI-documented nullable-enum shape).
+function _nullableProp(propSchema) {
+  if (!propSchema || typeof propSchema !== 'object' || Array.isArray(propSchema)) return propSchema
+  const p = Object.assign({}, propSchema)
+  const hasEnum = Array.isArray(p.enum)
+  if (hasEnum && p.enum.indexOf(null) < 0) p.enum = p.enum.concat([null])
+  if (p.type !== undefined) {
+    p.type = _typeWithNull(p.type)
+  } else if (hasEnum) {
+    const types = []
+    for (const v of p.enum) {
+      const t = _jsonType(v)
+      if (t && types.indexOf(t) < 0) types.push(t)
+    }
+    if (types.length) p.type = types
+  }
+  return p
+}
+
+function _isObjectNode(node) {
+  if (!node || typeof node !== 'object') return false
+  if (node.type === 'object') return true
+  return Array.isArray(node.type) && node.type.indexOf('object') >= 0
+}
+
+function strictify(schema) {
+  if (Array.isArray(schema)) return schema.map(strictify)
+  if (!schema || typeof schema !== 'object') return schema
+  const out = {}
+  for (const k of Object.keys(schema)) out[k] = strictify(schema[k])
+  if (_isObjectNode(out)) {
+    const props = (out.properties && typeof out.properties === 'object' && !Array.isArray(out.properties))
+      ? out.properties : null
+    const propKeys = props ? Object.keys(props) : []
+    const originalRequired = Array.isArray(schema.required) ? schema.required : []
+    if (props) {
+      for (const key of propKeys) {
+        if (originalRequired.indexOf(key) < 0) props[key] = _nullableProp(props[key])
+      }
+    }
+    out.additionalProperties = false
+    out.required = propKeys
+  }
+  return out
 }
 
 // Reuse the spine's exec dumb-pipe (lazy require avoids a load-time cycle: showrunner requires the
@@ -87,27 +174,134 @@ async function _captureHead(wt) {
 // stays, so a slow-to-signal-death CLI still can't hang the caller past limitMs) — the perl layer's job
 // is only to make sure the CLI is actually DEAD, not just unwaited-on. perl/alarm/exec are ordinary CLI
 // tokens (not Node/JS globals), so they don't trip the bundle's banned-global static check.
-// Returns the raw stdout string (or null on fail).
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds) {
+//
+// #309 STALL MONITOR (the ceiling+monitor pair): the perl alarm is a wall-clock CEILING (worst case).
+// When the caller arms the byte-activity monitor (`armIdle`), the CLI is instead wrapped in a shell
+// watchdog that reaps a *wedged* CLI far sooner: run the alarmed CLI in the BACKGROUND as its own
+// process group (`setpgrp(0,0)` in the perl wrapper — so a group-kill reaches the CLI AND its children;
+// a silently-stalled writer never gets SIGPIPE, so byte-growth is the only observable signal), poll the
+// captured-output file's byte size every `poll` seconds, and if it does not grow for `idleSeconds`,
+// TERM-then-KILL the whole process group. Both limits are ALWAYS armed — the perl alarm ceiling stays
+// inside the wrapper, and the monitor (≤ ceiling) fires first on a true stall. The watchdog emits the
+// captured CLI output followed by a trailing `__SR_DISPATCH__{...}` control line JS strips + reads for
+// the idle-kill verdict. The whole watchdog is composed into ONE shell command because the spine's exec
+// courier runs one command and returns its complete stdout in one shot — there is no Node child_process
+// in the Workflow sandbox to attach per-chunk data listeners to (FR-8), so the progress observation has
+// to live shell-side, next to the CLI. The script body carries NO single quotes so it survives shq's
+// single-quote wrapping intact.
+//
+// Returns an object: {ok:true, stdout} on a completed run; {ok:false, stalled:true, idleSeconds} when
+// the monitor idle-killed the CLI; {ok:false} on a courier-level failure.
+function _pollFor(idle) {
+  // Poll cadence: fine enough to honor a small (test-scale) idle window, capped at 10s so a production
+  // 300–600s window costs at most ~60 cheap `wc -c` samples. Effective kill latency ≈ idle + one poll.
+  return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
+}
+// The single-quote-free watchdog script (see the header note). Positional args from `sh -c <script> sh`:
+// $1 ceiling, $2 idle, $3 poll, $4 capture-file BASE, $5 prompt-file, $6 perlprog; then "$@" (after
+// `shift 6`) = the CLI argv. Three deliberate mechanics (each answers a review finding):
+//   - The CLI's stdin is redirected from the prompt file EXPLICITLY (`< "$in"`): a POSIX-sh background
+//     job's stdin is /dev/null unless explicitly redirected, so relying on an outer `< promptPath` (the
+//     unarmed path's mechanism) would silently feed the engine an EMPTY prompt (live-verified
+//     2026-07-09; review finding code-001 Critical).
+//   - stdout and stderr are captured to SEPARATE files: the idle poll watches the SUM of both sizes
+//     (activity on EITHER stream resets the timer — a test-runner spinner on stderr is progress), but
+//     only stdout is emitted to parse-result, so the armed path feeds the adapter exactly what the
+//     unarmed path does (stderr never pollutes parsing; review finding code-002).
+//   - The capture files are suffixed with the script's OWN pid (`$$` — a shell token, not a banned
+//     JS time/random global, so FR-8-clean): concurrent same-workItem dispatches (a review panel
+//     fanning out reviewers that share workItem/roleKind/engine and hence a runId) each get a private
+//     capture pair, so one watchdog can never poll another's file (review finding premortem-001).
+const _WATCH_SCRIPT = [
+  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; shift 6',
+  'out="$base.$$.out"; err="$base.$$.err"',
+  ': > "$out"; : > "$err"',
+  'perl -e "$prog" "$c" "$@" < "$in" > "$out" 2> "$err" &',
+  'p=$!',
+  'last=-1; idlesec=0; killed=0',
+  'while kill -0 "$p" 2>/dev/null; do',
+  'sleep "$poll"',
+  'szo=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szo" ] || szo=0',
+  'sze=$(wc -c < "$err" 2>/dev/null | tr -d " "); [ -n "$sze" ] || sze=0',
+  'sz=$((szo + sze))',
+  'if [ "$sz" -gt "$last" ]; then last=$sz; idlesec=0; else idlesec=$((idlesec + poll)); fi',
+  'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
+  'done',
+  'wait "$p" 2>/dev/null; ec=$?',
+  'cat "$out"',
+  // Cleanup: the stdout capture is always consumed (cat above) so always remove it; the stderr capture
+  // is KEPT on any failure (idle-kill or non-zero exit) so the engine's own diagnostic survives for
+  // post-mortem on disk (never surfaced to parse-result — the journal outcome points here), and removed
+  // only on success (a clean run's stderr is noise; keeping every one would accumulate per dispatch).
+  'if [ "$killed" -eq 1 ] || [ "$ec" -ne 0 ]; then rm -f "$out"; else rm -f "$out" "$err"; fi',
+  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s}\\n" "$killed" "$idle" "$ec"',
+].join('\n')
+
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
-  const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-  const cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  let cmd
+  if (idleArmed) {
+    const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
+    const poll = _pollFor(idle)
+    // Capture-file BASE: the script appends its own `.$$.out`/`.$$.err` (per-sh-process pid) so
+    // concurrent same-runId dispatches never share a capture file (premortem-001).
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
+    const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
+    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
+      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${quotedArgv}`
+    // No outer stdin redirect: the watchdog feeds the prompt to the (backgrounded) CLI itself via
+    // `< "$in"` — a POSIX-sh async job's stdin is /dev/null unless explicitly redirected, so an outer
+    // redirect would silently deliver an EMPTY prompt (code-001; live-verified 2026-07-09).
+    cmd = cwd ? `cd ${shq(cwd)} && ${inner}` : inner
+  } else {
+    const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
+    cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+  }
   const res = await _exec([cmd])
   const r0 = res && res[0]
-  if (r0 && r0.ok) return (r0.stdout == null ? '' : String(r0.stdout))
-  return null
+  if (!(r0 && r0.ok)) return { ok: false }
+  let out = (r0.stdout == null ? '' : String(r0.stdout))
+  if (idleArmed) {
+    // Strip the trailing control line and read the idle-kill verdict. The marker is OUR sentinel on its
+    // own final line; match the LAST occurrence so any legitimate look-alike earlier in CLI output can't
+    // shadow it. A stall returns {stalled:true} so the caller journals outcome:'stalled' + falls open.
+    const m = out.match(/\n?__SR_DISPATCH__(\{[^\n]*\})\s*$/)
+    if (m) {
+      let verdict = null
+      try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
+      out = out.slice(0, m.index)
+      if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
+        return { ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null }
+      }
+    }
+  }
+  return { ok: true, stdout: out }
 }
 
 async function _journalExternal(payload) {
   // Journal the external action as a FIRST-CLASS `external_dispatch` event (FR-6): the audit line's
   // `type` is external_dispatch (Task 4 added the type + the journal_entry.py --event-type flag), and
-  // the payload is written AS-IS (non-secret {engine,effort,roleKind,verify,outcome}). A failed durable
-  // append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
+  // the payload is written AS-IS. #308/#309 enrich it with the RESOLVED `model`, the final `argv`
+  // (both engine-controlled config, never external free-text), and the `effectiveTimeout` in seconds,
+  // so #299's expected-vs-actual audit can prove the dispatched model/timeout match the readout's
+  // promise, and a `timeout` outcome + effectiveTimeout together read as "killed at ceiling after Ns"
+  // — distinct from a genuine CLI failure (external-run-failed / unreadable / commit-failed). A failed
+  // durable append -> {ok:false} -> the caller treats it as UFR-6 (fail-closed, unauditable).
   return _execJson(
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
     `--event-type external_dispatch --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
+      model: payload.model == null ? null : payload.model,
+      argv: Array.isArray(payload.argv) ? payload.argv : null,
+      effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
+      // #309 stall-monitor audit: `stallMonitor` names the monitor state (armed / inert (engine
+      // buffers) / unarmed) and `idleSeconds` is the armed idle threshold (null when not armed). A
+      // `stalled` outcome + idleSeconds together read as "no output for Ns -> killed" — distinct from a
+      // `timeout` outcome (killed at the wall-clock ceiling) or a genuine CLI failure.
+      stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
+      idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
       verify: payload.verify, outcome: payload.outcome })))
 }
 
@@ -133,6 +327,29 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  // #309 STALL MONITOR resolution — the monitor half of the ceiling+monitor pair. The caller resolves
+  // the idle threshold (resolveIdle: role default or owner override) and passes it as o.idleSeconds; a
+  // dispatch with no idle passed (the engine_authz probe / any pre-#309 caller) runs ceiling-only. The
+  // monitor is armed ONLY for an engine that streams output when piped — a hypothetical fully-buffering
+  // engine would be FALSE-KILLED by a byte-growth watchdog, so we leave it inert (ceiling only) and say
+  // so in the journal, rather than arm a dangerous monitor. Both current engines stream (verified
+  // 2026-07-09). The threshold is clamped to the ceiling in _runArgv (monitor ≤ ceiling); an override
+  // never disables the ceiling — the perl alarm stays inside the wrapper regardless.
+  const idleRequested = Number(o.idleSeconds) > 0 ? Math.ceil(Number(o.idleSeconds)) : null
+  const engineStreams = _STREAMS_WHEN_PIPED[engine] === true
+  const armIdle = engineStreams && idleRequested != null
+  const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
+  const stallMonitor = armIdle ? 'armed'
+    : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
+  // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
+  // resolved model, effective timeout ceiling, (once build-argv resolves) the exact argv, and the
+  // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
+  // it is available. Each outcome-specific call overlays its own {verify, outcome}. `model` is a native
+  // tier short-name or null (session inherit).
+  const _jbase = () => ({ workItem: o.workItem, engine, effort, roleKind,
+    model: (typeof model === 'string' && model) ? model : null,
+    argv: resolvedArgv, effectiveTimeout: limitSeconds,
+    stallMonitor, idleSeconds })
   // author-plan (the plan-author leaf) is write-SANDBOXED (it authors the doc + stamps the marker)
   // but takes NO preSHA/commit: definition-docs are not committed by the produce phase (native
   // authors don't commit either; in-repo docs ride the ship phase, out-of-repo docs never commit).
@@ -152,9 +369,14 @@ async function _dispatchExternalInner(o) {
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
+  // #307: codex reads this file as an OpenAI-STRICT `--output-schema`; strictify it so it validates
+  // (see strictify above). ONLY on the codex path — cursor ignores the schema entirely, and the
+  // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
+  // which Anthropic's tool input_schema requires and which strict shapes would break).
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   const writeInputs = await _exec([
     _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(schema || {})),
+    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
   ])
   if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
     return { ok: false, reason: 'could-not-stage-external-inputs' }
@@ -168,6 +390,11 @@ async function _dispatchExternalInner(o) {
   }
 
   // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
+  // resolvedArgv is hoisted so the journal (below, on EVERY outcome incl. a ceiling timeout) can record
+  // the exact argv that was dispatched (#308). It is set synchronously inside `run` right after
+  // build-argv resolves, so by the time the race's timeout branch fires (limitMs later, during the CLI
+  // run) it already holds the real argv — a timeout journals the argv the CLI was killed while running.
+  let resolvedArgv = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -176,13 +403,17 @@ async function _dispatchExternalInner(o) {
       (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
+    resolvedArgv = argv
 
     // Feed the staged prompt file to the external process stdin (the argv itself carries no prompt).
     // cwd is threaded through so _runArgv can confine the run to the worktree (FR-8; see _runArgv).
-    // limitSeconds is threaded through so _runArgv can OS-level-kill a stalled CLI (FIX 2 below) —
-    // the same value that bounds the JS Promise.race, so the perl alarm and the race agree.
-    const rawStdout = await _runArgv(argv, promptPath, cwd, limitSeconds)
-    if (rawStdout == null) return { ok: false, reason: 'external-run-failed' }
+    // limitSeconds bounds the perl-alarm ceiling (belt-and-suspenders with the JS race); idleSeconds +
+    // armIdle arm the #309 byte-activity stall monitor (≤ ceiling). A monitor idle-kill returns
+    // {stalled:true} -> outcome:'stalled' (distinct from the ceiling 'timeout'); the caller falls open.
+    const runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle)
+    if (runRes && runRes.stalled) return { ok: false, reason: 'stalled' }
+    if (!runRes || !runRes.ok) return { ok: false, reason: 'external-run-failed' }
+    const rawStdout = runRes.stdout
 
     // parse-result SCRUBS external free-text at the adapter boundary (Task 6); pass raw stdout by file.
     const rawPath = `/tmp/engine-${runId}.out`
@@ -216,8 +447,8 @@ async function _dispatchExternalInner(o) {
   // unjournaled author dispatch is as unauditable as any other), then hand the parsed notify
   // back; the caller's usableDraft post-check decides acceptance and falls open on failure.
   if (isAuthor) {
-    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
   }
@@ -227,16 +458,16 @@ async function _dispatchExternalInner(o) {
   // append itself fails — mirror the write-role check below (a failed journal -> {ok:false,
   // reason:'unauditable'}) instead of discarding the append's own success/failure unchecked.
   if (!isWrite) {
-    const jRead = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jRead = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jRead && jRead.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { findings: parsed.findings || [] } : { ok: false, reason: parsed.reason }
   }
 
   // 5. Write role failure -> only uncommitted edits exist; caller reuses resetUncommitted + falls open (UFR-2).
   if (!parsed.ok) {
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.reason || 'failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.reason || 'failed' }))
     return { ok: false, reason: parsed.reason }
   }
 
@@ -250,14 +481,14 @@ async function _dispatchExternalInner(o) {
     // sec-101: the engine DID run and edited the worktree here, so this outcome must ALSO leave exactly
     // one audit line — otherwise commit-failure is the single external-dispatch outcome with no journal
     // entry (FR-6/UFR-6 symmetry gap). Journal BEFORE returning; the reason is already scrubbed above.
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: 'commit-failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: 'commit-failed' }))
     return { ok: false, reason }
   }
 
   // 7. Journal BEFORE returning the native worker shape (UFR-6: unauditable -> the caller fails closed).
-  const j = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind,
-    verify: 'pending', outcome: 'ok' })
+  const j = await _journalExternal(Object.assign(_jbase(), {
+    verify: 'pending', outcome: 'ok' }))
   if (!(j && j.ok)) return { ok: false, reason: 'unauditable' }
   return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
 }
@@ -321,4 +552,7 @@ async function dispatchExternal(o) {
 // test-only: reset the once-per-process tripwire memo so a smoke can drive the notice deterministically.
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
+// _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
+// external engine must have an explicit streams-when-piped verdict) — not a public seam.
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+  _STREAMS_WHEN_PIPED, strictify }

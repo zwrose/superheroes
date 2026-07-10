@@ -155,12 +155,12 @@ def display_model(engine, model):
     """The model string to SHOW for (engine, model). External engines show the SAME model id
     engine_adapter.build_argv would actually dispatch (single source of truth): codex ignores the
     tier and shows its pinned constant; cursor maps the native tier short-name through
-    engine_adapter._CURSOR_MODEL_BY_TIER exactly as build_argv does (fable/opus → their cursor ids;
-    an unmapped/None tier → the pinned composer default) — so a per-role model override (e.g.
-    author-plan: fable + planAuthor: cursor) is shown honestly, not flattened to the default.
-    claude shows the resolved tier model, or 'inherit' for a None (session-inherited) model. An
-    unknown engine shows its resolved model raw (UFR-5 handled by the caller's 'unrecognized'
-    marker)."""
+    engine_adapter._CURSOR_MODEL_BY_TIER exactly as build_argv does. Per the owner policy (2026-07-09)
+    that map's only entry is fable (the author-plan exception), so every work-role cursor row
+    truthfully shows the pinned composer default — cursor is the token-efficiency engine and premium
+    models are never routed through it by default. claude shows the resolved tier model, or 'inherit'
+    for a None (session-inherited) model. An unknown engine shows its resolved model raw (UFR-5
+    handled by the caller's 'unrecognized' marker)."""
     if engine == "codex":
         return engine_adapter._CODEX_MODEL
     if engine == "cursor":
@@ -224,6 +224,16 @@ def render(snapshot):
     storage = snapshot.get("storage") or {}
     lines.append("Storage            %s · docs at %s"
                  % (storage.get("mode", "unavailable"), storage.get("docsPath", "unavailable")))
+    # #311 defect 3: name the seeded-allowance-rule state so an unseeded project is LOUD, not silent
+    # (an unseeded project's #286 allowance layer never fires a routine family). Points at configure.
+    permission = snapshot.get("permission") or {}
+    if permission.get("unavailable"):
+        perm_line = "unavailable"
+    elif not permission.get("seeded"):
+        perm_line = "none seeded for this project — run configure to seed (allowances will not fire)"
+    else:
+        perm_line = "%d seeded" % permission["seeded"]
+    lines.append("Permission rules   " + perm_line)
     # Privacy note (spec NFR): verify/storage strings echo verbatim, owner-only. Revisit redaction
     # before ever routing readout content to a shared destination (out of scope here).
     return "\n".join(lines)
@@ -293,6 +303,7 @@ def _load_readers(work_item, root):
     store_root seam defaults to None."""
     import core_md, verify_command_cli, mode_registry, definition_doc
     import engine_pref as _ep
+    import permission_rules
     # Shared setup — a raise here has no single owning field, so it (correctly) escapes to assemble's
     # total-failure guard (UFR-3), not a per-field degrade. resolve_profile_path's arg is the repo cwd.
     profile = model_tier_overrides.resolve_profile_path(root)
@@ -307,8 +318,14 @@ def _load_readers(work_item, root):
     storage = _read_field(lambda: {"mode": mode_registry.resolve(root, None)["mode"],
                                    "docsPath": definition_doc.resolve_work_item_dir(
                                        work_item, root=root, cwd=root)})  # root/cwd = repo; store_root=None
+    # #311 defect 3: make the absence of seeded allowance rules LOUD. `rules`'s first arg is the
+    # project cwd (repo root); store-base=None so the REAL out-of-repo store resolves. An empty
+    # list here means the #286 allowance layer will never fire for a routine family — the readout
+    # names that state and points at configure (we do NOT auto-seed).
+    permission = _read_field(lambda: {"seeded": len(permission_rules.rules(root, None))})
     return {"prefs": prefs, "tier_overrides": tier_overrides, "authz": authz,
-            "calibration": calibration, "verify": verify, "storage": storage}
+            "calibration": calibration, "verify": verify, "storage": storage,
+            "permission": permission}
 
 
 def assemble(work_item, root, run_overrides=None, readers=None, _force_total_failure=False):
@@ -364,10 +381,20 @@ def assemble(work_item, root, run_overrides=None, readers=None, _force_total_fai
     else:
         storage = storage_val or {"unavailable": True}
 
+    # #311 defect 3: seeded-allowance-rule count. A _RAISE degrades (unavailable) like any other
+    # field; a real read yields {"seeded": N}. `None` seeded rules -> the render() line points at
+    # configure so the operator sees the layer is inert for this project (we never auto-seed).
+    permission_val = readers.get("permission")
+    if permission_val is _RAISE:
+        degraded.append({"field": "permission", "reason": "permission rules unreadable"})
+        permission = {"unavailable": True}
+    else:
+        permission = permission_val or {"seeded": 0}
+
     return {"workItem": work_item, "phases": phases, "externalEngines": external,
             "calibration": {"status": (cal or {}).get("status"), "provisional": provisional},
-            "verify": verify, "storage": storage, "degraded": degraded,
-            "version": READOUT_VERSION}
+            "verify": verify, "storage": storage, "permission": permission,
+            "degraded": degraded, "version": READOUT_VERSION}
 
 
 # --- Task 7: The JSON CLI (main) — the verified interface the skill shells (FR-1 plumbing, UFR-3) ---

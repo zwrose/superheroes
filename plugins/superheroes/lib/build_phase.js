@@ -426,7 +426,7 @@ async function _implWriteAuthorized(engine, wt) {
 // Route the write role (build|fix) to the chosen implementation engine. claude -> the existing agent()
 // path, BYTE-UNCHANGED. external -> dispatchExternal; on ANY non-success reset uncommitted edits (UFR-2)
 // and fall open to the native agent() (UFR-1). preSHA/commit-discipline live inside dispatchExternal.
-async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall }) {
+async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall, model }) {
   const engine = enginePrefTwin.resolveEngine(roleKind, _enginePrefs())
   if (engine === 'claude') return nativeAgentCall()
   // UFR-4: before the FIRST external WRITE, confirm the host grants this engine write authority.
@@ -435,9 +435,17 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   // FR-9: effort override comes from the engine-prefs effort sub-map (keyed by role_kind), NOT the
   // model-tier _overrides() map (keyed by role->model — resolveEffort could never match it).
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
+  // #309: write roles get the HIGH ceiling (resolveTimeout(_,'build'|'fix')); the owner `timeout`
+  // override on __SR_ENGINE_PREFS wins. #308: thread the caller's resolved model as a dispatch FACT —
+  // the adapter's policy map decides what cursor runs (owner policy 2026-07-09: composer for work
+  // roles; only the fable/author-plan exception maps a premium id), and the readout shows the same.
+  const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
+  // #309: PAIR the high ceiling with the byte-activity stall monitor — the write idle window
+  // (resolveIdle(_,'build'|'fix') = 600s, owner `idleTimeout` override wins, clamped ≤ ceiling).
+  const idleSeconds = enginePrefTwin.resolveIdle(_enginePrefs(), roleKind)
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem,
+    taskId, workItem, model, timeoutSeconds, idleSeconds,
   })
   if (res && res.ok) return res
   // UFR-2: a failed/stalled external write left only uncommitted edits -> discard, then redo on Claude.
@@ -620,7 +628,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt,
+      prompt, model: builderModel,   // #308: same tier the readout's builder row promises
       nativeAgentCall: () => agent(
         prompt,
         { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
@@ -731,6 +739,14 @@ const REVIEW_TASK_SCHEMA = {
 // foreign scale (`high`/`blocker`/lowercase `critical`) is corrected at the structured-output source
 // instead of slipping past the fail-closed fixer filter. Shared across the native + external dispatch
 // sites in runFinalReview's reviewerAgent.
+// #307: the finding item MUST declare every field the reviewerAgent prompt asks for
+// ({file,line,title,severity,evidence}). Under codex's OpenAI-strict `--output-schema` (staged through
+// engine_dispatch.strictify), an object with `additionalProperties:false` lets the engine emit ONLY the
+// declared keys — a `severity`-only item would force codex to drop file/line, and reviewPanel's
+// compileFindings discards any finding missing file/line, so a codex whole-branch review would report a
+// false clean and a defective branch would ship. The extra fields stay Anthropic-permissive here (no
+// `additionalProperties:false`, no `required` beyond none) so the native path is unconstrained;
+// strictify tightens them for codex, where they come back as explicit null when unset.
 const FINAL_REVIEW_SCHEMA = {
   type: 'object',
   required: ['findings'],
@@ -739,7 +755,13 @@ const FINAL_REVIEW_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          evidence: { type: 'string' },
+        },
       },
     },
   },
@@ -771,9 +793,14 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
   if (rEngine !== 'claude') {
     // regular per-task review effort ('review'/high); the whole-branch review dispatches 'review-deep'.
     const eff = enginePrefTwin.resolveEffort(rEngine, 'review', _effortOverrides())
+    // #308: thread the reviewer tier as a dispatch fact (the adapter's owner-policy map keeps a
+    // cursor reviewer on composer; the readout shows the same map's truth).
+    // #309: read roles get the moderate ceiling; the owner `timeout` override still wins.
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
+      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
+      idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review'),   // #309 read stall monitor
     })
     // The engine adapter's review parse yields {findings} only (parse_result role_kind='review'
     // discards verdicts), so synthesize the two required verdicts from the findings. The task_review
@@ -849,7 +876,7 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     }
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: task.id, wt, branch,
+      workItem, roleKind: 'fix', taskId: task.id, wt, branch, model: fixerModel,  // #308
       prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
@@ -908,9 +935,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
       // depth-aware effort: the whole-branch final review runs at the reviewer-deep model tier
       // (reviewerModel above), so it dispatches codex at 'review-deep' (xhigh) to match — FR-9.
       const eff = enginePrefTwin.resolveEffort(rEngine, 'review-deep', _effortOverrides())
+      // #308: thread the reviewer-deep tier as a dispatch fact (the adapter's owner-policy map
+      // keeps a cursor deep-reviewer on composer; the readout shows the same map's truth).
+      // #309: read roles get the moderate ceiling (review-deep shares it); owner `timeout` wins.
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
+        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review-deep'),   // #309 read stall monitor
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never
       // recorded clean. dispatchExternal returns {findings} on success or {ok:false} on failure.
@@ -945,7 +977,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // The whole-branch final review has NO per-task id in scope (mirror the real 504-511 closure):
     // use the work-item as the fix dispatch's task id for the trailer/journal.
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch,
+      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
       prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
