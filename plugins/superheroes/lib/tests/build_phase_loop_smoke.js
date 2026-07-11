@@ -420,6 +420,46 @@ const SMART_STUBS = [
   }
 
   // ===========================================================================
+  // (10b) #381 CITATION-LESS BLOCKER HANDOFF: line:null blocking finding rides the cap worklist —
+  //       fix dispatches once and the handoff journal records open_findings_count 1 (not 0).
+  // ===========================================================================
+  {
+    let handoffJournals = 0, fixDispatches = 0, handoffJournalCmd = null
+    global.agent = makeAgent([
+      execStub((p) => {
+        if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
+        if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) {
+          handoffJournals += 1
+          handoffJournalCmd = p
+          return JSON.stringify({ ok: true })
+        }
+        if (p.includes('prov_entry.py')) return JSON.stringify({ ok: true })
+        return standardLeaf(p)
+      }),
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+      ['branch-reviewer:', { findings: [{ file: 'b.js', line: null, title: 'missing line', severity: 'Critical', evidence: 'e' }] }],
+      ['fix-branch', () => { fixDispatches += 1; return { ok: true } }],
+      ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
+      ['run verify', { command: 'none', returncode: 0, timedOut: false }],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    const r = await bp.buildPhase(WI, 5)
+    assert.strictEqual(r.confidence, 'high', '#381 (f): citation-less blocker round-cap handoff proceeds')
+    assert.strictEqual(fixDispatches, 1, '#381 (f): citation-less blocker dispatches the fix batch')
+    assert.strictEqual(handoffJournals, 1, '#381 (f): handoff journals once')
+    const handoffPayload = JSON.parse(handoffJournalCmd.match(/--payload '(.*)'$/s)[1])
+    assert.strictEqual(handoffPayload.open_findings_count, 1,
+      '#381 (f): handoff payload counts the citation-less blocker (not 0)')
+    assert.strictEqual((handoffPayload.open_findings[0] || {}).title, 'missing line')
+  }
+
+  // ===========================================================================
   // (11) #381 VERIFY RED PARKS: a clean-looking whole-branch review whose verify gate goes red halts
   //      as haltKind 'verify-fail' — a PROCESS failure that still parks fail-closed (NOT a round-cap
   //      handoff). No coverage stamp, no provenance. Guards the swallow trap explicitly.

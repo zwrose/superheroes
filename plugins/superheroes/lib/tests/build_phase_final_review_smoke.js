@@ -181,5 +181,43 @@ const bp = require('../build_phase.js')
   assertTerminal(r, 'halted', '#381 (d): a lost fence halts')
   assert.strictEqual(r.haltKind, 'fix-failed', '#381 (d): a lost fence parks (fail-closed, UFR-10)')
   assert.strictEqual(fixDispatches, 0, '#381 (d): NO fixer dispatch over a lost fence (UFR-10)')
-  console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed + #381 one-fix-pass contract (round-cap handoff, pre/post-fix verify red, fix-failure, fence-lost)')
+
+  // 9. #381 CITATION-LESS BLOCKER (f): a blocking finding with line:null is counted by the cap
+  //    decider (presentBlocking) but dropped from verdict.findings by compileFindings. The cap
+  //    worklist must still dispatch the fix batch and journal open_findings_count 1, not 0.
+  const citationlessBlocker = [{ file: 'b.js', line: null, title: 'missing line', severity: 'Critical', evidence: 'e' }]
+  resetRunDir(WI)
+  global.agent = makeAgent({ reviewerFindings: citationlessBlocker, verifyResult: 'pass' })
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
+    fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
+  assertTerminal(r, 'halted', '#381 (f): a citation-less blocker at the cap halts (round-cap)')
+  assert.strictEqual(r.haltKind, 'round-cap', '#381 (f): the halt carries the round-cap discriminator')
+  assert.strictEqual(fixDispatches, 1, '#381 (f): citation-less blocker still dispatches the fix batch')
+  assert.strictEqual(r.openFindingsCount, 1, '#381 (f): handoff summary counts the citation-less blocker')
+  assert.strictEqual((r.openFindings[0] || {}).title, 'missing line')
+
+  // 10. #381 INCONSISTENT EMPTY WORKLIST (g): round-cap with an empty derived cap worklist is an
+  //     inconsistency with the decider — downgrade to 'other' (park), never stamp-and-advance.
+  resetRunDir(WI)
+  const ioSeam = require('../io_seam.js')
+  const baseIo = ioSeam.io()
+  globalThis.io = Object.assign({}, baseIo, {
+    readJson: async (p, dflt) => {
+      if (String(p).endsWith('round-records.json')) return []
+      return baseIo.readJson(p, dflt)
+    },
+  })
+  delete require.cache[require.resolve('../build_phase.js')]
+  const bpPark = require('../build_phase.js')
+  global.agent = makeAgent({ reviewerFindings: blocker, verifyResult: 'pass' })
+  r = await bpPark.runFinalReview(WI, 5, 'superheroes/wi-abc',
+    fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
+  assertTerminal(r, 'halted', '#381 (g): inconsistent empty cap worklist halts')
+  assert.strictEqual(r.haltKind, 'other', '#381 (g): empty worklist downgrades round-cap to other (park)')
+  assert.ok(/empty blocking worklist/i.test(r.reason || ''), '#381 (g): reason names the inconsistency')
+  assert.strictEqual(fixDispatches, 0, '#381 (g): NO fix dispatch when the cap worklist is empty')
+  delete globalThis.io
+  delete require.cache[require.resolve('../build_phase.js')]
+
+  console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed + #381 one-fix-pass contract (round-cap handoff, pre/post-fix verify red, fix-failure, fence-lost, citation-less blocker, empty-worklist park)')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

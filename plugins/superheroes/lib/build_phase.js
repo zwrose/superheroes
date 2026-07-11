@@ -20,6 +20,7 @@ const taskReviewTwin = require('./task_review.js')
 // verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
 // final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
+const panelTally = require('./panel_tally.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
 const engineDispatch = require('./engine_dispatch.js')
@@ -946,6 +947,34 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
   }
 }
 
+// #381: the cap decider's presentBlocking counts RAW dimension findings (including citation-less
+// blockers that compileFindings drops from verdict.findings). The manual post-cap fix/handoff path
+// must consume the SAME durable worklist the gate/breaker saw — read it from round-records.json
+// (the panel persists dimension findings there before the cap halt returns), mirroring the panel's
+// own fix leg which dispatches from the on-disk worklist rather than the compiled verdict.
+async function capBlockingWorklist(runDir, verdict) {
+  const round = (verdict && verdict.round) || 1
+  try {
+    const records = await io().readJson(`${runDir}/round-records.json`, null)
+    if (!Array.isArray(records)) return []
+    const rec = records.find((r) => r && r.round === round) || records[records.length - 1]
+    if (!rec || !rec.dimensions) return []
+    return panelTally.blockingFindingsFromDimensionResults(rec.dimensions)
+      .filter((f) => circuitBreaker.isBlocking(f.severity))
+  } catch (_e) {
+    return []
+  }
+}
+
+function capOpenFindingsSummary(blockers) {
+  return (blockers || []).slice(0, 50).map((f) => ({
+    file: (f && f.file) || null,
+    line: (f && (f.line !== undefined ? f.line : null)),
+    title: (f && f.title) || '',
+    severity: (f && f.severity) || '',
+  }))
+}
+
 async function runFinalReview(workItem, generation, branch, wt) {
   const script = [
     'import json, subprocess, sys',
@@ -1024,11 +1053,16 @@ async function runFinalReview(workItem, generation, branch, wt) {
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
   }
-  const fixStep = async (_fixContext, verdict, _runDir) => {
-    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
-    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
-    // severity is dispatched to the fixer, never silently counted nowhere.
-    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  // Populated after reviewPanel returns on a round-cap halt; fixStep reads it when dispatching.
+  let capBlockers = []
+  const fixStep = async (_fixContext, verdict, runDir) => {
+    // #381: consume the cap decider's raw blocking worklist (round-records), not verdict.findings
+    // (the compiled set that drops citation-less blockers). Fall back to compiled findings only when
+    // the durable record is absent (resume/degrade paths).
+    let blockers = capBlockers.length ? capBlockers.slice() : await capBlockingWorklist(runDir, verdict)
+    if (!blockers.length) {
+      blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+    }
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
@@ -1069,7 +1103,19 @@ async function runFinalReview(workItem, generation, branch, wt) {
   let haltKind = verdict && verdict.haltKind
   let reason = verdict && verdict.reason
   let fixPass = null
+  // #381: load the cap worklist once from round-records (same raw blocking source the decider
+  // counted). Only needed on a round-cap halt — a clean terminal never handoffs open findings.
+  if (verdict && verdict.haltKind === 'round-cap') {
+    capBlockers = await capBlockingWorklist(runDir, verdict)
+  }
   if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap') {
+    // Fail closed: the decider stamped round-cap only when presentBlocking > 0; an empty derived
+    // worklist means the fix/handoff path disagrees with the gate — park, never stamp-and-advance.
+    if (capBlockers.length === 0) {
+      haltKind = 'other'
+      reason = 'round-cap with empty blocking worklist — inconsistent with cap decider (fail closed)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
     // The ONE fix pass (#381, owner-ratified: "single review AND single fix pass, just no loop — not
     // advisory only"). Reuse the panel's own fixStep closure verbatim: fence-before-write (UFR-10),
     // _implDispatch (external engine + UFR-2 fall-open), the {fixed,deferred} report contract. A lost
@@ -1104,15 +1150,17 @@ async function runFinalReview(workItem, generation, branch, wt) {
           + ' after the one-pass fix batch — cannot hand off'
       }
     }
+    }
   }
   // openFindings is a COMPACT summary (no evidence bodies) the caller journals on a round-cap handoff
   // so the still-open findings review-code will vet stay auditable — a summary, not a prose wall.
-  const rawFindings = Array.isArray(verdict && verdict.findings) ? verdict.findings : []
-  const openFindings = rawFindings.slice(0, 50).map((f) => ({
-    file: (f && f.file) || null, line: (f && (f.line !== undefined ? f.line : null)),
-    title: (f && f.title) || '', severity: (f && f.severity) || '' }))
+  // Built from the SAME cap worklist the fix batch consumed (raw blocking set), not verdict.findings.
+  if (!capBlockers.length) {
+    capBlockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  }
+  const openFindings = capOpenFindingsSummary(capBlockers)
   return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
-           openFindings, openFindingsCount: rawFindings.length }
+           openFindings, openFindingsCount: capBlockers.length }
 }
 
 // #381 handoff audit: on a round-cap handoff (the whole-branch final review found blockers at the

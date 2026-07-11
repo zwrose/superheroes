@@ -4277,6 +4277,7 @@ const courier = require('./courier_exec.js')
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
 const circuitBreaker = require('./circuit_breaker.js')
+const panelTally = require('./panel_tally.js')
 const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const { libPath, libRoot } = require('./lib_root.js')
@@ -4808,6 +4809,27 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     round += 1
   }
 }
+async function capBlockingWorklist(runDir, verdict) {
+  const round = (verdict && verdict.round) || 1
+  try {
+    const records = await io().readJson(`${runDir}/round-records.json`, null)
+    if (!Array.isArray(records)) return []
+    const rec = records.find((r) => r && r.round === round) || records[records.length - 1]
+    if (!rec || !rec.dimensions) return []
+    return panelTally.blockingFindingsFromDimensionResults(rec.dimensions)
+      .filter((f) => circuitBreaker.isBlocking(f.severity))
+  } catch (_e) {
+    return []
+  }
+}
+function capOpenFindingsSummary(blockers) {
+  return (blockers || []).slice(0, 50).map((f) => ({
+    file: (f && f.file) || null,
+    line: (f && (f.line !== undefined ? f.line : null)),
+    title: (f && f.title) || '',
+    severity: (f && f.severity) || '',
+  }))
+}
 async function runFinalReview(workItem, generation, branch, wt) {
   const script = [
     'import json, subprocess, sys',
@@ -4869,8 +4891,12 @@ async function runFinalReview(workItem, generation, branch, wt) {
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
   }
-  const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  let capBlockers = []
+  const fixStep = async (_fixContext, verdict, runDir) => {
+    let blockers = capBlockers.length ? capBlockers.slice() : await capBlockingWorklist(runDir, verdict)
+    if (!blockers.length) {
+      blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+    }
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
@@ -4889,7 +4915,15 @@ async function runFinalReview(workItem, generation, branch, wt) {
   let haltKind = verdict && verdict.haltKind
   let reason = verdict && verdict.reason
   let fixPass = null
+  if (verdict && verdict.haltKind === 'round-cap') {
+    capBlockers = await capBlockingWorklist(runDir, verdict)
+  }
   if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap') {
+    if (capBlockers.length === 0) {
+      haltKind = 'other'
+      reason = 'round-cap with empty blocking worklist — inconsistent with cap decider (fail closed)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
     let fixReport = null
     try { fixReport = await fixStep(null, verdict, runDir) } catch (_e) { fixReport = null }
     if (!fixReport) {
@@ -4911,13 +4945,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
           + ' after the one-pass fix batch — cannot hand off'
       }
     }
+    }
   }
-  const rawFindings = Array.isArray(verdict && verdict.findings) ? verdict.findings : []
-  const openFindings = rawFindings.slice(0, 50).map((f) => ({
-    file: (f && f.file) || null, line: (f && (f.line !== undefined ? f.line : null)),
-    title: (f && f.title) || '', severity: (f && f.severity) || '' }))
+  if (!capBlockers.length) {
+    capBlockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  }
+  const openFindings = capOpenFindingsSummary(capBlockers)
   return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
-           openFindings, openFindingsCount: rawFindings.length }
+           openFindings, openFindingsCount: capBlockers.length }
 }
 async function journalFinalReviewHandoff(workItem, branch, fr) {
   const fixPass = (fr && fr.fixPass) || null

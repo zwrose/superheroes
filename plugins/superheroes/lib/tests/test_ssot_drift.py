@@ -381,7 +381,7 @@ def test_halt_kind_vocabulary_single_sourced():
 
     bp = _read(os.path.join("lib", "build_phase.js"))
     bp_literals = _js_halt_kind_routing_literals(bp, "build_phase.js")
-    assert bp_literals == {"round-cap", "fix-failed", "verify-fail"}, (
+    assert bp_literals == {"round-cap", "fix-failed", "verify-fail", "other"}, (
         "build_phase.js haltKind routing literals %r drifted from the expected "
         "consumer set" % bp_literals)
     assert bp_literals <= home_set, (
