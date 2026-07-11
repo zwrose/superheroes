@@ -119,6 +119,17 @@ const FIX_RESULT_SCHEMA = {
     extras: { type: 'object' },
   },
 }
+// #219: the PR-body composer. body is typed (verdict-bearing field — the #275 lesson); the leaf
+// returns ONLY the markdown prose, no code fences. It becomes the squash-merge commit message —
+// lean what & why; CI/test/spot-check live in the readout comment, never here.
+const PR_BODY_SCHEMA = { type: 'object', required: ['body'], properties: { body: { type: 'string' } } }
+const PR_BODY_COMPOSE_INSTRUCTION =
+  'Write the GitHub pull-request DESCRIPTION for this change, from the provided context. It becomes ' +
+  'the squash-merge commit message, so write a lean "what & why": a one-paragraph summary of what ' +
+  'changed and why, then a short bulleted list of the notable changes. Do NOT include CI status, ' +
+  'test results, or spot-check checkboxes (those live elsewhere). If the context has an "issue" ' +
+  'number, end the body with a line "Closes #<issue>". Return ONLY the markdown body via the schema ' +
+  "'body' field — no code fences, no preamble."
 
 function _policySubject(value) {
   if (typeof value !== 'string' || !value) return null
@@ -2900,15 +2911,49 @@ async function loadPr(workItem) {
   return (out && out.pr !== undefined) ? out.pr : null
 }
 
-// draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}.
+// #219: compose the durable draft-PR prose with a Sonnet leaf. Returns a durable file path that
+// pr_entry consumes via --body-file, or null (pr_entry then falls back to a deterministic real
+// body). Never throws — a compose failure is a body-quality concern, never a ship blocker (owner
+// Decision 2). Resume-cheap: the context courier (Python) reports prior_body_usable so an
+// adopt/resume never re-spends Sonnet — and the spine never io()-reads a maybe-missing file
+// (proseReads === 0; rev 2 of the tasks doc, learned from run 1).
+async function composePrBody(workItem) {
+  const bodyPath = `/tmp/showrunner-${workItem}-pr-body.md`
+  const base = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const baseArg = base ? ` --base ${shq(base)}` : ''
+  const ctx = await execJson(
+    `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg} --body-path ${shq(bodyPath)}`,
+    'pr-body context')
+  if (!ctx) return null                                  // context gather failed -> fallback
+  if (ctx.prior_body_usable === true) return bodyPath     // resume-cheap: no Sonnet re-spend
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('pr-body', overrides, null)
+  let out = null
+  try {
+    out = await globalThis.agent(
+      `${PR_BODY_COMPOSE_INSTRUCTION}\n\nContext: ${JSON.stringify(ctx)}`,
+      { model, label: 'compose PR body', schema: PR_BODY_SCHEMA })
+  } catch (_) { return null }
+  const body = (out && typeof out.body === 'string') ? out.body.trim() : ''  // null-guarded (#280 lesson)
+  if (!body) return null
+  try { await io().writeFile(bodyPath, body) } catch (_) { return null }
+  return bodyPath
+}
+module.exports.composePrBody = composePrBody
+
+// draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}. #219: a Sonnet leaf
+// composes the durable "what & why" body first (resume-cheap; a compose failure -> null -> pr_entry
+// falls back deterministically), threaded to pr_entry via --body-file.
 async function draftPRPhase(workItem) {
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
+  const _bodyPath = await composePrBody(workItem)
+  const _bodyArg = _bodyPath ? ` --body-file ${shq(_bodyPath)}` : ''
   let out = null
   try {
     out = await courier.runCourierJson(
       'open draft PR',
-      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
+      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}${_bodyArg}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
