@@ -83,14 +83,47 @@ def test_orchestration_role_inherits_session_model():
 
 def test_display_model_maps_external_engines():
     assert preflight_readout.display_model("codex", "sonnet") == "gpt-5.5"
-    # cursor honors the SAME per-tier map build_argv uses: an unmapped tier shows the pinned default,
-    # a mapped tier (today only fable/opus via _CURSOR_MODEL_BY_TIER) shows its resolved cursor id.
+    # cursor honors the SAME per-tier map build_argv uses. OWNER POLICY (ratified 2026-07-09): cursor
+    # is the token-efficiency engine — every work-role tier (opus/sonnet/haiku/None) shows the pinned
+    # composer default it really dispatches; ONLY fable (the author-plan exception) maps to a premium
+    # id. The readout row shows the composer truth instead of advertising a premium tier (the #308
+    # defect was the readout side, not the dispatch).
     assert preflight_readout.display_model("cursor", "sonnet") == "composer-2.5-fast"
+    assert preflight_readout.display_model("cursor", "opus") == "composer-2.5-fast"
+    assert preflight_readout.display_model("cursor", "haiku") == "composer-2.5-fast"
     assert preflight_readout.display_model("cursor", None) == "composer-2.5-fast"
     assert preflight_readout.display_model("cursor", "fable") == "claude-fable-5-thinking-xhigh"
-    assert preflight_readout.display_model("cursor", "opus") == "claude-opus-4-8-thinking-high"
     assert preflight_readout.display_model("claude", "opus") == "opus"
     assert preflight_readout.display_model("claude", None) == "inherit"
+
+
+def test_display_model_never_diverges_from_build_argv_for_every_role_engine():
+    """#308/#162 SSOT: for EVERY (engine, model-tier) an engine-routed role can dispatch, the model
+    the preflight readout SHOWS must equal the model engine_adapter.build_argv actually embeds in the
+    argv — no monkeypatched seams, both real. This is the by-construction guarantee the readout header
+    claims ('the readout cannot drift from dispatch'); the #308 defect was the READOUT side advertising
+    premium tiers cursor never dispatches (PR #285's display derivation) — the dispatch's composer
+    default was the owner policy. Covers cursor (the fable exception + the composer policy fallback)
+    and codex (always its pinned model, tier ignored)."""
+    import engine_adapter
+
+    def _model_in_argv(engine, role_kind, model):
+        argv = engine_adapter.build_argv(engine, role_kind, "composer" if engine == "cursor" else "high",
+                                         {"cwd": "/wt", "model": model})
+        flag = "--model" if engine == "cursor" else "-m"
+        return argv[argv.index(flag) + 1]
+
+    # Every model-tier an engine-routed role can thread, and None. Under the owner policy
+    # (2026-07-09) every cursor cell except fable resolves to the composer default on BOTH sides —
+    # the property being proven is equality through the one shared map, whatever the policy maps to.
+    for engine, role_kind in (("cursor", "build"), ("cursor", "fix"), ("cursor", "review"),
+                              ("cursor", "author-plan"), ("codex", "build"), ("codex", "review")):
+        for model in ("opus", "sonnet", "fable", "haiku", None):
+            dispatched = _model_in_argv(engine, role_kind, model)
+            shown = preflight_readout.display_model(engine, model)
+            assert shown == dispatched, (
+                "readout/dispatch drift for %s/%s/%s: readout shows %r, argv embeds %r"
+                % (engine, role_kind, model, shown, dispatched))
 
 
 def _snapshot_default():
@@ -148,6 +181,57 @@ def test_render_labels_a_default_row():
     assert "[default]" in text
 
 
+def test_render_names_unseeded_permission_rules_loudly():
+    # #311 defect 3: an unseeded project must be LOUD in the readout, not silent — an unseeded
+    # allowance layer never fires, so the operator has to see it and be pointed at configure.
+    snap = _snapshot_default()
+    snap["permission"] = {"seeded": 0}
+    text = preflight_readout.render(snap)
+    assert "Permission rules" in text
+    assert "none seeded for this project" in text
+    assert "configure" in text
+
+
+def test_render_shows_seeded_permission_rule_count():
+    snap = _snapshot_default()
+    snap["permission"] = {"seeded": 4}
+    text = preflight_readout.render(snap)
+    assert "Permission rules   4 seeded" in text
+
+
+def test_render_permission_unavailable_degrades():
+    snap = _snapshot_default()
+    snap["permission"] = {"unavailable": True}
+    text = preflight_readout.render(snap)
+    assert "Permission rules   unavailable" in text
+
+
+def test_render_missing_permission_key_reads_as_unseeded():
+    # A snapshot with no `permission` key (e.g. a pre-#311 persisted snapshot) renders the loud
+    # unseeded note rather than crashing — the fail-soft posture the rest of render() holds.
+    snap = _snapshot_default()
+    snap.pop("permission", None)
+    text = preflight_readout.render(snap)
+    assert "none seeded for this project" in text
+
+
+def test_assemble_reads_seeded_permission_rules(tmp_path, monkeypatch):
+    # #311 defect 3, real read: assemble() surfaces the seeded-rule count from the REAL
+    # permission_rules store (no monkeypatched rules seam). Seed via the sanctioned front door,
+    # then confirm the snapshot's permission.seeded reflects it.
+    import permission_rules
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo, exist_ok=True)
+    # unseeded first
+    snap0 = preflight_readout.assemble("wi-x", repo)
+    assert snap0["permission"]["seeded"] == 0
+    # seed the default families through the real configure path, then re-assemble
+    permission_rules.seed_default_rules(repo)
+    snap1 = preflight_readout.assemble("wi-x", repo)
+    assert snap1["permission"]["seeded"] == len(permission_rules._SEED_FAMILIES)
+
+
 # --- Task 3: validate_override — the pure override gate (FR-10, UFR-6) ---
 
 def _rows_by_role():
@@ -203,6 +287,7 @@ def _fake_readers(**over):
         "calibration": {"status": "provisional"},
         "verify": "npm test",
         "storage": {"mode": "global", "docsPath": "/proj/docs"},
+        "permission": {"seeded": 0},
     }
     base.update(over)
     return base
@@ -248,6 +333,15 @@ def test_one_field_error_degrades_not_fails(monkeypatch=None):
     snap = preflight_readout.assemble("wi", "/root", readers=readers)
     assert any(d for d in snap["degraded"] if d.get("field") == "storage")
     assert snap["storage"].get("unavailable") is True
+
+
+def test_permission_field_error_degrades_not_fails():
+    # #311 review round 2 (Minor): symmetric with storage — a raising permission-rules read degrades
+    # to unavailable + a degraded[] entry, never a crashed readout.
+    readers = _fake_readers(permission=preflight_readout._RAISE)
+    snap = preflight_readout.assemble("wi", "/root", readers=readers)
+    assert any(d for d in snap["degraded"] if d.get("field") == "permission")
+    assert snap["permission"].get("unavailable") is True
 
 
 def test_total_failure_returns_failure_sentinel():

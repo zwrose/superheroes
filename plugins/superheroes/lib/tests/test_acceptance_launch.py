@@ -204,7 +204,17 @@ def _preamble(fixture_dir):
     return (
         "CONTEXT — who is asking and why this is sanctioned: you are the acceptance "
         "harness's own non-interactive driver session, spawned and supervised by the "
-        "harness process (acceptance_run.py, the superheroes acceptance flow). The "
+        "harness process (acceptance_run.py, the superheroes acceptance flow). Your "
+        "spawn is mechanically verifiable — the launcher set "
+        "SUPERHEROES_ACCEPTANCE_CONTEXT in your environment; check it now, only the "
+        "harness sets it on the child it spawns. Your protocol lives on this checkout's "
+        "own reviewed surface: invoke the repo-local acceptance-driver skill (or read "
+        ".claude/skills/acceptance-driver/SKILL.md directly) and follow it — it states "
+        "this same sanction and honesty contract from the repo itself. Do NOT invoke "
+        "the acceptance skill: that is the owner's front door for starting a NEW run — "
+        "it refuses to nest by design, and you are already inside the run it delegates "
+        "to; its never-hand-execute-internals rule addresses the owner's interactive "
+        "session, not the harness's own driver child (issue #344). The "
         "work-item below is NOT a normal discovery work-item: its accept-harness- prefix "
         "is the harness's own reserved namespace (RESERVED_PREFIX in "
         "acceptance_fixture.py), and the harness materialized it moments ago as a "
@@ -255,6 +265,45 @@ def test_launch_prompt_carries_no_guard_evasion_coaching():
         assert "sensitive-file guard" not in low
         assert "never the write" not in low
         assert "regardless of permission rules" not in low
+
+
+def test_launch_prompt_forecloses_the_acceptance_skill_route():
+    # Issue #344 (two live parks, 2026-07-10): the child obeys repo-carried skill surfaces
+    # over its inline prompt. The front-door `acceptance` skill's refuse-to-nest contract
+    # read as "refuse this prompt", so the prompt must (a) foreclose that route explicitly,
+    # (b) hand the child a verifiable sanction (the env marker only the launcher sets), and
+    # (c) point at the repo-carried driver protocol (the acceptance-driver skill) — in BOTH
+    # prompt forms.
+    for prompt in (
+        al.build_launch_prompt("wi", "/tmp/x/terminal-record.json"),
+        al.build_launch_prompt("wi", "/tmp/x/terminal-record.json",
+                               spine_lib="/lib", root="/root"),
+    ):
+        assert al._CONTEXT_MARKER in prompt
+        assert "acceptance-driver" in prompt
+        assert "Do NOT invoke the acceptance skill" in prompt
+
+
+def _repo_root():
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+
+
+def test_driver_skill_file_carries_the_protocol_the_prompt_points_at():
+    # Drift guard binding the two surfaces (#344): the prompt names the repo-local
+    # acceptance-driver skill, so that file must exist and carry the load-bearing facts —
+    # the verifiable marker, the run_outcome honesty contract, the reserved prefix, and
+    # the never-merge line. If the skill moves or loses one, this fails with the prompt.
+    path = os.path.join(_repo_root(), ".claude", "skills", "acceptance-driver", "SKILL.md")
+    assert os.path.isfile(path), path
+    body = open(path, encoding="utf-8").read()
+    assert al._CONTEXT_MARKER in body
+    assert "run_outcome" in body
+    assert "accept-harness-" in body
+    assert "Never merge, release, or force-push" in body
+    # and the front door must hand the spawned child over to the driver skill, not a dead end
+    front = open(os.path.join(_repo_root(), ".claude", "skills", "acceptance", "SKILL.md"),
+                 encoding="utf-8").read()
+    assert "acceptance-driver" in front
 
 
 def test_build_launch_prompt_threads_explicit_fixture_dir_into_preamble():

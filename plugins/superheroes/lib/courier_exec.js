@@ -1,14 +1,57 @@
 let injectedAgent = null
 
 class CourierTransportError extends Error {
-  constructor(label, reason) {
+  constructor(label, reason, answer) {
     super(`courier transport failed after retry (${label}): ${reason}`)
     this.label = label
     this.reason = reason
+    // #341: the leaf's LAST raw answer (verbatim), so a caller that treats a persistent transport
+    // failure as a courier DECLINE (a safety-trained cheap leaf answering prose instead of running
+    // the command) can journal the refusal prose as honest reason-context — distinct from an engine
+    // failure. Empty string when no answer was produced (never null).
+    this.answer = answer == null ? '' : String(answer)
   }
 }
 
 function setCourierAgent(fn) { injectedAgent = fn }
+
+// B5 (#315) courier retry meter — a per-run, in-memory accumulator (globalThis.__SR_COURIER, mirroring
+// cost_meter.js). Every courier loop below records ONE retry when a dispatch finally returns a usable
+// answer after >1 attempt (attempt index > 0). A courier that needed 3 tries otherwise reads identically
+// to one that worked first try, so retry pressure is invisible until it becomes an outright failure; the
+// terminal readout leaf reads courierRetryTotals() to disclose "couriers: N retried" + a journal note.
+function _courierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  if (!g.__SR_COURIER || typeof g.__SR_COURIER !== 'object') g.__SR_COURIER = { retried: 0, byLabel: {} }
+  if (!g.__SR_COURIER.byLabel) g.__SR_COURIER.byLabel = {}
+  return g.__SR_COURIER
+}
+
+// _recordRetry(label, attempt): attempt is the 0-based loop index that finally produced a usable
+// answer; >0 means the dispatch needed a retry. A no-op on the first-try success (attempt 0), so a
+// clean run records nothing. Never throws (disclosure must not derail a courier dispatch).
+function _recordRetry(label, attempt) {
+  if (!(attempt > 0)) return
+  try {
+    const s = _courierMeter()
+    s.retried += 1
+    const key = label || 'unknown'
+    s.byLabel[key] = (s.byLabel[key] || 0) + 1
+  } catch (_) { /* meter is best-effort */ }
+}
+
+// courierRetryTotals(): { retried, byLabel } snapshot for the readout/journal. Never throws.
+function courierRetryTotals() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  const s = (g.__SR_COURIER && typeof g.__SR_COURIER === 'object') ? g.__SR_COURIER : {}
+  return { retried: s.retried || 0, byLabel: Object.assign({}, s.byLabel || {}) }
+}
+
+// resetCourierMeter(): clear the accumulator (new-run guard / test helper).
+function resetCourierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  g.__SR_COURIER = { retried: 0, byLabel: {} }
+}
 
 function currentAgent() {
   if (injectedAgent) return injectedAgent
@@ -153,6 +196,19 @@ function badCourierAnswer(a) {
   return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
 }
 
+// executedMarker (#343): TRUE when the answer carries a runtime-EXPANDED digit marker (__SR_EXIT:<n>)
+// — positive execution evidence an echoed/quoted command can never carry by accident, because the
+// command TEXT only ever contains the literal '__SR_EXIT:$?'. Distinct from !badCourierAnswer: an
+// answer holding BOTH an echoed command (the $? literal) AND the real expanded marker fails
+// badCourierAnswer yet IS executed — executedMarker is the tiebreaker for callers whose retry would
+// RE-EXECUTE a non-idempotent command (the engine write dispatch). Like the whole marker protocol this
+// proves marker-shape, not cryptographic execution (a leaf could fabricate digits); the error direction
+// is safe — a fabricated "executed" is never retried (no double-run) and its garbage payload fails
+// downstream parsing into an honest fall-open.
+function executedMarker(a) {
+  return /__SR_EXIT:\d/.test(String(a == null ? '' : a))
+}
+
 // markerSliceStdout: parse a leaf-bash answer (stdout + trailing __SR_EXIT:N) into {status, stdout}.
 // helperResult wraps this for the bundle __runHelperCommand / stageAndRunHelper result shape.
 function markerSliceStdout(s) {
@@ -189,13 +245,25 @@ function wrapMarkedCommand(command) {
 // Each outer attempt calls dispatchMarked once; dispatchMarked itself retries up to 3 dispatches
 // (courier agent → courier agent → default agent) when badCourierAnswer fires — 2×3 total before
 // CourierTransportError. That chain bounds residual simulation (see badCourierAnswer / libRootProbe).
-async function dispatchMarked(label, markedCmd) {
+// opts (#343, for NON-IDEMPOTENT commands — the engine write dispatch):
+//   single: true         — exactly ONE dispatch, no marker-retry, no fallback. Every extra dispatch
+//                          hands the command to a NEW leaf that RE-RUNS it; safe for the idempotent
+//                          spine couriers this chain was built for, but a double-execution hazard for
+//                          an engine write. The caller owns any retry decision.
+//   acceptExecuted: true — a marker-retry never fires on an answer carrying the runtime-expanded
+//                          digit marker (executedMarker): the command EXECUTED, so re-dispatching
+//                          would re-run it just because the answer ALSO echoed the '$?' literal.
+function _isBadAnswer(ans, opts) {
+  return badCourierAnswer(ans) && !((opts && opts.acceptExecuted) && executedMarker(ans))
+}
+async function dispatchMarked(label, markedCmd, opts) {
   const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
   const prompt = markedPromptFor(markedCmd)
   let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
-  if (badCourierAnswer(ans)) {
+  if (opts && opts.single) return ans
+  if (_isBadAnswer(ans, opts)) {
     ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
-    if (badCourierAnswer(ans)) {
+    if (_isBadAnswer(ans, opts)) {
       const fo = Object.assign({}, baseOpts)
       delete fo.agentType
       ans = stdoutOf(await currentAgent()(prompt, fo))
@@ -205,21 +273,28 @@ async function dispatchMarked(label, markedCmd) {
 }
 
 // runCourierMarkedText: dumb-pipe a shell command through the __SR_EXIT marker protocol and return
-// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218).
-async function runCourierMarkedText(label, command) {
+// stdout before the marker. Used by reconcile's libRoot-probed gather snapshot (#218) and (#341/#343,
+// with opts) the engine CLI dispatch. opts.single limits the WHOLE call to ONE leaf dispatch (one
+// outer attempt over a single-dispatch dispatchMarked); opts.acceptExecuted accepts an answer whose
+// runtime-expanded digit marker proves execution even when an echoed '$?' literal rides along (see
+// dispatchMarked). Defaults preserve the pre-#343 idempotent-courier behavior exactly.
+async function runCourierMarkedText(label, command, opts) {
   const markedCmd = wrapMarkedCommand(command)
+  const attempts = (opts && opts.single) ? 1 : 2
   let last = 'empty stdout'
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const ans = await dispatchMarked(label, markedCmd)
-    if (badCourierAnswer(ans)) {
+  let lastAns = ''
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd, opts)
+    lastAns = ans
+    if (_isBadAnswer(ans, opts)) {
       last = 'missing execution marker'
       continue
     }
     const sliced = markerSliceStdout(ans)
-    if (sliced.stdout.trim() !== '') return sliced.stdout
+    if (sliced.stdout.trim() !== '') { _recordRetry(label, attempt); return sliced.stdout }
     last = 'empty stdout'
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 
 // runCourierMarkedJson: runCourierJson semantics over the __SR_EXIT marker protocol — execution is
@@ -229,8 +304,10 @@ async function runCourierMarkedJson(label, command, opts) {
   const options = opts || {}
   const markedCmd = wrapMarkedCommand(command)
   let last = 'empty stdout'
+  let lastAns = ''
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
+    lastAns = ans
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -245,15 +322,16 @@ async function runCourierMarkedJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 
 // runCourierText deliberately does NOT strip fences: its payload is arbitrary text whose
@@ -264,10 +342,11 @@ async function runCourierText(label, command) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
     const out = stdoutOf(raw)
-    if (out.trim() !== '') return out
+    if (out.trim() !== '') { _recordRetry(label, attempt); return out }
     last = 'empty stdout'
   }
   throw new CourierTransportError(label, last)
@@ -281,6 +360,7 @@ async function runCourierJson(label, command, opts) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }
     if (out.trim() === '') {
@@ -294,12 +374,13 @@ async function runCourierJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
   throw new CourierTransportError(label, last)
@@ -314,6 +395,7 @@ async function runCourierBatchJson(label, commands, opts) {
 module.exports = {
   CourierTransportError,
   badCourierAnswer,
+  executedMarker,
   extractJson,
   extractJsonStrict,
   helperResult,
@@ -324,4 +406,10 @@ module.exports = {
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
+  courierRetryTotals,
+  resetCourierMeter,
+  // #341: the production marker framing — exported so the real-seam detector (CONVENTIONS §12.2) can
+  // compose the exact prompt a courier leaf receives and drive it through a REAL cheapest-model agent.
+  wrapMarkedCommand,
+  markedPromptFor,
 }

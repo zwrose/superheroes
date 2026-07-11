@@ -38,6 +38,7 @@ import acceptance_launch
 import acceptance_ceiling
 import acceptance_phases
 import acceptance_result
+import acceptance_verdict
 import control_plane
 import cost_report
 import hostinfo
@@ -1077,6 +1078,26 @@ def real_run_outcome(root, work_item=None, spine_lib=None):
     return _read
 
 
+def real_engine_dispatch_tally(root, work_item=None):
+    """`deps["engine_dispatch_tally"]` (#310): read the run's events.jsonl and tally its
+    `external_dispatch` events (per-engine ok/total + acceptable fall-open reasons) so the
+    verdict can require an EXTERNAL-calibrated run to prove its external dispatch chain worked
+    at least once. Reads the SAME journal `_phases_from_journal`/`real_spend_sampler` read.
+    Fail-CLOSED: an unreadable journal (or an unidentifiable work-item) returns
+    `{"unreadable": True}` so the verdict fails via the UFR-9 path rather than faking a pass on
+    a run whose dispatch record could not be read."""
+    def _read():
+        current_work_item = work_item() if callable(work_item) else work_item
+        if not current_work_item:
+            return {"unreadable": True}
+        try:
+            events = journal.read_events(control_plane.paths(root, current_work_item)["events"])
+        except Exception:
+            return {"unreadable": True}
+        return acceptance_verdict.tally_external_dispatches(events)
+    return _read
+
+
 def real_expected_phases(spine_lib=None):
     return lambda: _read_spine_phases(spine_lib)
 
@@ -1154,7 +1175,14 @@ def real_launcher(root, ceilings=None, spine_lib=None, child_model=None):
             stamped, acceptance_ceiling.normalize_ceilings(ceilings), _child_factory,
             acceptance_launch._REAL_CLOCK,
             real_spend_sampler(root, lambda: stamped.get("work_item")),
-            lambda: acceptance_launch._default_engine_pref_reader(root, root),
+            # #310: the SECOND arg of load_engine_prefs is the STORE root, not the repo root.
+            # Passing `root` (the repo root) resolved core.md to a nonexistent
+            # <repo>/projects/<key>/config/core.md → the fail-open degenerate all-Claude map,
+            # so spend_partial read `false` on a codex/cursor-calibrated run (the 0.11.0
+            # escape). Pass None so the real store (SUPERHEROES_STORE_ROOT / ~/.claude/
+            # superheroes) resolves — the exact call the spine makes (showrunner.js:1994,
+            # `load_engine_prefs(root, None)`).
+            lambda: acceptance_launch._default_engine_pref_reader(root, None),
             budget_consumed=budget_consumed, attempt=attempt,
         )
     return _launch
@@ -1272,6 +1300,8 @@ def build(fixture_dir, root, ceilings=None, spine_lib=None, child_model=None,
                                   child_model=resolved_child_model),
         "run_outcome": real_run_outcome(
             root, lambda: (state["stamped"] or {}).get("work_item"), spine_lib=spine_lib),
+        "engine_dispatch_tally": real_engine_dispatch_tally(
+            root, lambda: (state["stamped"] or {}).get("work_item")),
         "gh_reader": gh_reader,
         "expected_phases": real_expected_phases(spine_lib=spine_lib),
         "discover_artifacts": discover_artifacts,

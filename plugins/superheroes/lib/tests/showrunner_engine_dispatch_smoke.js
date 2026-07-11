@@ -3,8 +3,13 @@
 // makeAgent(routes)/execRoute idiom (route by exact label, then prompt substring), plus an ordered
 // execLog so the stdin-redirect / audit-event assertions can inspect the exact dispatch-run command.
 const assert = require('assert')
+const { markedStdout } = require('./_marked_stdout.js')
 const logs = []
 global.log = (m) => logs.push(m)
+// #341: the CLI-run dispatch now rides the HARDENED courier (superheroes:courier + __SR_EXIT marker),
+// so a stubbed run leaf must return a MARKER-carrying answer (a bare array reads as a courier decline).
+// Non-run exec leaves (staging/build-argv/parse-result/commit/journal) still ride the plain exec()
+// dumb-pipe and keep their bare-array shape.
 
 // Route an agent() call by the first matching needle found in its prompt OR its label.
 function makeAgent(routes) {
@@ -34,7 +39,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external review output"}' }]
+        return markedStdout('{"raw":"external review output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -78,7 +83,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return markedStdout('{"raw":"external build output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -97,14 +102,124 @@ function makeAgent(routes) {
     'FR-6: the journal call must carry the first-class external_dispatch event type')
   // FR-8: a WRITE dispatch's exec command must be confined to the target cwd via a `cd <cwd> &&`
   // prefix — cursor's argv carries no -C flag of its own, so without this the run would execute at
-  // __SR_ROOT (the repo root) instead of the per-task build worktree.
-  assert.ok(/(^|\n)\d+\.\s*cd '\/tmp\/wt' && /.test(runCmd2), 'write dispatch must confine the run to cwd via cd <cwd> &&: ' + runCmd2)
+  // __SR_ROOT (the repo root) instead of the per-task build worktree. #341: the run now rides the
+  // hardened marker courier (markedPromptFor: "Execute this exact shell command…\n\n<cmd>"), so the
+  // confinement prefix follows the blank line rather than a numbered-list marker.
+  assert.ok(/\n\ncd '\/tmp\/wt' && /.test(runCmd2), 'write dispatch must confine the run to cwd via cd <cwd> &&: ' + runCmd2)
   // FIX 2: the perl-alarm kill guard must ALSO wrap a write-role dispatch, threaded with the same
   // timeoutSeconds (300) used to bound the JS race for this call.
   assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 300 'codex' 'exec'/.test(runCmd2),
     'FIX 2: write dispatch run command must wrap the CLI with the perl-alarm kill guard using the same timeout: ' + runCmd2)
 
   console.log('OK: engine_dispatch write-path')
+
+  // ---------------------------------------------------------------------
+  // #308/#309: the enriched external_dispatch journal + threaded model/timeout. This exercises the
+  // REAL dispatchExternal with NO monkeypatched internal seam (only the outermost exec courier is
+  // stubbed, exactly as production runs it), so it pins the ACTUAL argv/journal the dispatch emits:
+  //   - the resolved `model` is forwarded to build-argv (`--model 'opus'`);
+  //   - the perl-alarm OS-kill guard carries the caller's effective timeout (2400s here);
+  //   - the external_dispatch journal payload records model + argv + effectiveTimeout (what #299 audits).
+  {
+    const execLogEnrich = []
+    let capturedArgv = null
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogEnrich.push(prompt)
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          // What the real adapter emits for a cursor work role under the owner policy (2026-07-09):
+          // the composer default — the threaded tier informs the adapter, the policy map decides.
+          capturedArgv = ['cursor-agent', '--model', 'composer-2.5-fast', '-p', '--trust', '-f', '--output-format', 'stream-json']
+          return [{ index: 0, ok: true, stdout: JSON.stringify(capturedArgv) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+        if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--model')) return markedStdout('{"raw":"external build output"}')
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rEnrich = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, model: 'opus', taskId: 'T1', workItem: 'wi-abc' })
+    assert.strictEqual(rEnrich.ok, true, '#308/#309: the enriched write dispatch still succeeds')
+    // build-argv received the resolved model (the #308 fix: dispatch forwards the tier).
+    const argvCmd = execLogEnrich.find((c) => c.includes('engine_adapter.py build-argv'))
+    assert.ok(argvCmd.includes("--model 'opus'"), '#308: dispatch forwards the resolved model to build-argv: ' + argvCmd)
+    // the perl-alarm OS-kill guard carries the caller's effective timeout (#309), not the 300s default.
+    const runCmd = execLogEnrich.find((c) => c.includes('--model') && c.includes(' < '))
+    assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 2400 /.test(runCmd),
+      '#309: the perl-alarm guard carries the threaded timeout (2400s): ' + runCmd)
+    // the external_dispatch journal payload is enriched with model + argv + effectiveTimeout (#299 audit).
+    const journalCmd = execLogEnrich.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    const pm = journalCmd.match(/--payload '(.*)'$/s)
+    const payload = JSON.parse(pm[1])
+    assert.strictEqual(payload.model, 'opus', '#308: the journal records the resolved model')
+    assert.strictEqual(payload.effectiveTimeout, 2400, '#309: the journal records the effective timeout ceiling')
+    assert.deepStrictEqual(payload.argv, capturedArgv, '#308: the journal records the exact dispatched argv')
+    console.log('OK: engine_dispatch enriched journal (model + argv + effectiveTimeout) + threaded timeout')
+  }
+
+  // #309: with NO timeoutSeconds supplied the dispatch keeps the legacy finite default (300s) — the
+  // per-role ceilings live in the CALLERS (build_phase/showrunner), so the leaf itself stays back-compat.
+  {
+    const execLogDef = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogDef.push(prompt)
+        if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, workItem: 'wi-abc' })
+    const runCmd = execLogDef.find((c) => c.includes('--sandbox') && c.includes(' < '))
+    assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 300 /.test(runCmd),
+      '#309: absent timeoutSeconds keeps the leaf-level 300s finite default: ' + runCmd)
+    const journalCmd = execLogDef.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    assert.ok(/"effectiveTimeout":300/.test(journalCmd), '#309: the journal records the 300s default when nothing was passed')
+  }
+
+  console.log('OK: engine_dispatch leaf-default timeout back-compat')
+
+  // ---------------------------------------------------------------------
+  // #309/#299: the TIMEOUT-outcome journal enrichment — the exact case resolvedArgv was hoisted for.
+  // A CLI killed at the ceiling must journal outcome:'timeout' WITH the argv it was running and the
+  // effective ceiling, so the audit line reads unambiguously as "killed at ceiling after Ns" (distinct
+  // from a genuine CLI failure) and never records a null argv for a run that really dispatched.
+  // ---------------------------------------------------------------------
+  {
+    const execLogTO = []
+    let argvTO = null
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLogTO.push(prompt)
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          argvTO = ['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']
+          return [{ index: 0, ok: true, stdout: JSON.stringify(argvTO) }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return new Promise(() => {})   // CLI wedges -> ceiling kill
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const rTO = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high', prompt: 'build',
+      cwd: '/tmp/wt', schema: {}, timeoutSeconds: 0.05, taskId: 'T1', workItem: 'wi-abc' })
+    assert.strictEqual(rTO.ok, false, '#309: a ceiling kill fails the dispatch')
+    assert.strictEqual(rTO.reason, 'timeout', '#309: the ceiling kill reason is timeout')
+    const journalTO = execLogTO.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
+    assert.ok(journalTO, '#309: a ceiling-killed dispatch still journals exactly one external_dispatch line')
+    const payloadTO = JSON.parse(journalTO.match(/--payload '(.*)'$/s)[1])
+    assert.strictEqual(payloadTO.outcome, 'timeout', '#299: the journal outcome is timeout (killed at ceiling)')
+    assert.strictEqual(payloadTO.effectiveTimeout, 0.05, '#299: the journal records the ceiling it was killed at')
+    assert.deepStrictEqual(payloadTO.argv, argvTO,
+      '#299: the journal records the REAL argv the CLI was killed while running (resolvedArgv hoist), never null')
+  }
+
+  console.log('OK: engine_dispatch timeout-outcome journal enrichment (killed-at-ceiling audit line)')
 
   // ---------------------------------------------------------------------
   // #288: HONEST REFUSAL. The external build leaf refuses ({"ok":false,"signal":"plan_wrong"}) —
@@ -133,7 +248,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"ok":false,"signal":"plan_wrong"}' }]
+        return markedStdout('{"ok":false,"signal":"plan_wrong"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -157,7 +272,7 @@ function makeAgent(routes) {
       if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
       if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
       if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-      if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{"ok":false,"signal":"plan_wrong"}' }]
+      if (prompt.includes('--sandbox')) return markedStdout('{"ok":false,"signal":"plan_wrong"}')
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
   ])
@@ -180,11 +295,16 @@ function makeAgent(routes) {
       if (prompt.includes('engine_adapter.py build-argv')) {
         return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'workspace-write', '-C', '/tmp/wt', '-']) }]
       }
-      if (prompt.includes('--sandbox')) {
-        // Simulate a hang: resolve far later than the wrapper's own timeout, via an unref'd timer
+      // The timeout-path journal payload embeds the resolved argv (which contains '--sandbox'), so this
+      // MUST be matched before the '--sandbox' run-hang branch below — otherwise the timeout journal
+      // itself hangs and dispatchExternal never returns (a latent smoke hang that silently exited the
+      // process at 6 OKs under HEAD; every block below here previously never ran).
+      if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      if (prompt.includes('Execute this exact shell command')) {
+        // Simulate a run-hang: resolve far later than the wrapper's own timeout, via an unref'd timer
         // so the never-taken branch doesn't pin the node process alive after the test moves on.
         return new Promise((resolve) => {
-          const t = setTimeout(() => resolve([{ index: 0, ok: true, stdout: '{"raw":"late"}' }]), 3600000)
+          const t = setTimeout(() => resolve(markedStdout('{"raw":"late"}')), 3600000)
           if (t.unref) t.unref()
         })
       }
@@ -214,7 +334,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return markedStdout('{"raw":"external build output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -248,7 +368,7 @@ function makeAgent(routes) {
         return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       }
       if (prompt.includes('--sandbox')) {
-        return [{ index: 0, ok: true, stdout: '{"raw":"external build output"}' }]
+        return markedStdout('{"raw":"external build output"}')
       }
       return [{ index: 0, ok: true, stdout: '{}' }]
     }],
@@ -304,7 +424,7 @@ function makeAgent(routes) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
         }
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -393,8 +513,10 @@ function makeAgent(routes) {
       ['exec', (prompt) => {
         if (prompt.includes('base64 -d >') && prompt.includes('.out')) return [{ index: 0, ok: false, stdout: '' }]
         if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
-        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return [{ index: 0, ok: true, stdout: '{"ok":true}' }]
+        // journal BEFORE the '--sandbox' run branch: the journal payload embeds the resolved argv
+        // (which contains '--sandbox'), so a run-branch checked first would mis-route the journal leaf.
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        if (prompt.includes('--sandbox') || prompt.includes(' < ')) return markedStdout('{"ok":true}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -430,7 +552,7 @@ function makeAgent(routes) {
         if (prompt.includes('journal_entry.py')) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
         }
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -541,7 +663,7 @@ function makeAgent(routes) {
         if (prompt.includes('journal_entry.py')) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false }) }]
         }
-        if (prompt.includes('--sandbox')) return [{ index: 0, ok: true, stdout: '{"raw":"external review output"}' }]
+        if (prompt.includes('--sandbox')) return markedStdout('{"raw":"external review output"}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
@@ -551,5 +673,258 @@ function makeAgent(routes) {
   }
 
   console.log('OK: engine_dispatch UFR-6 fail-closed symmetry (read role also fails closed on a failed journal append)')
+
+  // ---------------------------------------------------------------------
+  // #341 COURIER DECLINE. A safety-trained cheapest-model courier leaf REFUSES the autonomous engine
+  // command and answers prose instead of running it (the a7bade9a escape: cursor 0/2 in-child). The
+  // marker-less answer plus a CLEAN worktree (the #343 corroboration — nothing executed) classifies a
+  // decline: the dispatch must journal the HONEST `courier-declined` outcome (NEVER external-run-failed
+  // — the engine was never tried), retry ONCE through the hardened path, and journal BOTH attempts.
+  // #343: a WRITE dispatch runs SINGLE (one leaf per attempt, no chain re-dispatches — every chain
+  // retry would hand the command to a new leaf that RE-RUNS it, a double-execution hazard).
+  // ---------------------------------------------------------------------
+  {
+    const REFUSAL = "I can't proceed with this request as written. This pattern — an autonomous " +
+      'agent invoked with --trust -f — raises concerns, so I will not run it.'
+    const journalPayloads = []
+    let runLeafDispatches = 0
+    let dirtyProbes = 0
+    global.agent = async (prompt) => {
+      // #343 corroboration: the execution-evidence probe answers the POSITIVE clean sentinel (no
+      // edits, unmoved HEAD, no capture files) so the marker-less answer classifies as a genuine
+      // decline (probed before EACH classification). A bare empty stdout would read as a probe DROP
+      // and classify "may have executed" (fail-safe) — clean must be this explicit shape. Matched
+      // BEFORE the preSHA branch: the probe command embeds 'rev-parse HEAD' inside its $().
+      if (prompt.includes('__SR_PROBE__')) { dirtyProbes += 1; return [{ index: 0, ok: true, stdout: '__SR_PROBE__ 0 preSHA-abc 0' }] }
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) {
+        return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--model', 'composer-2.5-fast', '-p', '--trust', '-f', '--output-format', 'stream-json']) }]
+      }
+      // journal BEFORE the run branch (the payload embeds the '--trust'/'-f' argv).
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        // The refusal declinePrefix carries an apostrophe ("can't"), which shq escapes as '\'' — undo
+        // that shell quoting before parsing (proves the prose survives the shq round-trip intact).
+        if (m) { try { journalPayloads.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      // The hardened marker-courier run dispatch (markedPromptFor). REFUSE with prose — no __SR_EXIT
+      // marker — exactly the cheapest-model decline this fix exists for.
+      if (prompt.includes('Execute this exact shell command')) {
+        runLeafDispatches += 1
+        return REFUSAL
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rDecline = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-decline' })
+    // Honest distinct outcome — NEVER external-run-failed (promise 4/5: don't blame the engine).
+    assert.strictEqual(rDecline.ok, false, '#341: a persistent courier decline fails the dispatch (falls open to Claude)')
+    assert.strictEqual(rDecline.reason, 'courier-declined',
+      '#341: a courier decline surfaces the honest courier-declined reason, not external-run-failed: ' + rDecline.reason)
+    // BOTH attempts journaled as courier-declined proves the retry-once fired; NONE as
+    // external-run-failed.
+    const declined = journalPayloads.filter((p) => p.outcome === 'courier-declined')
+    assert.strictEqual(declined.length, 2, '#341: a decline retries ONCE — BOTH attempts are journaled as courier-declined: ' + JSON.stringify(journalPayloads.map((p) => p.outcome)))
+    // #343: a WRITE dispatch is SINGLE-dispatch per attempt — exactly 2 run leaves total (1 per
+    // attempt), never the idempotent chain's 2×3 fan-out (each extra leaf would RE-RUN the command).
+    assert.strictEqual(runLeafDispatches, 2, '#343: write decline = exactly one leaf per attempt (no chain re-execution): ' + runLeafDispatches)
+    assert.strictEqual(dirtyProbes, 2, '#343: each decline classification is corroborated by a worktree dirty-probe: ' + dirtyProbes)
+    assert.ok(!journalPayloads.some((p) => p.outcome === 'external-run-failed'),
+      '#341: a courier decline is NEVER journaled as external-run-failed (the engine was never tried)')
+    // The refusal prose is carried as clamped reason-context (audit line self-identifies the decline).
+    assert.ok(declined.every((p) => typeof p.declinePrefix === 'string' && p.declinePrefix.includes("I can't proceed")),
+      '#341: the courier-declined journal carries a prefix of the leaf refusal prose: ' + JSON.stringify(declined.map((p) => p.declinePrefix)))
+    // The enriched engine/model/argv fields still ride the decline audit line (not a bare failure).
+    assert.ok(declined.every((p) => p.engine === 'cursor' && Array.isArray(p.argv) && p.argv.includes('--trust')),
+      '#341: the courier-declined audit line still carries the engine + resolved argv')
+    console.log('OK: engine_dispatch #341 courier-declined (honest outcome, retry-once, both attempts journaled, never external-run-failed)')
+  }
+
+  // ---------------------------------------------------------------------
+  // #341 DECLINE-THEN-RECOVER (review finding test-002). The retry-once exists because the refusal is
+  // STOCHASTIC — a first-attempt decline that RECOVERS on the retry must complete the dispatch
+  // normally (engine ran), journaling the engine outcome, NOT courier-declined. Guards a broken-recovery
+  // mutant (a retry that silently drops the recovered result).
+  // ---------------------------------------------------------------------
+  {
+    const REFUSAL = "I won't run this."
+    const journalP = []
+    let runLeaf = 0
+    global.agent = async (prompt) => {
+      if (prompt.includes('__SR_PROBE__')) return [{ index: 0, ok: true, stdout: '__SR_PROBE__ 0 preSHA-abc 0' }]   // clean -> genuine decline (before preSHA: probe embeds rev-parse)
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+      if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      // #343 single-dispatch write: attempt 1's ONE leaf refuses; the retry's leaf succeeds.
+      if (prompt.includes('Execute this exact shell command')) {
+        runLeaf += 1
+        return runLeaf === 1 ? REFUSAL : markedStdout('{"ok":true,"signal":"ok"}')
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rRecover = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-recover' })
+    assert.strictEqual(rRecover.ok, true, '#341: a decline that recovers on the retry completes the dispatch normally')
+    assert.strictEqual(runLeaf, 2, '#341/#343: the retry re-dispatched exactly one more leaf after the first decline: ' + runLeaf)
+    const recJournals = journalP.filter((p) => p.engine === 'cursor')
+    assert.strictEqual(recJournals.length, 1, '#341: a recovered dispatch journals exactly ONE external_dispatch line (the engine outcome): ' + JSON.stringify(recJournals.map((p) => p.outcome)))
+    assert.strictEqual(recJournals[0].outcome, 'ok', '#341: the recovered dispatch journals the engine outcome (ok), NOT courier-declined')
+    console.log('OK: engine_dispatch #341 decline-then-recover (retry recovers -> normal completion, engine outcome journaled)')
+  }
+
+  // ---------------------------------------------------------------------
+  // #341 EMPTY-STDOUT IS NOT A DECLINE (review finding code-001/premortem-001). A courier answer that
+  // CARRIES the __SR_EXIT marker but has empty stdout proves the shell EXECUTED (marker present) and
+  // simply printed nothing — an engine outcome, NOT a courier decline. It must map to
+  // external-run-failed (engine ran, no usable output), NEVER courier-declined, and must NOT retry a
+  // possibly-mutating write. Guards the mislabel that would journal a dishonest "engine never tried".
+  // ---------------------------------------------------------------------
+  {
+    const journalP = []
+    let runLeaf = 0
+    global.agent = async (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      // Marker PRESENT (executed) but stdout empty -> runCourierMarkedText throws
+      // CourierTransportError('empty stdout'), which is NOT the marker-absent decline signal.
+      if (prompt.includes('Execute this exact shell command')) { runLeaf += 1; return markedStdout('') }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rEmpty = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-empty' })
+    assert.strictEqual(rEmpty.reason, 'external-run-failed',
+      '#341: a marker-present empty-stdout run is an engine failure, NOT a courier decline: ' + rEmpty.reason)
+    assert.ok(!journalP.some((p) => p.outcome === 'courier-declined'),
+      '#341: a run that EXECUTED (marker present) is NEVER journaled courier-declined (the engine WAS tried)')
+    assert.strictEqual(runLeaf, 1, '#341/#343: an empty-stdout (executed) write is ONE leaf — no decline retry, no chain re-execution: ' + runLeaf)
+    console.log('OK: engine_dispatch #341 empty-stdout is an engine failure, not a courier decline (no mislabel, no unsafe retry)')
+  }
+
+  // ---------------------------------------------------------------------
+  // #343 FALSE-DECLINE-ON-EXECUTED (the PR-343 vet's live find). The leaf EXECUTES the write command
+  // but its huge output is persisted by the leaf harness to a tool-results file, so the ANSWER is just
+  // a file-pointer sentence — NO markers, indistinguishable from a decline by the answer alone. The
+  // worktree dirty-probe corroborates: the tree is DIRTY (the engine ran and edited), so the dispatch
+  // must classify external-run-failed (engine outcome; the caller falls open + UFR-2 resets edits) —
+  // NEVER courier-declined, and NEVER retried (a retry would DOUBLE-EXECUTE on the edited tree).
+  // ---------------------------------------------------------------------
+  {
+    const POINTER = 'Full stdout saved to: `/Users/x/.claude/projects/y/tool-results/abc123.txt`'
+    const journalP = []
+    let runLeaf = 0
+    let probes = 0
+    global.agent = async (prompt) => {
+      // NOTE: the evidence probe's command ALSO contains 'rev-parse HEAD' (inside its $()), so the
+      // probe branch must be matched FIRST — the preSHA capture is the bare rev-parse command.
+      // DIRTY tree — the engine ran and left 2 uncommitted edits.
+      if (prompt.includes('__SR_PROBE__')) { probes += 1; return [{ index: 0, ok: true, stdout: '__SR_PROBE__ 2 preSHA-abc 0' }] }
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('Execute this exact shell command')) { runLeaf += 1; return POINTER }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rPointer = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-pointer' })
+    assert.strictEqual(rPointer.ok, false, '#343: an executed-but-pointer-answer write fails the dispatch (falls open)')
+    assert.strictEqual(rPointer.reason, 'external-run-failed',
+      '#343: a marker-less answer over a DIRTY tree is an ENGINE failure (it ran), never courier-declined: ' + rPointer.reason)
+    assert.strictEqual(runLeaf, 1, '#343: the executed write is NEVER retried (retry = double execution on the edited tree): ' + runLeaf)
+    assert.strictEqual(probes, 1, '#343: exactly one dirty-probe corroborated the classification')
+    assert.ok(!journalP.some((p) => p.outcome === 'courier-declined'),
+      '#343: no courier-declined line for an engine that actually ran (honest audit)')
+    assert.ok(journalP.some((p) => p.outcome === 'external-run-failed'),
+      '#343: the failure is journaled as the engine outcome external-run-failed')
+    console.log('OK: engine_dispatch #343 false-decline-on-executed (dirty-probe corroboration: engine failure, no retry, no double execution)')
+  }
+
+  // ---------------------------------------------------------------------
+  // #343 EVIDENCE SIGNALS 2/3 + PROBE-DROP FAIL-SAFE (delta review premortem-001/code-001/code-002).
+  // The probe must classify "may have executed" (-> external-run-failed, NO retry) on EACH of:
+  //   (a) HEAD moved off preSha — an engine that SELF-COMMITTED reads porcelain-clean;
+  //   (b) watchdog capture files exist — the run STARTED (failed, or an orphaned CLI is still going);
+  //   (c) a DROPPED probe answer (ok:true, empty stdout — the exec courier's known drop shape) — the
+  //       clean verdict must be the explicit positive sentinel, a drop can never impersonate it.
+  // ---------------------------------------------------------------------
+  {
+    const CASES = [
+      ['self-commit (HEAD moved)', '__SR_PROBE__ 0 somesha999 0'],
+      ['capture files present', '__SR_PROBE__ 0 preSHA-abc 3'],
+      ['probe answer dropped', ''],
+    ]
+    for (const [name, probeAnswer] of CASES) {
+      const journalP = []
+      let runLeaf = 0
+      global.agent = async (prompt) => {
+        if (prompt.includes('__SR_PROBE__')) return [{ index: 0, ok: true, stdout: probeAnswer }]
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+        if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+        if (prompt.includes('journal_entry.py')) {
+          const m = prompt.match(/--payload '(.*)'$/s)
+          if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        if (prompt.includes('Execute this exact shell command')) { runLeaf += 1; return 'Saved output to a file.' }
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+        prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-ev' })
+      assert.strictEqual(r.reason, 'external-run-failed', `#343 (${name}): evidence -> engine failure, never courier-declined: ` + r.reason)
+      assert.strictEqual(runLeaf, 1, `#343 (${name}): never retried (no double execution): ` + runLeaf)
+      assert.ok(!journalP.some((p) => p.outcome === 'courier-declined'), `#343 (${name}): no courier-declined audit line`)
+    }
+    console.log('OK: engine_dispatch #343 evidence signals (self-commit HEAD move, capture files, dropped probe) all block the retry')
+  }
+
+  // ---------------------------------------------------------------------
+  // #343 ECHO+EXECUTED ACCEPTANCE. An answer that BOTH echoes the command (carrying the literal
+  // unexpanded '__SR_EXIT:$?') AND carries the real runtime-expanded '__SR_EXIT:0' from actually
+  // running it fails badCourierAnswer — but the digit marker (executedMarker) proves execution, so
+  // the dispatch must ACCEPT the answer (markerSliceStdout takes the LAST digit marker) instead of
+  // re-dispatching a leaf that would RE-RUN the write.
+  // ---------------------------------------------------------------------
+  {
+    const journalP = []
+    let runLeaf = 0
+    global.agent = async (prompt) => {
+      if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
+      if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]
+      if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
+      if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
+      if (prompt.includes('journal_entry.py')) {
+        const m = prompt.match(/--payload '(.*)'$/s)
+        if (m) { try { journalP.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+        return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+      }
+      if (prompt.includes('Execute this exact shell command')) {
+        runLeaf += 1
+        // Echoed command first (unexpanded $? literal), then the real executed output + digit marker.
+        return 'I ran: sh -c ... 2>&1; echo __SR_EXIT:$?\n{"raw":"external build output"}\n__SR_EXIT:0'
+      }
+      return [{ index: 0, ok: true, stdout: '{}' }]
+    }
+    const rEcho = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T1', workItem: 'wi-echo' })
+    assert.strictEqual(rEcho.ok, true, '#343: an echo+digit-marker answer is ACCEPTED as executed (the dispatch completes)')
+    assert.strictEqual(runLeaf, 1, '#343: the executed answer is never re-dispatched (no re-run just because the $? literal rides along): ' + runLeaf)
+    assert.ok(journalP.some((p) => p.outcome === 'ok'), '#343: the accepted dispatch journals the normal ok outcome')
+    console.log('OK: engine_dispatch #343 echo+executed answer accepted (executedMarker tiebreak, no re-dispatch)')
+  }
 })()
 

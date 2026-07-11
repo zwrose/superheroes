@@ -1817,13 +1817,38 @@ module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA,
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
 class CourierTransportError extends Error {
-  constructor(label, reason) {
+  constructor(label, reason, answer) {
     super(`courier transport failed after retry (${label}): ${reason}`)
     this.label = label
     this.reason = reason
+    this.answer = answer == null ? '' : String(answer)
   }
 }
 function setCourierAgent(fn) { injectedAgent = fn }
+function _courierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  if (!g.__SR_COURIER || typeof g.__SR_COURIER !== 'object') g.__SR_COURIER = { retried: 0, byLabel: {} }
+  if (!g.__SR_COURIER.byLabel) g.__SR_COURIER.byLabel = {}
+  return g.__SR_COURIER
+}
+function _recordRetry(label, attempt) {
+  if (!(attempt > 0)) return
+  try {
+    const s = _courierMeter()
+    s.retried += 1
+    const key = label || 'unknown'
+    s.byLabel[key] = (s.byLabel[key] || 0) + 1
+  } catch (_) { /* meter is best-effort */ }
+}
+function courierRetryTotals() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  const s = (g.__SR_COURIER && typeof g.__SR_COURIER === 'object') ? g.__SR_COURIER : {}
+  return { retried: s.retried || 0, byLabel: Object.assign({}, s.byLabel || {}) }
+}
+function resetCourierMeter() {
+  const g = (typeof globalThis !== 'undefined') ? globalThis : {}
+  g.__SR_COURIER = { retried: 0, byLabel: {} }
+}
 function currentAgent() {
   if (injectedAgent) return injectedAgent
   const root = typeof globalThis !== 'undefined' ? globalThis : undefined
@@ -1912,6 +1937,9 @@ function badCourierAnswer(a) {
   const s = String(a == null ? '' : a)
   return s.indexOf('__SR_EXIT') < 0 || s.indexOf('__SR_EXIT:$?') >= 0
 }
+function executedMarker(a) {
+  return /__SR_EXIT:\d/.test(String(a == null ? '' : a))
+}
 function markerSliceStdout(s) {
   s = String(s || '')
   const re = /__SR_EXIT:(\d+)/g
@@ -1937,13 +1965,17 @@ function markedPromptFor(command) {
 function wrapMarkedCommand(command) {
   return String(command) + ' 2>&1; echo __SR_EXIT:$?'
 }
-async function dispatchMarked(label, markedCmd) {
+function _isBadAnswer(ans, opts) {
+  return badCourierAnswer(ans) && !((opts && opts.acceptExecuted) && executedMarker(ans))
+}
+async function dispatchMarked(label, markedCmd, opts) {
   const baseOpts = { label, courier: true, agentType: 'superheroes:courier' }
   const prompt = markedPromptFor(markedCmd)
   let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
-  if (badCourierAnswer(ans)) {
+  if (opts && opts.single) return ans
+  if (_isBadAnswer(ans, opts)) {
     ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
-    if (badCourierAnswer(ans)) {
+    if (_isBadAnswer(ans, opts)) {
       const fo = Object.assign({}, baseOpts)
       delete fo.agentType
       ans = stdoutOf(await currentAgent()(prompt, fo))
@@ -1951,27 +1983,32 @@ async function dispatchMarked(label, markedCmd) {
   }
   return ans
 }
-async function runCourierMarkedText(label, command) {
+async function runCourierMarkedText(label, command, opts) {
   const markedCmd = wrapMarkedCommand(command)
+  const attempts = (opts && opts.single) ? 1 : 2
   let last = 'empty stdout'
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const ans = await dispatchMarked(label, markedCmd)
-    if (badCourierAnswer(ans)) {
+  let lastAns = ''
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const ans = await dispatchMarked(label, markedCmd, opts)
+    lastAns = ans
+    if (_isBadAnswer(ans, opts)) {
       last = 'missing execution marker'
       continue
     }
     const sliced = markerSliceStdout(ans)
-    if (sliced.stdout.trim() !== '') return sliced.stdout
+    if (sliced.stdout.trim() !== '') { _recordRetry(label, attempt); return sliced.stdout }
     last = 'empty stdout'
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 async function runCourierMarkedJson(label, command, opts) {
   const options = opts || {}
   const markedCmd = wrapMarkedCommand(command)
   let last = 'empty stdout'
+  let lastAns = ''
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
+    lastAns = ans
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -1986,25 +2023,27 @@ async function runCourierMarkedJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
-  throw new CourierTransportError(label, last)
+  throw new CourierTransportError(label, last, lastAns)
 }
 async function runCourierText(label, command) {
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
     const out = stdoutOf(raw)
-    if (out.trim() !== '') return out
+    if (out.trim() !== '') { _recordRetry(label, attempt); return out }
     last = 'empty stdout'
   }
   throw new CourierTransportError(label, last)
@@ -2017,6 +2056,7 @@ async function runCourierJson(label, command, opts) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
     if (!commandOk(raw)) {
+      _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }
     if (out.trim() === '') {
@@ -2028,12 +2068,13 @@ async function runCourierJson(label, command, opts) {
       last = 'unparseable JSON'
       continue
     }
-    if (parsed && parsed.ok === false && options.retryRealFailure === false) return parsed
+    if (parsed && parsed.ok === false && options.retryRealFailure === false) { _recordRetry(label, attempt); return parsed }
     const missing = missingRequired(parsed, options.require || [])
     if (missing) {
       last = `missing required field ${missing}`
       continue
     }
+    _recordRetry(label, attempt)
     return parsed
   }
   throw new CourierTransportError(label, last)
@@ -2046,6 +2087,7 @@ async function runCourierBatchJson(label, commands, opts) {
 module.exports = {
   CourierTransportError,
   badCourierAnswer,
+  executedMarker,
   extractJson,
   extractJsonStrict,
   helperResult,
@@ -2056,6 +2098,10 @@ module.exports = {
   runCourierText,
   runCourierBatchJson,
   setCourierAgent,
+  courierRetryTotals,
+  resetCourierMeter,
+  wrapMarkedCommand,
+  markedPromptFor,
 }
 };
 __modules["pr_comment_scrub"] = function (module, exports, require) {
@@ -3678,6 +3724,15 @@ module.exports = { decide }
 __modules["engine_pref"] = function (module, exports, require) {
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
+const WRITE_TIMEOUT_SECONDS = 2400   // build/fix/author-plan: a full test-first build (write→run→impl→run→commit)
+const READ_TIMEOUT_SECONDS = 900     // review/review-deep: a read-only review pass
+const _ROLE_TIMEOUT = { build: WRITE_TIMEOUT_SECONDS, fix: WRITE_TIMEOUT_SECONDS,
+  'author-plan': WRITE_TIMEOUT_SECONDS, review: READ_TIMEOUT_SECONDS, 'review-deep': READ_TIMEOUT_SECONDS }
+const WRITE_IDLE_SECONDS = 600   // build/fix/author-plan: no-output-bytes stall kill
+const READ_IDLE_SECONDS = 300    // review/review-deep: no-output-bytes stall kill
+const DEFAULT_IDLE_SECONDS = 300 // no-role fallback (conservative read-level idle)
+const _ROLE_IDLE = { build: WRITE_IDLE_SECONDS, fix: WRITE_IDLE_SECONDS,
+  'author-plan': WRITE_IDLE_SECONDS, review: READ_IDLE_SECONDS, 'review-deep': READ_IDLE_SECONDS }
 const _ROLE_KEY = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
 const _CODEX_EFFORT = { review: 'high', 'review-deep': 'xhigh', build: 'high', fix: 'low',
@@ -3706,28 +3761,100 @@ function resolveEffort(engine, roleKind, overrides) {
   }
   return def
 }
-function resolveTimeout(overrides) {
+function resolveTimeout(overrides, roleKind) {
   if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, 'timeout')) {
     const v = overrides.timeout
     if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
   }
+  if (roleKind != null && hasOwn(_ROLE_TIMEOUT, roleKind)) return _ROLE_TIMEOUT[roleKind]
   return DEFAULT_STALL_LIMIT_SECONDS
 }
-module.exports = { resolveEngine, resolveEffort, resolveTimeout, ENGINES, DEFAULT_STALL_LIMIT_SECONDS }
+function resolveIdle(overrides, roleKind) {
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, 'idleTimeout')) {
+    const v = overrides.idleTimeout
+    if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
+  }
+  if (roleKind != null && hasOwn(_ROLE_IDLE, roleKind)) return _ROLE_IDLE[roleKind]
+  return DEFAULT_IDLE_SECONDS
+}
+module.exports = { resolveEngine, resolveEffort, resolveTimeout, resolveIdle, ENGINES,
+  DEFAULT_STALL_LIMIT_SECONDS, WRITE_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS,
+  WRITE_IDLE_SECONDS, READ_IDLE_SECONDS, DEFAULT_IDLE_SECONDS }
 };
 __modules["engine_dispatch"] = function (module, exports, require) {
 const { libPath } = require('./lib_root.js')
 const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
+const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
+const COURIER_DECLINED_OUTCOME = 'courier-declined'
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function _stageCmd(path, content) {
   const encoded = b64(content == null ? '' : String(content))
   return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
 }
+function _typeWithNull(type) {
+  if (type == null) return type
+  if (Array.isArray(type)) return type.indexOf('null') >= 0 ? type : type.concat(['null'])
+  return type === 'null' ? type : [type, 'null']
+}
+function _jsonType(v) {
+  if (v === null) return 'null'
+  if (typeof v === 'string') return 'string'
+  if (typeof v === 'boolean') return 'boolean'
+  if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number'
+  return null
+}
+function _nullableProp(propSchema) {
+  if (!propSchema || typeof propSchema !== 'object' || Array.isArray(propSchema)) return propSchema
+  const p = Object.assign({}, propSchema)
+  const hasEnum = Array.isArray(p.enum)
+  if (hasEnum && p.enum.indexOf(null) < 0) p.enum = p.enum.concat([null])
+  if (p.type !== undefined) {
+    p.type = _typeWithNull(p.type)
+  } else if (hasEnum) {
+    const types = []
+    for (const v of p.enum) {
+      const t = _jsonType(v)
+      if (t && types.indexOf(t) < 0) types.push(t)
+    }
+    if (types.length) p.type = types
+  }
+  return p
+}
+function _isObjectNode(node) {
+  if (!node || typeof node !== 'object') return false
+  if (node.type === 'object') return true
+  return Array.isArray(node.type) && node.type.indexOf('object') >= 0
+}
+function strictify(schema) {
+  if (Array.isArray(schema)) return schema.map(strictify)
+  if (!schema || typeof schema !== 'object') return schema
+  const out = {}
+  for (const k of Object.keys(schema)) out[k] = strictify(schema[k])
+  if (_isObjectNode(out)) {
+    const props = (out.properties && typeof out.properties === 'object' && !Array.isArray(out.properties))
+      ? out.properties : null
+    const propKeys = props ? Object.keys(props) : []
+    const originalRequired = Array.isArray(schema.required) ? schema.required : []
+    if (props) {
+      for (const key of propKeys) {
+        if (originalRequired.indexOf(key) < 0) props[key] = _nullableProp(props[key])
+      }
+    }
+    out.additionalProperties = false
+    out.required = propKeys
+  }
+  return out
+}
 let _execFn = null
 function _exec(commands) {
   if (!_execFn) _execFn = require('./showrunner.js').exec
   return _execFn(commands)
+}
+let _courierMod = null
+function _courier() {
+  if (!_courierMod) _courierMod = require('./courier_exec.js')
+  return _courierMod
 }
 async function _execJson(cmd) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -3740,28 +3867,124 @@ async function _execJson(cmd) {
   }
   return null
 }
+async function _executionEvidence(wt, preSha, captureBase) {
+  const cmd = `printf '__SR_PROBE__ %s %s %s\\n' ` +
+    `"$(git -C ${shq(wt)} status --porcelain | wc -l | tr -d ' ')" ` +
+    `"$(git -C ${shq(wt)} rev-parse HEAD)" ` +
+    `"$(ls ${shq(captureBase)}.*.err 2>/dev/null | wc -l | tr -d ' ')"`
+  const res = await _exec([cmd])
+  const r0 = res && res[0]
+  if (!(r0 && r0.ok)) return true
+  const m = String(r0.stdout == null ? '' : r0.stdout).match(/__SR_PROBE__ (\d+) (\S+) (\d+)/)
+  if (!m) return true
+  return Number(m[1]) > 0 || (preSha != null && m[2] !== preSha) || Number(m[3]) > 0
+}
 async function _captureHead(wt) {
   const res = await _exec([`git -C ${shq(wt)} rev-parse HEAD`])
   const r0 = res && res[0]
   if (r0 && r0.ok) { const s = (r0.stdout == null ? '' : String(r0.stdout)).trim(); if (s) return s }
   return null
 }
-async function _runArgv(argv, promptPath, cwd, timeoutSeconds) {
+function _pollFor(idle) {
+  return Math.max(1, Math.min(10, Math.floor(Number(idle) / 4)))
+}
+const _WATCH_SCRIPT = [
+  'c=$1; idle=$2; poll=$3; base=$4; in=$5; prog=$6; cap=$7; shift 7',
+  'out="$base.$$.out"; err="$base.$$.err"',
+  ': > "$out"; : > "$err"',
+  'perl -e "$prog" "$c" "$@" < "$in" > "$out" 2> "$err" &',
+  'p=$!',
+  'last=-1; idlesec=0; killed=0',
+  'while kill -0 "$p" 2>/dev/null; do',
+  'sleep "$poll"',
+  'szo=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szo" ] || szo=0',
+  'sze=$(wc -c < "$err" 2>/dev/null | tr -d " "); [ -n "$sze" ] || sze=0',
+  'sz=$((szo + sze))',
+  'if [ "$sz" -gt "$last" ]; then last=$sz; idlesec=0; else idlesec=$((idlesec + poll)); fi',
+  'if [ "$idle" -gt 0 ] && [ "$idlesec" -ge "$idle" ]; then killed=1; kill -TERM -"$p" 2>/dev/null; sleep 1; kill -KILL -"$p" 2>/dev/null; break; fi',
+  'done',
+  'wait "$p" 2>/dev/null; ec=$?',
+  'szf=$(wc -c < "$out" 2>/dev/null | tr -d " "); [ -n "$szf" ] || szf=0',
+  'if [ "$szf" -gt "$cap" ]; then trunc=1; tail -c "$cap" "$out"; else trunc=0; cat "$out"; fi',
+  'if [ "$killed" -eq 0 ] && [ "$ec" -eq 0 ]; then rm -f "$err"; fi',
+  'printf "\\n__SR_DISPATCH__{\\"idleKilled\\":%s,\\"idleSeconds\\":%s,\\"exit\\":%s,\\"outBytes\\":%s,\\"truncated\\":%s,\\"outPath\\":\\"%s\\"}\\n" "$killed" "$idle" "$ec" "$szf" "$trunc" "$out"',
+].join('\n')
+const EMIT_TAIL_BYTES = 24000
+function _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle) {
   const seconds = Number(timeoutSeconds) > 0 ? Math.ceil(Number(timeoutSeconds)) : Math.ceil(DEFAULT_STALL_LIMIT_SECONDS)
   const quotedArgv = argv.map((a) => shq(a)).join(' ')
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  if (idleArmed) {
+    const idle = Math.min(Math.ceil(Number(idleSeconds)), seconds)   // monitor ≤ ceiling
+    const poll = _pollFor(idle)
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
+    const perlProg = 'setpgrp(0,0); alarm shift @ARGV; exec @ARGV or exit 127'
+    const inner = `sh -c ${shq(_WATCH_SCRIPT)} sh ${seconds} ${idle} ${poll} ` +
+      `${shq(captureBase)} ${shq(promptPath)} ${shq(perlProg)} ${EMIT_TAIL_BYTES} ${quotedArgv}`
+    return cwd ? `cd ${shq(cwd)} && ${inner}` : inner
+  }
   const alarmed = `perl -e ${shq("alarm shift @ARGV; exec @ARGV or exit 127")} ${seconds} ${quotedArgv}`
-  const cmd = cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
-  const res = await _exec([cmd])
-  const r0 = res && res[0]
-  if (r0 && r0.ok) return (r0.stdout == null ? '' : String(r0.stdout))
-  return null
+  return cwd ? `cd ${shq(cwd)} && ${alarmed} < ${shq(promptPath)}` : `${alarmed} < ${shq(promptPath)}`
+}
+async function _runArgv(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle, nonIdempotent) {
+  const idleArmed = armIdle === true && Number(idleSeconds) > 0
+  const cmd = _composeDispatchCommand(argv, promptPath, cwd, timeoutSeconds, idleSeconds, armIdle)
+  let out
+  try {
+    out = await _courier().runCourierMarkedText('dispatch external CLI', cmd,
+      { single: nonIdempotent === true, acceptExecuted: true })
+  } catch (e) {
+    const c = _courier()
+    if (c.CourierTransportError && e instanceof c.CourierTransportError) {
+      if (e.reason === 'missing execution marker') {
+        return { ok: false, declined: true, answer: e.answer || '' }
+      }
+      return { ok: false }
+    }
+    throw e
+  }
+  if (idleArmed) {
+    const m = out.match(/\n?__SR_DISPATCH__(\{[^\n]*\})\s*$/)
+    if (m) {
+      let verdict = null
+      try { verdict = JSON.parse(m[1]) } catch (_e) { verdict = null }
+      out = out.slice(0, m.index)
+      const relay = (verdict && typeof verdict.outPath === 'string' && verdict.outPath)
+        ? { truncated: String(verdict.truncated) === '1',
+            outBytes: Number.isFinite(Number(verdict.outBytes)) ? Number(verdict.outBytes) : null,
+            outPath: verdict.outPath }
+        : null
+      if (verdict && verdict.idleKilled && String(verdict.idleKilled) !== '0') {
+        return Object.assign({ ok: false, stalled: true, idleSeconds: Number(verdict.idleSeconds) || null },
+          relay ? { relay } : {})
+      }
+      if (relay) return { ok: true, stdout: out, relay }
+    }
+  }
+  return { ok: true, stdout: out }
 }
 async function _journalExternal(payload) {
   return _execJson(
     `python3 ${libPath('journal_entry.py')} --work-item ${shq(payload.workItem || '')} ` +
     `--event-type external_dispatch --payload ` +
     shq(JSON.stringify({ engine: payload.engine, effort: payload.effort, roleKind: payload.roleKind,
-      verify: payload.verify, outcome: payload.outcome })))
+      model: payload.model == null ? null : payload.model,
+      argv: Array.isArray(payload.argv) ? payload.argv : null,
+      effectiveTimeout: payload.effectiveTimeout == null ? null : payload.effectiveTimeout,
+      stallMonitor: payload.stallMonitor == null ? null : payload.stallMonitor,
+      idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
+      declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
+      verify: payload.verify, outcome: payload.outcome,
+      ...(payload.outputTruncated === true
+        ? { outputTruncated: true,
+            outBytes: payload.outBytes == null ? null : payload.outBytes,
+            outPath: payload.outPath == null ? null : payload.outPath }
+        : {}) })))
+}
+function _declinePrefix(answer) {
+  const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
+  if (!s) return 'courier returned no execution marker'
+  return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
 async function _scrubReason(reason) {
   const s = reason == null ? '' : String(reason)
@@ -3776,14 +3999,27 @@ async function _dispatchExternalInner(o) {
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
+  const idleRequested = Number(o.idleSeconds) > 0 ? Math.ceil(Number(o.idleSeconds)) : null
+  const engineStreams = _STREAMS_WHEN_PIPED[engine] === true
+  const armIdle = engineStreams && idleRequested != null
+  const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
+  const stallMonitor = armIdle ? 'armed'
+    : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
+  const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
+    model: (typeof model === 'string' && model) ? model : null,
+    argv: resolvedArgv, effectiveTimeout: limitSeconds,
+    stallMonitor, idleSeconds },
+    (relayMeta && relayMeta.truncated)
+      ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
   const isAuthor = (roleKind === 'author-plan')
   const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   const writeInputs = await _exec([
     _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(schema || {})),
+    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
   ])
   if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
     return { ok: false, reason: 'could-not-stage-external-inputs' }
@@ -3793,6 +4029,8 @@ async function _dispatchExternalInner(o) {
     preSha = await _captureHead(cwd)
     if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
   }
+  let resolvedArgv = null
+  let relayMeta = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -3801,14 +4039,46 @@ async function _dispatchExternalInner(o) {
       (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
-    const rawStdout = await _runArgv(argv, promptPath, cwd, limitSeconds)
-    if (rawStdout == null) return { ok: false, reason: 'external-run-failed' }
-    const rawPath = `/tmp/engine-${runId}.out`
-    const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
-    if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+    resolvedArgv = argv
+    const nonIdempotent = isWrite || isAuthor
+    const captureBase = promptPath.replace(/\.prompt$/, '') + '.run'
+    let runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle, nonIdempotent)
+    const priorDeclines = []
+    if (runRes && runRes.declined) {
+      if (isWrite && await _executionEvidence(cwd, preSha, captureBase)) {
+        return { ok: false, reason: 'external-run-failed' }
+      }
+      priorDeclines.push(_declinePrefix(runRes.answer))
+      runRes = await _runArgv(argv, promptPath, cwd, limitSeconds, idleSeconds, armIdle, nonIdempotent)
+      if (runRes && runRes.declined) {
+        if (isWrite && await _executionEvidence(cwd, preSha, captureBase)) {
+          return { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
+        }
+        priorDeclines.push(_declinePrefix(runRes.answer))
+        return { ok: false, reason: COURIER_DECLINED_OUTCOME, declined: true, declinePrefixes: priorDeclines }
+      }
+    }
+    if (runRes && runRes.stalled) {
+      if (runRes.relay) relayMeta = runRes.relay   // #347: the stalled line still names the kept capture
+      return priorDeclines.length ? { ok: false, reason: 'stalled', declinePrefixes: priorDeclines }
+        : { ok: false, reason: 'stalled' }
+    }
+    if (!runRes || !runRes.ok) {
+      return priorDeclines.length ? { ok: false, reason: 'external-run-failed', declinePrefixes: priorDeclines }
+        : { ok: false, reason: 'external-run-failed' }
+    }
+    if (runRes.relay) relayMeta = runRes.relay
+    const rawStdout = runRes.stdout
+    let parsePath = relayMeta && relayMeta.outPath ? relayMeta.outPath : null
+    if (!parsePath) {
+      const rawPath = `/tmp/engine-${runId}.out`
+      const wroteRaw = await _exec([_stageCmd(rawPath, rawStdout)])
+      if (!(wroteRaw && wroteRaw[0] && wroteRaw[0].ok)) return { ok: false, reason: 'could-not-stage-external-output' }
+      parsePath = rawPath
+    }
     const parsed = await _execJson(
       `python3 ${libPath('engine_adapter.py')} parse-result --engine ${shq(engine)} --role ${shq(roleKind)} ` +
-      `--stdout-path ${shq(rawPath)}`)
+      `--stdout-path ${shq(parsePath)}`)
     if (!parsed || parsed.ok !== true) return { ok: false, reason: (parsed && parsed.reason) || 'unreadable' }
     return parsed
   })()
@@ -3823,21 +4093,28 @@ async function _dispatchExternalInner(o) {
     ])
   } catch (_e) { parsed = { ok: false, reason: 'external-run-threw' } }
   finally { if (timeoutHandle) clearTimeout(timeoutHandle) }
+  if (parsed && Array.isArray(parsed.declinePrefixes)) {
+    for (const prefix of parsed.declinePrefixes) {
+      await _journalExternal(Object.assign(_jbase(), { verify: null,
+        outcome: COURIER_DECLINED_OUTCOME, declinePrefix: prefix }))
+    }
+  }
+  if (parsed && parsed.declined) return { ok: false, reason: COURIER_DECLINED_OUTCOME }
   if (isAuthor) {
-    const jAuthor = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jAuthor = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jAuthor && jAuthor.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { ok: true, notify: parsed.notify || [] } : { ok: false, reason: parsed.reason }
   }
   if (!isWrite) {
-    const jRead = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') })
+    const jRead = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.ok ? 'ok' : (parsed.reason || 'failed') }))
     if (!(jRead && jRead.ok)) return { ok: false, reason: 'unauditable' }
     return parsed.ok ? { findings: parsed.findings || [] } : { ok: false, reason: parsed.reason }
   }
   if (!parsed.ok) {
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: parsed.reason || 'failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: parsed.reason || 'failed' }))
     return { ok: false, reason: parsed.reason }
   }
   const commit = await _execJson(
@@ -3845,12 +4122,12 @@ async function _dispatchExternalInner(o) {
     `--pre-sha ${shq(preSha)}`)
   if (!commit || commit.ok !== true) {
     const reason = (commit && commit.error) ? await _scrubReason(commit.error) : 'commit-failed'
-    await _journalExternal({ workItem: o.workItem, engine, effort, roleKind, verify: null,
-      outcome: 'commit-failed' })
+    await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: 'commit-failed' }))
     return { ok: false, reason }
   }
-  const j = await _journalExternal({ workItem: o.workItem, engine, effort, roleKind,
-    verify: 'pending', outcome: 'ok' })
+  const j = await _journalExternal(Object.assign(_jbase(), {
+    verify: 'pending', outcome: 'ok' }))
   if (!(j && j.ok)) return { ok: false, reason: 'unauditable' }
   return { ok: true, signal: parsed.signal || 'ok', evidence: parsed.evidence || {} }
 }
@@ -3888,7 +4165,11 @@ async function dispatchExternal(o) {
   }
 }
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice }
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+  _STREAMS_WHEN_PIPED, strictify,
+  COURIER_DECLINED_OUTCOME,
+  _composeDispatchCommand,
+  EMIT_TAIL_BYTES }
 };
 __modules["build_phase"] = function (module, exports, require) {
 const { reviewPanel } = require('./review_panel_shell.js')
@@ -4149,14 +4430,16 @@ async function _implWriteAuthorized(engine, wt) {
   }
   return _writeAuthOk
 }
-async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall }) {
+async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, nativeAgentCall, model }) {
   const engine = enginePrefTwin.resolveEngine(roleKind, _enginePrefs())
   if (engine === 'claude') return nativeAgentCall()
   if (!(await _implWriteAuthorized(engine, wt))) return nativeAgentCall()
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
+  const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
+  const idleSeconds = enginePrefTwin.resolveIdle(_enginePrefs(), roleKind)
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem,
+    taskId, workItem, model, timeoutSeconds, idleSeconds,
   })
   if (res && res.ok) return res
   await resetUncommitted(wt, branch)
@@ -4182,13 +4465,33 @@ function buildTaskPrompt(task, branch, wt, docPath, retryNote, deniedNote) {
     + `the filesystem outside the build worktree and the given doc path. Commit with a trailer line `
     + `"Task-Id: ${task.id}" on EVERY commit you make for this task. Put the Task-Id: ${task.id} trailer in the `
     + `FINAL paragraph of the commit message with no blank line between it and any other trailer (e.g. `
-    + `Co-Authored-By). ${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
+    + `Co-Authored-By). ${workerContractTail()}`
+    + (retryNote || '')
+    + (deniedNote || '')
+  )
+}
+function workerContractTail() {
+  return (
+    `${require('./showrunner.js').TIMEOUT_PROCEED_CONTRACT} If the 15-minute timeout `
     + `fired on ANY substantive step (not a verification probe — an actual implementation/commit action), set `
     + `"deniedAction" to a short description of what you could not do; otherwise omit it or set it `
     + `to null — never fabricate a completed step you were denied. Return JSON `
     + `{"ok":bool,"signal":"ok|needs_context|plan_wrong","evidence":{"testFailed":bool,"testPassed":bool},"deniedAction":"<string or null>"}.`
-    + (retryNote || '')
-    + (deniedNote || '')
+  )
+}
+function fixTaskPrompt(task, branch, wt, findingsJson) {
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with `
+    + `trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message `
+    + `with no blank line before other trailers such as Co-Authored-By): ${findingsJson} `
+    + workerContractTail()
+  )
+}
+function fixBranchPrompt(branch, wt, blockersJson) {
+  return (
+    `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: `
+    + `${blockersJson} `
+    + workerContractTail()
   )
 }
 function buildDeniedNote(deniedActions) {
@@ -4250,7 +4553,7 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
     const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
-      prompt,
+      prompt, model: builderModel,   // #308: same tier the readout's builder row promises
       nativeAgentCall: () => agent(
         prompt,
         { label: implementTaskLabel(task, taskCount), model: builderModel, schema: BUILD_LEAF_SCHEMA }),
@@ -4316,7 +4619,13 @@ const FINAL_REVIEW_SCHEMA = {
       type: 'array',
       items: {
         type: 'object',
-        properties: { severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] } },
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          severity: { enum: ['Critical', 'Important', 'Minor', 'Nit'] },
+          evidence: { type: 'string' },
+        },
       },
     },
   },
@@ -4337,6 +4646,8 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
+      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
+      idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review'),   // #309 read stall monitor
     })
     if (res && Array.isArray(res.findings)) {
       const v = res.findings.some((f) => f && circuitBreaker.isBlocking(f.severity)) ? 'fail' : 'pass'
@@ -4385,8 +4696,8 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     }
     const _fixFindings = JSON.stringify((d.blocking || []).concat(d.cannot_verify || []))
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: task.id, wt, branch,
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer "Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
+      workItem, roleKind: 'fix', taskId: task.id, wt, branch, model: fixerModel,  // #308
+      prompt: fixTaskPrompt(task, branch, wt, _fixFindings),   // #357: external prompt states the contract
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these Task ${task.id} findings and commit with trailer `
         + `"Task-Id: ${task.id}" (put Task-Id: ${task.id} in the FINAL paragraph of the commit message with no blank line before other trailers such as Co-Authored-By): ${_fixFindings}`,
@@ -4439,6 +4750,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
+        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review-deep'),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
@@ -4459,8 +4772,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
-      workItem, roleKind: 'fix', taskId: workItem, wt, branch,
-      prompt: `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
+      workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
+      prompt: fixBranchPrompt(branch, wt, JSON.stringify(blockers)),   // #357: contract stated
       nativeAgentCall: () => agent(
         `In the build worktree at ${wt} (branch ${branch}), fix these whole-branch blocking findings: ${JSON.stringify(blockers)}`,
         { label: 'fix-branch', model: fixerModel }),
@@ -4476,6 +4789,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
 }
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildTaskPrompt = buildTaskPrompt
+module.exports.fixTaskPrompt = fixTaskPrompt
+module.exports.fixBranchPrompt = fixBranchPrompt
+module.exports.workerContractTail = workerContractTail
 module.exports.buildDeniedNote = buildDeniedNote
 module.exports.buildLeafPrompt = buildLeafPrompt
 module.exports.buildOneTask = buildOneTask
@@ -4843,15 +5159,37 @@ const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings', 'confidence'],
   properties: {
-    findings: { type: 'array' },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          title: { type: 'string' },
+          summary: { type: 'string' },
+          severity: { type: 'string' },
+          evidence: { type: 'string' },
+          suggestion: { type: 'string' },
+          dimension: { type: 'string' },
+          classKey: { type: 'string' },
+          taxonomy: { type: 'string' },
+          tradeoff: { type: 'boolean' },
+          cannot_verify_from_diff: { type: 'boolean' },
+        },
+      },
+    },
     confidence: { enum: ['high', 'low'] },
     verificationReceipt: {
       type: 'object',
       required: ['artifact', 'chain', 'coverageDecisionIds'],
       properties: {
         artifact: { type: 'string' },
-        chain: { type: 'array' },
-        coverageDecisionIds: { type: 'array' },
+        chain: {
+          type: 'array',
+          items: { type: 'object', properties: { step: { type: 'string' }, evidence: { type: 'string' } } },
+        },
+        coverageDecisionIds: { type: 'array', items: { type: 'string' } },
       },
     },
     usage: { type: 'object' },
@@ -5134,6 +5472,8 @@ function reviewCodeLeaves(tiers, opts) {
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
+        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
         const shaped = ensureReviewerShape({ findings: res.findings, confidence: 'high' },
@@ -5175,6 +5515,8 @@ function reviewCodeLeaves(tiers, opts) {
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
+        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
       const out = await agent(prompt, withModel(pinnedTier('fixer'), { label: `fix-code:r${verdict.round}`, schema: FIX_RESULT_SCHEMA }))
@@ -5543,6 +5885,8 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
+        idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
       const afterSnap = await _snapshotGitPorcelain()
       const porcelainResult = await _revertAuthorPlanStrays(workItem, beforeSnap, afterSnap)
@@ -6074,6 +6418,12 @@ async function showrunner({ workItem }) {
       implementation: _epParsed.implementation || 'claude',
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
+    }
+    if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
+      _epMap.timeout = _epParsed.timeout
+    }
+    if (typeof _epParsed.idleTimeout === 'number' && Number.isInteger(_epParsed.idleTimeout) && _epParsed.idleTimeout > 0) {
+      _epMap.idleTimeout = _epParsed.idleTimeout
     }
   }
   const _frozenSnapshot = _coerceObj((startupFacts && startupFacts.frozen_snapshot) || null)
@@ -7023,9 +7373,11 @@ async function postReadout(workItem, pr, args) {
   const prNum = pr && pr.number ? ` --pr ${shq(String(pr.number))}` : ''
   const termArg = args.terminal ? ` --terminal ${shq(args.terminal)}` : ''
   const costArg = args.costBody ? ` --cost-payload ${shq(JSON.stringify(args.costBody))}` : ''
+  const retries = (typeof courier.courierRetryTotals === 'function') ? courier.courierRetryTotals() : null
+  const retriesArg = (retries && retries.retried > 0) ? ` --courier-retries ${shq(JSON.stringify(retries))}` : ''
   const cmd = args.ctx
-    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg} --ctx ${shq(JSON.stringify(args.ctx))}`
-    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}`
+    ? `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)}${prNum}${termArg}${costArg}${retriesArg} --ctx ${shq(JSON.stringify(args.ctx))}`
+    : `python3 ${libPath('readout_post.py')} --work-item ${shq(workItem)} --reason ${shq(args.reason || '')}${prNum}${termArg}${costArg}${retriesArg}`
   try {
     return await courier.runCourierJson('post readout', cmd, { require: ['posted'], retryRealFailure: false })
   } catch (_e) {

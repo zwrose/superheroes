@@ -8,6 +8,8 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..",
 
 SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/courier_exec_smoke.js",
+    # B5 (#315): the courier retry meter counts a dispatch that needed >1 attempt (retry pressure).
+    "plugins/superheroes/lib/tests/courier_retry_meter_smoke.js",
     "plugins/superheroes/lib/tests/test_pilot_deciders_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
@@ -129,6 +131,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/build_phase_denial_smoke.js",
     # back-half cluster: task-list leaf shape guards (BUG-2/3) + silent-zero park.
     "plugins/superheroes/lib/tests/build_phase_tasklist_shape_smoke.js",
+    # #357: the worker output-contract drift guard (build + both external fix prompts share the tail).
+    "plugins/superheroes/lib/tests/build_phase_fix_contract_smoke.js",
     # configurable base branch: --base threading to ship freshness, draft-PR, gather + bundle ENTRY.
     "plugins/superheroes/lib/tests/showrunner_base_smoke.js",
     # FIX A: resolveTarget seam targets build worktree + null-resolver parks (never reviews root).
@@ -141,11 +145,24 @@ SHOWRUNNER_SMOKES = [
     # NO Buffer global (the exact sandbox condition that made external dispatch dead). Prefixed
     # showrunner_ so the discovery-equality guard below auto-matches it.
     "plugins/superheroes/lib/tests/showrunner_bytes_smoke.js",
+    # #307: engine_dispatch.strictify() — OpenAI-strict `--output-schema` transformer (unit: nested/
+    # arrays-of-objects/enum/no-mutation/idempotent) + a REAL-file staging round-trip (the base64 stage
+    # runs against /tmp, the schema file is read back and asserted strict; cursor stages the original).
+    "plugins/superheroes/lib/tests/showrunner_strictify_smoke.js",
     # #38: engine_dispatch.js dispatchExternal — review/build happy paths, stdin-redirect delivery,
     # UFR-5 timeout, UFR-6 unauditable, sec-101 commit-failure audit symmetry. Named
     # showrunner_engine_dispatch_smoke.js (not engine_dispatch_smoke.js) so the discovery-equality
     # guard below (which only auto-matches showrunner_*/build_phase_* names) stays satisfied.
     "plugins/superheroes/lib/tests/showrunner_engine_dispatch_smoke.js",
+    # #341: the engine CLI dispatch rides the HARDENED marker courier — a real cheapest-model claude
+    # leaf must actually RUN the composed cursor build watchdog command (answer carries __SR_EXIT)
+    # rather than declining with prose. LIVE-GATED (SUPERHEROES_LIVE_COURIER=1): a no-op SKIP in CI
+    # (its composition assertions still run); the live round-trip receipt rides the PR body (§12.2).
+    "plugins/superheroes/lib/tests/showrunner_engine_dispatch_realseam_smoke.js",
+    # #309: the byte-activity stall monitor paired with the high ceiling — command shape (setpgrp
+    # group-kill + byte-growth watchdog, monitor ≤ ceiling), armed/unarmed/inert journal states, and a
+    # REAL-seam run of a fake CLI (stall -> outcome:stalled + process-group death; steady emit -> ok).
+    "plugins/superheroes/lib/tests/showrunner_stall_monitor_smoke.js",
     # plan-author engine route: author-plan external dispatch (commit-free write, --model
     # threading, notify, UFR-6) + producePhase planAuthor wiring (plan-only, fall-open).
     "plugins/superheroes/lib/tests/showrunner_engine_author_smoke.js",

@@ -16,7 +16,27 @@ ap.add_argument("--ctx", default=None, help="JSON context for readout.build_read
 # every other terminal stays parked. --cost-payload folds ship's cost telemetry into this same leaf.
 ap.add_argument("--terminal", choices=["parked", "completed"], default="parked")
 ap.add_argument("--cost-payload", default=None, help="#130: JSON phase_cost telemetry (best-effort)")
+ap.add_argument("--courier-retries", default=None,
+                help="B5 (#315): JSON {retried, byLabel} courier retry pressure — journaled + rendered")
 a = ap.parse_args()
+
+
+def _courier_retries():
+    """Parse --courier-retries into {retried:int, byLabel:dict}, or None. Best-effort: a malformed
+    payload is dropped (telemetry is never load-bearing)."""
+    if not a.courier_retries:
+        return None
+    try:
+        obj = json.loads(a.courier_retries)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    retried = obj.get("retried")
+    if not isinstance(retried, int) or isinstance(retried, bool) or retried <= 0:
+        return None
+    by_label = obj.get("byLabel") if isinstance(obj.get("byLabel"), dict) else {}
+    return {"retried": retried, "byLabel": by_label}
 
 _TERMINAL_EVENT = {"parked": "parked", "completed": "run_completed"}
 if not a.ctx and a.reason is None:
@@ -41,6 +61,10 @@ if a.ctx:
     # no denials, never breaks the readout.
     if "permissionDenials" not in ctx:
         ctx["permissionDenials"] = run_readout._permission_denials({"events_path": paths["events"]})
+    if "courierRetries" not in ctx:                  # B5 (#315): render courier retry pressure
+        _cr = _courier_retries()
+        if _cr:
+            ctx["courierRetries"] = _cr
     body = readout.build_readout(ctx)                # every free-text field scrubbed inside build_readout
     if note:
         body = body + "\n\n> _" + readout.scrub(note, root=os.getcwd())[0] + "_"
@@ -74,6 +98,17 @@ if a.cost_payload:
     try:
         journal.append(paths["events"], "phase_cost", payload=json.loads(a.cost_payload), root=os.getcwd())
     except Exception:   # noqa: BLE001 — telemetry is best-effort
+        pass
+# B5 (#315): journal the run's aggregate courier retry pressure so it survives in the audit trail
+# (run_watch renders `notify`), not only in the terminal readout body. Best-effort.
+_cr = _courier_retries()
+if _cr:
+    try:
+        journal.append(paths["events"], "notify",
+                       detail="couriers: %d retried (a courier dispatch that needed >1 attempt — "
+                              "retry pressure before it becomes failure)" % _cr["retried"],
+                       root=os.getcwd())
+    except Exception:   # noqa: BLE001 — disclosure is best-effort, never load-bearing
         pass
 if not a.pr:                                       # parked before a PR exists (FR-13 no-PR branch)
     rec = _record_brief(text)

@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.11.0...superheroes-v0.11.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **superheroes:** acceptance verdict requires authentic external dispatch + fix engine-pref store-root read ([#310](https://github.com/zwrose/superheroes/issues/310)) ([#331](https://github.com/zwrose/superheroes/issues/331)) ([ee81602](https://github.com/zwrose/superheroes/commit/ee816025f883ab495fa8606e32d27b9b48528259))
+* **superheroes:** bound the watchdog stdout relay + unwrap the stream-json result envelope ([#347](https://github.com/zwrose/superheroes/issues/347)) ([#348](https://github.com/zwrose/superheroes/issues/348)) ([96a30f3](https://github.com/zwrose/superheroes/commit/96a30f355086fec636b1cd34b7e759eb2f75b481))
+* **superheroes:** carry the acceptance driver protocol on a repo-local acceptance-driver skill ([#344](https://github.com/zwrose/superheroes/issues/344)) ([#345](https://github.com/zwrose/superheroes/issues/345)) ([b30216d](https://github.com/zwrose/superheroes/commit/b30216d0ff8a18beed1019e18cbaced7f09c81b4))
+* **superheroes:** disclose ship-freshen fetch failures, rollup corruption, courier retries, bootstrap breadcrumbs ([#315](https://github.com/zwrose/superheroes/issues/315)) ([#334](https://github.com/zwrose/superheroes/issues/334)) ([3ae11f2](https://github.com/zwrose/superheroes/commit/3ae11f2875561b3a2a39ab0f2d0163d2e20286a5))
+* **superheroes:** engine-dispatch couriers use the hardened path + honest courier-declined outcome + per-engine authenticity gate ([#341](https://github.com/zwrose/superheroes/issues/341)) ([#343](https://github.com/zwrose/superheroes/issues/343)) ([abff57c](https://github.com/zwrose/superheroes/commit/abff57c77eeeb04f87a4e0d416a4f05911eb9a06))
+* **superheroes:** external fix dispatches state the worker output contract ([#357](https://github.com/zwrose/superheroes/issues/357)) ([#358](https://github.com/zwrose/superheroes/issues/358)) ([f93582c](https://github.com/zwrose/superheroes/commit/f93582c405bcc0033ac8bad01e8a8be90825d6bf))
+* **superheroes:** make the [#286](https://github.com/zwrose/superheroes/issues/286) allowance layer operative — emit allows, confine on real exec dir, loud unseeded state ([#311](https://github.com/zwrose/superheroes/issues/311)) ([#335](https://github.com/zwrose/superheroes/issues/335)) ([d685bb2](https://github.com/zwrose/superheroes/commit/d685bb24dd6f7d9681dfddb7768bb8efde3b2f0b))
+* **superheroes:** parse engine output from the shell-written capture — never re-stage it through a courier ([#349](https://github.com/zwrose/superheroes/issues/349)) ([#351](https://github.com/zwrose/superheroes/issues/351)) ([7f9166b](https://github.com/zwrose/superheroes/commit/7f9166bc5318fdcc7f86897adc0416f632bb95b7))
+* **superheroes:** strictify codex --output-schema at the dispatch staging seam ([#307](https://github.com/zwrose/superheroes/issues/307)) ([#330](https://github.com/zwrose/superheroes/issues/330)) ([04de660](https://github.com/zwrose/superheroes/commit/04de660683129489d65d1c3e6e851dc943ef1962))
+* **superheroes:** thread resolved model + role-appropriate timeouts through all external dispatch sites ([#308](https://github.com/zwrose/superheroes/issues/308)) ([#309](https://github.com/zwrose/superheroes/issues/309)) ([#332](https://github.com/zwrose/superheroes/issues/332)) ([1d0429f](https://github.com/zwrose/superheroes/commit/1d0429fbe420d164ec2125c92bc5d41210e0f75d))
+
 ## [0.11.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.10.0...superheroes-v0.11.0) (2026-07-08)
 
 

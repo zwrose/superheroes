@@ -26,13 +26,20 @@ TASK_ID_TRAILER = "Task-Id"
 _CODEX_MODEL = "gpt-5.5"
 _CURSOR_MODEL = "composer-2.5-fast"
 
-# Native tier short-name -> cursor model id, for roles that carry a model override (today only
-# author-plan, the plan-author leaf: `author-plan: fable` + `planAuthor: cursor` = Fable via
-# Cursor). Ids verified live 2026-07-03 against cursor-agent 2026.07.01 `models`. An unmapped or
-# absent override keeps the pinned composer default — never the developer's ambient default.
+# Native model-tier short-name -> cursor model id — the OWNER POLICY map (ratified 2026-07-09).
+# Cursor is the TOKEN-EFFICIENCY engine: its whole point is the highly token-efficient composer-2.5,
+# so ALL work roles (build/fix/review/reviewer-deep) dispatch the pinned _CURSOR_MODEL composer
+# default, and premium Claude models are NEVER routed through cursor by default. The ONE deliberate
+# exception is plan authoring: `author-plan: fable` (model tier) + `planAuthor: cursor` (engine pref)
+# dispatches Fable via cursor — hence `fable` is the map's ONLY entry (id verified live against
+# `cursor-agent models` 2026-07-03). Every other tier (opus/sonnet/haiku, or any owner override)
+# DELIBERATELY falls through build_argv's `.get(..., _CURSOR_MODEL)` to composer — that fall-through
+# IS the policy, not a gap; do not "complete" this map with premium ids. EVERY cursor dispatch
+# threads its role's resolved tier (#308) through this map, and display_model resolves through this
+# SAME map (SSOT), so the preflight readout row shows the composer truth and can never disagree with
+# the dispatched argv by construction (#308 / #162).
 _CURSOR_MODEL_BY_TIER = {
     "fable": "claude-fable-5-thinking-xhigh",
-    "opus": "claude-opus-4-8-thinking-high",
 }
 
 
@@ -126,6 +133,27 @@ def _last_json_array(stdout):
     return _last_top_level_json(stdout, list)
 
 
+def _unwrap_stream_envelope(stdout):
+    """Unwrap a stream-json RESULT ENVELOPE before the role parsers scan for the leaf's
+    payload (#347). cursor-agent `--output-format stream-json` (the format the byte-activity
+    stall monitor NEEDS — a buffering format would run monitor-inert) wraps ALL leaf text in
+    line-delimited events; the final event is `{"type":"result","result":"<all leaf text as
+    ONE escaped string>",...}`. The leaf's real verdict/findings JSON therefore sits
+    JSON-escaped INSIDE that string — invisible to a top-level scan, which sees only the
+    envelope (no `ok` key -> build/fix coerced to a refusal; live: every in-child cursor
+    dispatch ever recorded, issue #347). When — and only when — the LAST top-level object is
+    such an envelope (`type=="result"`, a string `result`, and NOT itself a leaf verdict: no
+    `ok` key), return the inner text for re-scanning; otherwise return stdout unchanged
+    (codex output and native shapes are byte-identical through here). An error envelope whose
+    inner text carries no JSON still ends `unreadable` downstream — the honest fail
+    direction."""
+    obj = _last_json_object(stdout)
+    if (isinstance(obj, dict) and obj.get("type") == "result"
+            and isinstance(obj.get("result"), str) and "ok" not in obj):
+        return obj["result"]
+    return stdout
+
+
 def _scrub(text):
     if not isinstance(text, str) or not text:
         return text
@@ -178,6 +206,7 @@ def parse_result(engine, role_kind, stdout):
     defaults). Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
     scrubbed HERE (Secret-hygiene). Never raises."""
     try:
+        stdout = _unwrap_stream_envelope(stdout)   # #347: see the unwrap's docstring
         obj = _last_json_object(stdout)
         if role_kind == "review":
             findings = obj.get("findings") if isinstance(obj, dict) else None
@@ -282,7 +311,7 @@ def main(argv):
     b.add_argument("--cwd", default=None)
     b.add_argument("--schema-path", default=None)
     b.add_argument("--model", default=None,
-                   help="native tier short name (fable/opus); cursor maps it to its model id")
+                   help="native tier short name; cursor maps ONLY fable (owner policy), else composer")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
     pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))

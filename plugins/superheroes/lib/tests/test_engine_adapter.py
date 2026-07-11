@@ -325,13 +325,28 @@ def test_build_argv_cursor_author_plan_maps_fable_model():
     assert "--mode" not in argv               # not the read-only plan mode
 
 
-def test_build_argv_cursor_author_plan_maps_opus_model():
-    argv = EA.build_argv("cursor", "author-plan", "composer", {"model": "opus"})
-    assert argv[argv.index("--model") + 1] == "claude-opus-4-8-thinking-high"
+def test_build_argv_cursor_work_roles_stay_on_composer_for_every_premium_tier():
+    # OWNER POLICY (ratified 2026-07-09): cursor is the token-efficiency engine — composer-2.5 for
+    # ALL work roles; premium Claude models are NEVER routed through cursor by default. A threaded
+    # opus/sonnet/haiku tier deliberately falls through to the pinned composer default (the map's
+    # only entry is fable, the author-plan exception). This is the policy, not a coverage gap.
+    for role in ("review", "build", "fix"):
+        for tier in ("opus", "sonnet", "haiku"):
+            argv = EA.build_argv("cursor", role, "composer", {"cwd": "/wt", "model": tier})
+            assert argv[argv.index("--model") + 1] == "composer-2.5-fast", (role, tier)
+
+
+def test_build_argv_cursor_fable_is_the_only_mapped_tier():
+    # The one deliberate exception: author-plan: fable + planAuthor: cursor dispatches Fable via
+    # cursor. The map contains fable and NOTHING else — adding premium ids would invert the owner
+    # policy (see _CURSOR_MODEL_BY_TIER's comment).
+    assert EA._CURSOR_MODEL_BY_TIER == {"fable": "claude-fable-5-thinking-xhigh"}
 
 
 def test_build_argv_cursor_unmapped_model_keeps_composer_default():
-    for model in (None, "", "bogus-tier"):
+    # opus included: even author-plan only gets a premium model via the fable exception — an opus
+    # author-plan tier stays on composer per the owner policy.
+    for model in (None, "", "bogus-tier", "opus"):
         argv = EA.build_argv("cursor", "author-plan", "composer", {"model": model})
         assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
     # non-author roles without a model override are unchanged
@@ -416,3 +431,82 @@ def test_engine_dispatch_timeout_expiry_contract_is_stated_in_dispatch_reference
     assert "reviewer" in text and "fixer" in text
     # the expiry contract: an expired slot is `unreadable`, routed to UFR-7
     assert "unreadable" in text and "UFR-7" in text
+
+
+# ---------------------------------------------------------------------------
+# #347: the stream-json RESULT-ENVELOPE unwrap. Real cursor-agent stream-json wraps ALL
+# leaf text inside the final result event as ONE escaped string — the leaf's verdict:
+# {"type":"result","result":"...\n```json\n{\"ok\":true,...}\n```\n\nSummary...","session_id":"..."}
+# A top-level scan sees only the envelope (no "ok" key), so before this unwrap every
+# in-child cursor build/fix parsed as a refusal (live: run accept-harness-84251c…, 2026-07-10).
+
+
+def _envelope(inner_text, **extra):
+    ev = {"type": "result", "subtype": "success", "is_error": False,
+          "duration_ms": 12345, "session_id": "0aae943d", "result": inner_text}
+    ev.update(extra)
+    return ('{"type":"system","subtype":"init","model":"Composer 2.5 Fast"}\n'
+            '{"type":"thinking","text":"..."}\n' + json.dumps(ev) + "\n")
+
+
+def test_parse_result_cursor_build_verdict_inside_stream_envelope():
+    # The live shape: verdict JSON in a fenced block INSIDE the envelope's result string,
+    # followed by a prose summary (exactly what Composer emitted in the 2026-07-10 run).
+    inner = ('Test failed as expected. Implementing the append.\n```json\n'
+             '{"ok":true,"signal":"ok","evidence":{"testFailed":true,"testPassed":true},'
+             '"deniedAction":null}\n```\n\n**Task 1 complete.** Summary of the TDD steps.')
+    res = EA.parse_result("cursor", "build", _envelope(inner))
+    assert res == {"ok": True, "signal": "ok",
+                   "evidence": {"testFailed": True, "testPassed": True}}
+
+
+def test_parse_result_cursor_fix_honest_refusal_inside_stream_envelope():
+    # An honest leaf refusal inside the envelope must SURVIVE as a refusal (#288 semantics
+    # through the unwrap) — never unreadable, never coerced ok.
+    inner = 'I cannot apply this plan.\n{"ok":false,"signal":"plan_wrong","evidence":{}}'
+    res = EA.parse_result("cursor", "fix", _envelope(inner))
+    assert res["ok"] is False and res["signal"] == "plan_wrong"
+
+
+def test_parse_result_cursor_review_findings_inside_stream_envelope():
+    inner = ('Reviewed the diff.\n{"findings":[{"severity":"Important","title":"t",'
+             '"file":"a.py","line":3,"body":"b","suggestion":"s"}]}\nDone.')
+    res = EA.parse_result("cursor", "review", _envelope(inner))
+    assert res["ok"] is True
+    assert res["findings"][0]["severity"] == "Important"
+
+
+def test_parse_result_error_envelope_with_no_inner_json_is_unreadable():
+    # An error envelope whose inner text carries no JSON parses unreadable — the honest
+    # fail direction (falls open / UFR-7), never a silent pass.
+    res = EA.parse_result("cursor", "build",
+                          _envelope("fatal: model quota exceeded", is_error=True, subtype="error"))
+    assert res == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_envelope_unwrap_tolerates_truncated_leading_noise():
+    # #347 bounded relay: the watchdog emits only the stdout TAIL, so the first line may be
+    # chopped mid-JSON. The noise-tolerant scan must still find the final envelope and unwrap it.
+    inner = '{"ok":true,"signal":"ok","evidence":{"testFailed":true,"testPassed":true}}'
+    chopped = 'l","text":"...chopped mid-event..."}\n' + _envelope(inner)
+    res = EA.parse_result("cursor", "build", chopped)
+    assert res["ok"] is True and res["signal"] == "ok"
+
+
+def test_parse_result_top_level_verdict_with_result_key_is_not_unwrapped():
+    # A leaf verdict that happens to carry a type/result-looking shape but HAS an "ok" key is
+    # the verdict itself — never unwrapped away.
+    stdout = json.dumps({"type": "result", "result": "prose", "ok": True, "signal": "ok",
+                         "evidence": {"testFailed": True, "testPassed": True}})
+    res = EA.parse_result("cursor", "build", stdout)
+    assert res["ok"] is True
+
+
+def test_parse_result_codex_shapes_are_byte_identical_through_the_unwrap():
+    # codex never emits the envelope shape — its parses must be unchanged by #347.
+    stdout = json.dumps({"findings": [{"severity": "Minor", "title": "t", "body": "b",
+                                       "suggestion": "s"}]})
+    assert EA.parse_result("codex", "review", stdout)["ok"] is True
+    verdict = json.dumps({"ok": True, "signal": "ok",
+                          "evidence": {"testFailed": True, "testPassed": True}})
+    assert EA.parse_result("codex", "build", verdict)["ok"] is True
