@@ -939,12 +939,13 @@ function makeAgent(routes) {
     const DENIAL = 'Permission for this action was denied by the Claude Code auto mode classifier. ' +
       'Reason: Auto mode could not evaluate this action and is blocking it for safety.'
     // Helper: collect every external_dispatch journal payload the dispatch appends.
-    function journalCollector(collector, routes) {
+    function journalCollector(collector, routes, journalResult) {
+      const jOut = journalResult == null ? { ok: true } : journalResult
       return async (prompt) => {
         if (prompt.includes('journal_entry.py')) {
           const m = prompt.match(/--payload '(.*)'$/s)
           if (m) { try { collector.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
-          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+          return [{ index: 0, ok: true, stdout: JSON.stringify(jOut) }]
         }
         for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
         return [{ index: 0, ok: true, stdout: '{}' }]
@@ -1066,6 +1067,34 @@ function makeAgent(routes) {
       assert.ok(!seen.some((c) => c.includes('engine_adapter.py build-argv')), '#373: build-argv is never reached after a preSHA failure')
       assert.ok(!seen.some((c) => c.includes('engine_adapter.py commit')), '#373: no commit is attempted after a preSHA failure')
       console.log('OK: engine_dispatch #373 presha-failed journals one line before build-argv/CLI/commit')
+    }
+
+    // (c2) STAGING DENIED + JOURNAL APPEND FAILS: the classifier blocks staging and the audit append
+    // itself fails -> fail-closed 'unauditable' (NOT could-not-stage-external-inputs).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: DENIAL }]],
+      ], { ok: false })
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'secret build prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-unaud-staging' })
+      assert.strictEqual(r.ok, false, '#373: staging denial with journal failure returns ok:false')
+      assert.strictEqual(r.reason, 'unauditable', '#373: journal append failure fail-closed to unauditable (NOT could-not-stage-external-inputs): ' + r.reason)
+      console.log('OK: engine_dispatch #373 staging-denied + journal failure -> unauditable fail-closed')
+    }
+
+    // (c3) PRESHA FAILED + JOURNAL APPEND FAILS: write-role staging succeeds, preSHA capture fails,
+    // and the audit append itself fails -> fail-closed 'unauditable' (NOT could-not-capture-preSHA).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['git', (p) => p.includes('rev-parse HEAD') ? [{ index: 0, ok: false, stdout: '' }] : [{ index: 0, ok: true, stdout: '{}' }]],
+      ], { ok: false })
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-unaud-presha' })
+      assert.strictEqual(r.ok, false, '#373: preSHA failure with journal failure returns ok:false')
+      assert.strictEqual(r.reason, 'unauditable', '#373: journal append failure fail-closed to unauditable (NOT could-not-capture-preSHA): ' + r.reason)
+      console.log('OK: engine_dispatch #373 presha-failed + journal failure -> unauditable fail-closed')
     }
 
     // (d) SUCCESSFUL DISPATCH UNCHANGED: a normal write build still journals EXACTLY ONE external_dispatch
