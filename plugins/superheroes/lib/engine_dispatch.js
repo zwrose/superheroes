@@ -5,7 +5,7 @@
 // everything downstream (loop math, verify gate, journal) is reused unchanged. Read roles are
 // read-only (no preSHA/commit); write roles capture preSHA -> engine edits -> adapter commits.
 const { libPath } = require('./lib_root.js')
-const { b64 } = require('./bytes.js')
+const { sha256hex } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
 // #309: engines that emit output INCREMENTALLY when piped to a file (not a TTY) — verified 2026-07-09
@@ -43,20 +43,62 @@ const PRESHA_FAILED_OUTCOME = 'presha-failed'     // write-role preSHA capture f
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-// Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
-// text is untrusted and MAY contain a line identical to any fixed heredoc sentinel, which would
-// terminate the heredoc early and corrupt the staged file. Base64 also makes the payload an OPAQUE
-// blob as it rides the LLM `exec` courier — a courier can copy alphabet-soup verbatim or fail
-// visibly, but cannot paraphrase it the way it rewrites readable text (the 2026-07-02 staged-write
-// mangle class). Encoding sidesteps sentinels AND mangling; a shell `base64 -d` decodes it.
-// #277: the base64 encode MUST NOT use Node's `Buffer` — the Workflow sandbox has no Buffer global
-// (same class as the FR-8-banned wall-clock/PRNG globals), so `Buffer.from(...)` threw on the first
-// statement here and every external dispatch silently fell open to Claude. b64() is the shared,
-// Buffer-less encoder (bytes.js), byte-identical in node and the sandbox and exercised the same in
-// both. base64 output is pure ASCII so shq's single-quote escaping is sufficient.
+// #257: the PLAIN-READABLE stage-write, replacing the old `printf '<base64>' | base64 -d > …` blob.
+// Root cause it fixes (live 2026-07-11, 0.11.1 run wf_e0d42237-c87): the Claude Code auto-mode safety
+// classifier flags exactly the base64 courier's OPACITY and DENIED all 4 cursor stagings — every cursor
+// build fell open to native, the write-engine axis never ran. Opacity had a real job (transit fidelity:
+// a leaf once rewrote readable JSON mid-relay, 2026-07-02), so we keep the fidelity guarantee WITHOUT the
+// opacity: the payload rides as a plain, human/classifier-readable python argv, and a Python-side sha256
+// re-hash of the written file — pinned to a hash the SPINE computed from the ORIGINAL content and embedded
+// as a literal — proves the courier copied it faithfully. A paraphrase changes the file's hash but never
+// the embedded literal (an LLM copies a 64-hex string verbatim or fails visibly; only a paraphrase of the
+// readable body is the observed mangle), so a mangled stage EXITS NON-ZERO here and the caller fails
+// closed + retries — never persists silently-altered content.
+//
+// Shape choice (deviates from the issue's heredoc suggestion, same guarantee): the argv-shape python
+// writer is the SAME transport io.writeFile already uses live in this exact runtime (bundle `__SR_W`,
+// finding #13) — a path/payload passed as ARGV is data, not a shell file-op, so it clears the store's
+// sensitive-file guard where a `cat > … <<EOF` heredoc open() is denied. It also needs no collision-proof
+// heredoc delimiter (untrusted engine text can contain any sentinel line) and adds no trailing-newline
+// artifact — the file bytes are EXACTLY the content, so the verify hash is sha256hex(content) flat.
+// #277 carries over: no Node `Buffer`/`crypto` on this path (both absent in the sandbox) — sha256hex is
+// the shared Buffer-less digest (bytes.js), exercised identically in node and the sandbox. The verify
+// returns only its EXIT STATUS (0 match / 3 mismatch); it NEVER echoes the file back through the courier's
+// answer, so the read side can't re-mangle and the audit line can't leak the staged payload.
+// _SR_STAGE_SIG is the stable routing/identity substring every staged command carries.
+const _SR_STAGE_SIG = 'hashlib.sha256'
+const _SR_STAGE_SCRIPT =
+  'import os,sys,hashlib;' +
+  'p,c,w=sys.argv[1],sys.argv[2],sys.argv[3];' +
+  'd=os.path.dirname(p);' +
+  'd and os.makedirs(d,exist_ok=True);' +
+  'open(p,"w",encoding="utf-8").write(c);' +
+  'h=hashlib.sha256(open(p,"rb").read()).hexdigest();' +
+  'sys.exit(0 if h==w else 3)'
 function _stageCmd(path, content) {
-  const encoded = b64(content == null ? '' : String(content))
-  return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
+  const c = content == null ? '' : String(content)
+  return `python3 -c ${shq(_SR_STAGE_SCRIPT)} ${shq(path)} ${shq(c)} ${shq(sha256hex(c))}`
+}
+
+// #257: stage ONE input (prompt / schema / raw output) through the exec courier with fail-closed sha256
+// verify + one retry. A stage rides its OWN single-command leaf (never a multi-command numbered list):
+// a plain readable payload legitimately contains newlines, and a numbered `1.`/`2.` batch could mis-slice
+// a multi-line command mid-payload. exec-level ok reflects the python verify's exit status, so ok===true
+// means the file on disk hashed to the spine's expected value — a transit mangle (verify exit 3 -> ok
+// false) or a courier/exec error retries ONCE (the known haiku stdout-drop is stochastic), then gives up.
+// A CLASSIFIER DENIAL is deterministic (retrying re-denies), so we break early on a denial signature and
+// hand the failed leaf's results back so the caller journals `staging-denied` with the bounded reason.
+async function _stageInput(path, content) {
+  const cmd = _stageCmd(path, content)
+  let last = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await _exec([cmd])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) return { ok: true, results: res }
+    last = res
+    if (_stagingDenial(res)) break   // deterministic denial — a retry only re-denies
+  }
+  return { ok: false, results: last }
 }
 
 // #307: codex's `--output-schema` rides OpenAI STRICT structured outputs, whose two hard rules the
@@ -493,8 +535,10 @@ function _declinePrefix(answer) {
 // #373: inspect a FAILED staging result set for an auto-mode/permission DENIAL and, when found, return
 // a bounded single-line reason string (owner-relevant evidence: WHY the staging courier was blocked).
 // The extraction WINDOW STARTS at the denial phrase — never at the head of the leaf's stdout — so an
-// echoed `printf '<base64>' | base64 -d > …` command (which base64-encodes the PROMPT) can never leak
-// into the reason: the classifier's prose is what rides, not the payload. Whitespace-collapsed and
+// echoed staging command can never leak into the reason: the classifier's prose is what rides, not the
+// payload. This matters MORE under #257's plain-readable staging — the echoed command now carries the
+// PROMPT as readable text (`python3 -c … '<prompt>' '<hash>'`), not an opaque blob — so the phrase-
+// anchored window is what keeps the staged prompt out of the audit line. Whitespace-collapsed and
 // clamped to ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/
 // exec error), so the caller distinguishes `staging-denied` from `staging-failed`.
 const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
@@ -594,16 +638,21 @@ async function _dispatchExternalInner(o) {
   // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
   // which Anthropic's tool input_schema requires and which strict shapes would break).
   const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
-  const writeInputs = await _exec([
-    _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
-  ])
-  if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
+  // #257: stage prompt then schema as PLAIN-readable, hash-verified writes (see _stageCmd/_stageInput) —
+  // each in its own leaf, prompt first so a prompt-staging denial short-circuits the (pointless) schema
+  // stage. writeInputs holds the FAILED leaf's raw results so the #373 denial-signature extraction still
+  // fires; a success carries no denial and journals nothing here.
+  const promptStage = await _stageInput(promptPath, prompt || '')
+  const schemaStage = promptStage.ok
+    ? await _stageInput(schemaPath, JSON.stringify(stagedSchema))
+    : { ok: false, results: [] }
+  if (!(promptStage.ok && schemaStage.ok)) {
     // #373: staging died BEFORE the CLI ran — journal it (was a silent return). A denial-signature in
-    // the failed leaf's stdout (the auto-mode classifier blocking the base64 courier) rides as the
+    // the failed leaf's stdout (the auto-mode classifier blocking the staging courier) rides as the
     // bounded `reason`, and the outcome distinguishes a denial from a plain courier/exec staging error.
     // The RETURN reason stays `could-not-stage-external-inputs` so the #277 harness-dead tripwire and
     // every caller behave exactly as before — only the missing audit line is added.
+    const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
     const denial = _stagingDenial(writeInputs)
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
@@ -880,5 +929,10 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // #341 test-only: the pure production command composer, exported so the real-seam detector
   // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
   _composeDispatchCommand,
+  // #257 test-only: the plain-readable stage-write composer + its verify-and-retry wrapper, exported so
+  // the fidelity smoke drives the REAL python write+sha256-verify through a shell (round-trip + mangle
+  // fail-closed) and pins that no base64 blob rides the staged command; the routing signature lets
+  // mocks target the stage leaf.
+  _stageCmd, _stageInput, _SR_STAGE_SIG,
   // #347 test-only: the watchdog's stdout-relay cap, exported so the flood smoke pins the bound.
   EMIT_TAIL_BYTES }

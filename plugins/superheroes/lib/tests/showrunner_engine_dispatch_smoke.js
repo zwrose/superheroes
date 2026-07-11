@@ -404,11 +404,13 @@ function makeAgent(routes) {
   console.log('OK: engine_dispatch falls open (does not throw) on a synchronous internal error, reason carries the error')
 
   // ---------------------------------------------------------------------
-  // #277: the base64 staging encoder must NOT depend on Node's `Buffer` — the Workflow sandbox has no
-  // Buffer global, and the old `Buffer.from(...)` in _stageCmd threw on its first statement, making
-  // EVERY external dispatch silently fall open to Claude. With Buffer deleted from the global scope
-  // (simulating the sandbox), a dispatch must still stage its inputs and reach the CLI — the exact
-  // regression that was invisible to smokes running in plain node where Buffer exists.
+  // #277/#257: the staging path must NOT depend on Node's `Buffer` — the Workflow sandbox has no Buffer
+  // global (the old `Buffer.from(...)` in _stageCmd threw on its first statement, making EVERY external
+  // dispatch silently fall open to Claude). #257 dropped base64 for a PLAIN-readable write whose fidelity
+  // rides sha256hex (bytes.js) — also Buffer-LESS (and crypto-less), so the same #277 constraint holds on
+  // the hash step. With Buffer deleted from the global scope (simulating the sandbox), a dispatch must
+  // still stage its inputs (compute the verify hash + emit the plain command) and reach the CLI — the
+  // exact regression class that was invisible to smokes running in plain node where Buffer exists.
   // ---------------------------------------------------------------------
   {
     d.__resetHarnessNotice(); logs.length = 0
@@ -439,14 +441,20 @@ function makeAgent(routes) {
     }
     assert.ok(rNB && !rNB.reason, '#277: a dispatch must NOT fail with Buffer absent — it did: ' + (rNB && rNB.reason))
     assert.deepStrictEqual(rNB.findings, [], '#277: the Buffer-less dispatch completes normally (reaches parse-result)')
-    // the prompt was staged via `printf %s '<b64>' | base64 -d > ...` — proving the encoder ran with no Buffer.
-    assert.ok(execLogNB.some((c) => c.includes('base64 -d >') && c.includes('.prompt')),
-      '#277: the prompt is staged via a base64-decode command even with no Buffer global')
+    // #257: the prompt is staged via the plain python write+sha256-verify command (readable payload +
+    // embedded hash), proving sha256hex ran with no Buffer — and NOT via any base64-decode blob.
+    const promptStageNB = execLogNB.find((c) => c.includes(d._SR_STAGE_SIG) && c.includes('.prompt'))
+    assert.ok(promptStageNB,
+      '#257/#277: the prompt is staged via the plain hash-verified write even with no Buffer global')
+    assert.ok(/stage me — 🎡 §/.test(promptStageNB),
+      '#257: the staged prompt rides the command as readable text (no opaque blob): ' + promptStageNB)
+    assert.ok(!/base64 -d/.test(promptStageNB),
+      '#257: the staged command carries NO base64-decode blob: ' + promptStageNB)
     assert.ok(!logs.some((l) => /ENGINE-UNAVAILABLE/.test(l)),
       '#277: no harness-dead notice fires when staging succeeds Buffer-free')
   }
 
-  console.log('OK: engine_dispatch stages inputs with NO Buffer global (Buffer-less base64 encoder)')
+  console.log('OK: engine_dispatch stages inputs plain-readable with NO Buffer global (#257/#277)')
 
   // ---------------------------------------------------------------------
   // #277 tripwire: a harness-level staging/dispatch death surfaces ONCE as a distinct NAMED notice
@@ -458,7 +466,7 @@ function makeAgent(routes) {
     d.__resetHarnessNotice(); logs.length = 0
     global.agent = makeAgent([
       ['exec', (prompt) => {
-        if (prompt.includes('base64 -d >')) return [{ index: 0, ok: false, stdout: '' }]
+        if (prompt.includes(d._SR_STAGE_SIG)) return [{ index: 0, ok: false, stdout: '' }]
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
@@ -511,7 +519,7 @@ function makeAgent(routes) {
     d.__resetHarnessNotice(); logs.length = 0
     global.agent = makeAgent([
       ['exec', (prompt) => {
-        if (prompt.includes('base64 -d >') && prompt.includes('.out')) return [{ index: 0, ok: false, stdout: '' }]
+        if (prompt.includes(d._SR_STAGE_SIG) && prompt.includes('.out')) return [{ index: 0, ok: false, stdout: '' }]
         if (prompt.includes('engine_adapter.py build-argv')) return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
         // journal BEFORE the '--sandbox' run branch: the journal payload embeds the resolved argv
         // (which contains '--sandbox'), so a run-branch checked first would mis-route the journal leaf.
@@ -633,7 +641,7 @@ function makeAgent(routes) {
     global.agent = makeAgent([
       ['exec', (prompt) => {
         execLogB3.push(prompt)
-        if (prompt.includes('base64 -d >')) return [{ index: 0, ok: false, stdout: '' }]
+        if (prompt.includes(d._SR_STAGE_SIG)) return [{ index: 0, ok: false, stdout: '' }]
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
@@ -952,15 +960,15 @@ function makeAgent(routes) {
       }
     }
 
-    // (a) STAGING DENIED: the base64 staging courier is blocked by the classifier — the failed leaf's
+    // (a) STAGING DENIED: the staging courier is blocked by the classifier — the failed leaf's
     // stdout carries the denial prose. The dispatch journals outcome:'staging-denied' WITH a bounded
     // `reason` (the denial text), exactly one line, argv null (build-argv never ran), and returns the
-    // unchanged could-not-stage-external-inputs reason.
+    // unchanged could-not-stage-external-inputs reason. (#257: routes on the plain stage signature.)
     {
       d.__resetHarnessNotice()
       const jp = []
       global.agent = journalCollector(jp, [
-        ['base64 -d >', [{ index: 0, ok: false, stdout: DENIAL }]],
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: DENIAL }]],
       ])
       const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'secret build prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-deny' })
       assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: the caller-facing return reason is UNCHANGED (harness-dead tripwire keys on it)')
@@ -976,24 +984,25 @@ function makeAgent(routes) {
       console.log('OK: engine_dispatch #373 staging-denied journals one line with the bounded denial reason')
     }
 
-    // (a2) DENIAL-REASON WINDOWING: even when the failed leaf ECHOES the base64 staging command (whose
-    // blob base64-encodes the PROMPT) BEFORE the denial prose, the reason window STARTS at the denial
-    // phrase — so the base64 payload can never ride into the audit line.
+    // (a2) DENIAL-REASON WINDOWING: with #257's PLAIN staging the failed leaf can ECHO the staging
+    // command with the READABLE prompt right there in it (`python3 -c … '<prompt>' '<hash>'`) BEFORE the
+    // denial prose. The reason window STARTS at the denial phrase — so the readable payload can never
+    // ride into the audit line (the windowing that guarded the base64 blob now guards the plain payload).
     {
       d.__resetHarnessNotice()
       const jp = []
-      // 'U0VDUkVUUFJPTVBU' is base64 for 'SECRETPROMPT' — the kind of blob an echoed stage cmd carries.
-      const ECHOED = "printf %s 'U0VDUkVUUFJPTVBUQkxPQg==' | base64 -d > /tmp/engine-x.prompt\n" + DENIAL
+      const SECRET = 'SECRETPROMPT-abc123'
+      const ECHOED = "python3 -c '…hashlib.sha256…' /tmp/engine-x.prompt '" + SECRET + "' 'deadbeef'\n" + DENIAL
       global.agent = journalCollector(jp, [
-        ['base64 -d >', [{ index: 0, ok: false, stdout: ECHOED }]],
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: ECHOED }]],
       ])
-      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-window' })
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: SECRET, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-window' })
       const ed = jp.filter((p) => p.outcome === 'staging-denied')
       assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: read-role staging denial also journals one staging-denied line')
       assert.ok(ed[0].reason.startsWith('Permission for this action was denied'), '#373: the reason window starts at the denial phrase: ' + ed[0].reason)
-      assert.ok(!/U0VDUkVU/.test(ed[0].reason), '#373: the echoed base64 blob (the encoded prompt) never leaks into the reason: ' + ed[0].reason)
-      console.log('OK: engine_dispatch #373 denial-reason windowing (echoed base64 payload excluded)')
+      assert.ok(!ed[0].reason.includes(SECRET), '#257/#373: the echoed readable prompt never leaks into the reason: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #373 denial-reason windowing (echoed plain payload excluded)')
     }
 
     // (a3) DENIAL-REASON CLAMP + REDACTION: denial prose exceeds 200 chars and the forward window also
@@ -1030,7 +1039,7 @@ function makeAgent(routes) {
       d.__resetHarnessNotice()
       const jp = []
       global.agent = journalCollector(jp, [
-        ['base64 -d >', [{ index: 0, ok: false, stdout: '' }]],
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: '' }]],
       ])
       const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-fail' })
       assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: return reason unchanged for a non-denial staging failure')
@@ -1117,6 +1126,100 @@ function makeAgent(routes) {
       assert.ok(!jp.some((p) => ['staging-denied', 'staging-failed', 'presha-failed'].includes(p.outcome)), '#373: no pre-CLI early-exit token appears on the happy path')
       console.log('OK: engine_dispatch #373 successful dispatch unchanged (exactly one ok line, no stray pre-CLI journal)')
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // #257 PLAIN-READABLE STAGE-WRITE + HASH-VERIFY FIDELITY. The base64 courier's opacity was the live
+  // 2026-07-11 failure mode (the auto-mode classifier denied all 4 cursor stagings). _stageCmd now emits
+  // a plain, readable python write + Python-side sha256 verify. These drive the REAL command through an
+  // actual bash+python (not a mock) to prove: (1) an arbitrary payload — quotes, backslashes, newlines,
+  // non-ASCII, shell metacharacters, even text that looks like the stage signature or a denial phrase —
+  // round-trips to disk BYTE-EXACT and the embedded-hash verify EXITS 0; (2) a transit mangle of the
+  // readable payload (its hash no longer matches the embedded literal) EXITS NON-ZERO (fail-closed); and
+  // (3) the staged command carries NO base64 blob. Then _stageInput's retry/denial policy is pinned via
+  // a mocked exec (retry once on a non-denial failure, break early on a denial).
+  // ---------------------------------------------------------------------
+  {
+    const fs = require('fs'); const os = require('os'); const path = require('path')
+    const { execFileSync } = require('child_process')
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-stage-257-' + process.pid + '-'))
+    const runBash = (cmd) => {
+      try { execFileSync('bash', ['-c', cmd], { stdio: 'pipe' }); return 0 }
+      catch (e) { return (e && typeof e.status === 'number') ? e.status : 1 }
+    }
+    const DENIAL_PHRASE = 'Permission for this action was denied by the Claude Code auto mode classifier.'
+    const payloads = [
+      '',
+      'plain ascii prompt',
+      "it's got 'single' and \"double\" quotes",
+      'back\\slashes \\ and a \\n literal and a real\ntab\there',
+      'multi\nline\nprompt\nwith trailing\n',
+      'café — 日本語 ✓ 🎡 astral',
+      'shell metachars: $(rm -rf /) `whoami` ${HOME} | & ; > < # * ?',
+      'looks like the stage sig: hashlib.sha256 and import os,sys',
+      'contains a denial phrase in the BODY: ' + DENIAL_PHRASE,
+      '{"type":"object","properties":{"x":{"type":"string","d":"a\\"b\\\\c"}}}',
+      'x'.repeat(5000) + ' — long payload — ' + 'y'.repeat(2000),
+    ]
+    let n = 0
+    for (const payload of payloads) {
+      const p = path.join(tmpDir, 'engine-fixture-' + (n++) + '.prompt')
+      const cmd = d._stageCmd(p, payload)
+      // (1) no opaque blob rides the command — the payload is readable in it (non-empty case).
+      assert.ok(!/base64/.test(cmd), '#257: staged command carries no base64: ' + cmd.slice(0, 120))
+      if (payload) assert.ok(cmd.includes(payload) || cmd.includes(payload.replace(/'/g, "'\\''")),
+        '#257: the readable payload rides in the staged command text')
+      // (2) round-trip byte-exact + verify EXITS 0.
+      const status = runBash(cmd)
+      assert.strictEqual(status, 0, '#257: the plain write+sha256-verify exits 0 for payload #' + (n - 1))
+      assert.strictEqual(fs.readFileSync(p, 'utf8'), payload,
+        '#257: the staged file round-trips BYTE-EXACT for payload #' + (n - 1))
+    }
+    console.log('OK: engine_dispatch #257 stage-write round-trips byte-exact across quotes/backslashes/newlines/non-ASCII/metachars')
+
+    // (3) MANGLE FAIL-CLOSED: simulate a courier that paraphrases the readable payload arg but copies the
+    // embedded hash verbatim — the on-disk file no longer matches the hash, so the verify EXITS NON-ZERO.
+    {
+      const p = path.join(tmpDir, 'engine-mangle.prompt')
+      const cmd = d._stageCmd(p, 'the original faithful prompt')
+      const mangled = cmd.replace("'the original faithful prompt'", "'a MANGLED paraphrase of the prompt'")
+      assert.notStrictEqual(mangled, cmd, '#257 precondition: the mangle rewrote the payload arg')
+      const status = runBash(mangled)
+      assert.notStrictEqual(status, 0, '#257: a payload mangle (hash no longer matches) fails closed with a non-zero verify exit')
+    }
+    console.log('OK: engine_dispatch #257 a transit mangle fails closed (sha256 verify catches it)')
+
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+
+  // #257: _stageInput retry + denial policy (mocked exec — no real shell). exec-level ok reflects the
+  // python verify's exit status, so a non-denial failure retries ONCE (stochastic courier drop / mangle),
+  // a persistent failure gives up after 2 attempts, and a DETERMINISTIC classifier denial breaks early.
+  {
+    const savedAgent = global.agent
+    const DENIAL = 'Permission for this action was denied by the Claude Code auto mode classifier.'
+    // (a) recovers on the second attempt.
+    let calls = 0
+    global.agent = async () => { calls += 1; return [{ index: 0, ok: calls > 1, stdout: '' }] }
+    const rRecover = await d._stageInput('/tmp/sr-257-a.prompt', 'content')
+    assert.strictEqual(rRecover.ok, true, '#257: _stageInput recovers when the retry succeeds')
+    assert.strictEqual(calls, 2, '#257: a first-attempt non-denial failure retries exactly once')
+    // (b) persistent non-denial failure gives up after two attempts.
+    let calls2 = 0
+    global.agent = async () => { calls2 += 1; return [{ index: 0, ok: false, stdout: '' }] }
+    const rFail = await d._stageInput('/tmp/sr-257-b.prompt', 'content')
+    assert.strictEqual(rFail.ok, false, '#257: a persistent staging failure returns ok:false')
+    assert.strictEqual(calls2, 2, '#257: it gives up after exactly two attempts (one retry)')
+    assert.ok(rFail.results && rFail.results[0] && rFail.results[0].ok === false,
+      '#257: the failed leaf results ride back for denial-signature inspection')
+    // (c) a deterministic classifier DENIAL breaks early — no wasted retry.
+    let calls3 = 0
+    global.agent = async () => { calls3 += 1; return [{ index: 0, ok: false, stdout: DENIAL }] }
+    const rDenied = await d._stageInput('/tmp/sr-257-c.prompt', 'content')
+    assert.strictEqual(rDenied.ok, false, '#257: a denied staging returns ok:false')
+    assert.strictEqual(calls3, 1, '#257: a deterministic denial breaks early (retry would only re-deny)')
+    global.agent = savedAgent
+    console.log('OK: engine_dispatch #257 _stageInput retries a mangle once, gives up on persistent failure, breaks early on a denial')
   }
 })()
 
