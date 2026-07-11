@@ -14,6 +14,7 @@ Clusters covered (sweep follow-up of #231):
 - Route vocabulary full/quick    (shared vocabulary: preflight.py + showrunner.js)
 - Accepted-model set (KNOWN_MODELS)                    (home: model_tier_overrides.py)
 - Accepted-engine set (ENGINES)                        (home: engine_pref.py)
+- haltKind cap-halt discriminator                      (home: review_loop_plan.py)
 
 The generated showrunner.bundle.js copies of these facts are guarded separately by
 test_bundle_drift. The reviewer-roster, docs-location, and Failure-Mode-taxonomy
@@ -331,3 +332,70 @@ def test_engines_single_sourced():
     js = _read(os.path.join("lib", "engine_pref.js"))
     assert set(_js_str_array(js, "ENGINES", "engine_pref.js")) == set(home), (
         "engine_pref.js ENGINES drifted from engine_pref.py ENGINES")
+
+
+# --- Cluster 7: haltKind cap-halt discriminator (#381) -----------------------
+
+def _halt_kind_literals_home():
+    """Home: review_loop_plan.py tally-round verdict assembly — the four halt_kind
+    assignments inside `if terminal == "halted":`. Read from the producer, not
+    restated."""
+    text = _read(os.path.join("lib", "review_loop_plan.py"))
+    m = re.search(
+        r'if terminal == "halted":\s+'
+        r'if verify_red:\s+halt_kind = "([^"]+)"\s+'
+        r'elif fix_status == "failed":\s+halt_kind = "([^"]+)"\s+'
+        r'elif breaker_halt and brk\.get\("reason"\) == "max-iterations":\s+'
+        r'halt_kind = "([^"]+)"\s+'
+        r'else:\s+halt_kind = "([^"]+)"',
+        text)
+    assert m, (
+        "review_loop_plan.py: #381 halt_kind assignment block not found "
+        "(drift or reformat)")
+    kinds = list(m.groups())
+    assert kinds == ["verify-fail", "fix-failed", "round-cap", "other"], kinds
+    return kinds
+
+
+def _js_halt_kind_routing_literals(text, label):
+    """`haltKind` / `fr.haltKind` comparisons and assignments in JS copy-holders."""
+    literals = re.findall(
+        r"(?:fr\.)?haltKind\s*(?:===|!==|=)\s*'([^']+)'", text)
+    assert literals, "%s: no haltKind routing literals found (drift or reformat)" % label
+    return set(literals)
+
+
+def _js_halt_kind_assertion_literals(text, label):
+    """`assert.strictEqual(...haltKind, 'kind', ...)` in JS smoke tests."""
+    literals = re.findall(r"haltKind,\s*'([^']+)'", text)
+    return set(literals)
+
+
+def test_halt_kind_vocabulary_single_sourced():
+    """CONVENTIONS §11: the #381 haltKind cap-halt discriminator is produced by
+    review_loop_plan.py and consumed by build_phase.js (routing + downgrade) and
+    pinned in JS smokes. A rename on the producer must break CI in every
+    copy-holder rather than silently mis-routing the handoff."""
+    home = _halt_kind_literals_home()
+    home_set = set(home)
+
+    bp = _read(os.path.join("lib", "build_phase.js"))
+    bp_literals = _js_halt_kind_routing_literals(bp, "build_phase.js")
+    assert bp_literals == {"round-cap", "fix-failed", "verify-fail"}, (
+        "build_phase.js haltKind routing literals %r drifted from the expected "
+        "consumer set" % bp_literals)
+    assert bp_literals <= home_set, (
+        "build_phase.js haltKind literals %r are not all in the producer home %r"
+        % (bp_literals, home_set))
+
+    js_test_holders = [
+        ("lib/tests/build_phase_engine_smoke.js", "build_phase_engine_smoke.js"),
+        ("lib/tests/build_phase_final_review_smoke.js", "build_phase_final_review_smoke.js"),
+    ]
+    for rel, label in js_test_holders:
+        text = _read(rel)
+        test_literals = _js_halt_kind_assertion_literals(text, label)
+        assert test_literals, "%s: expected haltKind assertion literals" % label
+        assert test_literals <= home_set, (
+            "%s haltKind assertion literals %r drifted from review_loop_plan.py home %r"
+            % (label, test_literals, home_set))

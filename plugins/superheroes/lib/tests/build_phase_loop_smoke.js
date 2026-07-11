@@ -366,12 +366,16 @@ const SMART_STUBS = [
   //      review-code). The routing keys on the STRUCTURED haltKind 'round-cap', never on the prose.
   // ===========================================================================
   {
-    let handoffJournals = 0, finalStamps = 0, provWrites = 0, fixDispatches = 0
+    let handoffJournals = 0, finalStamps = 0, provWrites = 0, fixDispatches = 0, handoffJournalCmd = null
     global.agent = makeAgent([
       execStub((p) => {
         if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
         if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
-        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) { handoffJournals += 1; return JSON.stringify({ ok: true }) }
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) {
+          handoffJournals += 1
+          handoffJournalCmd = p
+          return JSON.stringify({ ok: true })
+        }
         if (p.includes('prov_entry.py')) { provWrites += 1; return JSON.stringify({ ok: true }) }
         return standardLeaf(p)
       }),
@@ -396,6 +400,21 @@ const SMART_STUBS = [
       '#381: the fix batch dispatches EXACTLY ONCE (one fix pass, no loop, not advisory-only)')
     assert.strictEqual(handoffJournals, 1,
       '#381: the round-cap handoff journals the still-open findings exactly once (auditable)')
+    assert.ok(handoffJournalCmd, '#381: the handoff journal command was captured')
+    const handoffPayload = JSON.parse(handoffJournalCmd.match(/--payload '(.*)'$/s)[1])
+    assert.strictEqual(handoffPayload.open_findings_count, 1,
+      '#381: handoff payload records one still-open finding')
+    assert.deepStrictEqual(handoffPayload.open_findings,
+      [{ file: 'a.js', line: 1, title: 'branch blocker', severity: 'Critical' }],
+      '#381: handoff payload carries the compact open-findings summary')
+    assert.strictEqual(handoffPayload.fix_dispatched, true,
+      '#381: handoff payload records that the one fix pass dispatched')
+    assert.deepStrictEqual(handoffPayload.fix_fixed, ['branch blocker'],
+      '#381: handoff payload records which findings the fix pass claimed')
+    assert.strictEqual(handoffPayload.post_fix_verify, 'skipped',
+      '#381: handoff payload records post-fix verify status (none configured → skipped)')
+    assert.strictEqual(handoffPayload.handoff, 'review-code',
+      '#381: handoff payload names the next gate')
     assert.strictEqual(finalStamps, 1, '#381: coverage is stamped on the handoff path, like the clean path')
     assert.strictEqual(provWrites, 1, '#381: provenance is written after the handoff (advance like clean)')
   }
