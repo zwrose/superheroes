@@ -1849,7 +1849,7 @@ const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
 const VERIFY_SCHEMA = { type: 'object', required: ['result'],
   properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
 };
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
@@ -4270,7 +4270,7 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   EMIT_TAIL_BYTES }
 };
 __modules["build_phase"] = function (module, exports, require) {
-const { reviewPanel } = require('./review_panel_shell.js')
+const { reviewPanel, verifyAgent: shellVerifyAgent } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
 const modelTierTwin = require('./model_tier.js')
 const courier = require('./courier_exec.js')
@@ -4886,24 +4886,54 @@ async function runFinalReview(workItem, generation, branch, wt) {
     runKey: runDir, runDir, fixStep, maxRounds: 1,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
+  let haltKind = verdict && verdict.haltKind
+  let reason = verdict && verdict.reason
+  let fixPass = null
+  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap') {
+    let fixReport = null
+    try { fixReport = await fixStep(null, verdict, runDir) } catch (_e) { fixReport = null }
+    if (!fixReport) {
+      haltKind = 'fix-failed'
+      reason = 'one-pass fix batch did not complete (fix dispatch failed or fence lost)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
+      try { await recordDeferred(fixReport, verdict, runDir) } catch (_e) { /* advisory by contract */ }
+      let postVerify = 'skipped'
+      if (verify && String(verify).trim().toLowerCase() !== 'none') {
+        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io()) }
+        catch (_e) { postVerify = 'fail' }
+      }
+      if (postVerify === 'pass' || postVerify === 'skipped') {
+        fixPass = { dispatched: true, fixed: (fixReport.fixed || []), postVerify }
+      } else {
+        haltKind = 'verify-fail'   // post-fix red verify PARKS — never swallowed into the handoff
+        reason = 'post-fix verify ' + (postVerify === 'timeout' ? 'timed out' : 'failed')
+          + ' after the one-pass fix batch — cannot hand off'
+      }
+    }
+  }
   const rawFindings = Array.isArray(verdict && verdict.findings) ? verdict.findings : []
   const openFindings = rawFindings.slice(0, 50).map((f) => ({
     file: (f && f.file) || null, line: (f && (f.line !== undefined ? f.line : null)),
     title: (f && f.title) || '', severity: (f && f.severity) || '' }))
-  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason,
-           haltKind: verdict && verdict.haltKind,
+  return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
            openFindings, openFindingsCount: rawFindings.length }
 }
 async function journalFinalReviewHandoff(workItem, branch, fr) {
+  const fixPass = (fr && fr.fixPass) || null
   const summary = {
     branch,
     open_findings_count: (fr && fr.openFindingsCount) || 0,
     open_findings: (fr && fr.openFindings) || [],
     reason: (fr && fr.reason) || '',
+    fix_dispatched: !!(fixPass && fixPass.dispatched),
+    fix_fixed: (fixPass && fixPass.fixed) || [],
+    post_fix_verify: (fixPass && fixPass.postVerify) || 'none',
     handoff: 'review-code',
   }
   const detail = `whole-branch final review reached the one-pass cap with `
-    + `${summary.open_findings_count} open finding(s) — handing off to review-code`
+    + `${summary.open_findings_count} open finding(s); one fix pass dispatched `
+    + `(post-fix verify: ${summary.post_fix_verify}) — handing off to review-code (unvetted by this leg)`
   try {
     await execJson(
       `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `

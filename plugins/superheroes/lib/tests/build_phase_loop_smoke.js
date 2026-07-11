@@ -359,12 +359,14 @@ const SMART_STUBS = [
 
   // ===========================================================================
   // (10) #381 ROUND-CAP HANDOFF: the whole-branch final review's single pass (maxRounds:1) surfaces a
-  //      blocker with verify NOT red -> round-cap halt. The buildPhase gate does NOT park: it journals
-  //      the open findings (auditable), stamps coverage, and PROCEEDS to provenance (hand off to
+  //      blocker with verify NOT red -> round-cap halt -> the ONE fix pass dispatches EXACTLY ONCE
+  //      (fence-before-write; no verify configured here, so the post-fix verify is skipped per "if
+  //      configured"). The buildPhase gate then does NOT park: it journals the handoff (open findings
+  //      + fix-pass facts, auditable), stamps coverage, and PROCEEDS to provenance (hand off to
   //      review-code). The routing keys on the STRUCTURED haltKind 'round-cap', never on the prose.
   // ===========================================================================
   {
-    let handoffJournals = 0, finalStamps = 0, provWrites = 0
+    let handoffJournals = 0, finalStamps = 0, provWrites = 0, fixDispatches = 0
     global.agent = makeAgent([
       execStub((p) => {
         if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
@@ -380,6 +382,8 @@ const SMART_STUBS = [
       ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
       // the whole-branch reviewer surfaces a blocking finding on its one review pass.
       ['branch-reviewer:', { findings: [{ file: 'a.js', line: 1, title: 'branch blocker', severity: 'Critical', evidence: 'e' }] }],
+      // the #381 one fix pass: the native fixer leaf, dispatched exactly once post-cap-halt.
+      ['fix-branch', () => { fixDispatches += 1; return { ok: true } }],
       ['stamp build coverage', () => { finalStamps += 1; return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }] }],
       ['run verify', { command: 'none', returncode: 0, timedOut: false }],
     ])
@@ -388,6 +392,8 @@ const SMART_STUBS = [
     const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'high',
       '#381: a round-cap final review PROCEEDS (hands off to review-code), it does NOT park')
+    assert.strictEqual(fixDispatches, 1,
+      '#381: the fix batch dispatches EXACTLY ONCE (one fix pass, no loop, not advisory-only)')
     assert.strictEqual(handoffJournals, 1,
       '#381: the round-cap handoff journals the still-open findings exactly once (auditable)')
     assert.strictEqual(finalStamps, 1, '#381: coverage is stamped on the handoff path, like the clean path')

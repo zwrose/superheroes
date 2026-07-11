@@ -993,4 +993,8 @@ const VERIFY_SCHEMA = { type: 'object', required: ['result'],
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+// verifyAgent exported for #381: build_phase's whole-branch final review re-runs the verify gate ONCE
+// after its one-pass fix batch lands (the fix changed the tree, so the round's pre-fix verify result is
+// stale) — reusing this leaf keeps the verify contract (round-stamped file authoritative, anti-
+// fabrication fail-closed) single-sourced instead of duplicating it at the call site.
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }

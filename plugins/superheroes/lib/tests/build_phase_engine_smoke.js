@@ -14,8 +14,9 @@ require('./_smoke_checkout_root.js')
 //     dispatches externally for a write role), using the require.cache-reset idiom (mirrors
 //     showrunner_cmdrunner_cwd_smoke.js) so the module-level _writeAuthOk cache does not leak across
 //     scenarios in this single process.
-//   - #381 round-cap handoff over an external review engine: an external-reviewer blocker at the
-//     one-pass cap (maxRounds:1) halts with the STRUCTURED haltKind 'round-cap' + an open-findings
+//   - #381 one-fix-pass handoff over external engines: an external-reviewer blocker at the one-pass
+//     cap (maxRounds:1) dispatches the fix batch to the implementation engine EXACTLY ONCE, re-runs
+//     the verify gate post-fix, and halts with the STRUCTURED haltKind 'round-cap' + an open-findings
 //     summary, so the caller hands off to review-code rather than parking.
 //   - the commit-discipline multi-round fold invariant: two external fix rounds dispatch TWICE with the
 //     SAME taskId.
@@ -323,38 +324,53 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
   }
 
   // ===========================================================================
-  // Scenario 4: #381 round-cap handoff over an EXTERNAL review engine. Under the single-pass contract
+  // Scenario 4: #381 one-fix-pass handoff over EXTERNAL engines. Under the single-pass contract
   // (maxRounds:1) a whole-branch final review whose external reviewer surfaces a blocker hits the
-  // one-pass cap: terminal 'halted' with the STRUCTURED haltKind 'round-cap' (verify NOT red). The
-  // caller (buildPhase gate) hands this off to review-code rather than parking — the routing keys on
-  // haltKind, not the prose reason. (Pre-#381 this scenario ran a multi-round fix loop; that loop, and
-  // the fixStep closure it exercised, are unreachable now — the fix pass is review-code's job.)
+  // one-pass cap; the ONE fix pass then dispatches roleKind:'fix' to the implementation engine
+  // EXACTLY ONCE (the fixStep closure: fence-before-write + _implDispatch + the {fixed,deferred}
+  // report reaching the deferred-set), the post-fix verify re-runs the verify gate, and the result
+  // carries the STRUCTURED haltKind 'round-cap' — the shape the caller (buildPhase gate) hands off
+  // to review-code rather than parking. Routing keys on haltKind, not the prose reason.
   // ===========================================================================
   {
     delete require.cache[require.resolve('../build_phase.js')]
     delete require.cache[require.resolve('../engine_dispatch.js')]
     const engineDispatch = require('../engine_dispatch.js')
+    let externalFixDispatches = 0
     engineDispatch.dispatchExternal = async (o) => {
       if (o.roleKind === 'review') {
         return { findings: [{ severity: 'Critical', file: 'y.js', title: 'blocker', line: 1, evidence: 'x' }] }
       }
+      if (o.roleKind === 'fix') externalFixDispatches += 1
       return { ok: true, signal: 'ok', evidence: {} }
     }
     const bp = require('../build_phase.js')
     globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'codex', effort: {} }
-    resetRunDir(WI)
+    // build_phase installs its OWN globalThis.recordDeferred (io()-backed write to <runDir>/deferred-
+    // set.json); reset + recreate the fixed runDir so the write lands and no earlier scenario leaks in.
+    const deferredSetPath = `${resetRunDir(WI)}/deferred-set.json`
+    let verifyRuns = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
-      ['verify_gate.py', (cmd) => verifyGateStub(cmd, 'pass')],
+      ['verify_gate.py', (cmd) => { verifyRuns += 1; return verifyGateStub(cmd, 'pass') }],
     ])
     const fr = await bp.runFinalReview(WI, 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
     assertTerminal(fr, 'halted',
       '#381: an external-reviewer blocker at the one-pass cap halts (round-cap), not clean')
     assert.strictEqual(fr.haltKind, 'round-cap',
       '#381: the halt carries the STRUCTURED round-cap discriminator (the caller hands off to review-code)')
+    assert.strictEqual(externalFixDispatches, 1,
+      '#381: the one fix pass dispatches roleKind fix to the implementation engine EXACTLY ONCE')
+    assert.strictEqual(verifyRuns, 2,
+      '#381: the post-fix verify re-runs the verify gate once (round verify + post-fix verify)')
     assert.strictEqual(fr.openFindingsCount, 1,
       '#381: the open finding the external reviewer surfaced is summarized for the handoff journal')
-    console.log('OK: #381 round-cap handoff over an external review engine (haltKind round-cap + open-findings summary)')
+    // The {fixed,deferred} report reaching the deferred-set is the audit channel the shell's
+    // runFixStep wrote pre-#381 — preserved on the direct fix-pass path.
+    const written = JSON.parse(fs.readFileSync(deferredSetPath, 'utf8'))
+    assert.ok(Object.prototype.hasOwnProperty.call(written, 'blocker'),
+      '#381: the fix report ids (blockers.map) reached recordDeferred/deferred-set.json')
+    console.log('OK: #381 one-fix-pass handoff over external engines (fix dispatched once + post-fix verify + deferred-set)')
   }
 
   // ===========================================================================

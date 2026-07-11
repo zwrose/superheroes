@@ -576,7 +576,10 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         # site from the same structured inputs the terminal decision used — no prose regexing.
         #   'round-cap'  — the finding-churn cap: the breaker's max-iterations halt (round cap reached
         #                  with blockers still present) with verify NOT red. This is the ONLY halt kind
-        #                  the caller proceeds past (hands off to review-code, the stronger branch gate).
+        #                  the caller acts on instead of parking: build_phase dispatches its ONE fix
+        #                  pass + a post-fix verify, and only when both land green hands off to
+        #                  review-code (the stronger branch gate) — otherwise it downgrades the kind
+        #                  to 'fix-failed'/'verify-fail' and parks.
         #   'verify-fail'— verify went red (fail/timeout). A blocking round with a red verify halts via
         #                  the breaker WITHOUT tripping the clean→halted verify override above, so it is
         #                  classified explicitly here — the cap-halt proceed path must never swallow a
