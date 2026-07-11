@@ -75,7 +75,6 @@ import argparse
 import json
 import os
 import subprocess
-import sys
 
 _DIFF_EXCERPT_CAP = 12000   # chars — keep the compose prompt bounded
 _COMMIT_CAP = 25            # subjects

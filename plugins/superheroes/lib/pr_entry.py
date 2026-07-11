@@ -149,12 +149,14 @@ def _set_prose_body(root, work_item, branch, base, number, body_file, worktree=N
     (composed body-file if usable, else the deterministic fallback), which is always scrubbed and
     carries `Closes #N`.
 
-    `worktree` (review-code review finding): the MANAGED build worktree the branch being opened
-    actually lives in — passed through from the spine's --worktree (resolveBuildTarget), same
-    resolve the compose-context gather used. Falls back to `root` (the cwd pr_entry itself ran
-    from, which callers already know may be the launch checkout, not the build worktree) only
-    when the spine could not resolve one — this keeps the fallback-body path honest about which
-    branch's commits/diff it describes instead of silently describing the launch checkout."""
+    Two distinct locations (review-code finding — a build worktree conflated both): the GIT ops
+    (commits/diff for the fallback body) run against the MANAGED build `worktree` the branch being
+    opened lives in (the spine's --worktree / resolveBuildTarget), while definition-DOC resolution
+    (issue + intent, so `Closes #N` and the "why" survive) runs against `root` — the launch
+    checkout `pr_entry` ran from (couriers cd into it). This matters for in-repo GITIGNORED docs,
+    which live only in the launch checkout and are absent from a fresh build-worktree checkout;
+    rooting docs at the worktree there would silently drop the issue/intent. `worktree` falls back
+    to `root` only when the spine could not resolve one."""
     import pr_body
     if not number:
         return None
@@ -164,7 +166,7 @@ def _set_prose_body(root, work_item, branch, base, number, body_file, worktree=N
     prose, tail = pr_body.split_prose(current or "")
     if not pr_body.is_placeholder_body(prose):
         return None                                      # never clobber a real/owner prose
-    new_prose = pr_body.resolve_body(body_file, work_item, root=(worktree or root),
+    new_prose = pr_body.resolve_body(body_file, work_item, root=root,
                                      worktree=(worktree or root), base=base)
     tail = (tail or "").strip()
     final = new_prose + (("\n\n" + tail) if tail else "") + "\n"

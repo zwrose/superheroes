@@ -2928,14 +2928,18 @@ async function loadPr(workItem) {
 // of bug the PR #261 CI-settle finding fixed for the mark-ready wait). Without it, pr_body.py's
 // `context` gather defaults `worktree` to os.getcwd() (== checkoutRoot()) and diffs
 // `base...HEAD` against THAT checkout's HEAD, describing whatever the launch checkout has
-// checked out rather than the build branch. Threaded through as both --worktree (git ops) and
-// --root (in-repo definition-doc resolution — the docs live on the build branch). A null/failed
-// resolve falls back to the prior (unrooted) behavior rather than blocking compose.
+// checked out rather than the build branch. --worktree (git ops: commits/diff) is the build
+// worktree; --root (definition-doc resolution) is the LAUNCH checkout (checkoutRoot()/__SR_ROOT).
+// In-repo GITIGNORED docs live only in the launch checkout, absent from a fresh build-worktree
+// checkout, so rooting docs at the worktree would drop the issue/intent (and `Closes #N`); for
+// out-of-repo storage both share a git common-dir → same store either way. A null/failed resolve
+// of either falls back to the prior (unrooted) default rather than blocking compose.
 async function composePrBody(workItem, worktree) {
   const bodyPath = `/tmp/showrunner-${workItem}-pr-body.md`
   const base = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const baseArg = base ? ` --base ${shq(base)}` : ''
-  const wtArg = worktree ? ` --worktree ${shq(worktree)} --root ${shq(worktree)}` : ''
+  const _docRoot = checkoutRoot()
+  const wtArg = (worktree ? ` --worktree ${shq(worktree)}` : '') + (_docRoot ? ` --root ${shq(_docRoot)}` : '')
   const ctx = await execJson(
     `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg}${wtArg} --body-path ${shq(bodyPath)}`,
     'pr-body context')

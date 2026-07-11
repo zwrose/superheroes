@@ -6812,7 +6812,8 @@ async function composePrBody(workItem, worktree) {
   const bodyPath = `/tmp/showrunner-${workItem}-pr-body.md`
   const base = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const baseArg = base ? ` --base ${shq(base)}` : ''
-  const wtArg = worktree ? ` --worktree ${shq(worktree)} --root ${shq(worktree)}` : ''
+  const _docRoot = checkoutRoot()
+  const wtArg = (worktree ? ` --worktree ${shq(worktree)}` : '') + (_docRoot ? ` --root ${shq(_docRoot)}` : '')
   const ctx = await execJson(
     `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg}${wtArg} --body-path ${shq(bodyPath)}`,
     'pr-body context')

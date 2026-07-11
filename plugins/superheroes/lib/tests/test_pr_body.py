@@ -108,6 +108,30 @@ def test_context_carries_commits_and_bounded_diff(tmp_path):
     assert len(ctx["diff_excerpt"]) <= pr_body._DIFF_EXCERPT_CAP
 
 
+def test_context_reads_git_from_worktree_but_docs_from_root(tmp_path):
+    # Git ops (commits/diff) resolve from --worktree (the build worktree); definition-doc
+    # resolution (issue/intent) resolves from --root (the launch checkout). Regression for the
+    # review finding: an in-repo GITIGNORED doc lives only in the launch checkout and is absent
+    # from a fresh build-worktree checkout, so rooting docs at the worktree drops issue/intent.
+    repo = _repo_with_change(tmp_path)                 # build worktree — carries the commit
+    root = tmp_path / "launch"                         # launch checkout — carries the doc only
+    doc_dir = root / "docs" / "superheroes" / "wi"     # in-repo docs (spec-anchored) live here
+    doc_dir.mkdir(parents=True)
+    (doc_dir / "spec.md").write_text("---\nissue: 219\n---\n\nThe what.\n")
+    (doc_dir / "tasks.md").write_text("---\nissue: 219\n---\n\nWhy this work matters.\n")
+    lib = os.path.dirname(os.path.abspath(pr_body.__file__))
+    env = os.environ.copy()
+    env["WORKHORSE_STORE_ROOT"] = str(tmp_path / "store")
+    proc = subprocess.run(
+        [_sys.executable, os.path.join(lib, "pr_body.py"), "context", "--work-item", "wi",
+         "--base", "main", "--worktree", str(repo), "--root", str(root)],
+        cwd=str(repo), env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    ctx = json.loads(proc.stdout)
+    assert any("second line" in c for c in ctx["commits"])   # git came from --worktree
+    assert ctx["issue"] == "219"                             # doc came from --root, not worktree
+
+
 def test_context_reports_prior_body_usability(tmp_path):
     repo = _repo_with_change(tmp_path)
     ctx = _run_context(repo, tmp_path, extra=["--body-path", str(tmp_path / "absent.md")])
