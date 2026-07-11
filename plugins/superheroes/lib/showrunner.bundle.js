@@ -6208,7 +6208,7 @@ async function readStartupState(workItem) {
 }
 const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
-const READOUT_VERSION = 2
+const READOUT_VERSION = 3
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}

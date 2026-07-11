@@ -14,14 +14,18 @@ import engine_adapter  # for the external-engine display model constants (single
 import model_tier_overrides
 import engine_detect
 
-# Bumped to 2 (freeze-consume hardening): a frozenSnapshot persisted by an EARLIER commit of this
-# branch carries version 1 but predates the widened merge exclusions (fallbackToClaude/unavailable/
-# unrecognized) + the merge-boundary set validation. mergeFrozenSnapshot ignores any snapshot whose
-# `version` != this constant (falls through to live config, the documented rollback state), so every
-# pre-fix record is treated stale-and-ignored. The JS side learns this value from the snapshot Python
-# wrote and, in a drift smoke, from a `python3 -c` dump of this constant — never a hand-duplicated JS
-# literal. BUMP this on any change that re-interprets an already-persisted snapshot.
-READOUT_VERSION = 2
+# Bumped to 3 (#219 pr-body dispatch row): a frozenSnapshot persisted by an EARLIER commit (version
+# 2 or lower) predates the concrete "pr-body" dispatch row added for draft-PR's compose-PR-body leaf
+# — those older snapshots only carry the old draft-PR `kind: none` row, so pr-body would be absent
+# from a pinned snapshot and mergeFrozenSnapshot would leave it unpinned, letting showrunner.js
+# resolve it from LIVE __SR_OVERRIDES at dispatch time and silently bypass the confirmed preflight
+# readout for that leaf. mergeFrozenSnapshot ignores any snapshot whose `version` != this constant
+# (falls through to live config, the documented rollback state), so every pre-fix record is treated
+# stale-and-ignored. The JS side learns this value from the snapshot Python wrote and, in a drift
+# smoke, from a `python3 -c` dump of this constant — never a hand-duplicated JS literal. BUMP this on
+# any change that re-interprets an already-persisted snapshot (a new row, a changed exclusion, or a
+# changed set-validation rule).
+READOUT_VERSION = 3
 
 # The spine's phase roster is the single source of truth. Kept as a literal that MUST equal
 # showrunner.js's PHASES; the roster-parity node smoke (Task 12) asserts they match so a phase

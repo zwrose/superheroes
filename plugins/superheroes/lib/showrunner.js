@@ -2115,7 +2115,12 @@ const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'i
 // rollback state). This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
 // smoke asserts it equals preflight_readout.READOUT_VERSION via a `python3 -c` dump (roster-parity
 // pattern), so a Python-side bump that isn't mirrored here fails CI rather than silently ungating.
-const READOUT_VERSION = 2
+// Bumped to 3 (#219 pr-body dispatch row): older snapshots (version 2 or lower) predate the concrete
+// "pr-body" row for draft-PR's compose-PR-body leaf and only carry the old `kind: none` row, so
+// re-interpreting them would leave pr-body unpinned and let it resolve from LIVE config at dispatch —
+// silently bypassing the confirmed preflight readout. Ignored (falls through to live) rather than
+// mis-merged.
+const READOUT_VERSION = 3
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
