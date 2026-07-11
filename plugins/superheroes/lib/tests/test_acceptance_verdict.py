@@ -19,6 +19,53 @@ def test_courier_declined_token_matches_js_producer_no_drift():
         "courier-declined token drift: engine_dispatch.js=%r acceptance_verdict.py=%r"
         % (js_token, v.COURIER_DECLINED_OUTCOME))
 
+
+def test_staging_presha_tokens_are_failed_attempts_not_acceptable_fallopen():
+    # #373 / CONVENTIONS §11.2 BEHAVIOR drift guard: the three pre-CLI early-exit outcome tokens are a
+    # cross-boundary contract — engine_dispatch.js now emits them (was: silent returns) and
+    # acceptance_verdict.py must classify them as genuine dispatch FAILURES (an engine seen only via
+    # these has a non-empty record with 0 oks -> FAILS the per-engine authenticity gate), NEVER as an
+    # acceptable fall-open (authz-denied / engine-unavailable) or a courier-decline. There is no NAMED
+    # Python home for them (they fall into the generic failed bucket), so the drift guard reads the JS
+    # tokens and pins the BEHAVIOR: the fail-CLOSED default (an unrecognized token counts as a failure)
+    # is exactly the classification #373 wants — a rename on the JS side that ever routed one of these
+    # to the acceptable-fall-open set would flip this test.
+    tokens = subprocess.run(
+        ["node", "-e", "const d=require('./engine_dispatch.js'); "
+         "process.stdout.write([d.STAGING_DENIED_OUTCOME,d.STAGING_FAILED_OUTCOME,d.PRESHA_FAILED_OUTCOME].join(','))"],
+        cwd=_LIB, text=True, capture_output=True, timeout=30).stdout.strip().split(",")
+    assert tokens == ["staging-denied", "staging-failed", "presha-failed"], (
+        "#373 pre-CLI outcome tokens drifted from the JS home: %r" % (tokens,))
+    for tok in tokens:
+        # Neither an acceptable fall-open nor a courier-decline — each is a plain failure.
+        assert tok not in v.ACCEPTABLE_FALLOPEN_OUTCOMES, (
+            "#373: %r must NOT be an acceptable fall-open (it is a genuine dispatch failure)" % tok)
+        assert tok != v.COURIER_DECLINED_OUTCOME
+        events = [{"type": "external_dispatch",
+                   "payload": {"engine": "cursor", "roleKind": "build", "outcome": tok}}]
+        t = v.tally_external_dispatches(events)
+        # Counted as an ATTEMPT that failed: total=1, ok=0, declined=0 -> the engine fails the gate.
+        assert t["by_engine"] == {"cursor": {"ok": 0, "total": 1, "declined": 0}}, (
+            "#373: %r must count as a failed dispatch attempt, got %r" % (tok, t["by_engine"]))
+        assert t["failed"] == 1 and t["ok"] == 0 and t["declined"] == 0
+        assert t["acceptable_reasons"] == []
+
+
+def test_2026_07_11_staging_denied_cursor_4_of_4_is_fail_naming_cursor():
+    # The exact live #373 shape: config routed cursor for the builder, the auto-mode classifier denied
+    # cursor's base64 staging courier on all four dispatches (2 builds + 2 fixes), and every attempt now
+    # journals staging-denied (was: ZERO events -> read as "cursor never routed"). The verdict must FAIL
+    # naming cursor 0/4 — the run no longer looks like an honest all-Claude-by-preference run.
+    events = [{"type": "external_dispatch",
+               "payload": {"engine": "cursor", "roleKind": "build", "outcome": "staging-denied",
+                           "reason": "Permission for this action was denied by the Claude Code auto mode classifier."}}
+              for _ in range(4)]
+    tally = v.tally_external_dispatches(events)
+    assert tally["ok"] == 0 and tally["by_engine"] == {"cursor": {"ok": 0, "total": 4, "declined": 0}}
+    r = v.decide(_external_pass(external_dispatch_tally=tally))
+    assert r["verdict"] == "fail"
+    assert "cursor 0/4" in r["reason"] and "never authentically dispatched" in r["reason"]
+
 # These phase names are arbitrary self-consistent verdict-logic inputs; the real
 # pipeline phase list is read from showrunner.js via acceptance_phases.
 PASS = dict(

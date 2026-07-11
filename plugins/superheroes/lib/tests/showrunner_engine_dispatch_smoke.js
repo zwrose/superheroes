@@ -926,5 +926,197 @@ function makeAgent(routes) {
     assert.ok(journalP.some((p) => p.outcome === 'ok'), '#343: the accepted dispatch journals the normal ok outcome')
     console.log('OK: engine_dispatch #343 echo+executed answer accepted (executedMarker tiebreak, no re-dispatch)')
   }
+
+  // ---------------------------------------------------------------------
+  // #373 PRE-CLI EARLY EXITS ARE NOW JOURNALED. A dispatch that dies BEFORE the CLI runs — staging the
+  // prompt/schema to /tmp, or (write roles) capturing preSHA — used to RETURN before the journal point,
+  // leaving ZERO trace in events.jsonl (the live 2026-07-11 case: the auto-mode classifier denied
+  // cursor's base64 staging courier 4/4, so the run read as "cursor never routed"). Each early exit now
+  // emits exactly one external_dispatch line with a distinct outcome token; a denial rides a bounded
+  // `reason`. The RETURN reasons are UNCHANGED (the #277 harness-dead tripwire still keys on them).
+  // ---------------------------------------------------------------------
+  {
+    const DENIAL = 'Permission for this action was denied by the Claude Code auto mode classifier. ' +
+      'Reason: Auto mode could not evaluate this action and is blocking it for safety.'
+    // Helper: collect every external_dispatch journal payload the dispatch appends.
+    function journalCollector(collector, routes, journalResult) {
+      const jOut = journalResult == null ? { ok: true } : journalResult
+      return async (prompt) => {
+        if (prompt.includes('journal_entry.py')) {
+          const m = prompt.match(/--payload '(.*)'$/s)
+          if (m) { try { collector.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) { /* asserted below */ } }
+          return [{ index: 0, ok: true, stdout: JSON.stringify(jOut) }]
+        }
+        for (const [needle, resp] of routes) if (prompt.includes(needle)) return typeof resp === 'function' ? resp(prompt) : resp
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }
+    }
+
+    // (a) STAGING DENIED: the base64 staging courier is blocked by the classifier — the failed leaf's
+    // stdout carries the denial prose. The dispatch journals outcome:'staging-denied' WITH a bounded
+    // `reason` (the denial text), exactly one line, argv null (build-argv never ran), and returns the
+    // unchanged could-not-stage-external-inputs reason.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: DENIAL }]],
+      ])
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'secret build prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-deny' })
+      assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: the caller-facing return reason is UNCHANGED (harness-dead tripwire keys on it)')
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: a denied staging journals EXACTLY ONE staging-denied line (no double-append, #350): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed[0].engine, 'cursor', '#373: the staging-denied line names the routed engine')
+      assert.strictEqual(ed[0].argv, null, '#373: argv is null (honest — build-argv never ran before the pre-CLI death)')
+      assert.ok(typeof ed[0].reason === 'string' && ed[0].reason.includes('Permission for this action was denied'),
+        '#373: the staging-denied line carries the bounded denial reason: ' + ed[0].reason)
+      // The reason must NEVER contain the staged PROMPT content.
+      assert.ok(!ed[0].reason.includes('secret build prompt'), '#373: the reason never leaks the staged prompt content')
+      console.log('OK: engine_dispatch #373 staging-denied journals one line with the bounded denial reason')
+    }
+
+    // (a2) DENIAL-REASON WINDOWING: even when the failed leaf ECHOES the base64 staging command (whose
+    // blob base64-encodes the PROMPT) BEFORE the denial prose, the reason window STARTS at the denial
+    // phrase — so the base64 payload can never ride into the audit line.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      // 'U0VDUkVUUFJPTVBU' is base64 for 'SECRETPROMPT' — the kind of blob an echoed stage cmd carries.
+      const ECHOED = "printf %s 'U0VDUkVUUFJPTVBUQkxPQg==' | base64 -d > /tmp/engine-x.prompt\n" + DENIAL
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: ECHOED }]],
+      ])
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-window' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: read-role staging denial also journals one staging-denied line')
+      assert.ok(ed[0].reason.startsWith('Permission for this action was denied'), '#373: the reason window starts at the denial phrase: ' + ed[0].reason)
+      assert.ok(!/U0VDUkVU/.test(ed[0].reason), '#373: the echoed base64 blob (the encoded prompt) never leaks into the reason: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #373 denial-reason windowing (echoed base64 payload excluded)')
+    }
+
+    // (a3) DENIAL-REASON CLAMP + REDACTION: denial prose exceeds 200 chars and the forward window also
+    // captures an echoed base64 staging command — the reason is clamped (≤201) and long base64 runs are
+    // redacted so no reversible payload fragment persists.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const secretPayload = 'SECRET_PROMPT_CLAMP_TEST_12'
+      const blob = Buffer.from(secretPayload).toString('base64')
+      const blobFrag = blob.slice(0, 24)
+      const denialPrefix = 'Permission denied by auto mode classifier. '
+      const echoed = ` cmd: printf '${blob}'|base64 -d>/tmp/e373-${process.pid}`
+      const longTail = ' Additional denial context that extends the full stdout well past two hundred characters so the clamp is exercised on prose that would otherwise grow without bound and never fit in the audit line.'
+      const ECHOED_AFTER = denialPrefix + echoed + longTail
+      assert.ok(ECHOED_AFTER.length > 200, '#373: denial stdout exceeds 200 chars')
+      assert.ok((denialPrefix + echoed).length <= 200, '#373: echoed staging command rides inside the forward window')
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: ECHOED_AFTER }]],
+      ])
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: secretPayload, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-clamp' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: clamp+redaction case journals one staging-denied line')
+      assert.ok(ed[0].reason.length <= 201, '#373: the journaled reason is clamped to ≤201 chars (200 + ellipsis): len=' + ed[0].reason.length)
+      assert.ok(!ed[0].reason.includes(blobFrag), '#373: no base64 fragment of the staged blob appears in the reason: ' + ed[0].reason)
+      assert.ok(!ed[0].reason.includes(secretPayload), '#373: the raw prompt never leaks into the reason')
+      console.log('OK: engine_dispatch #373 denial-reason clamp + base64 redaction (≤201 chars, no payload fragment)')
+    }
+
+    // (b) STAGING FAILED (no denial signature): a plain courier/exec staging error (empty stdout) →
+    // outcome:'staging-failed' with NO reason field (there is no denial prose to disclose).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: '' }]],
+      ])
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-fail' })
+      assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: return reason unchanged for a non-denial staging failure')
+      const ed = jp.filter((p) => p.outcome === 'staging-failed')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: a plain staging failure journals EXACTLY ONE staging-failed line: ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.ok(!('reason' in ed[0]) || ed[0].reason == null, '#373: a non-denial staging failure carries NO reason field (nothing to disclose): ' + JSON.stringify(ed[0]))
+      assert.ok(!jp.some((p) => p.outcome === 'staging-denied'), '#373: a no-signature failure is NOT mislabeled staging-denied')
+      console.log('OK: engine_dispatch #373 staging-failed journals one line, no reason field, not mislabeled as denied')
+    }
+
+    // (c) PRESHA FAILED (write role): staging succeeds, but the write-role preSHA git capture fails →
+    // outcome:'presha-failed', exactly one line, before build-argv/CLI/commit ever run.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const seen = []
+      global.agent = async (prompt) => {
+        seen.push(prompt)
+        if (prompt.includes('journal_entry.py')) {
+          const m = prompt.match(/--payload '(.*)'$/s)
+          if (m) { try { jp.push(JSON.parse(m[1].replace(/'\\''/g, "'"))) } catch (_e) {} }
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: false, stdout: '' }]  // preSHA capture fails
+        return [{ index: 0, ok: true, stdout: '{}' }]   // staging succeeds
+      }
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-presha' })
+      assert.strictEqual(r.reason, 'could-not-capture-preSHA', '#373: return reason unchanged for a preSHA failure')
+      const ed = jp.filter((p) => p.outcome === 'presha-failed')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: a preSHA failure journals EXACTLY ONE presha-failed line: ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed[0].engine, 'cursor', '#373: the presha-failed line names the routed engine')
+      assert.ok(!seen.some((c) => c.includes('engine_adapter.py build-argv')), '#373: build-argv is never reached after a preSHA failure')
+      assert.ok(!seen.some((c) => c.includes('engine_adapter.py commit')), '#373: no commit is attempted after a preSHA failure')
+      console.log('OK: engine_dispatch #373 presha-failed journals one line before build-argv/CLI/commit')
+    }
+
+    // (c2) STAGING DENIED + JOURNAL APPEND FAILS: the classifier blocks staging and the audit append
+    // itself fails -> fail-closed 'unauditable' (NOT could-not-stage-external-inputs).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: DENIAL }]],
+      ], { ok: false })
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'secret build prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-unaud-staging' })
+      assert.strictEqual(r.ok, false, '#373: staging denial with journal failure returns ok:false')
+      assert.strictEqual(r.reason, 'unauditable', '#373: journal append failure fail-closed to unauditable (NOT could-not-stage-external-inputs): ' + r.reason)
+      console.log('OK: engine_dispatch #373 staging-denied + journal failure -> unauditable fail-closed')
+    }
+
+    // (c3) PRESHA FAILED + JOURNAL APPEND FAILS: write-role staging succeeds, preSHA capture fails,
+    // and the audit append itself fails -> fail-closed 'unauditable' (NOT could-not-capture-preSHA).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['git', (p) => p.includes('rev-parse HEAD') ? [{ index: 0, ok: false, stdout: '' }] : [{ index: 0, ok: true, stdout: '{}' }]],
+      ], { ok: false })
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-unaud-presha' })
+      assert.strictEqual(r.ok, false, '#373: preSHA failure with journal failure returns ok:false')
+      assert.strictEqual(r.reason, 'unauditable', '#373: journal append failure fail-closed to unauditable (NOT could-not-capture-preSHA): ' + r.reason)
+      console.log('OK: engine_dispatch #373 presha-failed + journal failure -> unauditable fail-closed')
+    }
+
+    // (d) SUCCESSFUL DISPATCH UNCHANGED: a normal write build still journals EXACTLY ONE external_dispatch
+    // line (outcome:'ok') — the new early-exit journaling must not add a stray line to the happy path
+    // (guards against #350 double-append and against a pre-CLI journal firing when staging succeeds).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      global.agent = journalCollector(jp, [
+        ['git', (p) => p.includes('rev-parse HEAD') ? [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }] : [{ index: 0, ok: true, stdout: '{}' }]],
+        ['engine_adapter.py build-argv', [{ index: 0, ok: true, stdout: JSON.stringify(['cursor-agent', '--trust', '-f']) }]],
+        ['engine_adapter.py parse-result', [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]],
+        ['engine_adapter.py commit', [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]],
+        ['Execute this exact shell command', markedStdout('{"ok":true,"signal":"ok"}')],
+      ])
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-ok' })
+      assert.strictEqual(r.ok, true, '#373: the happy-path write dispatch still succeeds')
+      assert.strictEqual(jp.length, 1, '#373: a successful dispatch journals EXACTLY ONE external_dispatch line (no stray pre-CLI line): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(jp[0].outcome, 'ok', '#373: the single line is the ok outcome')
+      assert.ok(!jp.some((p) => ['staging-denied', 'staging-failed', 'presha-failed'].includes(p.outcome)), '#373: no pre-CLI early-exit token appears on the happy path')
+      console.log('OK: engine_dispatch #373 successful dispatch unchanged (exactly one ok line, no stray pre-CLI journal)')
+    }
+  }
 })()
 

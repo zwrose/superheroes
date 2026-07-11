@@ -26,6 +26,21 @@ const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 // acceptance_verdict's generic `failed` bucket, so a decline-only engine still fails the gate.
 const COURIER_DECLINED_OUTCOME = 'courier-declined'
 
+// #373: outcome tokens for the two PRE-CLI early exits that used to return before any journal write —
+// staging the prompt/schema to /tmp, and (write roles) capturing preSHA. A dispatch that dies here left
+// ZERO trace in events.jsonl, so a run whose external engine was routed-and-DENIED read identically to
+// "never routed" (the live 2026-07-11 case: the auto-mode safety classifier denied cursor's base64
+// staging courier 4/4, journaling nothing). These are the honest audit tokens those exits now emit —
+// distinct from `could-not-stage-external-inputs` (the caller-facing return reason, kept for the #277
+// harness-dead tripwire) so the journal names WHICH pre-CLI step died and, on a denial, why. Like every
+// non-"ok" external_dispatch outcome they are genuine dispatch FAILURES: acceptance_verdict.py counts
+// them against the per-engine authenticity gate (an engine with only these records has 0 oks -> fails),
+// never as an acceptable fall-open (authz-denied / engine-unavailable) or a courier-decline. Single JS
+// home + exported so the JS↔Python behavior drift guard (CONVENTIONS §11.2) pins that classification.
+const STAGING_DENIED_OUTCOME = 'staging-denied'   // staging failed AND the failure carries a denial signature
+const STAGING_FAILED_OUTCOME = 'staging-failed'   // staging failed for any other reason (courier/exec error)
+const PRESHA_FAILED_OUTCOME = 'presha-failed'     // write-role preSHA capture failed before the CLI ran
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
 // Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
@@ -452,6 +467,11 @@ async function _journalExternal(payload) {
       // secret-bearing text lands in the audit line.
       declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
       verify: payload.verify, outcome: payload.outcome,
+      // #373: on a PRE-CLI early-exit outcome (staging-denied / staging-failed / presha-failed) carry a
+      // bounded disclosure of WHY — the classifier's denial prose is owner-relevant evidence. Spread so
+      // it is present ONLY when the caller supplied one (no new always-null key: pre-#373 payloads stay
+      // byte-identical). The caller has already clamped + windowed it (never the staged prompt content).
+      ...(payload.reason == null ? {} : { reason: String(payload.reason) }),
       // #347: bounded-relay disclosure — present ONLY when the watchdog truncated the stdout relay
       // (the parser saw the tail; outPath is the kept full capture). Spread so pre-#347 payloads
       // stay byte-identical (no new always-null keys).
@@ -468,6 +488,28 @@ function _declinePrefix(answer) {
   const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
   if (!s) return 'courier returned no execution marker'
   return s.length > 200 ? s.slice(0, 200) + '…' : s
+}
+
+// #373: inspect a FAILED staging result set for an auto-mode/permission DENIAL and, when found, return
+// a bounded single-line reason string (owner-relevant evidence: WHY the staging courier was blocked).
+// The extraction WINDOW STARTS at the denial phrase — never at the head of the leaf's stdout — so an
+// echoed `printf '<base64>' | base64 -d > …` command (which base64-encodes the PROMPT) can never leak
+// into the reason: the classifier's prose is what rides, not the payload. Whitespace-collapsed and
+// clamped to ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/
+// exec error), so the caller distinguishes `staging-denied` from `staging-failed`.
+const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+function _stagingDenial(results) {
+  const arr = Array.isArray(results) ? results : []
+  for (const r of arr) {
+    if (r && r.ok) continue
+    const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    const m = s.match(_DENIAL_SIG)
+    if (m) {
+      let from = s.slice(m.index).replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+      return from.length > 200 ? from.slice(0, 200) + '…' : from
+    }
+  }
+  return null
 }
 
 // Scrub external-derived free-text (git stderr in a commit/dispatch-failure reason) BEFORE it enters
@@ -506,6 +548,15 @@ async function _dispatchExternalInner(o) {
   const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
   const stallMonitor = armIdle ? 'armed'
     : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
+  // resolvedArgv / relayMeta are hoisted ABOVE _jbase (and above the staging/preSHA early exits) so the
+  // journal reads them at call time (#308 timeout-argv audit) AND so the #373 pre-CLI early exits can
+  // journal through the same _jbase path — both are still null there (build-argv hasn't run, no CLI
+  // relay yet), which is the honest audit shape for a dispatch that died before the CLI (argv: null, no
+  // relay disclosure). resolvedArgv is set synchronously inside `run` right after build-argv resolves so
+  // a later timeout branch journals the real argv; relayMeta carries the last completed _runArgv's relay
+  // facts (#347). Both stay null on the pre-CLI failure paths.
+  let resolvedArgv = null
+  let relayMeta = null
   // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
   // resolved model, effective timeout ceiling, (once build-argv resolves) the exact argv, and the
   // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
@@ -548,6 +599,16 @@ async function _dispatchExternalInner(o) {
     _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
   ])
   if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
+    // #373: staging died BEFORE the CLI ran — journal it (was a silent return). A denial-signature in
+    // the failed leaf's stdout (the auto-mode classifier blocking the base64 courier) rides as the
+    // bounded `reason`, and the outcome distinguishes a denial from a plain courier/exec staging error.
+    // The RETURN reason stays `could-not-stage-external-inputs` so the #277 harness-dead tripwire and
+    // every caller behave exactly as before — only the missing audit line is added.
+    const denial = _stagingDenial(writeInputs)
+    const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
+      denial ? { reason: denial } : {}))
+    if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
 
@@ -555,18 +616,20 @@ async function _dispatchExternalInner(o) {
   let preSha = null
   if (isWrite) {
     preSha = await _captureHead(cwd)
-    if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
+    if (!preSha) {
+      // #373: preSHA capture died before the CLI ran — journal it (was a silent return) so a write
+      // dispatch that never reached the engine leaves a trace instead of reading as "never routed".
+      const jPreSha = await _journalExternal(Object.assign(_jbase(), { verify: null, outcome: PRESHA_FAILED_OUTCOME }))
+      if (!(jPreSha && jPreSha.ok)) return { ok: false, reason: 'unauditable' }
+      return { ok: false, reason: 'could-not-capture-preSHA' }
+    }
   }
 
   // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
-  // resolvedArgv is hoisted so the journal (below, on EVERY outcome incl. a ceiling timeout) can record
-  // the exact argv that was dispatched (#308). It is set synchronously inside `run` right after
-  // build-argv resolves, so by the time the race's timeout branch fires (limitMs later, during the CLI
-  // run) it already holds the real argv — a timeout journals the argv the CLI was killed while running.
-  let resolvedArgv = null
-  // #347: relay facts from the LAST completed _runArgv (set synchronously inside `run`, read by
-  // _jbase at journal time — same hoisting pattern as resolvedArgv).
-  let relayMeta = null
+  // resolvedArgv / relayMeta are declared ABOVE (hoisted over _jbase and the #373 pre-CLI early exits);
+  // `run` assigns resolvedArgv synchronously right after build-argv resolves so a ceiling timeout still
+  // journals the exact argv the CLI was killed while running (#308), and relayMeta carries the last
+  // completed _runArgv's relay facts (#347).
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -810,6 +873,10 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // #341: the courier-declined outcome token, exported so the JS↔Python drift guard (CONVENTIONS
   // §11.2) can assert this producer home matches acceptance_verdict.COURIER_DECLINED_OUTCOME.
   COURIER_DECLINED_OUTCOME,
+  // #373: the pre-CLI early-exit outcome tokens, exported so the JS↔Python behavior drift guard
+  // (CONVENTIONS §11.2) can pin that acceptance_verdict.py classifies them as failed dispatch
+  // attempts (counted against the per-engine authenticity gate) — never an acceptable fall-open.
+  STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   // #341 test-only: the pure production command composer, exported so the real-seam detector
   // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
   _composeDispatchCommand,

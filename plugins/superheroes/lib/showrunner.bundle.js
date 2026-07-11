@@ -3787,6 +3787,9 @@ const { b64 } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 const COURIER_DECLINED_OUTCOME = 'courier-declined'
+const STAGING_DENIED_OUTCOME = 'staging-denied'   // staging failed AND the failure carries a denial signature
+const STAGING_FAILED_OUTCOME = 'staging-failed'   // staging failed for any other reason (courier/exec error)
+const PRESHA_FAILED_OUTCOME = 'presha-failed'     // write-role preSHA capture failed before the CLI ran
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 function _stageCmd(path, content) {
   const encoded = b64(content == null ? '' : String(content))
@@ -3975,6 +3978,7 @@ async function _journalExternal(payload) {
       idleSeconds: payload.idleSeconds == null ? null : payload.idleSeconds,
       declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
       verify: payload.verify, outcome: payload.outcome,
+      ...(payload.reason == null ? {} : { reason: String(payload.reason) }),
       ...(payload.outputTruncated === true
         ? { outputTruncated: true,
             outBytes: payload.outBytes == null ? null : payload.outBytes,
@@ -3985,6 +3989,20 @@ function _declinePrefix(answer) {
   const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
   if (!s) return 'courier returned no execution marker'
   return s.length > 200 ? s.slice(0, 200) + '…' : s
+}
+const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+function _stagingDenial(results) {
+  const arr = Array.isArray(results) ? results : []
+  for (const r of arr) {
+    if (r && r.ok) continue
+    const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    const m = s.match(_DENIAL_SIG)
+    if (m) {
+      let from = s.slice(m.index).replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+      return from.length > 200 ? from.slice(0, 200) + '…' : from
+    }
+  }
+  return null
 }
 async function _scrubReason(reason) {
   const s = reason == null ? '' : String(reason)
@@ -4005,6 +4023,8 @@ async function _dispatchExternalInner(o) {
   const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
   const stallMonitor = armIdle ? 'armed'
     : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
+  let resolvedArgv = null
+  let relayMeta = null
   const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
     model: (typeof model === 'string' && model) ? model : null,
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
@@ -4022,15 +4042,22 @@ async function _dispatchExternalInner(o) {
     _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
   ])
   if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
+    const denial = _stagingDenial(writeInputs)
+    const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
+      denial ? { reason: denial } : {}))
+    if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
   let preSha = null
   if (isWrite) {
     preSha = await _captureHead(cwd)
-    if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
+    if (!preSha) {
+      const jPreSha = await _journalExternal(Object.assign(_jbase(), { verify: null, outcome: PRESHA_FAILED_OUTCOME }))
+      if (!(jPreSha && jPreSha.ok)) return { ok: false, reason: 'unauditable' }
+      return { ok: false, reason: 'could-not-capture-preSHA' }
+    }
   }
-  let resolvedArgv = null
-  let relayMeta = null
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -4168,6 +4195,7 @@ function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
 module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
   _STREAMS_WHEN_PIPED, strictify,
   COURIER_DECLINED_OUTCOME,
+  STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   _composeDispatchCommand,
   EMIT_TAIL_BYTES }
 };
