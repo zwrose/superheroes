@@ -280,7 +280,43 @@ function b64(text) {
   }
   return out
 }
-module.exports = { utf8Bytes, b64 }
+function sha256hex(text) {
+  var bytes = utf8Bytes(text), i, j
+  var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
+  bytes.push(0x80)
+  while (bytes.length % 64 !== 56) bytes.push(0)
+  bytes.push((hi >>> 24) & 255, (hi >>> 16) & 255, (hi >>> 8) & 255, hi & 255,
+             (lo >>> 24) & 255, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255)
+  var H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+  var K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]
+  var w = new Array(64)
+  for (i = 0; i < bytes.length; i += 64) {
+    for (j = 0; j < 16; j++) {
+      var off = i + j * 4
+      w[j] = (bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3]
+    }
+    for (j = 16; j < 64; j++) {
+      var x = w[j - 15], y = w[j - 2]
+      var s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3)
+      var s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10)
+      w[j] = (w[j - 16] + s0 + w[j - 7] + s1) | 0
+    }
+    var a = H[0], b = H[1], c2 = H[2], dd = H[3], e = H[4], f = H[5], g = H[6], h = H[7]
+    for (j = 0; j < 64; j++) {
+      var S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7))
+      var t1 = (h + S1 + ((e & f) ^ (~e & g)) + K[j] + w[j]) | 0
+      var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10))
+      var t2 = (S0 + ((a & b) ^ (a & c2) ^ (b & c2))) | 0
+      h = g; g = f; f = e; e = (dd + t1) | 0; dd = c2; c2 = b; b = a; a = (t1 + t2) | 0
+    }
+    H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c2) | 0; H[3] = (H[3] + dd) | 0
+    H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0
+  }
+  var out = ''
+  for (i = 0; i < 8; i++) for (j = 3; j >= 0; j--) out += ('0' + ((H[i] >>> (j * 8)) & 255).toString(16)).slice(-2)
+  return out
+}
+module.exports = { utf8Bytes, b64, sha256hex }
 };
 __modules["cost_meter"] = function (module, exports, require) {
 function _g() { return (typeof globalThis !== 'undefined') ? globalThis : {} }
@@ -3783,7 +3819,7 @@ module.exports = { resolveEngine, resolveEffort, resolveTimeout, resolveIdle, EN
 };
 __modules["engine_dispatch"] = function (module, exports, require) {
 const { libPath } = require('./lib_root.js')
-const { b64 } = require('./bytes.js')
+const { sha256hex } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 const COURIER_DECLINED_OUTCOME = 'courier-declined'
@@ -3791,9 +3827,36 @@ const STAGING_DENIED_OUTCOME = 'staging-denied'   // staging failed AND the fail
 const STAGING_FAILED_OUTCOME = 'staging-failed'   // staging failed for any other reason (courier/exec error)
 const PRESHA_FAILED_OUTCOME = 'presha-failed'     // write-role preSHA capture failed before the CLI ran
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
+const _SR_STAGE_SIG = 'hashlib.sha256'
+const _SR_STAGE_SCRIPT =
+  'import os,sys,hashlib;' +
+  'p,e,w=sys.argv[1],sys.argv[2],sys.argv[3];' +
+  'c=[];i=0;' +
+  'exec("while i<len(e):\\n if i+2<len(e)and e[i:i+3]==chr(92)*2+chr(110):c.append(chr(92)+chr(110));i+=3\\n elif i+1<len(e)and e[i:i+2]==chr(92)+chr(110):c.append(chr(10));i+=2\\n elif i+1<len(e)and e[i:i+2]==chr(92)+chr(114):c.append(chr(13));i+=2\\n elif i+1<len(e)and e[i:i+2]==chr(92)*2:c.append(chr(92));i+=2\\n else:c.append(e[i]);i+=1");' +
+  'c="".join(c);' +
+  'd=os.path.dirname(p);' +
+  'd and os.makedirs(d,exist_ok=True);' +
+  'open(p,"w",encoding="utf-8").write(c);' +
+  'h=hashlib.sha256(open(p,"rb").read()).hexdigest();' +
+  'sys.exit(0 if h==w else 3)'
+function _stageEnc(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+}
 function _stageCmd(path, content) {
-  const encoded = b64(content == null ? '' : String(content))
-  return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
+  const c = content == null ? '' : String(content)
+  return `python3 -c ${shq(_SR_STAGE_SCRIPT)} ${shq(path)} ${shq(_stageEnc(c))} ${shq(sha256hex(c))}`
+}
+async function _stageInput(path, content) {
+  const cmd = _stageCmd(path, content)
+  let last = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await _exec([cmd])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) return { ok: true, results: res }
+    last = res
+    if (_stagingDenial(res)) break   // deterministic denial — a retry only re-denies
+  }
+  return { ok: false, results: last }
 }
 function _typeWithNull(type) {
   if (type == null) return type
@@ -3991,16 +4054,20 @@ function _declinePrefix(answer) {
   return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
 const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
 function _stagingDenial(results) {
   const arr = Array.isArray(results) ? results : []
   for (const r of arr) {
     if (r && r.ok) continue
     const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    const sigIdxs = [_SR_STAGE_SIG, 'python3 -c'].map((sig) => s.indexOf(sig)).filter((i) => i >= 0)
+    const sigIdx = sigIdxs.length ? Math.min(...sigIdxs) : -1
     const m = s.match(_DENIAL_SIG)
-    if (m) {
-      let from = s.slice(m.index).replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
-      return from.length > 200 ? from.slice(0, 200) + '…' : from
-    }
+    if (!m) continue
+    if (sigIdx >= 0 && m.index >= sigIdx) return _DENIAL_TAINTED
+    let from = sigIdx >= 0 ? s.slice(m.index, sigIdx) : s.slice(m.index)
+    from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+    return from.length > 200 ? from.slice(0, 200) + '…' : from
   }
   return null
 }
@@ -4037,11 +4104,12 @@ async function _dispatchExternalInner(o) {
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
   const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
-  const writeInputs = await _exec([
-    _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
-  ])
-  if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
+  const promptStage = await _stageInput(promptPath, prompt || '')
+  const schemaStage = promptStage.ok
+    ? await _stageInput(schemaPath, JSON.stringify(stagedSchema))
+    : { ok: false, results: [] }
+  if (!(promptStage.ok && schemaStage.ok)) {
+    const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
     const denial = _stagingDenial(writeInputs)
     const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
@@ -4197,6 +4265,7 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   COURIER_DECLINED_OUTCOME,
   STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   _composeDispatchCommand,
+  _stageCmd, _stageInput, _SR_STAGE_SIG,
   EMIT_TAIL_BYTES }
 };
 __modules["build_phase"] = function (module, exports, require) {
