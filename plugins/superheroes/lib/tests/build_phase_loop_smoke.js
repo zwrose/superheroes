@@ -504,10 +504,13 @@ const SMART_STUBS = [
   //      array) -> cannot-certify -> park. Not a round-cap handoff; the leg fails closed (UFR-7).
   // ===========================================================================
   {
+    let handoffJournals = 0, finalStamps = 0, provWrites = 0
     global.agent = makeAgent([
       execStub((p) => {
         if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
         if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) { handoffJournals += 1; return JSON.stringify({ ok: true }) }
+        if (p.includes('prov_entry.py')) { provWrites += 1; return JSON.stringify({ ok: true }) }
         return standardLeaf(p)
       }),
       ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
@@ -517,7 +520,7 @@ const SMART_STUBS = [
       ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
       ['branch-reviewer:', {}],   // no findings array -> reviewerAgent returns null -> cannot-certify
       ['run verify', { command: 'none', returncode: 0, timedOut: false }],
-      ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
+      ['stamp build coverage', () => { finalStamps += 1; return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }] }],
     ])
     globalThis.reviewerAgent = async () => ([])
     globalThis.recordDeferred = async () => {}
@@ -525,6 +528,9 @@ const SMART_STUBS = [
     assert.strictEqual(r.confidence, 'low', '#381: an unusable review (no review obtainable) PARKS (UFR-7)')
     assert.ok(/final review did not reach clean/i.test((r.assumptions || [])[0] || ''),
       '#381: the park reason names the whole-branch final review')
+    assert.strictEqual(handoffJournals, 0, '#381: a no-review-obtainable park NEVER journals a handoff')
+    assert.strictEqual(finalStamps, 0, '#381: a no-review-obtainable park NEVER stamps coverage')
+    assert.strictEqual(provWrites, 0, '#381: a no-review-obtainable park NEVER writes provenance')
   }
 
   console.log('ok: build_phase FR-4a in-memory loop (reconcile-once, resume-once, FR-9/UFR-6/UFR-12, stale-final-review, double-dirty-park, exec fail-closed, #381 round-cap handoff/verify-park/no-review-park)')
