@@ -4054,22 +4054,20 @@ function _declinePrefix(answer) {
   return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
 const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
 function _stagingDenial(results) {
   const arr = Array.isArray(results) ? results : []
   for (const r of arr) {
     if (r && r.ok) continue
     const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    const sigIdxs = [_SR_STAGE_SIG, 'python3 -c'].map((sig) => s.indexOf(sig)).filter((i) => i >= 0)
+    const sigIdx = sigIdxs.length ? Math.min(...sigIdxs) : -1
     const m = s.match(_DENIAL_SIG)
-    if (m) {
-      let from = s.slice(m.index)
-      const sigCut = [
-        from.indexOf(_SR_STAGE_SIG),
-        from.indexOf('python3 -c'),
-      ].filter((i) => i >= 0)
-      if (sigCut.length) from = from.slice(0, Math.min(...sigCut))
-      from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
-      return from.length > 200 ? from.slice(0, 200) + '…' : from
-    }
+    if (!m) continue
+    if (sigIdx >= 0 && m.index >= sigIdx) return _DENIAL_TAINTED
+    let from = sigIdx >= 0 ? s.slice(m.index, sigIdx) : s.slice(m.index)
+    from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+    return from.length > 200 ? from.slice(0, 200) + '…' : from
   }
   return null
 }

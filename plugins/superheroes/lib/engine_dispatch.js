@@ -540,30 +540,28 @@ function _declinePrefix(answer) {
 
 // #373: inspect a FAILED staging result set for an auto-mode/permission DENIAL and, when found, return
 // a bounded single-line reason string (owner-relevant evidence: WHY the staging courier was blocked).
-// The extraction WINDOW STARTS at the denial phrase — never at the head of the leaf's stdout — so an
-// echoed staging command can never leak into the reason: the classifier's prose is what rides, not the
-// payload. This matters MORE under #257's plain-readable staging — the echoed command now carries the
-// PROMPT as readable text (`python3 -c … '<prompt>' '<hash>'`), not an opaque blob — so the phrase-
-// anchored window is what keeps the staged prompt out of the audit line. Whitespace-collapsed and
-// clamped to ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/
-// exec error), so the caller distinguishes `staging-denied` from `staging-failed`.
+// Taint-aware under #257 plain-readable staging: the echoed stage command (`python3 -c … '<prompt>'
+// '<hash>'`) is a tainted region — a denial signature match AT/AFTER the earliest stage signature is
+// treated as payload echo, not classifier prose, and returns a fixed withheld label. When the match
+// precedes any stage signature (live classifier case), the window starts at the denial phrase and
+// truncates at the signature so the staged prompt never leaks. Whitespace-collapsed and clamped to
+// ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/exec error),
+// so the caller distinguishes `staging-denied` from `staging-failed`.
 const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
 function _stagingDenial(results) {
   const arr = Array.isArray(results) ? results : []
   for (const r of arr) {
     if (r && r.ok) continue
     const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    const sigIdxs = [_SR_STAGE_SIG, 'python3 -c'].map((sig) => s.indexOf(sig)).filter((i) => i >= 0)
+    const sigIdx = sigIdxs.length ? Math.min(...sigIdxs) : -1
     const m = s.match(_DENIAL_SIG)
-    if (m) {
-      let from = s.slice(m.index)
-      const sigCut = [
-        from.indexOf(_SR_STAGE_SIG),
-        from.indexOf('python3 -c'),
-      ].filter((i) => i >= 0)
-      if (sigCut.length) from = from.slice(0, Math.min(...sigCut))
-      from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
-      return from.length > 200 ? from.slice(0, 200) + '…' : from
-    }
+    if (!m) continue
+    if (sigIdx >= 0 && m.index >= sigIdx) return _DENIAL_TAINTED
+    let from = sigIdx >= 0 ? s.slice(m.index, sigIdx) : s.slice(m.index)
+    from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+    return from.length > 200 ? from.slice(0, 200) + '…' : from
   }
   return null
 }

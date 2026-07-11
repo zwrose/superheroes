@@ -1015,15 +1015,14 @@ function makeAgent(routes) {
       console.log('OK: engine_dispatch #373 schema-stage denial journals one staging-denied line with bounded reason')
     }
 
-    // (a2) DENIAL-REASON WINDOWING: with #257's PLAIN staging the failed leaf can ECHO the staging
-    // command with the READABLE prompt right there in it (`python3 -c … '<prompt>' '<hash>'`) BEFORE the
-    // denial prose. The reason window STARTS at the denial phrase — so the readable payload can never
-    // ride into the audit line (the windowing that guarded the base64 blob now guards the plain payload).
+    // (a2) DENIAL-REASON WINDOWING: live classifier prose precedes any echoed stage command — the reason
+    // window STARTS at the denial phrase and truncates at the stage signature so the readable payload
+    // can never ride into the audit line.
     {
       d.__resetHarnessNotice()
       const jp = []
       const SECRET = 'SECRETPROMPT-abc123'
-      const ECHOED = "python3 -c '…hashlib.sha256…' /tmp/engine-x.prompt '" + SECRET + "' 'deadbeef'\n" + DENIAL
+      const ECHOED = DENIAL + " python3 -c '…hashlib.sha256…' /tmp/engine-x.prompt '" + SECRET + "' 'deadbeef'"
       global.agent = journalCollector(jp, [
         [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: ECHOED }]],
       ])
@@ -1033,7 +1032,28 @@ function makeAgent(routes) {
       assert.strictEqual(ed.length, 1, '#373: read-role staging denial also journals one staging-denied line')
       assert.ok(ed[0].reason.startsWith('Permission for this action was denied'), '#373: the reason window starts at the denial phrase: ' + ed[0].reason)
       assert.ok(!ed[0].reason.includes(SECRET), '#257/#373: the echoed readable prompt never leaks into the reason: ' + ed[0].reason)
-      console.log('OK: engine_dispatch #373 denial-reason windowing (echoed plain payload excluded)')
+      console.log('OK: engine_dispatch #373 denial-reason windowing (classifier prose before echo)')
+    }
+
+    // (a2d) TAINT-AWARE DENIAL: when the denial signature lands inside/after the echoed stage command
+    // (e.g. the payload itself contains a denial phrase), the reason is the fixed withheld label — no
+    // windowed text at all.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const WITHHELD = 'denial signature detected after the echoed stage command — text withheld'
+      const secretPayload = 'build prompt with Permission for this action was denied embedded'
+      const stageEcho = "python3 -c 'import os,sys,hashlib;…" + d._SR_STAGE_SIG + "…' /tmp/e373t-" + process.pid + ".prompt '" + secretPayload + "' 'deadbeef'"
+      global.agent = journalCollector(jp, [
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: stageEcho }]],
+      ])
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: secretPayload, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-taint' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line for taint case: ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: tainted denial journals one staging-denied line')
+      assert.strictEqual(ed[0].reason, WITHHELD, '#373: tainted denial returns the fixed withheld reason')
+      assert.ok(!ed[0].reason.includes(secretPayload), '#257/#373: the payload text never rides in the withheld reason')
+      console.log('OK: engine_dispatch #373 taint-aware denial (payload-embedded phrase withheld)')
     }
 
     // (a3) DENIAL-REASON CLAMP + PLAIN-STAGING LEAK GUARD: denial prose exceeds 200 chars and the
@@ -1175,8 +1195,24 @@ function makeAgent(routes) {
     const { execFileSync } = require('child_process')
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sr-stage-257-' + process.pid + '-'))
     const runBash = (cmd) => {
-      try { execFileSync('bash', ['-c', cmd], { stdio: 'pipe' }); return 0 }
-      catch (e) { return (e && typeof e.status === 'number') ? e.status : 1 }
+      try {
+        const stdout = execFileSync('bash', ['-c', cmd], { stdio: 'pipe', encoding: 'utf8' })
+        return { status: 0, stdout: String(stdout || ''), stderr: '' }
+      } catch (e) {
+        return {
+          status: (e && typeof e.status === 'number') ? e.status : 1,
+          stdout: (e.stdout && e.stdout.toString()) || '',
+          stderr: (e.stderr && e.stderr.toString()) || '',
+        }
+      }
+    }
+    const assertStageSilent = (result, payload, label) => {
+      assert.strictEqual(result.stdout, '', label + ': stage stdout must be empty (got: ' + result.stdout.slice(0, 80) + ')')
+      assert.strictEqual(result.stderr, '', label + ': stage stderr must be empty (got: ' + result.stderr.slice(0, 80) + ')')
+      if (payload) {
+        assert.ok(!result.stdout.includes(payload) && !result.stderr.includes(payload),
+          label + ': stage output must not echo the payload')
+      }
     }
     const DENIAL_PHRASE = 'Permission for this action was denied by the Claude Code auto mode classifier.'
     const stageEnc = (s) => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
@@ -1192,6 +1228,7 @@ function makeAgent(routes) {
       'contains a denial phrase in the BODY: ' + DENIAL_PHRASE,
       '{"type":"object","properties":{"x":{"type":"string","d":"a\\"b\\\\c"}}}',
       'x'.repeat(5000) + ' — long payload — ' + 'y'.repeat(2000),
+      'carriage\rreturn\r\nwindows',
     ]
     let n = 0
     for (const payload of payloads) {
@@ -1205,10 +1242,13 @@ function makeAgent(routes) {
           '#257: the payload (single-line encoded when multiline) rides in the staged command text')
       }
       // (2) round-trip byte-exact + verify EXITS 0.
-      const status = runBash(cmd)
-      assert.strictEqual(status, 0, '#257: the plain write+sha256-verify exits 0 for payload #' + (n - 1))
+      const result = runBash(cmd)
+      assert.strictEqual(result.status, 0, '#257: the plain write+sha256-verify exits 0 for payload #' + (n - 1))
       assert.strictEqual(fs.readFileSync(p, 'utf8'), payload,
         '#257: the staged file round-trips BYTE-EXACT for payload #' + (n - 1))
+      if (n === 2 || payload === 'carriage\rreturn\r\nwindows') {
+        assertStageSilent(result, payload, '#257: successful write payload #' + (n - 1))
+      }
     }
     console.log('OK: engine_dispatch #257 stage-write round-trips byte-exact across quotes/backslashes/newlines/non-ASCII/metachars')
 
@@ -1219,8 +1259,9 @@ function makeAgent(routes) {
       const cmd = d._stageCmd(p, 'the original faithful prompt')
       const mangled = cmd.replace("'the original faithful prompt'", "'a MANGLED paraphrase of the prompt'")
       assert.notStrictEqual(mangled, cmd, '#257 precondition: the mangle rewrote the payload arg')
-      const status = runBash(mangled)
-      assert.notStrictEqual(status, 0, '#257: a payload mangle (hash no longer matches) fails closed with a non-zero verify exit')
+      const mangleResult = runBash(mangled)
+      assert.notStrictEqual(mangleResult.status, 0, '#257: a payload mangle (hash no longer matches) fails closed with a non-zero verify exit')
+      assertStageSilent(mangleResult, 'the original faithful prompt', '#257: hash-mismatch failure')
     }
     console.log('OK: engine_dispatch #257 a transit mangle fails closed (sha256 verify catches it)')
 
