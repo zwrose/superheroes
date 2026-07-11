@@ -137,7 +137,7 @@ def _seed_pr_body(root, work_item, branch, base, number):
     _gh_edit_body(number, new_body)
 
 
-def _set_prose_body(root, work_item, branch, base, number, body_file):
+def _set_prose_body(root, work_item, branch, base, number, body_file, worktree=None):
     """Set the durable "what & why" PROSE body (issue #219) on the draft PR. Returns None on
     success or a deliberate no-op, else a reason string (the caller decides park vs best-effort).
 
@@ -147,7 +147,14 @@ def _set_prose_body(root, work_item, branch, base, number, body_file):
     The #228 generated tail (DoD table / stubbed seams) is split off and re-attached UNCHANGED so
     a filled DoD table is never lost. The composed prose comes from `pr_body.resolve_body`
     (composed body-file if usable, else the deterministic fallback), which is always scrubbed and
-    carries `Closes #N`."""
+    carries `Closes #N`.
+
+    `worktree` (review-code review finding): the MANAGED build worktree the branch being opened
+    actually lives in — passed through from the spine's --worktree (resolveBuildTarget), same
+    resolve the compose-context gather used. Falls back to `root` (the cwd pr_entry itself ran
+    from, which callers already know may be the launch checkout, not the build worktree) only
+    when the spine could not resolve one — this keeps the fallback-body path honest about which
+    branch's commits/diff it describes instead of silently describing the launch checkout."""
     import pr_body
     if not number:
         return None
@@ -157,7 +164,8 @@ def _set_prose_body(root, work_item, branch, base, number, body_file):
     prose, tail = pr_body.split_prose(current or "")
     if not pr_body.is_placeholder_body(prose):
         return None                                      # never clobber a real/owner prose
-    new_prose = pr_body.resolve_body(body_file, work_item, root=root, worktree=root, base=base)
+    new_prose = pr_body.resolve_body(body_file, work_item, root=(worktree or root),
+                                     worktree=(worktree or root), base=base)
     tail = (tail or "").strip()
     final = new_prose + (("\n\n" + tail) if tail else "") + "\n"
     cp = _gh_edit_body(number, final)
@@ -166,7 +174,7 @@ def _set_prose_body(root, work_item, branch, base, number, body_file):
     return None
 
 
-def _draft_success(root, work_item, branch, base, pr, read_back, body_file, strict_body):
+def _draft_success(root, work_item, branch, base, pr, read_back, body_file, strict_body, worktree=None):
     """Set the prose body FIRST (so `_seed_pr_body` appends the DoD/stubs blocks onto real prose),
     then seed those blocks (best-effort), then emit the draft-step success JSON and exit. On the
     CREATE path (strict_body=True) a body-set failure parks fail-closed — resume adopts the PR and
@@ -174,7 +182,7 @@ def _draft_success(root, work_item, branch, base, pr, read_back, body_file, stri
     failure is best-effort (a stderr note, like seeding)."""
     number = pr.get("number") if isinstance(pr, dict) else None
     try:
-        body_reason = _set_prose_body(root, work_item, branch, base, number, body_file)
+        body_reason = _set_prose_body(root, work_item, branch, base, number, body_file, worktree=worktree)
     except Exception as e:                               # a body-set crash is never a ship blocker
         body_reason = "prose body-set errored: %s" % e
     if body_reason is not None:
@@ -200,6 +208,10 @@ def main(argv=None):
                     help="configurable PR target base branch; absent -> gh uses remote default (current behavior)")
     ap.add_argument("--body-file", default=None,
                     help="composed 'what & why' PR-body prose (#219); absent -> deterministic fallback")
+    ap.add_argument("--worktree", default=None,
+                    help="the MANAGED build worktree this PR's branch lives in (review-code review "
+                         "finding); threaded into the prose body-set's git/doc reads so a fallback "
+                         "body describes the build branch, not the launch checkout cwd defaults to")
     a = ap.parse_args(argv)
     root = os.getcwd()
     paths = control_plane.paths(root, a.work_item)
@@ -232,7 +244,7 @@ def main(argv=None):
             # adopt: best-effort body-set (never re-park a PR that already exists; a placeholder
             # prose is replaced, a real/owner body is left untouched).
             _draft_success(root, a.work_item, branch, a.base, world["pr"], read_back,
-                           a.body_file, strict_body=False)
+                           a.body_file, strict_body=False, worktree=a.worktree)
         # create: only after the ship-gate proves SDD build + review-code ran over the SHIPPED HEAD —
         # the build branch's tip (what the PR ships), resolved from checkpoint.branch, not the cwd HEAD.
         try:
@@ -291,7 +303,7 @@ def main(argv=None):
         read_back = isinstance(current, dict) and current.get("number") == pr.get("number")
         # create: strict body-set — a failed set parks fail-closed (resume adopts and sets it).
         _draft_success(root, a.work_item, branch, a.base, pr, read_back,
-                       a.body_file, strict_body=True)
+                       a.body_file, strict_body=True, worktree=a.worktree)
     else:  # mark-ready
         pr = _gh_pr(branch)
         decision = pr_phase.mark_ready_action(pr)

@@ -144,10 +144,13 @@ const PHASE_BUDGETS = {
   // (in-memory tally), 12 post-D3, 29 pre-D3. (The clean green path parks nothing, so
   // renderAndPostReadout's terminal-record compose-terminal write does not fire here.)
   'review-code': 10,
-  // #219: pr-body context (composePrBody's Python gather courier) + io:write (the composed body's
-  // durable file) + open draft PR + save phase progress. The Sonnet 'compose PR body' leaf itself
-  // is a genuine judgment agent (not a courier), so it does not count here. Was 2 pre-#219.
-  'draft-PR': 4,
+  // #219: resolve review target (the SAME build-worktree entry gather review-code/test-pilot/ship
+  // use — review finding: composePrBody and pr_entry's --worktree must describe the build branch,
+  // not the launch checkout, so draft-PR resolves it too) + pr-body context (composePrBody's Python
+  // gather courier, now rooted at the resolved worktree) + io:write (the composed body's durable
+  // file) + open draft PR + save phase progress. The Sonnet 'compose PR body' leaf itself is a
+  // genuine judgment agent (not a courier), so it does not count here. Was 2 pre-#219, 4 pre-worktree-fix.
+  'draft-PR': 5,
   // resolve review target (build-worktree pin) + read test context + plan/results/server/seed
   // artifact staging (writeJson = mkdir+write pairs) + prepare test run + milestone status writes
   // + final artifacts + restore-baseline + write test status + publish tested head + save phase

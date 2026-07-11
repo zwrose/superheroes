@@ -31,10 +31,10 @@ PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
 
 # Per phase: the ordered roles it dispatches. Each role is (roleLabel, model_tier role, role_kind,
 # kind-tag). kind-tag drives engine selection (review/build/fix) + the orchestration/None marker.
-# 'draft-PR' and 'mark-ready' dispatch no agent (deterministic spine steps): they contribute a single
-# non-agent placeholder row (kind "none") so the readout still NAMES every spine phase and the roster
-# stays row-for-phase complete against showrunner.js's PHASES (roster-parity guard) — a phase can
-# never be silently dropped from the readout. A "none"-kind row pins no engine/model/effort.
+# 'mark-ready' dispatches no agent (a deterministic spine step): it contributes a single non-agent
+# placeholder row (kind "none") so the readout still NAMES every spine phase and the roster stays
+# row-for-phase complete against showrunner.js's PHASES (roster-parity guard) — a phase can never
+# be silently dropped from the readout. A "none"-kind row pins no engine/model/effort.
 _PHASE_ROLES = {
     "plan":         [("author", "author", None, "author")],
     "review-plan":  [("reviewer", "reviewer", "review", "review")],
@@ -51,7 +51,17 @@ _PHASE_ROLES = {
     # config edit leak into the synthesis model. Model rides the "synthesis" tier role (opus).
     "review-code":  [("deep reviewer", "reviewer-deep", "review", "review-deep"),
                      ("synthesis judge", "synthesis", None, "synthesis")],
-    "draft-PR":     [("no agent (deterministic step)", None, None, "none")],
+    # draft-PR (#219): showrunner.js's composePrBody dispatches a genuine Sonnet leaf ("compose PR
+    # body") that composes the durable "what & why" prose BEFORE the deterministic pr_entry.py step
+    # opens/adopts the PR — a real dispatch on the "pr-body" model tier, not a no-agent step (the
+    # prior single "none" row hid it from frozen preflight snapshots, letting it run on live config
+    # after the owner-confirmed readout). Its kind-tag "pr-body" is not review/build/fix, so
+    # _engine_for resolves "claude" (matches the real dispatch: composePrBody calls agent() directly,
+    # never engine-routed) and _effort_for resolves None (matches: no engine_pref effort applies).
+    # The PR-open/adopt step itself is still the deterministic dumb-pipe courier, kept as its own
+    # "none" row.
+    "draft-PR":     [("compose PR body", "pr-body", None, "pr-body"),
+                     ("open/adopt draft PR (deterministic step)", None, None, "none")],
     "test-pilot":   [("orchestration", "orchestrator", None, "orchestration")],
     "mark-ready":   [("no agent (deterministic step)", None, None, "none")],
     "ship":         [("fixer (on CI failure)", "fixer", "fix", "fix")],

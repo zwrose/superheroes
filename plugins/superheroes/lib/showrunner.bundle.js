@@ -6808,12 +6808,13 @@ async function loadPr(workItem) {
     `python3 ${libPath('checkpoint_entry.py')} --work-item ${shq(workItem)} --read-pr`, 'read pr')
   return (out && out.pr !== undefined) ? out.pr : null
 }
-async function composePrBody(workItem) {
+async function composePrBody(workItem, worktree) {
   const bodyPath = `/tmp/showrunner-${workItem}-pr-body.md`
   const base = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const baseArg = base ? ` --base ${shq(base)}` : ''
+  const wtArg = worktree ? ` --worktree ${shq(worktree)} --root ${shq(worktree)}` : ''
   const ctx = await execJson(
-    `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg} --body-path ${shq(bodyPath)}`,
+    `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg}${wtArg} --body-path ${shq(bodyPath)}`,
     'pr-body context')
   if (!ctx) return null                                  // context gather failed -> fallback
   if (ctx.prior_body_usable === true) return bodyPath     // resume-cheap: no Sonnet re-spend
@@ -6834,13 +6835,16 @@ module.exports.composePrBody = composePrBody
 async function draftPRPhase(workItem) {
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
-  const _bodyPath = await composePrBody(workItem)
+  const _target = await resolveBuildTarget(workItem).catch(() => null)
+  const _wt = (_target && _target.worktree) || null
+  const _bodyPath = await composePrBody(workItem, _wt)
   const _bodyArg = _bodyPath ? ` --body-file ${shq(_bodyPath)}` : ''
+  const _wtArg = _wt ? ` --worktree ${shq(_wt)}` : ''
   let out = null
   try {
     out = await courier.runCourierJson(
       'open draft PR',
-      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}${_bodyArg}`,
+      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}${_bodyArg}${_wtArg}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
