@@ -467,6 +467,52 @@ const SMART_STUBS = [
   // ===========================================================================
   // (10c) #381 HANDOFF JOURNAL FAILURE DISCLOSURE: a failed final_review_handoff journal write still
   //       PROCEEDS (UFR-2 fail-open), but the phase's surfaced handoffSummary names the failed write.
+  //       Production durable-write failures return {"ok":false} on stdout with exit 0 (not a throw).
+  // ===========================================================================
+  {
+    let handoffJournals = 0, finalStamps = 0, provWrites = 0, fixDispatches = 0
+    global.agent = makeAgent([
+      execStub((p) => {
+        if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
+        if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) {
+          handoffJournals += 1
+          return JSON.stringify({ ok: false, error: 'durable write failed' })
+        }
+        if (p.includes('prov_entry.py')) { provWrites += 1; return JSON.stringify({ ok: true }) }
+        return standardLeaf(p)
+      }),
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+      ['branch-reviewer:', { findings: [{ file: 'a.js', line: 1, title: 'branch blocker', severity: 'Critical', evidence: 'e' }] }],
+      ['fix-branch', () => { fixDispatches += 1; return { ok: true } }],
+      ['stamp build coverage', () => { finalStamps += 1; return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }] }],
+      ['run verify', { command: 'none', returncode: 0, timedOut: false }],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    const r = await bp.buildPhase(WI, 5)
+    assert.strictEqual(r.confidence, 'high',
+      '#381 (10c): a failed handoff journal write still PROCEEDS (fail-open)')
+    assert.strictEqual(handoffJournals, 1, '#381 (10c): the handoff journal was attempted once')
+    assert.strictEqual(fixDispatches, 1, '#381 (10c): the fix batch still dispatches')
+    assert.strictEqual(finalStamps, 1, '#381 (10c): coverage is still stamped on the handoff path')
+    assert.strictEqual(provWrites, 1, '#381 (10c): provenance is still written after the handoff')
+    assert.ok(r.handoffSummary, '#381 (10c): the failed journal write is disclosed on handoffSummary')
+    assert.strictEqual(r.handoffSummary.handoffJournalOk, false,
+      '#381 (10c): handoffSummary records that the journal write failed')
+    assert.ok(/durable write failed|final_review_handoff/i.test(r.handoffSummary.handoffJournalError || ''),
+      '#381 (10c): handoffSummary names the durable-failure final_review_handoff journal write')
+    assert.strictEqual(r.handoffSummary.openFindingsCount, 1,
+      '#381 (10c): handoffSummary still carries the open finding count')
+  }
+
+  // ===========================================================================
+  // (10d) #381 HANDOFF JOURNAL THROW DISCLOSURE: courier/exec throw is a second failure vector —
+  //       still fail-open, still disclosed on handoffSummary.
   // ===========================================================================
   {
     let handoffJournals = 0, finalStamps = 0, provWrites = 0, fixDispatches = 0
@@ -495,18 +541,18 @@ const SMART_STUBS = [
     globalThis.recordDeferred = async () => {}
     const r = await bp.buildPhase(WI, 5)
     assert.strictEqual(r.confidence, 'high',
-      '#381 (10c): a failed handoff journal write still PROCEEDS (fail-open)')
-    assert.strictEqual(handoffJournals, 1, '#381 (10c): the handoff journal was attempted once')
-    assert.strictEqual(fixDispatches, 1, '#381 (10c): the fix batch still dispatches')
-    assert.strictEqual(finalStamps, 1, '#381 (10c): coverage is still stamped on the handoff path')
-    assert.strictEqual(provWrites, 1, '#381 (10c): provenance is still written after the handoff')
-    assert.ok(r.handoffSummary, '#381 (10c): the failed journal write is disclosed on handoffSummary')
+      '#381 (10d): a thrown handoff journal write still PROCEEDS (fail-open)')
+    assert.strictEqual(handoffJournals, 1, '#381 (10d): the handoff journal was attempted once')
+    assert.strictEqual(fixDispatches, 1, '#381 (10d): the fix batch still dispatches')
+    assert.strictEqual(finalStamps, 1, '#381 (10d): coverage is still stamped on the handoff path')
+    assert.strictEqual(provWrites, 1, '#381 (10d): provenance is still written after the handoff')
+    assert.ok(r.handoffSummary, '#381 (10d): the thrown journal write is disclosed on handoffSummary')
     assert.strictEqual(r.handoffSummary.handoffJournalOk, false,
-      '#381 (10c): handoffSummary records that the journal write failed')
+      '#381 (10d): handoffSummary records that the journal write failed')
     assert.ok(/handoff write failed|final_review_handoff/i.test(r.handoffSummary.handoffJournalError || ''),
-      '#381 (10c): handoffSummary names the failed final_review_handoff journal write')
+      '#381 (10d): handoffSummary names the thrown final_review_handoff journal write')
     assert.strictEqual(r.handoffSummary.openFindingsCount, 1,
-      '#381 (10c): handoffSummary still carries the open finding count')
+      '#381 (10d): handoffSummary still carries the open finding count')
   }
 
   // ===========================================================================

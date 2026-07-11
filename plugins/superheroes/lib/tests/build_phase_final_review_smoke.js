@@ -237,9 +237,9 @@ const bp = require('../build_phase.js')
   const ioSeam = require('../io_seam.js')
   const baseIo = ioSeam.io()
   globalThis.io = Object.assign({}, baseIo, {
-    readJson: async (p, dflt) => {
-      if (String(p).endsWith('round-records.json')) return []
-      return baseIo.readJson(p, dflt)
+    readText: async (p) => {
+      if (String(p).endsWith('round-records.json')) return '[]'
+      return baseIo.readText(p)
     },
   })
   delete require.cache[require.resolve('../build_phase.js')]

@@ -346,14 +346,13 @@ def _halt_kind_literals_home():
         r'if verify_red:\s+halt_kind = "([^"]+)"\s+'
         r'elif fix_status == "failed":\s+halt_kind = "([^"]+)"\s+'
         r'elif breaker_halt and brk\.get\("reason"\) == "max-iterations":.*?'
-        r'"round-cap".*?"other"',
+        r'halt_kind = \("([^"]+)" if gate == "blocking" and confidence == "high"\s+'
+        r'else "([^"]+)"\)',
         text, re.DOTALL)
     assert m, (
         "review_loop_plan.py: #381 halt_kind assignment block not found "
         "(drift or reformat)")
-    kinds = [m.group(1), m.group(2), "round-cap", "other"]
-    assert kinds == ["verify-fail", "fix-failed", "round-cap", "other"], kinds
-    return kinds
+    return [m.group(1), m.group(2), m.group(3), m.group(4)]
 
 
 def _js_halt_kind_routing_literals(text, label):
@@ -380,11 +379,8 @@ def test_halt_kind_vocabulary_single_sourced():
 
     bp = _read(os.path.join("lib", "build_phase.js"))
     bp_literals = _js_halt_kind_routing_literals(bp, "build_phase.js")
-    assert bp_literals == {"round-cap", "fix-failed", "verify-fail", "other"}, (
-        "build_phase.js haltKind routing literals %r drifted from the expected "
-        "consumer set" % bp_literals)
-    assert bp_literals <= home_set, (
-        "build_phase.js haltKind literals %r are not all in the producer home %r"
+    assert bp_literals == home_set, (
+        "build_phase.js haltKind routing literals %r drifted from review_loop_plan.py home %r"
         % (bp_literals, home_set))
 
     js_test_holders = [

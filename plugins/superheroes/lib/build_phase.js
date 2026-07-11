@@ -962,16 +962,29 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
 // own fix leg which dispatches from the on-disk worklist rather than the compiled verdict.
 async function capBlockingWorklist(runDir, verdict) {
   const round = (verdict && verdict.round) || 1
+  const path = `${runDir}/round-records.json`
+  let raw
   try {
-    const records = await io().readJson(`${runDir}/round-records.json`, null)
-    if (!Array.isArray(records)) return []
-    const rec = records.find((r) => r && r.round === round) || records[records.length - 1]
-    if (!rec || !rec.dimensions) return []
-    return panelTally.blockingFindingsFromDimensionResults(rec.dimensions)
-      .filter((f) => circuitBreaker.isBlocking(f.severity))
+    raw = await io().readText(path)
   } catch (_e) {
-    return []
+    return { ok: false, reason: 'round-memory-unreadable' }
   }
+  let records
+  try {
+    records = JSON.parse(raw)
+  } catch (_e) {
+    return { ok: false, reason: 'round-memory-corrupt' }
+  }
+  if (!Array.isArray(records)) {
+    return { ok: false, reason: 'round-memory-corrupt' }
+  }
+  const rec = records.find((r) => r && r.round === round) || records[records.length - 1]
+  if (!rec || !rec.dimensions) {
+    return { ok: true, blockers: [] }
+  }
+  const blockers = panelTally.blockingFindingsFromDimensionResults(rec.dimensions)
+    .filter((f) => circuitBreaker.isBlocking(f.severity))
+  return { ok: true, blockers }
 }
 
 function capOpenFindingsSummary(blockers) {
@@ -1074,7 +1087,14 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // #381: consume the cap decider's raw blocking worklist (round-records), not verdict.findings
     // (the compiled set that drops citation-less blockers). Fall back to compiled findings only when
     // the durable record is absent (resume/degrade paths).
-    let blockers = capBlockers.length ? capBlockers.slice() : await capBlockingWorklist(runDir, verdict)
+    let blockers
+    if (capBlockers.length) {
+      blockers = capBlockers.slice()
+    } else {
+      const wl = await capBlockingWorklist(runDir, verdict)
+      if (!wl.ok) return null
+      blockers = wl.blockers
+    }
     if (!blockers.length) {
       blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
     }
@@ -1121,7 +1141,13 @@ async function runFinalReview(workItem, generation, branch, wt) {
   // #381: load the cap worklist once from round-records (same raw blocking source the decider
   // counted). Only needed on a certified round-cap halt — uncertified caps park with no fix dispatch.
   if (verdict && verdict.haltKind === 'round-cap' && !verdict.uncertified) {
-    capBlockers = await capBlockingWorklist(runDir, verdict)
+    const wl = await capBlockingWorklist(runDir, verdict)
+    if (!wl.ok) {
+      haltKind = 'other'
+      reason = wl.reason
+    } else {
+      capBlockers = wl.blockers
+    }
   }
   if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap' && !verdict.uncertified) {
     // Fail closed: the decider stamped round-cap only when presentBlocking > 0; an empty derived
@@ -1230,6 +1256,9 @@ async function journalFinalReviewHandoff(workItem, branch, fr) {
       'journal final-review handoff')
     if (r == null) {
       return { ok: false, error: 'final_review_handoff journal write did not run (courier/exec failed)' }
+    }
+    if (r.ok !== true) {
+      return { ok: false, error: r.error || r.reason || 'final_review_handoff journal write failed' }
     }
     return { ok: true }
   } catch (e) {
