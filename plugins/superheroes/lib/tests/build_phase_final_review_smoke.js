@@ -205,6 +205,7 @@ const bp = require('../build_phase.js')
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
   assertTerminal(r, 'halted', '#381 (c): a failed fix dispatch halts')
   assert.strictEqual(r.haltKind, 'fix-failed', '#381 (c): a failed fix dispatch parks (fail-closed)')
+  assert.strictEqual(fixDispatches, 1, '#381 (c): the one fix pass was attempted before it failed')
   assert.strictEqual(verifyCalls, 1, '#381 (c): no post-fix verify after a failed fix dispatch')
 
   // 8. #381 FENCE LOST (d): the lease fence answers not-ok before the fix write -> fixStep returns
