@@ -1021,7 +1021,7 @@ function makeAgent(routes) {
       assert.ok(ECHOED_AFTER.length > 200, '#373: denial stdout exceeds 200 chars')
       assert.ok((denialPrefix + echoed).length <= 200, '#373: echoed staging command rides inside the forward window')
       global.agent = journalCollector(jp, [
-        ['base64 -d >', [{ index: 0, ok: false, stdout: ECHOED_AFTER }]],
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: ECHOED_AFTER }]],
       ])
       await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: secretPayload, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-clamp' })
       const ed = jp.filter((p) => p.outcome === 'staging-denied')
@@ -1084,7 +1084,7 @@ function makeAgent(routes) {
       d.__resetHarnessNotice()
       const jp = []
       global.agent = journalCollector(jp, [
-        ['base64 -d >', [{ index: 0, ok: false, stdout: DENIAL }]],
+        [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: DENIAL }]],
       ], { ok: false })
       const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'secret build prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-unaud-staging' })
       assert.strictEqual(r.ok, false, '#373: staging denial with journal failure returns ok:false')
