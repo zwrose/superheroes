@@ -69,15 +69,21 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 const _SR_STAGE_SIG = 'hashlib.sha256'
 const _SR_STAGE_SCRIPT =
   'import os,sys,hashlib;' +
-  'p,c,w=sys.argv[1],sys.argv[2],sys.argv[3];' +
+  'p,e,w=sys.argv[1],sys.argv[2],sys.argv[3];' +
+  'c=[];i=0;' +
+  'exec("while i<len(e):\\n if i+2<len(e)and e[i:i+3]==chr(92)*2+chr(110):c.append(chr(92)+chr(110));i+=3\\n elif i+1<len(e)and e[i:i+2]==chr(92)+chr(110):c.append(chr(10));i+=2\\n elif i+1<len(e)and e[i:i+2]==chr(92)+chr(114):c.append(chr(13));i+=2\\n elif i+1<len(e)and e[i:i+2]==chr(92)*2:c.append(chr(92));i+=2\\n else:c.append(e[i]);i+=1");' +
+  'c="".join(c);' +
   'd=os.path.dirname(p);' +
   'd and os.makedirs(d,exist_ok=True);' +
   'open(p,"w",encoding="utf-8").write(c);' +
   'h=hashlib.sha256(open(p,"rb").read()).hexdigest();' +
   'sys.exit(0 if h==w else 3)'
+function _stageEnc(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+}
 function _stageCmd(path, content) {
   const c = content == null ? '' : String(content)
-  return `python3 -c ${shq(_SR_STAGE_SCRIPT)} ${shq(path)} ${shq(c)} ${shq(sha256hex(c))}`
+  return `python3 -c ${shq(_SR_STAGE_SCRIPT)} ${shq(path)} ${shq(_stageEnc(c))} ${shq(sha256hex(c))}`
 }
 
 // #257: stage ONE input (prompt / schema / raw output) through the exec courier with fail-closed sha256
@@ -549,7 +555,13 @@ function _stagingDenial(results) {
     const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
     const m = s.match(_DENIAL_SIG)
     if (m) {
-      let from = s.slice(m.index).replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+      let from = s.slice(m.index)
+      const sigCut = [
+        from.indexOf(_SR_STAGE_SIG),
+        from.indexOf('python3 -c'),
+      ].filter((i) => i >= 0)
+      if (sigCut.length) from = from.slice(0, Math.min(...sigCut))
+      from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
       return from.length > 200 ? from.slice(0, 200) + '…' : from
     }
   }

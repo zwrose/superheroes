@@ -984,6 +984,37 @@ function makeAgent(routes) {
       console.log('OK: engine_dispatch #373 staging-denied journals one line with the bounded denial reason')
     }
 
+    // (a2b) SCHEMA-STAGE DENIAL: prompt staging succeeds, schema staging is blocked — exactly one
+    // external_dispatch with outcome 'staging-denied' and a bounded reason (not a silent return).
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const { execFileSync } = require('child_process')
+      global.agent = journalCollector(jp, [
+        [d._SR_STAGE_SIG, (prompt) => {
+          const lines = prompt.split('\n').map((l) => l.match(/^\d+\.\s(.*)$/)).filter(Boolean).map((m) => m[1])
+          if (lines.length) {
+            return lines.map((c, i) => {
+              if (c.includes('.schema.json')) {
+                return { index: i, ok: false, stdout: DENIAL }
+              }
+              try { execFileSync('bash', ['-c', c], { stdio: 'pipe' }); return { index: i, ok: true, stdout: '' } }
+              catch (e) { return { index: i, ok: false, stdout: (e.stderr && e.stderr.toString()) || String(e.status) } }
+            })
+          }
+          return [{ index: 0, ok: false, stdout: DENIAL }]
+        }],
+      ])
+      const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'schema-deny prompt', cwd: '/tmp/wt', schema: { type: 'object' }, timeoutSeconds: 300, workItem: 'wi-373-schema-deny' })
+      assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: schema-stage denial return reason unchanged')
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line for schema-stage denial: ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: schema-stage denial journals exactly one staging-denied line')
+      assert.ok(typeof ed[0].reason === 'string' && ed[0].reason.includes('Permission for this action was denied'),
+        '#373: schema-stage denial carries the bounded denial reason: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #373 schema-stage denial journals one staging-denied line with bounded reason')
+    }
+
     // (a2) DENIAL-REASON WINDOWING: with #257's PLAIN staging the failed leaf can ECHO the staging
     // command with the READABLE prompt right there in it (`python3 -c … '<prompt>' '<hash>'`) BEFORE the
     // denial prose. The reason window STARTS at the denial phrase — so the readable payload can never
@@ -1005,32 +1036,32 @@ function makeAgent(routes) {
       console.log('OK: engine_dispatch #373 denial-reason windowing (echoed plain payload excluded)')
     }
 
-    // (a3) DENIAL-REASON CLAMP + REDACTION: denial prose exceeds 200 chars and the forward window also
-    // captures an echoed base64 staging command — the reason is clamped (≤201) and long base64 runs are
-    // redacted so no reversible payload fragment persists.
+    // (a3) DENIAL-REASON CLAMP + PLAIN-STAGING LEAK GUARD: denial prose exceeds 200 chars and the
+    // forward window also captures an echoed plain stage command (matching _stageCmd) AFTER the denial
+    // phrase — the reason is clamped (≤201) and the staging signature truncates the window so the
+    // readable payload literal never rides into the audit line.
     {
       d.__resetHarnessNotice()
       const jp = []
-      const secretPayload = 'SECRET_PROMPT_CLAMP_TEST_12'
-      const blob = Buffer.from(secretPayload).toString('base64')
-      const blobFrag = blob.slice(0, 24)
+      const secretPayload = 'SECRET_PLAIN_PROMPT_TEXT'
+      const stageEcho = "python3 -c 'import os,sys,hashlib;…" + d._SR_STAGE_SIG + "…' /tmp/e373-" + process.pid + ".prompt '" + secretPayload + "' 'deadbeef'"
       const denialPrefix = 'Permission denied by auto mode classifier. '
-      const echoed = ` cmd: printf '${blob}'|base64 -d>/tmp/e373-${process.pid}`
       const longTail = ' Additional denial context that extends the full stdout well past two hundred characters so the clamp is exercised on prose that would otherwise grow without bound and never fit in the audit line.'
-      const ECHOED_AFTER = denialPrefix + echoed + longTail
+      const ECHOED_AFTER = denialPrefix + stageEcho + longTail
       assert.ok(ECHOED_AFTER.length > 200, '#373: denial stdout exceeds 200 chars')
-      assert.ok((denialPrefix + echoed).length <= 200, '#373: echoed staging command rides inside the forward window')
+      assert.ok((denialPrefix + stageEcho).length <= 200, '#373: echoed plain stage command rides inside the forward window')
       global.agent = journalCollector(jp, [
         [d._SR_STAGE_SIG, [{ index: 0, ok: false, stdout: ECHOED_AFTER }]],
       ])
       await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: secretPayload, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-clamp' })
       const ed = jp.filter((p) => p.outcome === 'staging-denied')
       assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
-      assert.strictEqual(ed.length, 1, '#373: clamp+redaction case journals one staging-denied line')
+      assert.strictEqual(ed.length, 1, '#373: plain-staging clamp case journals one staging-denied line')
+      assert.ok(ed[0].reason.includes('Permission denied by auto mode classifier'),
+        '#373: the journaled reason contains the denial phrase: ' + ed[0].reason)
       assert.ok(ed[0].reason.length <= 201, '#373: the journaled reason is clamped to ≤201 chars (200 + ellipsis): len=' + ed[0].reason.length)
-      assert.ok(!ed[0].reason.includes(blobFrag), '#373: no base64 fragment of the staged blob appears in the reason: ' + ed[0].reason)
-      assert.ok(!ed[0].reason.includes(secretPayload), '#373: the raw prompt never leaks into the reason')
-      console.log('OK: engine_dispatch #373 denial-reason clamp + base64 redaction (≤201 chars, no payload fragment)')
+      assert.ok(!ed[0].reason.includes(secretPayload), '#373: the plain payload secret never leaks into the reason: ' + ed[0].reason)
+      console.log('OK: engine_dispatch #373 denial-reason clamp + plain-staging leak guard (≤201 chars, no payload)')
     }
 
     // (b) STAGING FAILED (no denial signature): a plain courier/exec staging error (empty stdout) →
@@ -1148,6 +1179,7 @@ function makeAgent(routes) {
       catch (e) { return (e && typeof e.status === 'number') ? e.status : 1 }
     }
     const DENIAL_PHRASE = 'Permission for this action was denied by the Claude Code auto mode classifier.'
+    const stageEnc = (s) => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
     const payloads = [
       '',
       'plain ascii prompt',
@@ -1167,8 +1199,11 @@ function makeAgent(routes) {
       const cmd = d._stageCmd(p, payload)
       // (1) no opaque blob rides the command — the payload is readable in it (non-empty case).
       assert.ok(!/base64/.test(cmd), '#257: staged command carries no base64: ' + cmd.slice(0, 120))
-      if (payload) assert.ok(cmd.includes(payload) || cmd.includes(payload.replace(/'/g, "'\\''")),
-        '#257: the readable payload rides in the staged command text')
+      if (payload) {
+        const needle = stageEnc(payload)
+        assert.ok(cmd.includes(needle) || cmd.includes(needle.replace(/'/g, "'\\''")),
+          '#257: the payload (single-line encoded when multiline) rides in the staged command text')
+      }
       // (2) round-trip byte-exact + verify EXITS 0.
       const status = runBash(cmd)
       assert.strictEqual(status, 0, '#257: the plain write+sha256-verify exits 0 for payload #' + (n - 1))
@@ -1188,6 +1223,29 @@ function makeAgent(routes) {
       assert.notStrictEqual(status, 0, '#257: a payload mangle (hash no longer matches) fails closed with a non-zero verify exit')
     }
     console.log('OK: engine_dispatch #257 a transit mangle fails closed (sha256 verify catches it)')
+
+    // (4) EXEC-FRAMING FIDELITY: a multiline payload (embedded newlines + a line starting with "2.")
+    // routes through _stageInput/_exec's numbered-list seam — the stub agent runs the delivered command
+    // via bash exactly as received, and the staged file round-trips BYTE-EXACT.
+    {
+      const targetPath = path.join(tmpDir, 'multiline-exec.prompt')
+      const multilinePayload = 'first line\n2. fake numbered-list line\nthird\\backslash\nfinal'
+      const savedAgent257 = global.agent
+      global.agent = async (prompt) => {
+        const lines = prompt.split('\n').map((l) => l.match(/^\d+\.\s(.*)$/)).filter(Boolean).map((m) => m[1])
+        if (!lines.length) return [{ index: 0, ok: false, stdout: 'no commands parsed' }]
+        return lines.map((c, i) => {
+          try { execFileSync('bash', ['-c', c], { stdio: 'pipe' }); return { index: i, ok: true, stdout: '' } }
+          catch (e) { return { index: i, ok: false, stdout: (e.stderr && e.stderr.toString()) || String(e.status) } }
+        })
+      }
+      const rExec = await d._stageInput(targetPath, multilinePayload)
+      global.agent = savedAgent257
+      assert.strictEqual(rExec.ok, true, '#257 exec-framing: _stageInput succeeds for multiline payload through numbered-list exec')
+      assert.strictEqual(fs.readFileSync(targetPath, 'utf8'), multilinePayload,
+        '#257 exec-framing: staged file round-trips BYTE-EXACT against original multiline payload')
+      console.log('OK: engine_dispatch #257 multiline payload through _exec numbered-list framing round-trips byte-exact')
+    }
 
     fs.rmSync(tmpDir, { recursive: true, force: true })
   }
