@@ -46,7 +46,11 @@ function reviewTaskLabel(task, round) {
   return `review task ${task.id}:r${round}`
 }
 function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
-function ok() { return { confidence: 'high', assumptions: [] } }
+function ok(extras) {
+  const r = { confidence: 'high', assumptions: [] }
+  if (extras && extras.handoffSummary) r.handoffSummary = extras.handoffSummary
+  return r
+}
 
 // FR-8: the configured base (--base) arg, threaded into EVERY build_state_cli gather so the entry
 // gather and the per-task UFR-7 check measure against the same base. Extracted to one helper so the
@@ -304,6 +308,7 @@ async function buildPhase(workItem, generation) {
   // current HEAD. If this walk built/reviewed anything, HEAD moved — the entry's final_review.clean
   // is STALE, so RE-RUN the whole-branch final review over the new HEAD (#115 final review FIX 3).
   const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
+  let handoffSummary = null
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     // #381 terminal routing. The whole-branch final review runs ONE review pass + ONE fix pass
@@ -333,7 +338,8 @@ async function buildPhase(workItem, generation) {
     }
     if (fr.haltKind === 'round-cap') {
       // Auditable handoff record (best-effort/fail-open), THEN stamp + advance like the clean path.
-      await journalFinalReviewHandoff(workItem, branch, fr)
+      const journalResult = await journalFinalReviewHandoff(workItem, branch, fr)
+      handoffSummary = buildHandoffSummary(fr, journalResult)
     }
     // recordFinalReviewClean stamps `final_review.clean`. Under #381 its semantics are: "branch scan +
     // one fix pass completed; the branch gate is review-code" — written on BOTH a clean terminal and a
@@ -353,7 +359,7 @@ async function buildPhase(workItem, generation) {
     if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown'))
   }
 
-  return ok()
+  return handoffSummary ? ok({ handoffSummary }) : ok()
 }
 
 // Reset ONLY uncommitted/untracked changes; never discard a commit (UFR-12). Returns {ok,error?}
@@ -1180,6 +1186,27 @@ async function runFinalReview(workItem, generation, branch, wt) {
 // Best-effort/fail-OPEN like the readout-disclosure journal (UFR-2): the auditable breadcrumb never
 // gates the handoff, and execJson already retries once on a dropped courier stdout. The proceed
 // decision is the caller's; this only records why the branch advanced with findings still open.
+// Returns {ok} or {ok:false, error} so the caller can surface a failed write on the phase record
+// (handoffSummary) without failing closed — review-code re-vets downstream.
+function buildHandoffSummary(fr, journalResult) {
+  const fixPass = (fr && fr.fixPass) || null
+  const summary = {
+    openFindingsCount: (fr && fr.openFindingsCount) || 0,
+    openFindings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    fixDispatched: !!(fixPass && fixPass.dispatched),
+    fixFixed: (fixPass && fixPass.fixed) || [],
+    postFixVerify: (fixPass && fixPass.postVerify) || 'none',
+    handoff: 'review-code',
+    handoffJournalOk: !!(journalResult && journalResult.ok),
+  }
+  if (!summary.handoffJournalOk) {
+    summary.handoffJournalError = (journalResult && journalResult.error)
+      || 'final_review_handoff journal write failed'
+  }
+  return summary
+}
+
 async function journalFinalReviewHandoff(workItem, branch, fr) {
   const fixPass = (fr && fr.fixPass) || null
   const summary = {
@@ -1196,12 +1223,19 @@ async function journalFinalReviewHandoff(workItem, branch, fr) {
     + `${summary.open_findings_count} open finding(s); one fix pass dispatched `
     + `(post-fix verify: ${summary.post_fix_verify}) — handing off to review-code (unvetted by this leg)`
   try {
-    await execJson(
+    const r = await execJson(
       `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
       + `--event-type final_review_handoff --step ${shq('final_review')} `
       + `--detail ${shq(detail)} --payload ${shq(JSON.stringify(summary))}`,
       'journal final-review handoff')
-  } catch (_e) { /* fail-open: an audit-journal write never derails the handoff (UFR-2) */ }
+    if (r == null) {
+      return { ok: false, error: 'final_review_handoff journal write did not run (courier/exec failed)' }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false,
+             error: (e && e.message) ? String(e.message) : 'final_review_handoff journal write failed' }
+  }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.

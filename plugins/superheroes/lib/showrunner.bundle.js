@@ -4293,7 +4293,11 @@ function reviewTaskLabel(task, round) {
   return `review task ${task.id}:r${round}`
 }
 function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
-function ok() { return { confidence: 'high', assumptions: [] } }
+function ok(extras) {
+  const r = { confidence: 'high', assumptions: [] }
+  if (extras && extras.handoffSummary) r.handoffSummary = extras.handoffSummary
+  return r
+}
 function baseArg() {
   const b = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   return b ? ` --base ${shq(b)}` : ''
@@ -4439,6 +4443,7 @@ async function buildPhase(workItem, generation) {
     }
   }
   const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
+  let handoffSummary = null
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
     if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
@@ -4446,7 +4451,8 @@ async function buildPhase(workItem, generation) {
       return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
     }
     if (fr.haltKind === 'round-cap') {
-      await journalFinalReviewHandoff(workItem, branch, fr)
+      const journalResult = await journalFinalReviewHandoff(workItem, branch, fr)
+      handoffSummary = buildHandoffSummary(fr, journalResult)
     }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
@@ -4458,7 +4464,7 @@ async function buildPhase(workItem, generation) {
     const p = await writeProvenance(workItem)
     if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown'))
   }
-  return ok()
+  return handoffSummary ? ok({ handoffSummary }) : ok()
 }
 async function resetUncommitted(wt, branch) {
   return agent(
@@ -4959,6 +4965,24 @@ async function runFinalReview(workItem, generation, branch, wt) {
            openFindings, openFindingsCount: capBlockers.length,
            uncertified: !!(verdict && verdict.uncertified) }
 }
+function buildHandoffSummary(fr, journalResult) {
+  const fixPass = (fr && fr.fixPass) || null
+  const summary = {
+    openFindingsCount: (fr && fr.openFindingsCount) || 0,
+    openFindings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    fixDispatched: !!(fixPass && fixPass.dispatched),
+    fixFixed: (fixPass && fixPass.fixed) || [],
+    postFixVerify: (fixPass && fixPass.postVerify) || 'none',
+    handoff: 'review-code',
+    handoffJournalOk: !!(journalResult && journalResult.ok),
+  }
+  if (!summary.handoffJournalOk) {
+    summary.handoffJournalError = (journalResult && journalResult.error)
+      || 'final_review_handoff journal write failed'
+  }
+  return summary
+}
 async function journalFinalReviewHandoff(workItem, branch, fr) {
   const fixPass = (fr && fr.fixPass) || null
   const summary = {
@@ -4975,12 +4999,19 @@ async function journalFinalReviewHandoff(workItem, branch, fr) {
     + `${summary.open_findings_count} open finding(s); one fix pass dispatched `
     + `(post-fix verify: ${summary.post_fix_verify}) — handing off to review-code (unvetted by this leg)`
   try {
-    await execJson(
+    const r = await execJson(
       `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
       + `--event-type final_review_handoff --step ${shq('final_review')} `
       + `--detail ${shq(detail)} --payload ${shq(JSON.stringify(summary))}`,
       'journal final-review handoff')
-  } catch (_e) { /* fail-open: an audit-journal write never derails the handoff (UFR-2) */ }
+    if (r == null) {
+      return { ok: false, error: 'final_review_handoff journal write did not run (courier/exec failed)' }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false,
+             error: (e && e.message) ? String(e.message) : 'final_review_handoff journal write failed' }
+  }
 }
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildTaskPrompt = buildTaskPrompt
@@ -7081,7 +7112,10 @@ async function runPhases(workItem, fromStep, deps) {
     const saved = await persistPhase(workItem, {
       sideEffectCmd: (persist && persist.sideEffectCmd) || null,
       journalPayload: (persist && persist.journalPayload) ||
-        { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+        Object.assign(
+          { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+          phaseResult.handoffSummary ? { handoffSummary: phaseResult.handoffSummary } : null,
+        ),
       step: i, phase, sideEffect,
       journalOnly: !proceed,
       recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf

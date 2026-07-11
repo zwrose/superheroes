@@ -417,6 +417,11 @@ const SMART_STUBS = [
       '#381: handoff payload names the next gate')
     assert.strictEqual(finalStamps, 1, '#381: coverage is stamped on the handoff path, like the clean path')
     assert.strictEqual(provWrites, 1, '#381: provenance is written after the handoff (advance like clean)')
+    assert.ok(r.handoffSummary, '#381: the round-cap handoff surfaces a handoffSummary on the phase record')
+    assert.strictEqual(r.handoffSummary.handoffJournalOk, true,
+      '#381: a successful handoff journal write is reflected on the surfaced record')
+    assert.strictEqual(r.handoffSummary.openFindingsCount, 1,
+      '#381: handoffSummary carries the still-open finding count')
   }
 
   // ===========================================================================
@@ -457,6 +462,51 @@ const SMART_STUBS = [
     assert.strictEqual(handoffPayload.open_findings_count, 1,
       '#381 (f): handoff payload counts the citation-less blocker (not 0)')
     assert.strictEqual((handoffPayload.open_findings[0] || {}).title, 'missing line')
+  }
+
+  // ===========================================================================
+  // (10c) #381 HANDOFF JOURNAL FAILURE DISCLOSURE: a failed final_review_handoff journal write still
+  //       PROCEEDS (UFR-2 fail-open), but the phase's surfaced handoffSummary names the failed write.
+  // ===========================================================================
+  {
+    let handoffJournals = 0, finalStamps = 0, provWrites = 0, fixDispatches = 0
+    global.agent = makeAgent([
+      execStub((p) => {
+        if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
+        if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) {
+          handoffJournals += 1
+          throw new Error('journal final-review handoff write failed')
+        }
+        if (p.includes('prov_entry.py')) { provWrites += 1; return JSON.stringify({ ok: true }) }
+        return standardLeaf(p)
+      }),
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+      ['branch-reviewer:', { findings: [{ file: 'a.js', line: 1, title: 'branch blocker', severity: 'Critical', evidence: 'e' }] }],
+      ['fix-branch', () => { fixDispatches += 1; return { ok: true } }],
+      ['stamp build coverage', () => { finalStamps += 1; return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }] }],
+      ['run verify', { command: 'none', returncode: 0, timedOut: false }],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    const r = await bp.buildPhase(WI, 5)
+    assert.strictEqual(r.confidence, 'high',
+      '#381 (10c): a failed handoff journal write still PROCEEDS (fail-open)')
+    assert.strictEqual(handoffJournals, 1, '#381 (10c): the handoff journal was attempted once')
+    assert.strictEqual(fixDispatches, 1, '#381 (10c): the fix batch still dispatches')
+    assert.strictEqual(finalStamps, 1, '#381 (10c): coverage is still stamped on the handoff path')
+    assert.strictEqual(provWrites, 1, '#381 (10c): provenance is still written after the handoff')
+    assert.ok(r.handoffSummary, '#381 (10c): the failed journal write is disclosed on handoffSummary')
+    assert.strictEqual(r.handoffSummary.handoffJournalOk, false,
+      '#381 (10c): handoffSummary records that the journal write failed')
+    assert.ok(/handoff write failed|final_review_handoff/i.test(r.handoffSummary.handoffJournalError || ''),
+      '#381 (10c): handoffSummary names the failed final_review_handoff journal write')
+    assert.strictEqual(r.handoffSummary.openFindingsCount, 1,
+      '#381 (10c): handoffSummary still carries the open finding count')
   }
 
   // ===========================================================================
@@ -533,5 +583,5 @@ const SMART_STUBS = [
     assert.strictEqual(provWrites, 0, '#381: a no-review-obtainable park NEVER writes provenance')
   }
 
-  console.log('ok: build_phase FR-4a in-memory loop (reconcile-once, resume-once, FR-9/UFR-6/UFR-12, stale-final-review, double-dirty-park, exec fail-closed, #381 round-cap handoff/verify-park/no-review-park)')
+  console.log('ok: build_phase FR-4a in-memory loop (reconcile-once, resume-once, FR-9/UFR-6/UFR-12, stale-final-review, double-dirty-park, exec fail-closed, #381 round-cap handoff/verify-park/no-review-park/handoff-journal-disclosure)')
 })()
