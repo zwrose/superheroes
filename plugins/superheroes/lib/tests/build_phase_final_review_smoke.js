@@ -161,6 +161,19 @@ const bp = require('../build_phase.js')
   assert.ok(/post-fix verify failed/.test(r.reason || ''), '#381 (b): the reason names the post-fix verify stage')
   assert.strictEqual(fixDispatches, 1, '#381 (b): the one fix pass ran before the post-fix verify')
 
+  // 6b. #381 POST-FIX VERIFY TIMEOUT (b-timeout): round verify passes, the fix batch lands, but the
+  //     post-fix verify times out — the handoff is withdrawn: haltKind 'verify-fail' -> the caller
+  //     PARKS (no journal, no stamp-and-advance on the buildPhase path).
+  resetRunDir(WI)
+  global.agent = makeAgent({ reviewerFindings: blocker, verifyResult: 'pass', postFixVerifyResult: 'timeout' })
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
+    fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
+  assertTerminal(r, 'halted', '#381 (b-timeout): a post-fix verify timeout halts')
+  assert.strictEqual(r.haltKind, 'verify-fail', '#381 (b-timeout): the post-fix timeout parks — never hands off')
+  assert.ok(/post-fix verify timed out/.test(r.reason || ''), '#381 (b-timeout): the reason names the post-fix verify timeout')
+  assert.strictEqual(fixDispatches, 1, '#381 (b-timeout): the one fix pass ran before the post-fix verify')
+  assert.strictEqual(verifyCalls, 2, '#381 (b-timeout): the post-fix verify runs once (round verify + post-fix)')
+
   // 7. #381 FIX DISPATCH FAILURE (c): the fixer leaf throws -> the fix batch did not land ->
   //    haltKind 'fix-failed' -> the caller PARKS (fail-closed). No post-fix verify runs.
   resetRunDir(WI)
@@ -219,5 +232,5 @@ const bp = require('../build_phase.js')
   delete globalThis.io
   delete require.cache[require.resolve('../build_phase.js')]
 
-  console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed + #381 one-fix-pass contract (round-cap handoff, pre/post-fix verify red, fix-failure, fence-lost, citation-less blocker, empty-worklist park)')
+  console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed + #381 one-fix-pass contract (round-cap handoff, pre/post-fix verify red+timeout, fix-failure, fence-lost, citation-less blocker, empty-worklist park)')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })
