@@ -575,11 +575,12 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         # gate) routes on this field, NEVER on the prose reason. Computed here at the verdict-assembly
         # site from the same structured inputs the terminal decision used — no prose regexing.
         #   'round-cap'  — the finding-churn cap: the breaker's max-iterations halt (round cap reached
-        #                  with blockers still present) with verify NOT red. This is the ONLY halt kind
-        #                  the caller acts on instead of parking: build_phase dispatches its ONE fix
-        #                  pass + a post-fix verify, and only when both land green hands off to
+        #                  with blockers still present) with verify NOT red AND the round CERTIFIED
+        #                  (gate blocking + confidence high — never cannot-certify). This is the ONLY
+        #                  halt kind the caller acts on instead of parking: build_phase dispatches its
+        #                  ONE fix pass + a post-fix verify, and only when both land green hands off to
         #                  review-code (the stronger branch gate) — otherwise it downgrades the kind
-        #                  to 'fix-failed'/'verify-fail' and parks.
+        #                  to 'fix-failed'/'verify-fail' and parks. An uncertified cap halt is 'other'.
         #   'verify-fail'— verify went red (fail/timeout). A blocking round with a red verify halts via
         #                  the breaker WITHOUT tripping the clean→halted verify override above, so it is
         #                  classified explicitly here — the cap-halt proceed path must never swallow a
@@ -595,7 +596,10 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
             elif fix_status == "failed":
                 halt_kind = "fix-failed"
             elif breaker_halt and brk.get("reason") == "max-iterations":
-                halt_kind = "round-cap"
+                # #381: only a CERTIFIED blocking cap is the handoff kind — an uncertified/cannot-certify
+                # gate parks regardless (the uncertified flag rides the verdict for the consumer guard).
+                halt_kind = ("round-cap" if gate == "blocking" and confidence == "high"
+                             else "other")
             else:
                 halt_kind = "other"
 

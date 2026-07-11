@@ -4441,7 +4441,7 @@ async function buildPhase(workItem, generation) {
   const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
-    if (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap') {
+    if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
       return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
     }
@@ -4830,6 +4830,10 @@ function capOpenFindingsSummary(blockers) {
     severity: (f && f.severity) || '',
   }))
 }
+function _branchReviewerPayload(out) {
+  if (!out || !Array.isArray(out.findings)) return null
+  return out.confidence ? out : out.findings
+}
 async function runFinalReview(workItem, generation, branch, wt) {
   const script = [
     'import json, subprocess, sys',
@@ -4879,11 +4883,11 @@ async function runFinalReview(workItem, generation, branch, wt) {
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
         schema: FINAL_REVIEW_SCHEMA })
-      return (out && Array.isArray(out.findings)) ? out.findings : null
+      return _branchReviewerPayload(out)
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
       schema: FINAL_REVIEW_SCHEMA })
-    return (out && Array.isArray(out.findings)) ? out.findings : null
+    return _branchReviewerPayload(out)
   }
   globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
@@ -4915,10 +4919,10 @@ async function runFinalReview(workItem, generation, branch, wt) {
   let haltKind = verdict && verdict.haltKind
   let reason = verdict && verdict.reason
   let fixPass = null
-  if (verdict && verdict.haltKind === 'round-cap') {
+  if (verdict && verdict.haltKind === 'round-cap' && !verdict.uncertified) {
     capBlockers = await capBlockingWorklist(runDir, verdict)
   }
-  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap') {
+  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap' && !verdict.uncertified) {
     if (capBlockers.length === 0) {
       haltKind = 'other'
       reason = 'round-cap with empty blocking worklist — inconsistent with cap decider (fail closed)'
@@ -4952,7 +4956,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   const openFindings = capOpenFindingsSummary(capBlockers)
   return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
-           openFindings, openFindingsCount: capBlockers.length }
+           openFindings, openFindingsCount: capBlockers.length,
+           uncertified: !!(verdict && verdict.uncertified) }
 }
 async function journalFinalReviewHandoff(workItem, branch, fr) {
   const fixPass = (fr && fr.fixPass) || null

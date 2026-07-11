@@ -325,7 +325,9 @@ async function buildPhase(workItem, generation) {
     //                        finding-churn park is removed; process failures still fail closed. The
     //                        routing keys on the STRUCTURED haltKind field, never on the prose reason.
     // #279: carry the verdict's reason into the park/handoff so the owner sees WHY, not a bare terminal.
-    if (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap') {
+    // #381: an uncertified verdict parks fail-closed regardless of haltKind — only a certified
+    // round-cap handoff proceeds (haltKind 'round-cap' AND NOT uncertified).
+    if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
       return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
     }
@@ -975,6 +977,13 @@ function capOpenFindingsSummary(blockers) {
   }))
 }
 
+// reviewerAgent returns findings[] for the common path; when the leaf also reports confidence
+// (smoke harness / external engines), ride the shaped object through so the panel gate sees it.
+function _branchReviewerPayload(out) {
+  if (!out || !Array.isArray(out.findings)) return null
+  return out.confidence ? out : out.findings
+}
+
 async function runFinalReview(workItem, generation, branch, wt) {
   const script = [
     'import json, subprocess, sys',
@@ -1036,11 +1045,11 @@ async function runFinalReview(workItem, generation, branch, wt) {
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
         schema: FINAL_REVIEW_SCHEMA })
-      return (out && Array.isArray(out.findings)) ? out.findings : null
+      return _branchReviewerPayload(out)
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
       schema: FINAL_REVIEW_SCHEMA })
-    return (out && Array.isArray(out.findings)) ? out.findings : null
+    return _branchReviewerPayload(out)
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
   // direct io-seam write — no genuine agent. (build_phase has no exec seam; the awaited io write below
@@ -1104,11 +1113,11 @@ async function runFinalReview(workItem, generation, branch, wt) {
   let reason = verdict && verdict.reason
   let fixPass = null
   // #381: load the cap worklist once from round-records (same raw blocking source the decider
-  // counted). Only needed on a round-cap halt — a clean terminal never handoffs open findings.
-  if (verdict && verdict.haltKind === 'round-cap') {
+  // counted). Only needed on a certified round-cap halt — uncertified caps park with no fix dispatch.
+  if (verdict && verdict.haltKind === 'round-cap' && !verdict.uncertified) {
     capBlockers = await capBlockingWorklist(runDir, verdict)
   }
-  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap') {
+  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap' && !verdict.uncertified) {
     // Fail closed: the decider stamped round-cap only when presentBlocking > 0; an empty derived
     // worklist means the fix/handoff path disagrees with the gate — park, never stamp-and-advance.
     if (capBlockers.length === 0) {
@@ -1160,7 +1169,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   const openFindings = capOpenFindingsSummary(capBlockers)
   return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
-           openFindings, openFindingsCount: capBlockers.length }
+           openFindings, openFindingsCount: capBlockers.length,
+           uncertified: !!(verdict && verdict.uncertified) }
 }
 
 // #381 handoff audit: on a round-cap handoff (the whole-branch final review found blockers at the

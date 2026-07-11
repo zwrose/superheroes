@@ -520,6 +520,20 @@ def test_haltkind_round_cap_on_blocking_at_the_cap(tmp_path):
     assert ans["haltKind"] == "round-cap", "the round cap with blockers present is the handoff kind"
 
 
+def test_haltkind_uncertified_cap_is_other_not_round_cap(tmp_path):
+    # #381: a cannot-certify cap halt (low-confidence reviewer + blockers at maxRounds:1) must NOT read
+    # as 'round-cap' — it parks. The uncertified flag rides the verdict for the consumer guard.
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[_blocker()]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, max_rounds=1, gate="cannot-certify", confidence="low",
+                 present_blocking=1)
+    assert ans["terminal"] == "halted"
+    assert ans["breaker"]["reason"] == "max-iterations"
+    assert ans["haltKind"] == "other", "an uncertified cap halt parks — never the round-cap handoff"
+    assert ans["uncertified"] is True
+
+
 def test_haltkind_verify_fail_not_swallowed_by_a_blocking_cap_halt(tmp_path):
     # The swallow-trap guard: a blocking round at the cap whose verify ALSO went red halts via the
     # breaker (terminal already 'halted', so the clean→halted verify override never fires). It MUST be

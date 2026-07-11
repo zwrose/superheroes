@@ -20,17 +20,20 @@ global.parallel = async (thunks) => Promise.all(thunks.map((t) => t()))
 // Per-scenario counters (reset before each makeAgent install).
 let fixDispatches = 0
 let verifyCalls = 0
+let reviewerCalls = 0
 
-// reviewerFindings: what the (single) reviewer leaf returns this run. verifyResult: the verify-gate
+// reviewerFindings: what the (single) reviewer leaf returns this run. reviewerConfidence (optional):
+// when set, rides through branch-reviewer so the panel gate sees cannot-certify. verifyResult: the
 // classification ('pass'|'fail'|'timeout'|'skipped') for the ROUND's verify; postFixVerifyResult (if
 // set) is what the SECOND verify call — the #381 post-fix verify — classifies as. fence:false answers
 // the fence-lease leaf {ok:false} (a lost lease). fixBranch: optional override for the native fixer
 // leaf (a function may throw to simulate a failed fix dispatch). The config IO leaves route through
 // the 'exec'-shaped labels and return the exec array shape. #115 Task 16: verifyAgent emits raw run
 // data ({command,returncode,timedOut}) for the JS twin to classify.
-function makeAgent({ reviewerFindings, verifyResult, postFixVerifyResult, fence = true, fixBranch }) {
+function makeAgent({ reviewerFindings, reviewerConfidence, verifyResult, postFixVerifyResult, fence = true, fixBranch }) {
   fixDispatches = 0
   verifyCalls = 0
+  reviewerCalls = 0
   // Map a desired classify result back to the raw run data that produces it
   function runDataFor(result) {
     if (result === 'skipped') return { command: 'none', returncode: null, timedOut: false }
@@ -50,7 +53,12 @@ function makeAgent({ reviewerFindings, verifyResult, postFixVerifyResult, fence 
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'resume') return '1'
-    if (label.startsWith('branch-reviewer:')) return { findings: reviewerFindings }
+    if (label.startsWith('branch-reviewer:')) {
+      reviewerCalls += 1
+      const payload = { findings: reviewerFindings }
+      if (reviewerConfidence) payload.confidence = reviewerConfidence
+      return payload
+    }
     if (label === 'fence lease') {
       return [{ ok: true, stdout: JSON.stringify({ ok: !!fence }) }]
     }
@@ -127,6 +135,7 @@ const bp = require('../build_phase.js')
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
   assertTerminal(r, 'halted', '#381: a blocker at the one-pass cap halts (round-cap), not clean')
   assert.strictEqual(r.haltKind, 'round-cap', '#381: the halt carries the round-cap discriminator')
+  assert.strictEqual(reviewerCalls, 1, '#381 (a): exactly one review pass — no post-fix re-review')
   assert.strictEqual(fixDispatches, 1, '#381 (a): the fix batch dispatches EXACTLY ONCE (no loop)')
   assert.strictEqual(verifyCalls, 2, '#381 (a): the post-fix verify runs once (round verify + post-fix)')
   assert.deepStrictEqual(r.fixPass, { dispatched: true, fixed: ['branch bug'], postVerify: 'pass' },
@@ -136,6 +145,19 @@ const bp = require('../build_phase.js')
   const deferredSet = JSON.parse(fs.readFileSync(`${runDirFor(WI)}/deferred-set.json`, 'utf8'))
   assert.ok(Object.prototype.hasOwnProperty.call(deferredSet, 'branch bug'),
     '#381 (a): the fix report ids reach the deferred-set (audit channel, as the shell would record)')
+
+  // 4b. #381 UNCERTIFIED CAP PARK (h): low-confidence reviewer output with a blocker at cap 1 must
+  //     PARK — no fix dispatch, no handoff/stamp side effects. haltKind is 'other', not 'round-cap'.
+  resetRunDir(WI)
+  global.agent = makeAgent({ reviewerFindings: blocker, reviewerConfidence: 'low', verifyResult: 'pass' })
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
+    fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
+  assertTerminal(r, 'halted', '#381 (h): an uncertified cap halt parks')
+  assert.strictEqual(r.haltKind, 'other', '#381 (h): uncertified cap is other — never round-cap handoff')
+  assert.strictEqual(r.uncertified, true, '#381 (h): the uncertified flag rides the result')
+  assert.strictEqual(reviewerCalls, 1, '#381 (h): exactly one review pass')
+  assert.strictEqual(fixDispatches, 0, '#381 (h): uncertified cap dispatches no fixer')
+  assert.strictEqual(verifyCalls, 1, '#381 (h): only the round verify runs — no post-fix verify')
 
   // 5. #381 PRE-FIX VERIFY-FAIL SWALLOW-TRAP GUARD: a blocker at the cap whose ROUND verify goes red
   //    must NOT read as 'round-cap' — it is 'verify-fail', PARKS, and dispatches NO fixer (the park
