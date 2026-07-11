@@ -87,5 +87,29 @@ const bp = require('../build_phase.js')
     fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
   assertTerminal(r, 'halted',
     'a verify failure with a dropped command echo must classify fail (not skipped) -> no clean certify')
-  console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed (in-memory panel, FR-17/UFR-4/FIX2)')
+
+  // 4. #381 ROUND-CAP HANDOFF: the single review pass (maxRounds:1) surfaces a blocker and hits the
+  //    one-pass cap with verify PASS -> terminal 'halted' carrying the STRUCTURED haltKind 'round-cap'.
+  //    The caller hands this off to review-code (asserted at the buildPhase level in the loop smoke).
+  //    The open finding is summarized (no evidence walls) for the handoff journal.
+  const blocker = [{ file: 'a.js', line: 1, title: 'branch bug', severity: 'Critical', evidence: 'e' }]
+  resetRunDir(WI)
+  global.agent = makeAgent({ reviewerFindings: blocker, verifyResult: 'pass' })
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
+    fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
+  assertTerminal(r, 'halted', '#381: a blocker at the one-pass cap halts (round-cap), not clean')
+  assert.strictEqual(r.haltKind, 'round-cap', '#381: the halt carries the round-cap discriminator')
+  assert.strictEqual(r.openFindingsCount, 1, '#381: the open finding is summarized for the handoff journal')
+  assert.strictEqual((r.openFindings[0] || {}).title, 'branch bug', '#381: the summary carries the finding identity')
+
+  // 5. #381 VERIFY-FAIL SWALLOW-TRAP GUARD: a blocker at the cap whose verify ALSO goes red must NOT
+  //    read as 'round-cap' (which would proceed past a red verify) — it is 'verify-fail' and PARKS.
+  resetRunDir(WI)
+  global.agent = makeAgent({ reviewerFindings: blocker, verifyResult: 'fail' })
+  r = await bp.runFinalReview(WI, 5, 'superheroes/wi-abc',
+    fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')))
+  assertTerminal(r, 'halted', '#381: a blocker + red verify halts')
+  assert.strictEqual(r.haltKind, 'verify-fail',
+    '#381: a red verify must dominate the cap halt (never swallowed into a round-cap proceed)')
+  console.log('ok: build_phase final review clean + halted + garbled-verify-fail-closed + #381 round-cap/verify-fail discriminator')
 })().catch((e) => { console.error('FAIL:', e.message); process.exit(1) })

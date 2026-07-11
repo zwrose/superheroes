@@ -1788,6 +1788,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     if (decided.certification) verdictOut.certification = decided.certification
     if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
     if (own(decided, 'worklistReason')) verdictOut.worklistReason = decided.worklistReason
+    if (own(decided, 'haltKind')) verdictOut.haltKind = decided.haltKind
     return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
@@ -4439,9 +4440,12 @@ async function buildPhase(workItem, generation) {
   const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
-    if (fr.terminal !== 'clean') {
+    if (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap') {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
       return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
+    if (fr.haltKind === 'round-cap') {
+      await journalFinalReviewHandoff(workItem, branch, fr)
     }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
@@ -4879,10 +4883,34 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
-    runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
+    runKey: runDir, runDir, fixStep, maxRounds: 1,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
+  const rawFindings = Array.isArray(verdict && verdict.findings) ? verdict.findings : []
+  const openFindings = rawFindings.slice(0, 50).map((f) => ({
+    file: (f && f.file) || null, line: (f && (f.line !== undefined ? f.line : null)),
+    title: (f && f.title) || '', severity: (f && f.severity) || '' }))
+  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason,
+           haltKind: verdict && verdict.haltKind,
+           openFindings, openFindingsCount: rawFindings.length }
+}
+async function journalFinalReviewHandoff(workItem, branch, fr) {
+  const summary = {
+    branch,
+    open_findings_count: (fr && fr.openFindingsCount) || 0,
+    open_findings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    handoff: 'review-code',
+  }
+  const detail = `whole-branch final review reached the one-pass cap with `
+    + `${summary.open_findings_count} open finding(s) — handing off to review-code`
+  try {
+    await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type final_review_handoff --step ${shq('final_review')} `
+      + `--detail ${shq(detail)} --payload ${shq(JSON.stringify(summary))}`,
+      'journal final-review handoff')
+  } catch (_e) { /* fail-open: an audit-journal write never derails the handoff (UFR-2) */ }
 }
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildTaskPrompt = buildTaskPrompt

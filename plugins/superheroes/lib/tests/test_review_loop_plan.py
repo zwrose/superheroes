@@ -502,6 +502,75 @@ def test_tally_fix_failed_halts(tmp_path):
     assert "fix step" in ans["reason"]
 
 
+# ── #381 structured cap-halt discriminator (haltKind) ──
+# The whole-branch final review (build_phase) routes on this STRUCTURED field, never on the prose
+# reason: only 'round-cap' hands off to review-code; every other halt kind parks fail-closed.
+def _blocker(title="bug", file="a.js", sev="Critical"):
+    return {"title": title, "file": file, "severity": sev, "dimension": "Code"}
+
+
+def test_haltkind_round_cap_on_blocking_at_the_cap(tmp_path):
+    # maxRounds:1 + a blocking round → the breaker's max-iterations halt → haltKind 'round-cap'.
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[_blocker()]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, max_rounds=1, gate="blocking", present_blocking=1)
+    assert ans["terminal"] == "halted"
+    assert ans["breaker"]["reason"] == "max-iterations"
+    assert ans["haltKind"] == "round-cap", "the round cap with blockers present is the handoff kind"
+
+
+def test_haltkind_verify_fail_not_swallowed_by_a_blocking_cap_halt(tmp_path):
+    # The swallow-trap guard: a blocking round at the cap whose verify ALSO went red halts via the
+    # breaker (terminal already 'halted', so the clean→halted verify override never fires). It MUST be
+    # classified 'verify-fail' (a park), NEVER 'round-cap' (which would proceed past a red verify).
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[_blocker()]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, max_rounds=1, gate="blocking", present_blocking=1, verify_result="fail")
+    assert ans["terminal"] == "halted"
+    assert ans["haltKind"] == "verify-fail", "a red verify must dominate — never proceed past it"
+
+
+def test_haltkind_verify_fail_on_a_clean_round(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="clean", present_blocking=0, verify_result="fail")
+    assert ans["terminal"] == "halted"
+    assert ans["haltKind"] == "verify-fail"
+
+
+def test_haltkind_fix_failed(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="clean", present_blocking=0, fix_status="failed")
+    assert ans["terminal"] == "halted"
+    assert ans["haltKind"] == "fix-failed"
+
+
+def test_haltkind_breaker_recurrence_is_other_not_round_cap(tmp_path):
+    # A recurrence halt (genuine churn, NOT the round cap) must NOT read as 'round-cap' — it parks.
+    finding = {"title": "same bug", "file": "a.js", "severity": "Critical", "dimension": "Code",
+               "classKey": "Code::x::same bug"}
+    recs = [
+        _skeleton_round(1, {"code-reviewer": _dim(findings=[finding])}, changed_subjects=["Code"]),
+        _skeleton_round(2, {"code-reviewer": _dim(findings=[finding])}, changed_subjects=["Code"]),
+    ]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 2, max_rounds=7, gate="blocking", present_blocking=1)
+    assert ans["terminal"] == "halted"
+    assert ans["breaker"]["reason"] == "recurring-finding"
+    assert ans["haltKind"] == "other", "recurrence is a park, not the round-cap handoff"
+
+
+def test_haltkind_absent_on_a_clean_terminal(tmp_path):
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans = _tally(path, 1, gate="clean", present_blocking=0)
+    assert ans["terminal"] == "clean"
+    assert "haltKind" not in ans, "a non-halt terminal carries no haltKind"
+
+
 def test_tally_internal_error_fails_closed(tmp_path, monkeypatch):
     recs = [_skeleton_round(1, {"code-reviewer": _dim(), "security-reviewer": _dim()})]
     path = _write_records(tmp_path, recs)

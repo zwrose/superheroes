@@ -357,5 +357,107 @@ const SMART_STUBS = [
     assert.ok(/gather authoritative git state/i.test((r.assumptions || [])[0] || ''), 'honest gather fail-closed reason')
   }
 
-  console.log('ok: build_phase FR-4a in-memory loop (reconcile-once, resume-once, FR-9/UFR-6/UFR-12, stale-final-review, double-dirty-park, exec fail-closed)')
+  // ===========================================================================
+  // (10) #381 ROUND-CAP HANDOFF: the whole-branch final review's single pass (maxRounds:1) surfaces a
+  //      blocker with verify NOT red -> round-cap halt. The buildPhase gate does NOT park: it journals
+  //      the open findings (auditable), stamps coverage, and PROCEEDS to provenance (hand off to
+  //      review-code). The routing keys on the STRUCTURED haltKind 'round-cap', never on the prose.
+  // ===========================================================================
+  {
+    let handoffJournals = 0, finalStamps = 0, provWrites = 0
+    global.agent = makeAgent([
+      execStub((p) => {
+        if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
+        if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) { handoffJournals += 1; return JSON.stringify({ ok: true }) }
+        if (p.includes('prov_entry.py')) { provWrites += 1; return JSON.stringify({ ok: true }) }
+        return standardLeaf(p)
+      }),
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+      // the whole-branch reviewer surfaces a blocking finding on its one review pass.
+      ['branch-reviewer:', { findings: [{ file: 'a.js', line: 1, title: 'branch blocker', severity: 'Critical', evidence: 'e' }] }],
+      ['stamp build coverage', () => { finalStamps += 1; return [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }] }],
+      ['run verify', { command: 'none', returncode: 0, timedOut: false }],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    const r = await bp.buildPhase(WI, 5)
+    assert.strictEqual(r.confidence, 'high',
+      '#381: a round-cap final review PROCEEDS (hands off to review-code), it does NOT park')
+    assert.strictEqual(handoffJournals, 1,
+      '#381: the round-cap handoff journals the still-open findings exactly once (auditable)')
+    assert.strictEqual(finalStamps, 1, '#381: coverage is stamped on the handoff path, like the clean path')
+    assert.strictEqual(provWrites, 1, '#381: provenance is written after the handoff (advance like clean)')
+  }
+
+  // ===========================================================================
+  // (11) #381 VERIFY RED PARKS: a clean-looking whole-branch review whose verify gate goes red halts
+  //      as haltKind 'verify-fail' — a PROCESS failure that still parks fail-closed (NOT a round-cap
+  //      handoff). No coverage stamp, no provenance. Guards the swallow trap explicitly.
+  // ===========================================================================
+  {
+    let handoffJournals = 0
+    global.agent = makeAgent([
+      execStub((p) => {
+        if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
+        if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        if (p.includes('journal_entry.py') && p.includes('final_review_handoff')) { handoffJournals += 1; return JSON.stringify({ ok: true }) }
+        return standardLeaf(p)
+      }),
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'pytest -q', minors: [] }) }]],
+      ['branch-reviewer:', { findings: [] }],
+      // verify writes a FAIL result to its --out file (the panel reads it back authoritatively).
+      ['run verify', (prompt) => {
+        const m = String(prompt).match(/--out '([^']+)'/)
+        if (m) require('fs').writeFileSync(m[1], JSON.stringify({ result: 'fail', code: 1, tail: 'boom' }))
+        return { command: 'pytest -q', returncode: 1, timedOut: false }
+      }],
+      ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    const r = await bp.buildPhase(WI, 5)
+    assert.strictEqual(r.confidence, 'low', '#381: a red verify at the final review PARKS (fail-closed)')
+    assert.ok(/final review did not reach clean/i.test((r.assumptions || [])[0] || ''),
+      '#381: the park reason names the whole-branch final review')
+    assert.strictEqual(handoffJournals, 0, '#381: a verify-fail park NEVER journals a handoff')
+  }
+
+  // ===========================================================================
+  // (12) #381 NO REVIEW OBTAINABLE PARKS: the single reviewer returns an unusable answer (no findings
+  //      array) -> cannot-certify -> park. Not a round-cap handoff; the leg fails closed (UFR-7).
+  // ===========================================================================
+  {
+    global.agent = makeAgent([
+      execStub((p) => {
+        if (p.includes('task_list_cli.py')) return JSON.stringify({ tasks: [{ id: '1', title: 'A' }] })
+        if (p.includes('build_state_cli.py gather')) return JSON.stringify({ committed_task_ids: [], unmapped_commits: 0, worktree_dirty: false })
+        return standardLeaf(p)
+      }),
+      ['implement-task', { ok: true, signal: 'ok', evidence: { testFailed: true, testPassed: true } }],
+      ['task-reviewer:r1', { verdicts: { spec_compliance: 'pass', code_quality: 'pass' }, findings: [] }],
+      ['record task built', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['record task reviewed', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '1' }) }]],
+      ['read verify + minors', [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]],
+      ['branch-reviewer:', {}],   // no findings array -> reviewerAgent returns null -> cannot-certify
+      ['run verify', { command: 'none', returncode: 0, timedOut: false }],
+      ['stamp build coverage', [{ ok: true, stdout: JSON.stringify({ ok: true, read_back: true }) }]],
+    ])
+    globalThis.reviewerAgent = async () => ([])
+    globalThis.recordDeferred = async () => {}
+    const r = await bp.buildPhase(WI, 5)
+    assert.strictEqual(r.confidence, 'low', '#381: an unusable review (no review obtainable) PARKS (UFR-7)')
+    assert.ok(/final review did not reach clean/i.test((r.assumptions || [])[0] || ''),
+      '#381: the park reason names the whole-branch final review')
+  }
+
+  console.log('ok: build_phase FR-4a in-memory loop (reconcile-once, resume-once, FR-9/UFR-6/UFR-12, stale-final-review, double-dirty-park, exec fail-closed, #381 round-cap handoff/verify-park/no-review-park)')
 })()

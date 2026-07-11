@@ -924,6 +924,9 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     // #211 fix-context pointer (written by the folded decider on a continue) — never inlined findings.
     if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
     if (own(decided, 'worklistReason')) verdictOut.worklistReason = decided.worklistReason
+    // #381 structured cap-halt discriminator (from the decider) — the whole-branch final-review gate
+    // routes on this (round-cap → hand off to review-code; every other halt kind parks), never on prose.
+    if (own(decided, 'haltKind')) verdictOut.haltKind = decided.haltKind
     return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
