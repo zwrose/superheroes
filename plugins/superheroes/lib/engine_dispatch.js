@@ -505,7 +505,7 @@ function _stagingDenial(results) {
     const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
     const m = s.match(_DENIAL_SIG)
     if (m) {
-      const from = s.slice(m.index)
+      let from = s.slice(m.index).replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
       return from.length > 200 ? from.slice(0, 200) + '…' : from
     }
   }
@@ -605,9 +605,10 @@ async function _dispatchExternalInner(o) {
     // The RETURN reason stays `could-not-stage-external-inputs` so the #277 harness-dead tripwire and
     // every caller behave exactly as before — only the missing audit line is added.
     const denial = _stagingDenial(writeInputs)
-    await _journalExternal(Object.assign(_jbase(), { verify: null,
+    const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
       outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
       denial ? { reason: denial } : {}))
+    if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
 
@@ -618,7 +619,8 @@ async function _dispatchExternalInner(o) {
     if (!preSha) {
       // #373: preSHA capture died before the CLI ran — journal it (was a silent return) so a write
       // dispatch that never reached the engine leaves a trace instead of reading as "never routed".
-      await _journalExternal(Object.assign(_jbase(), { verify: null, outcome: PRESHA_FAILED_OUTCOME }))
+      const jPreSha = await _journalExternal(Object.assign(_jbase(), { verify: null, outcome: PRESHA_FAILED_OUTCOME }))
+      if (!(jPreSha && jPreSha.ok)) return { ok: false, reason: 'unauditable' }
       return { ok: false, reason: 'could-not-capture-preSHA' }
     }
   }

@@ -964,6 +964,7 @@ function makeAgent(routes) {
       const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'secret build prompt', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-deny' })
       assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: the caller-facing return reason is UNCHANGED (harness-dead tripwire keys on it)')
       const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: a denied staging journals EXACTLY ONE staging-denied line (no double-append, #350): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed[0].engine, 'cursor', '#373: the staging-denied line names the routed engine')
       assert.strictEqual(ed[0].argv, null, '#373: argv is null (honest — build-argv never ran before the pre-CLI death)')
@@ -987,10 +988,39 @@ function makeAgent(routes) {
       ])
       await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-window' })
       const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: read-role staging denial also journals one staging-denied line')
       assert.ok(ed[0].reason.startsWith('Permission for this action was denied'), '#373: the reason window starts at the denial phrase: ' + ed[0].reason)
       assert.ok(!/U0VDUkVU/.test(ed[0].reason), '#373: the echoed base64 blob (the encoded prompt) never leaks into the reason: ' + ed[0].reason)
       console.log('OK: engine_dispatch #373 denial-reason windowing (echoed base64 payload excluded)')
+    }
+
+    // (a3) DENIAL-REASON CLAMP + REDACTION: denial prose exceeds 200 chars and the forward window also
+    // captures an echoed base64 staging command — the reason is clamped (≤201) and long base64 runs are
+    // redacted so no reversible payload fragment persists.
+    {
+      d.__resetHarnessNotice()
+      const jp = []
+      const secretPayload = 'SECRET_PROMPT_CLAMP_TEST_12'
+      const blob = Buffer.from(secretPayload).toString('base64')
+      const blobFrag = blob.slice(0, 24)
+      const denialPrefix = 'Permission denied by auto mode classifier. '
+      const echoed = ` cmd: printf '${blob}'|base64 -d>/tmp/e373-${process.pid}`
+      const longTail = ' Additional denial context that extends the full stdout well past two hundred characters so the clamp is exercised on prose that would otherwise grow without bound and never fit in the audit line.'
+      const ECHOED_AFTER = denialPrefix + echoed + longTail
+      assert.ok(ECHOED_AFTER.length > 200, '#373: denial stdout exceeds 200 chars')
+      assert.ok((denialPrefix + echoed).length <= 200, '#373: echoed staging command rides inside the forward window')
+      global.agent = journalCollector(jp, [
+        ['base64 -d >', [{ index: 0, ok: false, stdout: ECHOED_AFTER }]],
+      ])
+      await d.dispatchExternal({ engine: 'cursor', roleKind: 'review', effort: 'composer', prompt: secretPayload, cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-373-clamp' })
+      const ed = jp.filter((p) => p.outcome === 'staging-denied')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
+      assert.strictEqual(ed.length, 1, '#373: clamp+redaction case journals one staging-denied line')
+      assert.ok(ed[0].reason.length <= 201, '#373: the journaled reason is clamped to ≤201 chars (200 + ellipsis): len=' + ed[0].reason.length)
+      assert.ok(!ed[0].reason.includes(blobFrag), '#373: no base64 fragment of the staged blob appears in the reason: ' + ed[0].reason)
+      assert.ok(!ed[0].reason.includes(secretPayload), '#373: the raw prompt never leaks into the reason')
+      console.log('OK: engine_dispatch #373 denial-reason clamp + base64 redaction (≤201 chars, no payload fragment)')
     }
 
     // (b) STAGING FAILED (no denial signature): a plain courier/exec staging error (empty stdout) →
@@ -1004,6 +1034,7 @@ function makeAgent(routes) {
       const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-fail' })
       assert.strictEqual(r.reason, 'could-not-stage-external-inputs', '#373: return reason unchanged for a non-denial staging failure')
       const ed = jp.filter((p) => p.outcome === 'staging-failed')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: a plain staging failure journals EXACTLY ONE staging-failed line: ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.ok(!('reason' in ed[0]) || ed[0].reason == null, '#373: a non-denial staging failure carries NO reason field (nothing to disclose): ' + JSON.stringify(ed[0]))
       assert.ok(!jp.some((p) => p.outcome === 'staging-denied'), '#373: a no-signature failure is NOT mislabeled staging-denied')
@@ -1029,6 +1060,7 @@ function makeAgent(routes) {
       const r = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer', prompt: 'p', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, idleSeconds: 600, taskId: 'T373', workItem: 'wi-373-presha' })
       assert.strictEqual(r.reason, 'could-not-capture-preSHA', '#373: return reason unchanged for a preSHA failure')
       const ed = jp.filter((p) => p.outcome === 'presha-failed')
+      assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: a preSHA failure journals EXACTLY ONE presha-failed line: ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed[0].engine, 'cursor', '#373: the presha-failed line names the routed engine')
       assert.ok(!seen.some((c) => c.includes('engine_adapter.py build-argv')), '#373: build-argv is never reached after a preSHA failure')
