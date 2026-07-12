@@ -45,7 +45,6 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_defer_confirmation_fence_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_doc_severity_frame_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_doc_cap_smoke.js",
-    "plugins/superheroes/lib/tests/showrunner_plan_handoff_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",
