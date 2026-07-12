@@ -1157,6 +1157,35 @@ async function producePhase(phase, workItem) {
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
 
+// #397 FR-2: collectNonBlockingFindings reads round-records.json and filters to non-blocking findings,
+// adding planSection from docSection/section or dimension for the handoff. Returns an array or null
+// on a read failure (unreadable/malformed records).
+async function collectNonBlockingFindings(runDir) {
+  try {
+    const recordsPath = `${runDir}/round-records.json`
+    const recordsText = await io().readText(recordsPath)
+    const records = JSON.parse(recordsText)
+    if (!Array.isArray(records)) return []
+    const findings = []
+    for (const r of records) {
+      if (!r || typeof r !== 'object') continue
+      const roundFindings = r.findings
+      if (!Array.isArray(roundFindings)) continue
+      for (const f of roundFindings) {
+        if (!f || typeof f !== 'object') continue
+        if (!circuitBreaker.isBlocking(f.severity)) {
+          const e = Object.assign({}, f)
+          e.planSection = f.docSection || f.section || f.dimension || ''
+          findings.push(e)
+        }
+      }
+    }
+    return findings
+  } catch (_) {
+    return null
+  }
+}
+
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin. #118: the gate write rides the
 // per-phase 'save phase progress' tail in runPhases (set-gate chained ahead of journal+checkpoint)
@@ -1229,6 +1258,28 @@ async function reviewDocPhase(doc, workItem, opts) {
   const persist = {
     sideEffectCmd,
     journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
+  }
+  // #397 FR-2: at the plan-review terminal, write the non-blocking findings to the durable
+  // hand-off list the tasks author receives. A write failure discloses (UFR-1) — never silent.
+  if (doc === 'plan') {
+    let handoffOk = false
+    try {
+      const nonBlocking = await collectNonBlockingFindings(runDir)
+      if (nonBlocking && nonBlocking.length > 0) {
+        await io().writeFile(`${runDir}/nonblocking.json`, JSON.stringify(nonBlocking || []))
+        const res = await exec([
+          `python3 ${libPath('review_handoff.py')} write --docs-dir ${shq(docDirFor(workItem))} ` +
+          `--work-item ${shq(workItem)} --findings ${shq(runDir + '/nonblocking.json')}`,
+        ], 'write plan hand-off')
+        handoffOk = !!(res && res[0] && res[0].ok)
+      } else {
+        handoffOk = true  // no nonblocking findings to write is still success
+      }
+    } catch (_) { handoffOk = false }
+    if (!handoffOk) {
+      persist.journalPayload.assumptions.push(`plan-handoff.json write may have failed for ${workItem}`)
+      try { log(`reviewDocPhase: plan hand-off write failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
+    }
   }
   const recPath = `${runDir}/terminal-record.json`
   const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
@@ -1344,6 +1395,7 @@ async function appendNotify(workItem, entries) {
 
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
+module.exports.collectNonBlockingFindings = collectNonBlockingFindings
 module.exports.notifyLedgerFor = notifyLedgerFor
 module.exports.docPathFor = docPathFor
 

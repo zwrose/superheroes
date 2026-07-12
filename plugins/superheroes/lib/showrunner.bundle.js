@@ -6251,6 +6251,31 @@ async function producePhase(phase, workItem) {
   return { confidence: 'low',
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
 }
+async function collectNonBlockingFindings(runDir) {
+  try {
+    const recordsPath = `${runDir}/round-records.json`
+    const recordsText = await io().readText(recordsPath)
+    const records = JSON.parse(recordsText)
+    if (!Array.isArray(records)) return []
+    const findings = []
+    for (const r of records) {
+      if (!r || typeof r !== 'object') continue
+      const roundFindings = r.findings
+      if (!Array.isArray(roundFindings)) continue
+      for (const f of roundFindings) {
+        if (!f || typeof f !== 'object') continue
+        if (!circuitBreaker.isBlocking(f.severity)) {
+          const e = Object.assign({}, f)
+          e.planSection = f.docSection || f.section || f.dimension || ''
+          findings.push(e)
+        }
+      }
+    }
+    return findings
+  } catch (_) {
+    return null
+  }
+}
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}
   const runId = opts.runId || `review-${doc}-${workItem}`
@@ -6293,6 +6318,26 @@ async function reviewDocPhase(doc, workItem, opts) {
   const persist = {
     sideEffectCmd,
     journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
+  }
+  if (doc === 'plan') {
+    let handoffOk = false
+    try {
+      const nonBlocking = await collectNonBlockingFindings(runDir)
+      if (nonBlocking && nonBlocking.length > 0) {
+        await io().writeFile(`${runDir}/nonblocking.json`, JSON.stringify(nonBlocking || []))
+        const res = await exec([
+          `python3 ${libPath('review_handoff.py')} write --docs-dir ${shq(docDirFor(workItem))} ` +
+          `--work-item ${shq(workItem)} --findings ${shq(runDir + '/nonblocking.json')}`,
+        ], 'write plan hand-off')
+        handoffOk = !!(res && res[0] && res[0].ok)
+      } else {
+        handoffOk = true  // no nonblocking findings to write is still success
+      }
+    } catch (_) { handoffOk = false }
+    if (!handoffOk) {
+      persist.journalPayload.assumptions.push(`plan-handoff.json write may have failed for ${workItem}`)
+      try { log(`reviewDocPhase: plan hand-off write failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
+    }
   }
   const recPath = `${runDir}/terminal-record.json`
   const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
@@ -6379,6 +6424,7 @@ async function appendNotify(workItem, entries) {
 }
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
+module.exports.collectNonBlockingFindings = collectNonBlockingFindings
 module.exports.notifyLedgerFor = notifyLedgerFor
 module.exports.docPathFor = docPathFor
 async function frontHalfBoundary(workItem) {
