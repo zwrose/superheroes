@@ -14,11 +14,21 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
-// #396: the verify subprocess's own duration bound (mirrors verify_gate.DEFAULT_TIMEOUT = 600s and
-// bash_timeout.py's injected Bash floor). VERIFY_ALARM_SECONDS is the hard self-bounding ceiling the
-// perl-alarm wrapper enforces; it sits ABOVE the gate timeout so verify_gate.py classifies its own
-// TimeoutExpired (and still writes its result file) before the alarm hard-kills the process.
-const VERIFY_TIMEOUT_SECONDS = 600
+// #396: THREE strictly-ordered duration bounds, so a genuine verify timeout is CLASSIFIED and its
+// result file WRITTEN before any outer bound hard-kills the process:
+//   gate --timeout (VERIFY_TIMEOUT_SECONDS = 570s)
+//     < the courier's Bash-tool floor (600s — injected by hooks/bash_timeout.py, and asked for in the
+//       leaf prompt below)
+//     < the perl-alarm ceiling (VERIFY_ALARM_SECONDS = 630s).
+// verify_gate.py's own subprocess.run(timeout=570) raises TimeoutExpired FIRST and atomically writes a
+// distinct `result: "timeout"` (UFR-4) before the 600s Bash kill or the 630s alarm can fire. The alarm
+// is the OUTERMOST backstop — it only bites a courier that honors a HIGHER Bash timeout, or a host with
+// no bash_timeout hook. The gate is deliberately NOT a mirror of verify_gate.DEFAULT_TIMEOUT (600): it
+// is chosen strictly below the Bash floor for this ordering, so the two are independent by design (no
+// drift-mirror to keep in sync). `perl` is an assumed host tool here (the repo's own timeout-wrapper
+// convention; it ships on macOS + mainstream Linux) — an absent perl fails CLOSED (no result file →
+// 'fail'), the safe direction.
+const VERIFY_TIMEOUT_SECONDS = 570
 const VERIFY_ALARM_SECONDS = 630
 // #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
 // — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
@@ -803,10 +813,12 @@ async function verifyAgent(verifyCommand, runDir, round, ioApi, cwd) {
   // tree under review), pass verify_gate.py an explicit --cwd instead of letting the courier leaf run
   // in the hosting session's inherited cwd, and enforce the duration ceiling MECHANICALLY: pass
   // --timeout and self-bound the whole command with a perl alarm so the budget never depends on the
-  // courier honoring the Bash `timeout` param. The alarm ceiling (VERIFY_ALARM_SECONDS) sits above the
-  // gate's --timeout so verify_gate.py's own TimeoutExpired classification fires first and still writes
-  // its result file. No cwd threaded (the review-code leg cd-wraps the courier prompt via
-  // withTargetCommandPrompts) → the composed command is byte-identical to before.
+  // courier honoring the Bash `timeout` param. The gate --timeout / Bash floor / perl alarm are three
+  // strictly-ordered bounds (see VERIFY_TIMEOUT_SECONDS) so verify_gate.py classifies its own
+  // TimeoutExpired and writes its result file before any outer bound kills the process. No cwd threaded
+  // (the review-code leg roots verify by cd-wrapping the courier PROMPT via showrunner.js
+  // withTargetCommandPrompts — a SEPARATE rooting mechanism, kept in sync by hand) → the composed
+  // command is byte-identical to before.
   const gateArgs = `--command ${shq(verifyCommand || 'none')}` +
     (cwd ? ` --cwd ${shq(cwd)} --timeout ${VERIFY_TIMEOUT_SECONDS}` : '') +
     ` --out ${shq(outPath)}`

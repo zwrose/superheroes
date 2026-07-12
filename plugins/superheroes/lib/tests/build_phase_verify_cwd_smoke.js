@@ -62,9 +62,9 @@ async function main() {
       `verify did NOT run in the session cwd: tail must not contain ${realSession}, got: ${payload.tail}`)
     // And the composed command carries the deterministic seam controls.
     assert.ok(captured.includes(`--cwd '${worktree}'`), 'composed command threads --cwd <worktree>')
-    assert.ok(/--timeout 600(\s|$)/.test(captured), 'composed command passes an explicit --timeout')
+    assert.ok(/--timeout 570(\s|$)/.test(captured), 'composed command passes an explicit --timeout')
     assert.ok(captured.includes("perl -e 'alarm shift; exec @ARGV' 630 "),
-      'composed command is self-bounding via a perl-alarm wrapper whose ceiling (630) > gate --timeout (600)')
+      'composed command is self-bounding via a perl-alarm wrapper whose ceiling (630) sits above the gate --timeout (570) and the courier Bash floor (600)')
   }
 
   // ── 2a. STRING PIN: worktree threaded → --cwd + --timeout + perl wrapper, gate timeout below alarm ─
@@ -77,9 +77,9 @@ async function main() {
     await verifyAgent('npm run check', runDir, 2, io(), '/build/worktree/x')
     assert.ok(seen.includes("--command 'npm run check'"), 'the verify command is quoted into --command')
     assert.ok(seen.includes("--cwd '/build/worktree/x'"), 'the threaded worktree becomes --cwd')
-    assert.ok(seen.includes('--timeout 600'), 'the gate timeout is passed explicitly (not prompt-only)')
+    assert.ok(seen.includes('--timeout 570'), 'the gate timeout is passed explicitly (not prompt-only), strictly below the 600s Bash floor')
     assert.ok(seen.startsWith("perl -e 'alarm shift; exec @ARGV' 630 python3 "),
-      'the whole invocation is wrapped in a perl alarm ceiling ABOVE the gate timeout')
+      'the whole invocation is wrapped in a perl alarm ceiling (630) above the Bash floor (600) and gate timeout (570)')
     assert.ok(seen.includes('verify-result-r2.json'), 'the round-stamped --out path rides along')
   }
 

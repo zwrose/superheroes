@@ -1099,7 +1099,7 @@ const verifyGateTwin = require('./verify_gate.js')
 const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 const SCHEMA_VERSION = 1
-const VERIFY_TIMEOUT_SECONDS = 600
+const VERIFY_TIMEOUT_SECONDS = 570
 const VERIFY_ALARM_SECONDS = 630
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 function _jsonAnswer(out) {
