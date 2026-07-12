@@ -5,6 +5,7 @@ external free-text surface is scrubbed at THIS trust boundary (parse_result). Fl
 live 2026-07-01 against codex 0.141.0 (model gpt-5.5 — gpt-5.5-codex/gpt-5-codex are rejected
 under ChatGPT-account auth) and cursor-agent 2026.06.26 (--model / -p / --trust; -m is gone)."""
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -336,6 +337,23 @@ def commit_result(worktree, task_id, pre_sha):
 
 
 def _cmd_build_argv(args):
+    # #395: deterministic staged-input verify — the caller passes PATH:SHA256 for each file the
+    # staging courier claimed to have written. The courier's self-reported ok is fabricatable
+    # (live wf_28e14382-82e); this re-hash from disk is the authoritative signal. Any mismatch or
+    # unreadable file fails the WHOLE build-argv closed — the external CLI must never run on
+    # unverified inputs.
+    for spec in (args.verify or []):
+        path, _, want = spec.rpartition(":")
+        try:
+            with open(path, "rb") as fh:
+                got = hashlib.sha256(fh.read()).hexdigest()
+        except OSError:
+            got = None
+        if got != want:
+            sys.stdout.write(json.dumps(
+                {"ok": False, "reason": "staged-input-mismatch", "path": path}) + "\n")
+            return 0
+
     opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model}
     sys.stdout.write(json.dumps(build_argv(args.engine, args.role, args.effort, opts)) + "\n")
     return 0
@@ -352,6 +370,8 @@ def main(argv):
     b.add_argument("--schema-path", default=None)
     b.add_argument("--model", default=None,
                    help="native tier short name; cursor maps ONLY fable (owner policy), else composer")
+    b.add_argument("--verify", action="append", default=None,
+                   help="PATH:SHA256 staged-input check; any mismatch/unreadable file fails build-argv closed")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
     pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))

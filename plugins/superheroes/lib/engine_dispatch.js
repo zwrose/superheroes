@@ -635,11 +635,18 @@ async function _dispatchExternalInner(o) {
   //    build-argv via --schema-path (codex --output-schema for read roles).
   // runId is built from CALLER-SUPPLIED identifiers only — no wall-clock time or PRNG calls (FR-8:
   // the Workflow sandbox has no time/random globals, and the bundle-smoke statically bans those APIs
-  // because they break deterministic resume). taskId (write roles) or workItem (read roles) plus
-  // engine/roleKind give a stable-enough per-dispatch key; callers that omit both share a fallback
-  // key, which is safe because writeInputs/rawPath are consumed synchronously within this single
-  // dispatch and never read back across calls.
-  const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  // because they break deterministic resume). taskId (write roles and callers that pass one) wins;
+  // workItem-only keys append a deterministic content suffix so a review panel fanning out parallel
+  // reviewers (same workItem/roleKind/engine) never share one /tmp staging path — without that,
+  // concurrent dispatches clobber each other's prompt/schema between stage, verify, and _runArgv.
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
+  const schemaText = JSON.stringify(stagedSchema)
+  const runKeyBase = o.taskId
+    ? String(o.taskId)
+    : (o.workItem
+      ? `${String(o.workItem)}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
+      : 'run')
+  const runKey = runKeyBase.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
@@ -647,14 +654,13 @@ async function _dispatchExternalInner(o) {
   // (see strictify above). ONLY on the codex path — cursor ignores the schema entirely, and the
   // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
   // which Anthropic's tool input_schema requires and which strict shapes would break).
-  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   // #257: stage prompt then schema as PLAIN-readable, hash-verified writes (see _stageCmd/_stageInput) —
   // each in its own leaf, prompt first so a prompt-staging denial short-circuits the (pointless) schema
   // stage. writeInputs holds the FAILED leaf's raw results so the #373 denial-signature extraction still
   // fires; a success carries no denial and journals nothing here.
   const promptStage = await _stageInput(promptPath, prompt || '')
   const schemaStage = promptStage.ok
-    ? await _stageInput(schemaPath, JSON.stringify(stagedSchema))
+    ? await _stageInput(schemaPath, schemaText)
     : { ok: false, results: [] }
   if (!(promptStage.ok && schemaStage.ok)) {
     // #373: staging died BEFORE the CLI ran — journal it (was a silent return). A denial-signature in
@@ -690,11 +696,27 @@ async function _dispatchExternalInner(o) {
   // journals the exact argv the CLI was killed while running (#308), and relayMeta carries the last
   // completed _runArgv's relay facts (#347).
   const run = (async () => {
-    const argvObj = await _execJson(
+    const buildArgvCmd =
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
       `--schema-path ${shq(schemaPath)}` +
-      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : '') +
+      ` --verify ${shq(promptPath + ':' + sha256hex(prompt || ''))}` +
+      ` --verify ${shq(schemaPath + ':' + sha256hex(schemaText))}`
+    let argvObj = await _execJson(buildArgvCmd)
+    if (argvObj && argvObj.ok === false && argvObj.reason === 'staged-input-mismatch') {
+      // #395: the staging courier's ok was a LIE (or the file was clobbered since) — the disk
+      // hash disagrees. Re-stage both inputs once (the hijack/mangle is stochastic) and
+      // re-verify via a fresh build-argv; a second mismatch fails the dispatch closed — the
+      // CLI never runs on unverified inputs. No inline journaling (premortem-002: the raced
+      // `run` never journals); the reason rides the role-specific post-race journal line.
+      const rp = await _stageInput(promptPath, prompt || '')
+      const rs = rp.ok ? await _stageInput(schemaPath, schemaText) : { ok: false }
+      argvObj = (rp.ok && rs.ok) ? await _execJson(buildArgvCmd) : null
+      if (argvObj && argvObj.ok === false && argvObj.reason === 'staged-input-mismatch') {
+        return { ok: false, reason: 'staged-input-mismatch' }
+      }
+    }
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
@@ -892,6 +914,23 @@ function _maybeHarnessDeadNotice(o, reason) {
   } catch (_) {}
 }
 
+// #395: the staged-input-mismatch tripwire — DISTINCT from #277's harness-dead notice (that
+// one means the staging pipe cannot run at all and latches once per run; this one means the
+// deterministic verify caught a staging courier whose ok the disk disproves — the defense
+// WORKING, not a dead harness). Own latch so neither notice consumes the other's budget.
+let _stagingLieNoticeShown = false
+function _maybeStagingLieNotice(o, reason) {
+  if (_stagingLieNoticeShown || String(reason || '') !== 'staged-input-mismatch') return
+  _stagingLieNoticeShown = true
+  const engine = (o && o.engine) || 'external'
+  try {
+    globalThis.log('STAGED-INPUT-MISMATCH: engine ' + JSON.stringify(engine) + ' dispatch inputs failed ' +
+      'the deterministic hash verify twice (original stage + one re-stage) — a staging courier answered ' +
+      'ok on content the disk disproves (#395: possible payload hijack or staging corruption). The ' +
+      'dispatch failed closed; see the journal staged-input-mismatch line.')
+  } catch (_e) { /* notice is best-effort */ }
+}
+
 // #277: preserve the underlying error name+message (clamped) in the fall-open reason. The catch below
 // is the catch-all for any synchronous throw; collapsing every throw to a bare 'dispatch-error' made
 // the #277 Buffer death a transcript-archaeology session. Carrying the error text makes the next
@@ -914,20 +953,23 @@ async function dispatchExternal(o) {
   try {
     const res = await _dispatchExternalInner(o || {})
     _maybeHarnessDeadNotice(o, res && res.reason)
+    _maybeStagingLieNotice(o, res && res.reason)
     return res
   } catch (e) {
     const reason = 'dispatch-error: ' + _errText(e)
     _maybeHarnessDeadNotice(o, reason)
+    _maybeStagingLieNotice(o, reason)
     return { ok: false, reason }
   }
 }
 
 // test-only: reset the once-per-process tripwire memo so a smoke can drive the notice deterministically.
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
+function __resetStagingLieNotice() { _stagingLieNoticeShown = false }
 
 // _STREAMS_WHEN_PIPED is exported for the drift guard in the stall-monitor smoke (every dispatchable
 // external engine must have an explicit streams-when-piped verdict) — not a public seam.
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice, __resetStagingLieNotice,
   _STREAMS_WHEN_PIPED, strictify,
   // #341: the courier-declined outcome token, exported so the JS↔Python drift guard (CONVENTIONS
   // §11.2) can assert this producer home matches acceptance_verdict.COURIER_DECLINED_OUTCOME.
