@@ -39,7 +39,9 @@ async function partA() {
     calls.push({ prompt, opts: opts || {}, label: (opts && opts.label) || '' })
     const label = (opts && opts.label) || ''
     if (label === 'read startup state') {
-      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' }, doc_dir: '', run_overrides_present: false }) }]
+      return [{ ok: true, stdout: markedStdout({ ok: true, spec_gate: 'passed', model_overrides: { author: 'haiku' },
+        engine_prefs: { reviewer: 'codex', implementation: 'claude', planAuthor: 'claude', effort: {},
+          codexModels: { reviewer: 'gpt-5.5' } }, doc_dir: '', run_overrides_present: false }) }]
     }
     if (opts && opts.courier) {
       // Dumb-pipe leaves now carry descriptive labels ('gather snapshot'/'read gate'/…); route them
@@ -93,6 +95,8 @@ async function partA() {
     'haiku',
     'FAIL (a2): __SR_OVERRIDES does not carry the parsed author override',
   )
+  assert.strictEqual(globalThis.__SR_ENGINE_PREFS.codexModels.reviewer, 'gpt-5.5',
+    'GPT-5.6: startup must preserve provider-specific persistent Codex model pins')
 
   // (a3) authorModel() resolves through __SR_OVERRIDES (should return 'haiku' from the override)
   const am = sr.authorModel()

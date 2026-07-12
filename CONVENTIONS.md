@@ -827,8 +827,21 @@ review leaf routes to the reviewer engine, via `engine_dispatch.js` → `engine_
 axis is orthogonal to the model tier: `model_tier` still governs *which Claude model* runs when the
 engine is `claude`; when the engine is external, `engine_pref.resolve_effort` governs the engine's depth.
 Every external dispatch also **threads the role's resolved model** into the engine argv as a dispatch
-fact — and the adapter's **owner-policy model map** decides what actually runs (owner-ratified
-2026-07-09): **cursor is the token-efficiency engine** — the highly token-efficient composer-2.5 runs
+fact — and the adapter's **owner-policy model map** decides what actually runs. Codex tier map:
+haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
+An optional per-role `enginePreferences.codexModels` pin may select
+one of those canonical IDs or `gpt-5.5`; a one-run preflight pin wins over the persistent pin, which
+wins over tier mapping. The provider-specific pin is carried separately from the shared tier so a
+failed Codex dispatch falls directly open to Claude with a valid native model — never automatically
+downgrading to another GPT model. Effort stays orthogonal: existing role defaults remain, `max` is
+owner-opt-in on GPT-5.6 only, and `gpt-5.5` + `max` is rejected before dispatch. The readout and
+journal name the concrete attempted model and effort.
+The GPT-5.6 contract was live-verified on Codex CLI 0.144.1; 0.141.0 receives the API's
+"requires a newer version of Codex" rejection. There is no guessed semantic-version gate: the
+configure test-dispatch explicitly probes GPT-5.6 Sol capability, and an unavailable model follows the observable Claude
+fall-open path.
+
+**Cursor is the token-efficiency engine** (owner-ratified 2026-07-09) — the highly token-efficient composer-2.5 runs
 ALL work roles (build/fix/review/reviewer-deep), and premium Claude models are **never routed through
 cursor by default**. The one deliberate exception is plan authoring: `author-plan: fable` +
 `planAuthor: cursor` dispatches Fable via cursor; every other tier falls through to the pinned

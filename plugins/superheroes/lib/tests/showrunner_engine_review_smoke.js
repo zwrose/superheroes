@@ -184,7 +184,8 @@ async function partB() {
 
   // (b1) reviewer engine = codex, implementation = claude: reviewer routes external + read-only;
   // a Critical finding flows into the panel -> gate is changes-requested, not passed.
-  globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'claude' }
+  globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'claude',
+    codexModels: { 'reviewer-deep': 'gpt-5.5' } }
   const dispatchCalls = []
   engineDispatchMod.dispatchExternal = async (o) => {
     dispatchCalls.push(o)
@@ -253,6 +254,9 @@ async function partB() {
   assert.ok(reviewDispatch.every((c) => c.model === 'opus'),
     'FAIL (b1h #308): every round-1 (full-deep-panel) review dispatch must thread the reviewerDeep tier (opus): '
     + JSON.stringify(reviewDispatch.map((c) => c.model)))
+  assert.ok(reviewDispatch.every((c) => c.engineModel === 'gpt-5.5'),
+    'FAIL (b1h pin): every deep panel dispatch must consume the persistent reviewer-deep pin: '
+    + JSON.stringify(reviewDispatch.map((c) => c.engineModel)))
   assert.ok(reviewDispatch.every((c) => c.timeoutSeconds === 900),
     'FAIL (b1i #309): every review dispatch must carry the moderate read ceiling (900s), not the 300s default: '
     + JSON.stringify(reviewDispatch.map((c) => c.timeoutSeconds)))
@@ -290,11 +294,12 @@ async function partB() {
   assert.strictEqual(nativeReviewerFired, true, 'FAIL (b2b): UFR-7 unreadable external review must fall open to the native reviewer agent()')
   assert.strictEqual(r2.gate, 'passed', 'FAIL (b2c): a clean fall-open round (no findings from either path) is recorded clean')
 
-  // (b3) FR-15 mixed reviewer=codex / implementation=cursor: reviewer dispatch uses engine:codex,
-  // roleKind:review; fixStep's dispatch uses engine:cursor, roleKind:fix. Force a blocking finding
+  // (b3) mixed reviewer=cursor / implementation=codex: the panel reads through the reviewer engine,
+  // while its fixer consumes the implementation engine's distinct Codex role pin. Force a blocker.
   // from the (external) reviewer so fixStep actually runs, and let the external fix succeed so the
   // native fixer agent() never fires (proving the write path is on the implementation engine only).
-  globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'cursor' }
+  globalThis.__SR_ENGINE_PREFS = { reviewer: 'cursor', implementation: 'codex',
+    codexModels: { fixer: 'gpt-5.6-luna' } }
   dispatchCalls.length = 0
   let nativeFixerFired = false
   let round = 0
@@ -336,20 +341,23 @@ async function partB() {
   })
   const reviewDispatch3 = dispatchCalls.filter((c) => c.roleKind === 'review')
   const fixDispatch3 = dispatchCalls.filter((c) => c.roleKind === 'fix')
-  assert.ok(reviewDispatch3.length > 0 && reviewDispatch3.every((c) => c.engine === 'codex'),
-    'FAIL (b3a): reviewer dispatch must use engine:codex, roleKind:review')
-  assert.ok(fixDispatch3.length > 0 && fixDispatch3.every((c) => c.engine === 'cursor'),
-    'FAIL (b3b): fixStep dispatch must use engine:cursor, roleKind:fix (FR-15 split)')
+  assert.ok(reviewDispatch3.length > 0 && reviewDispatch3.every((c) => c.engine === 'cursor'),
+    'FAIL (b3a): reviewer dispatch must use the configured reviewer engine:cursor')
+  assert.ok(fixDispatch3.length > 0 && fixDispatch3.every((c) => c.engine === 'codex'),
+    'FAIL (b3b): fixStep dispatch must use the configured implementation engine')
   // #308/#309: the review-code fixer threads the resolved fixer tier (sonnet) + the WRITE ceiling.
   assert.ok(fixDispatch3.every((c) => c.model === 'sonnet'),
     'FAIL (b3b1 #308): the review-code fix dispatch must carry the resolved fixer tier (sonnet): '
     + JSON.stringify(fixDispatch3.map((c) => c.model)))
+  assert.ok(fixDispatch3.every((c) => c.engineModel === 'gpt-5.6-luna'),
+    'FAIL (b3b pin): every review-code fix dispatch must consume the persistent fixer pin: '
+    + JSON.stringify(fixDispatch3.map((c) => c.engineModel)))
   assert.ok(fixDispatch3.every((c) => c.timeoutSeconds === 2400),
     'FAIL (b3b2 #309): the review-code fix dispatch must carry the high write ceiling (2400s): '
     + JSON.stringify(fixDispatch3.map((c) => c.timeoutSeconds)))
   assert.strictEqual(nativeFixerFired, false, 'FAIL (b3c): the native code-fixer agent() must not fire when the external fix succeeds')
   assert.strictEqual(r3.gate, 'passed', 'FAIL (b3d): a successfully-fixed round advances to passed')
-  // synthesis stays loop-owned (native agent()) even under a mixed reviewer=codex/implementation=cursor
+  // synthesis stays loop-owned (native agent()) even under a mixed reviewer=cursor/implementation=codex
   // configuration; dispatchExternal in this scenario only ever carries roleKind:review or roleKind:fix.
   assert.ok(synthesisCalls3.length > 0, 'FAIL (b3e): synthesisLeaf must run via the native agent() (loop-owned) under mixed external engines')
   assert.ok(dispatchCalls.every((c) => c.roleKind === 'review' || c.roleKind === 'fix'),
@@ -357,7 +365,7 @@ async function partB() {
 
   engineDispatchMod.dispatchExternal = savedDispatch
   globalThis.__SR_ENGINE_PREFS = savedPrefs
-  console.log('OK (b): reviewer read-only on reviewer engine (Critical flows) + UFR-7 re-run on Claude + mixed reviewer!=impl (FR-15 split) + synthesis stays loop-owned')
+  console.log('OK (b): reviewer read-only on reviewer engine (Critical flows) + UFR-7 re-run on Claude + pinned Codex panel fix + synthesis stays loop-owned')
 }
 
 ;(async () => {

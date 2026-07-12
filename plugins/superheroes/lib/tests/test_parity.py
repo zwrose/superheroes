@@ -25,6 +25,8 @@ PARITY_TWINS = [
     ("model_tier", "resolveModel", "model_tier", "resolve_model"),
     ("engine_pref", "resolveEngine", "engine_pref", "resolve_engine"),
     ("engine_pref", "resolveEffort", "engine_pref", "resolve_effort"),
+    ("engine_pref", "resolveEngineModel", "engine_pref", "resolve_engine_model"),
+    ("engine_pref", "validCodexModelEffort", "engine_pref", "valid_codex_model_effort"),
     ("engine_pref", "resolveTimeout", "engine_pref", "resolve_timeout"),
     ("engine_pref", "resolveIdle", "engine_pref", "resolve_idle"),
     ("circuit_breaker", "normalizeTitle", "circuit_breaker", "normalize_title"),

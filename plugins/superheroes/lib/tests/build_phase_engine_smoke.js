@@ -108,7 +108,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
   // Scenario 1: build-then-verify on an external implementation engine (Codex).
   // ===========================================================================
   {
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {},
+      codexModels: { builder: 'gpt-5.6-terra' } }
     const dispatchCalls = []
     const authzCalls = { n: 0 }
     const engineDispatch = require('../engine_dispatch.js')
@@ -140,6 +141,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     const enginePrefS1 = require('../engine_pref.js')
     assert.strictEqual(buildCall.model, modelTierS1.resolveModel('builder', null, null),
       '#308: the build dispatch carries the resolved builder tier (opus)')
+    assert.strictEqual(buildCall.engineModel, 'gpt-5.6-terra',
+      'GPT-5.6: the build dispatch consumes the persistent builder pin by role')
     assert.strictEqual(buildCall.timeoutSeconds, enginePrefS1.resolveTimeout(globalThis.__SR_ENGINE_PREFS, 'build'),
       '#309: the build dispatch carries the high write ceiling from the REAL resolveTimeout')
     assert.strictEqual(buildCall.timeoutSeconds, 2400, '#309: the write ceiling is 2400s (owner HIGH-ceiling policy)')
@@ -189,7 +192,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     const bp = require('../build_phase.js')
 
     // (a) dispatchExternal fails -> resetUncommitted fires -> native worker THEN runs (fall open).
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {},
+      codexModels: { fixer: 'gpt-5.6-luna' } }
     let resetFired = 0
     let workerFired2 = 0
     global.agent = makeAgent([
@@ -238,7 +242,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     // 'codex' (#160) while the fixer dispatches roleKind:'fix',engine:'cursor' (FR-15 split). The
     // per-task review is engine-routed now, so its blocker comes from the dispatchExternal review mock
     // above (round 1) — the native 'review' agent route is no longer exercised for reviewer:codex.
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'cursor', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'cursor', effort: {},
+      codexModels: { 'reviewer-deep': 'gpt-5.5' } }
     dispatchCalls.length = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
@@ -273,6 +278,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     // read ceiling (900s). reviewer-deep is a read role — it shares the read ceiling with review.
     assert.strictEqual(reviewCall.model, modelTierS2.resolveModel('reviewer-deep', null, null),
       '#308: the whole-branch reviewer dispatch carries the resolved reviewer-deep tier (opus)')
+    assert.strictEqual(reviewCall.engineModel, 'gpt-5.5',
+      'GPT-5.6: the whole-branch reviewer consumes the persistent reviewer-deep pin')
     assert.strictEqual(reviewCall.timeoutSeconds, 900, '#309: the whole-branch reviewer carries the moderate read ceiling (900s)')
     console.log('OK: fail-closed trio + UFR-2 discard + UFR-4 write-preflight-denied fall-open + final-fixer {fixed,deferred} contract + mixed reviewer!=impl')
   }
@@ -293,7 +300,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     }
     const bp = require('../build_phase.js')
 
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {},
+      codexModels: { fixer: 'gpt-5.6-luna' } }
     const authzCalls = { n: 0 }
     let workerFired3 = 0
     let fixerFired3 = 0
@@ -388,7 +396,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
       return { ok: true, signal: 'ok', evidence: {} }
     }
     const bp = require('../build_phase.js')
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {},
+      codexModels: { fixer: 'gpt-5.6-luna' } }
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
       ['review', (() => {
@@ -408,6 +417,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     assert.strictEqual(fixDispatches.length, 2, 'exactly two external fix dispatches (one per round)')
     assert.strictEqual(fixDispatches[0].taskId, '6', 'round 1 fix dispatch carries the task id')
     assert.strictEqual(fixDispatches[1].taskId, '6', 'round 2 fix dispatch carries the SAME task id')
+    assert.ok(fixDispatches.every((o) => o.engineModel === 'gpt-5.6-luna'),
+      'GPT-5.6: every fix round consumes the persistent fixer pin')
     console.log('OK: per-round external fix dispatch (fold invariant boundary)')
   }
 
@@ -432,7 +443,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     // (a) reviewer:codex -> the per-task review dispatches roleKind:'review',engine:'codex' at effort
     //     'review' (regular/high, NOT 'review-deep'/xhigh); the native per-task reviewer agent() NEVER
     //     fires; a clean external review (findings []) -> synthesized verdicts -> complete.
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'claude', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'claude', effort: {},
+      codexModels: { reviewer: 'gpt-5.5' } }
     const reviewDispatches = []
     engineDispatch.dispatchExternal = async (o) => {
       if (o.roleKind === 'review') { reviewDispatches.push(o); return { findings: [] } }
@@ -458,6 +470,8 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
     const enginePrefS6 = require('../engine_pref.js')
     assert.strictEqual(reviewDispatches[0].model, modelTier.resolveModel('reviewer', null, null),
       '#308: the per-task review dispatch carries the resolved reviewer tier (sonnet)')
+    assert.strictEqual(reviewDispatches[0].engineModel, 'gpt-5.5',
+      'GPT-5.6: a standard Codex reviewer consumes its persistent compatibility pin separately')
     assert.strictEqual(reviewDispatches[0].timeoutSeconds, enginePrefS6.resolveTimeout(globalThis.__SR_ENGINE_PREFS, 'review'),
       '#309: the per-task review dispatch carries the moderate read ceiling from the REAL resolveTimeout')
     assert.strictEqual(reviewDispatches[0].timeoutSeconds, 900, '#309: the read ceiling is 900s')

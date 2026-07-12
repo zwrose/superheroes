@@ -236,7 +236,8 @@ async function produceSmokes() {
   const savedPrefs = globalThis.__SR_ENGINE_PREFS
   const savedOverrides = globalThis.__SR_OVERRIDES
   try {
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', planAuthor: 'cursor', effort: {} }
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'claude', planAuthor: 'codex',
+      effort: {}, codexModels: { 'author-plan': 'gpt-5.5' } }
     globalThis.__SR_OVERRIDES = { 'author-plan': 'fable' }
 
     // (1) plan doc + planAuthor:cursor + external ok -> external authored, native author NOT called.
@@ -251,6 +252,8 @@ async function produceSmokes() {
     assert.strictEqual(nativeCalls.length, 0, '(1) native author is NOT dispatched when external succeeds')
     assert.ok(externalRuns[0].includes("--role 'author-plan'"), '(1) dispatch carries the author-plan role')
     assert.ok(externalRuns[0].includes("--model 'fable'"), '(1) dispatch threads the resolved author-plan tier: ' + externalRuns[0])
+    assert.ok(externalRuns[0].includes("--engine-model 'gpt-5.5'"),
+      '(1) dispatch consumes the persistent author-plan compatibility pin: ' + externalRuns[0])
     // #309: the author-plan production dispatch resolves the WRITE ceiling (2400s) through the real
     // resolveTimeout — proven end to end via the enriched external_dispatch journal (not monkeypatched).
     assert.ok(journalCmds1.length >= 1, '(1) the author-plan dispatch journals an external_dispatch event')

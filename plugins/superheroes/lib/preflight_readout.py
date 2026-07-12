@@ -25,7 +25,7 @@ import engine_detect
 # smoke, from a `python3 -c` dump of this constant — never a hand-duplicated JS literal. BUMP this on
 # any change that re-interprets an already-persisted snapshot (a new row, a changed exclusion, or a
 # changed set-validation rule).
-READOUT_VERSION = 3
+READOUT_VERSION = 4
 
 # The spine's phase roster is the single source of truth. Kept as a literal that MUST equal
 # showrunner.js's PHASES; the roster-parity node smoke (Task 12) asserts they match so a phase
@@ -40,7 +40,7 @@ PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
 # row-for-phase complete against showrunner.js's PHASES (roster-parity guard) — a phase can never
 # be silently dropped from the readout. A "none"-kind row pins no engine/model/effort.
 _PHASE_ROLES = {
-    "plan":         [("author", "author", None, "author")],
+    "plan":         [("author", "author-plan", "author-plan", "author-plan")],
     "review-plan":  [("reviewer", "reviewer", "review", "review")],
     "tasks":        [("author", "author", None, "author")],
     "review-tasks": [("reviewer", "reviewer", "review", "review")],
@@ -81,13 +81,16 @@ def _engine_for(kind, prefs):
         return engine_pref.resolve_engine("build", prefs)
     if kind == "fix":
         return engine_pref.resolve_engine("fix", prefs)
+    if kind == "author-plan":
+        return engine_pref.resolve_engine("author-plan", prefs)
     return "claude"
 
 
 def _effort_for(engine, kind, prefs):
     effort_overrides = prefs.get("effort") if isinstance(prefs, dict) else None
     role_kind = "review-deep" if kind == "review-deep" else ("review" if kind == "review"
-                else ("build" if kind == "build" else ("fix" if kind == "fix" else None)))
+                else ("build" if kind == "build" else ("fix" if kind == "fix"
+                else ("author-plan" if kind == "author-plan" else None))))
     if role_kind is None:
         return None
     return engine_pref.resolve_effort(engine, role_kind, effort_overrides)
@@ -106,13 +109,18 @@ def enumerate_dispatch(prefs, tier_overrides, run_overrides=None):
                 # A deterministic spine step that dispatches no agent. It still gets a row so the
                 # readout names every phase, but pins no engine/model/effort and is never overridable.
                 rows.append({"phase": phase, "role": tier_role, "roleLabel": label,
-                             "engine": "claude", "model": None, "effort": None, "kind": kind,
+                             "engine": "claude", "model": None, "engineModel": None,
+                             "modelSource": "none", "effort": None, "kind": kind,
                              "configuredOrDefault": "default"})
                 continue
             model = model_tier.resolve_model(tier_role, tier_overrides,
                                              "code" if tier_role == "fixer" else None)
             engine = _engine_for(kind, prefs)
             effort = _effort_for(engine, kind, prefs)
+            engine_model = engine_pref.resolve_engine_model(engine, tier_role, model, prefs)
+            pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
+            persistent_pin = (engine == "codex" and isinstance(pins, dict)
+                              and pins.get(tier_role) == engine_model)
             # FR-5 (second criterion): label each row configured-vs-default. A row is "configured"
             # when the project's model-tier policy carries an EXPLICIT entry for this tier role
             # (the reader returned an owner-set value); otherwise the value fell back to the
@@ -120,55 +128,93 @@ def enumerate_dispatch(prefs, tier_overrides, run_overrides=None):
             # label by _phase_line; a run override later re-marks the row overridden (FR-11).
             configured = tier_role in tier_overrides
             row = {"phase": phase, "role": tier_role, "roleLabel": label,
-                   "engine": engine, "model": model, "effort": effort, "kind": kind,
+                   "engine": engine, "model": model, "engineModel": engine_model,
+                   "modelSource": ("persistent-codex-pin" if persistent_pin
+                                   else ("tier-mapping" if engine == "codex" else "shared-tier")),
+                   "effort": effort, "kind": kind,
                    "configuredOrDefault": "configured" if configured else "default"}
+            invalid_pins = prefs.get("invalidCodexModels") if isinstance(prefs, dict) else None
+            if isinstance(invalid_pins, dict) and tier_role in invalid_pins:
+                row["configInvalid"] = invalid_pins[tier_role]
             # UFR-4: a non-orchestration role whose model resolved to None (session inherit) is
             # unexpected — the orchestration role inherits by design (kind == "orchestration"), any
             # other role inheriting is flagged so the owner sees it rather than a silent inherit.
             if model is None and kind != "orchestration":
                 row["unexpectedInherit"] = True
-            _apply_override(row, run_overrides.get(tier_role))
+            _apply_override(row, run_overrides.get(tier_role), prefs)
             rows.append(row)
     return rows
 
 
-def _apply_override(row, ov):
+def _apply_override(row, ov, prefs=None):
     """Apply a per-run override to a row in place. Sparse: only fields present are applied. An
     invalid model/effort is flagged (overrideInvalid) not applied (FR-14); an engine outside
     ENGINES is applied-but-marked unrecognized (UFR-5, the owner sees the raw value they asked for)."""
     if not isinstance(ov, dict):
         return row
+    original = dict(row)
+    candidate = dict(row)
     applied = False
     if "engine" in ov and isinstance(ov["engine"], str):
-        row["engine"] = ov["engine"]
+        candidate["engine"] = ov["engine"]
         applied = True
         if ov["engine"] not in engine_pref.ENGINES:
-            row["unrecognized"] = True
+            candidate["unrecognized"] = True
         # re-derive effort for the (possibly new) engine unless the override also pins effort
         if "effort" not in ov:
-            row["effort"] = engine_pref.resolve_effort(row["engine"],
-                            ("review-deep" if row["kind"] == "review-deep" else row["kind"]), None)
+            candidate["effort"] = engine_pref.resolve_effort(candidate["engine"],
+                                ("review-deep" if candidate["kind"] == "review-deep"
+                                 else candidate["kind"]), None)
+        candidate["engineModel"] = engine_pref.resolve_engine_model(
+            candidate["engine"], candidate.get("role"), candidate.get("model"), prefs)
+        pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
+        persistent_pin = (candidate["engine"] == "codex" and isinstance(pins, dict)
+                          and pins.get(candidate.get("role")) == candidate["engineModel"])
+        candidate["modelSource"] = ("persistent-codex-pin" if persistent_pin
+                                    else ("tier-mapping" if candidate["engine"] == "codex"
+                                          else "shared-tier"))
     if "model" in ov and isinstance(ov["model"], str):
-        if ov["model"] in model_tier_overrides.KNOWN_MODELS:
-            row["model"] = ov["model"]
+        if candidate.get("engine") == "codex" and ov["model"] in engine_pref.CODEX_MODELS:
+            candidate["engineModel"] = ov["model"]
+            candidate["modelSource"] = "run-override"
+            applied = True
+        elif candidate.get("engine") != "codex" and ov["model"] in engine_pref.CODEX_MODELS:
+            # Run overrides accumulate by role. Keep a provider-specific Codex pin dormant when
+            # that same override switches the role to Claude/Cursor, just as persistent Codex pins
+            # are ignored outside Codex. If the role switches back later, the retained pin applies.
+            pass
+        elif ov["model"] in model_tier_overrides.KNOWN_MODELS:
+            candidate["model"] = ov["model"]
+            candidate["engineModel"] = engine_pref.resolve_engine_model(
+                candidate.get("engine"), candidate.get("role"), candidate.get("model"), prefs)
+            candidate["modelSource"] = "run-override"
             applied = True
         else:
-            row["overrideInvalid"] = True
+            candidate["overrideInvalid"] = True
     if "effort" in ov and isinstance(ov["effort"], str):
         if ov["effort"] in _EFFORT_TOKENS:
-            row["effort"] = ov["effort"]
+            candidate["effort"] = ov["effort"]
             applied = True
         else:
-            row["overrideInvalid"] = True
+            candidate["overrideInvalid"] = True
+    if candidate.get("overrideInvalid") or (
+            candidate.get("engine") == "codex" and
+            not engine_pref.valid_codex_model_effort(candidate.get("engineModel"), candidate.get("effort"))):
+        row.clear()
+        row.update(original)
+        row["overrideInvalid"] = True
+        return row
     if applied:
-        row["overridden"] = True
+        candidate["overridden"] = True
+    row.clear()
+    row.update(candidate)
     return row
 
 
-def display_model(engine, model):
+def display_model(engine, model, engine_model=None):
     """The model string to SHOW for (engine, model). External engines show the SAME model id
-    engine_adapter.build_argv would actually dispatch (single source of truth): codex ignores the
-    tier and shows its pinned constant; cursor maps the native tier short-name through
+    engine_adapter.build_argv would actually dispatch (single source of truth): codex shows a valid
+    concrete engine-model pin or maps the shared tier through engine_pref; cursor maps the tier through
     engine_adapter._CURSOR_MODEL_BY_TIER exactly as build_argv does. Per the owner policy (2026-07-09)
     that map's only entry is fable (the author-plan exception), so every work-role cursor row
     truthfully shows the pinned composer default — cursor is the token-efficiency engine and premium
@@ -176,7 +222,9 @@ def display_model(engine, model):
     for a None (session-inherited) model. An unknown engine shows its resolved model raw (UFR-5
     handled by the caller's 'unrecognized' marker)."""
     if engine == "codex":
-        return engine_adapter._CODEX_MODEL
+        if isinstance(engine_model, str) and engine_model in engine_pref.CODEX_MODELS:
+            return engine_model
+        return engine_pref.resolve_engine_model("codex", None, model, {})
     if engine == "cursor":
         # Mirror build_argv's cursor mapping so the readout never diverges from real dispatch.
         return engine_adapter._CURSOR_MODEL_BY_TIER.get(model, engine_adapter._CURSOR_MODEL)
@@ -186,7 +234,7 @@ def display_model(engine, model):
 
 
 def _phase_line(row):
-    parts = [row["engine"], display_model(row["engine"], row["model"])]
+    parts = [row["engine"], display_model(row["engine"], row["model"], row.get("engineModel"))]
     if row.get("effort"):
         parts.append(row["effort"])
     disp = " · ".join(parts)
@@ -195,8 +243,12 @@ def _phase_line(row):
         suffix = " (%s — inherits session model, expected)" % row["roleLabel"]
     if row.get("overridden"):
         suffix += " — overridden for this run"
+    elif row.get("modelSource") == "persistent-codex-pin":
+        suffix += " — persistent Codex pin"
     if row.get("overrideInvalid"):
         suffix += " — recorded override no longer valid, NOT applied ⚠"  # FR-14: shown flagged
+    if row.get("configInvalid"):
+        suffix += " — invalid persistent Codex selection rejected: %s ⚠" % row["configInvalid"]
     if row.get("fallbackToClaude"):
         suffix += " — %s not authorized → falls back to Claude ⚠" % row["engine"]  # FR-4
     if row.get("unexpectedInherit"):
@@ -253,7 +305,7 @@ def render(snapshot):
     return "\n".join(lines)
 
 
-_EFFORT_TOKENS = ("none", "low", "medium", "high", "xhigh", "composer")
+_EFFORT_TOKENS = ("none", "low", "medium", "high", "xhigh", "max", "composer")
 
 
 def preflight_readout_engines():
@@ -266,18 +318,30 @@ def validate_override(role, field, value, snapshot):
     Accepted sets come from the resolvers' own domains — never re-hardcoded here."""
     if role == "orchestrator":
         return {"ok": False, "reason": "the orchestration role is session-inherited and not overridable"}
+    rows = snapshot.get("phases") if isinstance(snapshot, dict) else None
+    row = next((r for r in (rows or []) if isinstance(r, dict) and r.get("role") == role), {})
     if field == "engine":
         if isinstance(value, str) and value in engine_pref.ENGINES:
             return {"ok": True, "accepted": value}
         return {"ok": False, "acceptedValues": list(engine_pref.ENGINES),
                 "reason": "not a valid engine"}
     if field == "model":
-        if isinstance(value, str) and value in model_tier_overrides.KNOWN_MODELS:
+        accepted_models = (list(engine_pref.CODEX_MODELS) if row.get("engine") == "codex"
+                           else list(model_tier_overrides.KNOWN_MODELS))
+        if isinstance(value, str) and value in accepted_models:
+            if row.get("engine") == "codex" and not engine_pref.valid_codex_model_effort(
+                    value, row.get("effort")):
+                return {"ok": False, "acceptedValues": accepted_models,
+                        "reason": "gpt-5.5 accepts effort through xhigh; max requires GPT-5.6"}
             return {"ok": True, "accepted": value}
-        return {"ok": False, "acceptedValues": list(model_tier_overrides.KNOWN_MODELS),
+        return {"ok": False, "acceptedValues": accepted_models,
                 "reason": "not a valid model"}
     if field == "effort":
         if isinstance(value, str) and value in _EFFORT_TOKENS:
+            if row.get("engine") == "codex" and not engine_pref.valid_codex_model_effort(
+                    row.get("engineModel"), value):
+                return {"ok": False, "acceptedValues": list(_EFFORT_TOKENS),
+                        "reason": "gpt-5.5 accepts effort through xhigh; max requires GPT-5.6"}
             return {"ok": True, "accepted": value}
         return {"ok": False, "acceptedValues": list(_EFFORT_TOKENS),
                 "reason": "not a valid effort"}
@@ -428,6 +492,8 @@ def main(argv):
     v.add_argument("--role", required=True)
     v.add_argument("--field", required=True, choices=("engine", "model", "effort"))
     v.add_argument("--value", required=True)
+    v.add_argument("--snapshot", required=True,
+                   help="the current snapshot JSON whose effective row is being overridden")
     args = ap.parse_args(argv)
     if args.cmd == "assemble":
         ro = None
@@ -448,7 +514,12 @@ def main(argv):
         sys.stdout.write(render(snap) + "\n")
         return 0
     if args.cmd == "validate-override":
-        out = validate_override(args.role, args.field, args.value, {})
+        try:
+            snap = json.loads(args.snapshot)
+        except (ValueError, json.JSONDecodeError):
+            out = {"ok": False, "reason": "current snapshot is unreadable; override not accepted"}
+        else:
+            out = validate_override(args.role, args.field, args.value, snap)
         sys.stdout.write(json.dumps(out) + "\n")
         return 0 if out.get("ok") else 1
     return 2

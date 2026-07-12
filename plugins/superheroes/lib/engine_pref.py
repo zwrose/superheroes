@@ -16,6 +16,23 @@ _MISSING = object()
 
 ENGINES = ("claude", "codex", "cursor")
 
+# Codex model policy is provider-specific and deliberately separate from model_tier's
+# Claude-family capability names. Shared tiers express role strength; this map translates those
+# strengths at the external boundary. Explicit pins live under enginePreferences.codexModels so a
+# GPT id can never leak into a native Claude fallback or Cursor dispatch.
+CODEX_MODELS = ("gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
+CODEX_MODEL_BY_TIER = {
+    "haiku": "gpt-5.6-luna",
+    "sonnet": "gpt-5.6-terra",
+    "opus": "gpt-5.6-sol",
+    "fable": "gpt-5.6-sol",
+}
+CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "builder", "fixer", "author-plan")
+CODEX_ROLE_KIND = {"reviewer": "review", "reviewer-deep": "review-deep", "builder": "build",
+                   "fixer": "fix", "author-plan": "author-plan"}
+CODEX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+CODEX_MAX_UNSUPPORTED_MODELS = ("gpt-5.5",)
+
 # role_kind -> the enginePreferences key it reads. `author-plan` (the front-half plan-author
 # leaf) reads its OWN key — plan authoring routes independently of review/build; tasks
 # authoring has no key on purpose and always runs native.
@@ -25,7 +42,8 @@ _ROLE_KEY = {"review": "reviewer", "build": "implementation", "fix": "implementa
 # effort defaults per engine. codex is effort-tiered; cursor is one composer model
 # (FR-10, exempt); claude defers to model_tier (None). Depth-aware review: the deep reviewers
 # (security/architecture — the reviewer-deep model tier) dispatch at 'review-deep' -> xhigh;
-# regular review -> high. gpt-5.5 efforts: none/low/medium/high/xhigh.
+# regular review -> high. GPT-5.6 additionally accepts max, but max is owner opt-in only;
+# GPT-5.5 remains limited to none/low/medium/high/xhigh.
 _CODEX_EFFORT = {"review": "high", "review-deep": "xhigh", "build": "high", "fix": "low",
                  "author-plan": "xhigh"}
 _CURSOR_EFFORT = "composer"
@@ -83,6 +101,30 @@ def resolve_effort(engine, role_kind, overrides=None):
         if isinstance(v, str) and v.strip():
             return v.strip()
     return default
+
+
+def resolve_engine_model(engine, tier_role, tier_model, prefs=None):
+    """Return the concrete Codex model for a role, or None for another engine.
+
+    A valid per-role persistent pin wins. Otherwise a known shared tier maps to its GPT-5.6
+    capability peer. An unknown tier fails open to Sol, the capable default; it never reuses an
+    invalid owner pin and never changes another provider's model selection.
+    """
+    if engine != "codex":
+        return None
+    pins = prefs.get("codexModels") if isinstance(prefs, dict) else None
+    if isinstance(pins, dict):
+        pinned = pins.get(tier_role)
+        if isinstance(pinned, str) and pinned in CODEX_MODELS:
+            return pinned
+    return CODEX_MODEL_BY_TIER.get(tier_model, "gpt-5.6-sol")
+
+
+def valid_codex_model_effort(model, effort):
+    """Whether an explicit Codex model/effort pair is dispatchable by owner policy."""
+    if model not in CODEX_MODELS or effort not in CODEX_EFFORTS:
+        return False
+    return not (model in CODEX_MAX_UNSUPPORTED_MODELS and effort == "max")
 
 
 def resolve_timeout(overrides=None, role_kind=None):
@@ -146,6 +188,22 @@ def load_engine_prefs(cwd, root=None):
            "implementation": _normalize(prefs.get("implementation")),
            "planAuthor": _normalize(prefs.get("planAuthor")),
            "effort": dict(effort) if isinstance(effort, dict) else {}}
+    codex_models = prefs.get("codexModels")
+    if isinstance(codex_models, dict):
+        pins = {}
+        invalid = {}
+        for role, model in codex_models.items():
+            if role not in CODEX_PIN_ROLES or not isinstance(model, str) or model not in CODEX_MODELS:
+                continue
+            role_effort = resolve_effort("codex", CODEX_ROLE_KIND[role], out["effort"])
+            if valid_codex_model_effort(model, role_effort):
+                pins[role] = model
+            else:
+                invalid[role] = "%s + %s is invalid" % (model, role_effort)
+        if pins:
+            out["codexModels"] = pins
+        if invalid:
+            out["invalidCodexModels"] = invalid
     # #309 owner override channel: a positive-int `timeout` rides the same enginePreferences block so
     # resolve_timeout(prefs, role) can honor it at real dispatch. A bool (an int subclass) or any
     # non-positive/non-int value is dropped, leaving the role ceiling in force.

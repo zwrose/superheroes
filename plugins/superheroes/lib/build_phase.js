@@ -479,9 +479,11 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   // #309: PAIR the high ceiling with the byte-activity stall monitor — the write idle window
   // (resolveIdle(_,'build'|'fix') = 600s, owner `idleTimeout` override wins, clamped ≤ ceiling).
   const idleSeconds = enginePrefTwin.resolveIdle(_enginePrefs(), roleKind)
+  const tierRole = roleKind === 'build' ? 'builder' : 'fixer'
+  const engineModel = enginePrefTwin.resolveEngineModel(engine, tierRole, model, _enginePrefs())
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem, model, timeoutSeconds, idleSeconds,
+    taskId, workItem, model, engineModel, timeoutSeconds, idleSeconds,
   })
   if (res && res.ok) return res
   // UFR-2: a failed/stalled external write left only uncommitted edits -> discard, then redo on Claude.
@@ -866,7 +868,9 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
-      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
+      model: reviewerModel,
+      engineModel: enginePrefTwin.resolveEngineModel(rEngine, 'reviewer', reviewerModel, _enginePrefs()),
+      timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
       idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review'),   // #309 read stall monitor
     })
     // The engine adapter's review parse yields {findings} only (parse_result role_kind='review'
@@ -1056,7 +1060,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
-        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
+        model: reviewerModel,
+        engineModel: enginePrefTwin.resolveEngineModel(rEngine, 'reviewer-deep', reviewerModel, _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review-deep'),   // #309 read stall monitor
       })
       // UFR-7: an unreadable/incomplete external review -> null -> the shell re-runs on Claude, never

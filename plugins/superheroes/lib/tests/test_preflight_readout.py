@@ -52,6 +52,88 @@ def test_each_row_carries_engine_model_effort():
                     "configuredOrDefault")) <= set(r)
 
 
+def test_codex_rows_resolve_tier_defaults_persistent_pins_and_plan_author():
+    prefs = {"reviewer": "codex", "implementation": "codex", "planAuthor": "codex",
+             "effort": {}, "codexModels": {"reviewer": "gpt-5.5"}}
+    rows = preflight_readout.enumerate_dispatch(prefs, {})
+    by_role = {r["role"]: r for r in rows if r.get("role")}
+    assert by_role["reviewer"]["model"] == "sonnet"       # fallback-safe shared tier
+    assert by_role["reviewer"]["engineModel"] == "gpt-5.5"
+    assert by_role["reviewer"]["modelSource"] == "persistent-codex-pin"
+    assert by_role["reviewer-deep"]["engineModel"] == "gpt-5.6-sol"
+    assert by_role["builder"]["engineModel"] == "gpt-5.6-sol"
+    assert by_role["fixer"]["engineModel"] == "gpt-5.6-terra"
+    assert by_role["author-plan"]["engine"] == "codex"
+    assert by_role["author-plan"]["engineModel"] == "gpt-5.6-sol"
+
+
+def test_codex_one_run_model_pin_does_not_replace_shared_fallback_tier():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {},
+             "codexModels": {"reviewer": "gpt-5.5"}}
+    rows = preflight_readout.enumerate_dispatch(
+        prefs, {}, {"reviewer": {"model": "gpt-5.6-sol"}})
+    reviewer = [r for r in rows if r["role"] == "reviewer"][0]
+    assert reviewer["engine"] == "codex"
+    assert reviewer["model"] == "sonnet"
+    assert reviewer["engineModel"] == "gpt-5.6-sol"
+    assert reviewer["modelSource"] == "run-override"
+
+
+def test_dormant_codex_run_pin_does_not_block_switching_role_to_claude():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {}}
+    rows = preflight_readout.enumerate_dispatch(
+        prefs, {}, {"reviewer": {"model": "gpt-5.5", "engine": "claude"}})
+    reviewer = next(r for r in rows if r["role"] == "reviewer")
+
+    assert reviewer["engine"] == "claude"
+    assert reviewer["model"] == "sonnet"
+    assert reviewer["engineModel"] is None
+    assert reviewer.get("overrideInvalid") is not True
+
+
+def test_engine_override_reports_an_activated_persistent_codex_pin():
+    prefs = {"reviewer": "claude", "implementation": "claude", "effort": {},
+             "codexModels": {"reviewer": "gpt-5.5"}}
+    rows = preflight_readout.enumerate_dispatch(
+        prefs, {}, {"reviewer": {"engine": "codex"}})
+    reviewer = next(r for r in rows if r["role"] == "reviewer")
+
+    assert reviewer["engineModel"] == "gpt-5.5"
+    assert reviewer["modelSource"] == "persistent-codex-pin"
+
+
+def test_codex_five_five_plus_max_run_override_is_rejected_as_a_pair():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {}}
+    rows = preflight_readout.enumerate_dispatch(
+        prefs, {}, {"reviewer": {"model": "gpt-5.5", "effort": "max"}})
+    reviewer = [r for r in rows if r["role"] == "reviewer"][0]
+    assert reviewer["engineModel"] == "gpt-5.6-terra"  # prior valid default preserved
+    assert reviewer["effort"] == "high"
+    assert reviewer["overrideInvalid"] is True
+
+
+def test_codex_max_is_accepted_for_a_gpt_5_6_run_override():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {}}
+    rows = preflight_readout.enumerate_dispatch(
+        prefs, {}, {"reviewer": {"model": "gpt-5.6-sol", "effort": "max"}})
+    reviewer = [r for r in rows if r["role"] == "reviewer"][0]
+    assert reviewer["engineModel"] == "gpt-5.6-sol"
+    assert reviewer["effort"] == "max"
+    assert reviewer["modelSource"] == "run-override"
+
+
+def test_rejected_persistent_codex_pin_is_loud_in_preflight():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {"review": "max"},
+             "invalidCodexModels": {"reviewer": "gpt-5.5 + max is invalid"}}
+    reviewer = [r for r in preflight_readout.enumerate_dispatch(prefs, {})
+                if r["role"] == "reviewer"][0]
+    assert reviewer["engineModel"] == "gpt-5.6-terra"
+    assert reviewer["configInvalid"] == "gpt-5.5 + max is invalid"
+    snap = _snapshot_default()
+    snap["phases"] = [reviewer]
+    assert "invalid persistent Codex selection" in preflight_readout.render(snap)
+
+
 def test_unconfigured_role_labeled_default_configured_role_labeled_configured():
     # FR-5 second criterion: an empty tier-override map -> every row is a "default"; an explicit
     # per-role override -> that row is "configured".
@@ -82,7 +164,7 @@ def test_orchestration_role_inherits_session_model():
 # --- Task 2: the engine->model display rule + render (FR-2, NFR scannability) ---
 
 def test_display_model_maps_external_engines():
-    assert preflight_readout.display_model("codex", "sonnet") == "gpt-5.5"
+    assert preflight_readout.display_model("codex", "sonnet") == "gpt-5.6-terra"
     # cursor honors the SAME per-tier map build_argv uses. OWNER POLICY (ratified 2026-07-09): cursor
     # is the token-efficiency engine — every work-role tier (opus/sonnet/haiku/None) shows the pinned
     # composer default it really dispatches; ONLY fable (the author-plan exception) maps to a premium
@@ -104,7 +186,7 @@ def test_display_model_never_diverges_from_build_argv_for_every_role_engine():
     claims ('the readout cannot drift from dispatch'); the #308 defect was the READOUT side advertising
     premium tiers cursor never dispatches (PR #285's display derivation) — the dispatch's composer
     default was the owner policy. Covers cursor (the fable exception + the composer policy fallback)
-    and codex (always its pinned model, tier ignored)."""
+    and Codex (tier-aware GPT-5.6 mapping)."""
     import engine_adapter
 
     def _model_in_argv(engine, role_kind, model):
@@ -270,6 +352,24 @@ def test_effort_override_valid_for_codex():
     assert out["ok"] is True and out["accepted"] == "xhigh"
 
 
+def test_validate_override_accepts_codex_model_ids_for_a_codex_row():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {}}
+    snap = _snapshot_default()
+    snap["phases"] = preflight_readout.enumerate_dispatch(prefs, {})
+    out = preflight_readout.validate_override("reviewer", "model", "gpt-5.5", snap)
+    assert out == {"ok": True, "accepted": "gpt-5.5"}
+
+
+def test_validate_override_rejects_max_when_codex_row_is_pinned_to_five_five():
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {},
+             "codexModels": {"reviewer": "gpt-5.5"}}
+    snap = _snapshot_default()
+    snap["phases"] = preflight_readout.enumerate_dispatch(prefs, {})
+    out = preflight_readout.validate_override("reviewer", "effort", "max", snap)
+    assert out["ok"] is False
+    assert "gpt-5.5" in out["reason"] and "xhigh" in out["reason"]
+
+
 def test_unknown_field_rejected():
     snap = _snapshot_default()
     out = preflight_readout.validate_override("reviewer", "storage", "x", snap)
@@ -423,9 +523,33 @@ def test_cli_assemble_emits_snapshot_json_exit_0_even_when_degraded(tmp_path):
 
 def test_cli_validate_override_emits_verdict():
     code, out = _run_cli(["validate-override", "--role", "reviewer",
-                          "--field", "engine", "--value", "gpt"])
+                          "--field", "engine", "--value", "gpt",
+                          "--snapshot", json.dumps(_snapshot_default())])
     obj = json.loads(out)
     assert obj["ok"] is False and "acceptedValues" in obj
+
+
+def test_cli_validate_override_uses_snapshot_for_codex_model_and_effort_contract():
+    snap = _snapshot_default()
+    reviewer = next(row for row in snap["phases"] if row.get("role") == "reviewer")
+    reviewer.update({"engine": "codex", "engineModel": "gpt-5.5", "effort": "high"})
+    snapshot_json = json.dumps(snap)
+
+    model_code, model_out = _run_cli([
+        "validate-override", "--role", "reviewer", "--field", "model",
+        "--value", "gpt-5.5", "--snapshot", snapshot_json,
+    ])
+    effort_code, effort_out = _run_cli([
+        "validate-override", "--role", "reviewer", "--field", "effort",
+        "--value", "max", "--snapshot", snapshot_json,
+    ])
+
+    assert model_code == 0
+    assert json.loads(model_out) == {"ok": True, "accepted": "gpt-5.5"}
+    assert effort_code == 1
+    assert json.loads(effort_out)["reason"] == (
+        "gpt-5.5 accepts effort through xhigh; max requires GPT-5.6"
+    )
 
 
 # --- Documented-invocation regression: the readers get (cwd, store-base) — NOT (root, root) ---

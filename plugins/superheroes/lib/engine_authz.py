@@ -19,6 +19,16 @@ if _LIB_DIR not in sys.path:
 _DISPATCH_CMD = {"codex": "codex exec", "cursor": "cursor-agent"}
 
 
+def _codex_capability_model():
+    """Probe the strongest default GPT-5.6 tier without duplicating the model ID policy."""
+    try:
+        import engine_pref
+        return engine_pref.CODEX_MODEL_BY_TIER["opus"]
+    except Exception:
+        # Fail toward the current required capability if the policy module itself is unreadable.
+        return "gpt-5.6-sol"
+
+
 def _probe_timeout(overrides=None):
     """The subprocess timeout for the throwaway dispatch probe — the SAME configurable, test-settable
     limit as UFR-5 (`engine_pref.resolve_timeout`, default DEFAULT_STALL_LIMIT_SECONDS=300). Any import
@@ -65,7 +75,11 @@ def implementation_dispatch_allowed(cwd, engine, run=None, overrides=None):
     # `codex exec --sandbox workspace-write -C <cwd> "<prompt>"` / `cursor-agent -p -f "<prompt>"`.
     write_prompt = "write an empty file named .superheroes-authz-probe and exit"
     if engine == "codex":
-        argv = ["codex", "exec", "--sandbox", "workspace-write", "-C", cwd, write_prompt]
+        # Probe the required GPT-5.6 family explicitly. An authenticated older CLI can run its
+        # ambient model while rejecting every 5.6 dispatch, so an unpinned probe would falsely mark
+        # Codex ready during configure and defer the failure until the real build.
+        argv = ["codex", "exec", "-m", _codex_capability_model(),
+                "--sandbox", "workspace-write", "-C", cwd, write_prompt]
     else:  # cursor
         # -p/--print is required for a headless run (without it cursor-agent goes interactive and
         # the probe hangs to the timeout, always reporting the engine not-ready); -f forces/trusts.

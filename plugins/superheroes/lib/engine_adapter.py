@@ -2,8 +2,8 @@
 """The deterministic engine argv/parse/commit core (kept out of the model-driven JS layer so
 it is unit-testable). Named engine_adapter (NOT engine_cli — that is test-pilot's). Every
 external free-text surface is scrubbed at THIS trust boundary (parse_result). Flags verified
-live 2026-07-01 against codex 0.141.0 (model gpt-5.5 — gpt-5.5-codex/gpt-5-codex are rejected
-under ChatGPT-account auth) and cursor-agent 2026.06.26 (--model / -p / --trust; -m is gone)."""
+live 2026-07-12 against codex 0.144.1 (GPT-5.6; 0.141.0 is rejected by the API as too old)
+and cursor-agent 2026.06.26 (--model / -p / --trust; -m is gone)."""
 import argparse
 import json
 import os
@@ -15,15 +15,18 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import readout  # noqa: E402  (the band's single scrub seam; same-tree sibling)
+import engine_pref  # noqa: E402  (provider-specific model policy; same-tree sibling)
 
 # The SINGLE-SOURCED commit trailer. The committer (commit_result, Task 7) and the
 # build_state_cli git-log parser both reference this so the convention cannot fork.
 TASK_ID_TRAILER = "Task-Id"
 
 # Explicit model per engine (Config-determinism NFR — never the developer's ambient default).
-# codex: gpt-5.5 (there is NO gpt-5.5-codex variant; gpt-5-codex is rejected under ChatGPT-account
-# auth). cursor: the current composer model id. Both verified live 2026-07-01.
-_CODEX_MODEL = "gpt-5.5"
+# Codex maps the shared tier through engine_pref and accepts a separate concrete engine-model pin;
+# this compatibility alias remains the capable no-tier default used by display/readout callers.
+_CODEX_MODEL_BY_TIER = dict(engine_pref.CODEX_MODEL_BY_TIER)
+_CODEX_MODEL = _CODEX_MODEL_BY_TIER["opus"]
+_CODEX_MODELS = tuple(engine_pref.CODEX_MODELS)
 _CURSOR_MODEL = "composer-2.5-fast"
 
 # Native model-tier short-name -> cursor model id — the OWNER POLICY map (ratified 2026-07-09).
@@ -46,8 +49,9 @@ _CURSOR_MODEL_BY_TIER = {
 def build_argv(engine, role_kind, effort, opts):
     """Return the argv list to dispatch `engine` for `role_kind` at `effort`. READ (review) →
     read-only sandbox; WRITE (build|fix|author-plan) → workspace-write. Always explicit
-    model+effort. opts keys: cwd, schema_path, model (native tier short name — cursor maps it via
-    _CURSOR_MODEL_BY_TIER; codex ignores it, staying on its pinned model). The PROMPT is NOT
+    model+effort. opts keys: cwd, schema_path, model (native tier short name), engine_model
+    (provider-specific concrete model pin). Cursor maps the tier via _CURSOR_MODEL_BY_TIER; Codex
+    uses a valid engine_model pin or maps the shared tier. The PROMPT is NOT
     encoded here — codex reads it from stdin (trailing `-`) and cursor-agent reads it from stdin
     when given no positional prompt; the JS runner (Task 10) feeds the staged prompt file to the
     process stdin. Deterministic; fully unit-testable."""
@@ -56,9 +60,12 @@ def build_argv(engine, role_kind, effort, opts):
     schema_path = opts.get("schema_path")
     is_read = role_kind == "review"
     if engine == "codex":
+        engine_model = opts.get("engine_model")
+        if not isinstance(engine_model, str) or engine_model not in _CODEX_MODELS:
+            engine_model = _CODEX_MODEL_BY_TIER.get(opts.get("model"), _CODEX_MODEL)
         sandbox = "read-only" if is_read else "workspace-write"
         argv = ["codex", "exec", "--sandbox", sandbox,
-                "-m", _CODEX_MODEL,
+                "-m", engine_model,
                 "-c", "model_reasoning_effort=%s" % effort]
         if not is_read and cwd:
             argv += ["-C", cwd]           # confine writes to the managed worktree
@@ -336,7 +343,8 @@ def commit_result(worktree, task_id, pre_sha):
 
 
 def _cmd_build_argv(args):
-    opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model}
+    opts = {"cwd": args.cwd, "schema_path": args.schema_path, "model": args.model,
+            "engine_model": args.engine_model}
     sys.stdout.write(json.dumps(build_argv(args.engine, args.role, args.effort, opts)) + "\n")
     return 0
 
@@ -352,6 +360,8 @@ def main(argv):
     b.add_argument("--schema-path", default=None)
     b.add_argument("--model", default=None,
                    help="native tier short name; cursor maps ONLY fable (owner policy), else composer")
+    b.add_argument("--engine-model", default=None,
+                   help="provider-specific concrete model id; currently used by codex pins")
     pr = sub.add_parser("parse-result")
     pr.add_argument("--engine", required=True, choices=("codex", "cursor"))
     pr.add_argument("--role", required=True, choices=("review", "build", "fix", "author-plan"))

@@ -3777,6 +3777,12 @@ module.exports = { decide }
 __modules["engine_pref"] = function (module, exports, require) {
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
+const CODEX_MODELS = ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+const CODEX_MODEL_BY_TIER = {
+  haiku: 'gpt-5.6-luna', sonnet: 'gpt-5.6-terra', opus: 'gpt-5.6-sol', fable: 'gpt-5.6-sol'
+}
+const CODEX_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+const CODEX_MAX_UNSUPPORTED_MODELS = ['gpt-5.5']
 const WRITE_TIMEOUT_SECONDS = 2400   // build/fix/author-plan: a full test-first build (write→run→impl→run→commit)
 const READ_TIMEOUT_SECONDS = 900     // review/review-deep: a read-only review pass
 const _ROLE_TIMEOUT = { build: WRITE_TIMEOUT_SECONDS, fix: WRITE_TIMEOUT_SECONDS,
@@ -3814,6 +3820,19 @@ function resolveEffort(engine, roleKind, overrides) {
   }
   return def
 }
+function resolveEngineModel(engine, tierRole, tierModel, prefs) {
+  if (engine !== 'codex') return null
+  const pins = prefs && typeof prefs === 'object' && !Array.isArray(prefs) ? prefs.codexModels : null
+  if (pins && typeof pins === 'object' && !Array.isArray(pins) && hasOwn(pins, tierRole)) {
+    const pinned = pins[tierRole]
+    if (typeof pinned === 'string' && CODEX_MODELS.indexOf(pinned) !== -1) return pinned
+  }
+  return hasOwn(CODEX_MODEL_BY_TIER, tierModel) ? CODEX_MODEL_BY_TIER[tierModel] : 'gpt-5.6-sol'
+}
+function validCodexModelEffort(model, effort) {
+  if (CODEX_MODELS.indexOf(model) === -1 || CODEX_EFFORTS.indexOf(effort) === -1) return false
+  return !(CODEX_MAX_UNSUPPORTED_MODELS.indexOf(model) !== -1 && effort === 'max')
+}
 function resolveTimeout(overrides, roleKind) {
   if (overrides && typeof overrides === 'object' && !Array.isArray(overrides) && hasOwn(overrides, 'timeout')) {
     const v = overrides.timeout
@@ -3830,7 +3849,9 @@ function resolveIdle(overrides, roleKind) {
   if (roleKind != null && hasOwn(_ROLE_IDLE, roleKind)) return _ROLE_IDLE[roleKind]
   return DEFAULT_IDLE_SECONDS
 }
-module.exports = { resolveEngine, resolveEffort, resolveTimeout, resolveIdle, ENGINES,
+module.exports = { resolveEngine, resolveEffort, resolveEngineModel, validCodexModelEffort,
+  ENGINES, CODEX_MODELS, CODEX_MODEL_BY_TIER, CODEX_EFFORTS, CODEX_MAX_UNSUPPORTED_MODELS,
+  resolveTimeout, resolveIdle,
   DEFAULT_STALL_LIMIT_SECONDS, WRITE_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS,
   WRITE_IDLE_SECONDS, READ_IDLE_SECONDS, DEFAULT_IDLE_SECONDS }
 };
@@ -4097,7 +4118,7 @@ async function _scrubReason(reason) {
   return 'external error (scrubbed)'
 }
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model, engineModel } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
@@ -4110,7 +4131,8 @@ async function _dispatchExternalInner(o) {
   let resolvedArgv = null
   let relayMeta = null
   const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
-    model: (typeof model === 'string' && model) ? model : null,
+    model: (typeof engineModel === 'string' && engineModel) ? engineModel
+      : ((typeof model === 'string' && model) ? model : null),
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
     stallMonitor, idleSeconds },
     (relayMeta && relayMeta.truncated)
@@ -4148,7 +4170,8 @@ async function _dispatchExternalInner(o) {
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
       `--schema-path ${shq(schemaPath)}` +
-      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : '') +
+      (typeof engineModel === 'string' && engineModel ? ` --engine-model ${shq(engineModel)}` : ''))
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
@@ -4561,9 +4584,11 @@ async function _implDispatch({ workItem, roleKind, taskId, prompt, wt, branch, n
   const effort = enginePrefTwin.resolveEffort(engine, roleKind, _effortOverrides())
   const timeoutSeconds = enginePrefTwin.resolveTimeout(_enginePrefs(), roleKind)
   const idleSeconds = enginePrefTwin.resolveIdle(_enginePrefs(), roleKind)
+  const tierRole = roleKind === 'build' ? 'builder' : 'fixer'
+  const engineModel = enginePrefTwin.resolveEngineModel(engine, tierRole, model, _enginePrefs())
   const res = await engineDispatch.dispatchExternal({
     engine, roleKind, effort, prompt, cwd: wt, schema: { type: 'object', required: ['ok'] },
-    taskId, workItem, model, timeoutSeconds, idleSeconds,
+    taskId, workItem, model, engineModel, timeoutSeconds, idleSeconds,
   })
   if (res && res.ok) return res
   await resetUncommitted(wt, branch)
@@ -4770,7 +4795,9 @@ async function taskReviewAgent(workItem, task, branch, wt, round) {
     const res = await engineDispatch.dispatchExternal({
       workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
       schema: REVIEW_TASK_SCHEMA, taskId: task.id,
-      model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
+      model: reviewerModel,
+      engineModel: enginePrefTwin.resolveEngineModel(rEngine, 'reviewer', reviewerModel, _enginePrefs()),
+      timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review'),
       idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review'),   // #309 read stall monitor
     })
     if (res && Array.isArray(res.findings)) {
@@ -4912,7 +4939,9 @@ async function runFinalReview(workItem, generation, branch, wt) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: rEngine, roleKind: 'review', effort: eff, prompt, cwd: wt,
         schema: FINAL_REVIEW_SCHEMA,
-        model: reviewerModel, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
+        model: reviewerModel,
+        engineModel: enginePrefTwin.resolveEngineModel(rEngine, 'reviewer-deep', reviewerModel, _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'review-deep'),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'review-deep'),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) return res.findings
@@ -5743,7 +5772,10 @@ function reviewCodeLeaves(tiers, opts) {
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
-        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        model,
+        engineModel: enginePrefTwin.resolveEngineModel(rEngine,
+          tier === 'reviewer' ? 'reviewer' : 'reviewer-deep', model, _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
@@ -5786,7 +5818,9 @@ function reviewCodeLeaves(tiers, opts) {
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
-        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        model: pinnedTier('fixer'),
+        engineModel: enginePrefTwin.resolveEngineModel(iEngine, 'fixer', pinnedTier('fixer'), _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
@@ -6156,6 +6190,7 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        engineModel: enginePrefTwin.resolveEngineModel(aEngine, 'author-plan', model, _enginePrefs()),
         timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
@@ -6690,6 +6725,10 @@ async function showrunner({ workItem }) {
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
+    if (_epParsed.codexModels && typeof _epParsed.codexModels === 'object'
+        && !Array.isArray(_epParsed.codexModels)) {
+      _epMap.codexModels = Object.assign({}, _epParsed.codexModels)
+    }
     if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
       _epMap.timeout = _epParsed.timeout
     }
@@ -6710,9 +6749,12 @@ async function showrunner({ workItem }) {
       : (_frozenSnapshot ? 'no pins produced' : 'frozen_snapshot dropped in transit')
     try {
       if (typeof log === 'function') {
-        log(`frozen readout snapshot present but NOT applied — dispatching on live config (${_why})`)
+        log(`frozen readout snapshot present but NOT applied — fresh preflight confirmation required (${_why})`)
       }
     } catch (_) { /* logging must never break the run */ }
+    await releaseLease(workItem, r.generation, r.root)
+    return { outcome: 'parked', phase: 'startup',
+      reason: `frozen readout snapshot could not be applied; fresh preflight confirmation required (${_why})` }
   }
   const _resuming = r.action === 'continue' && r.from_step != null
   const _workhorseStep = PHASES.indexOf('workhorse')
@@ -6829,7 +6871,7 @@ async function readStartupState(workItem) {
 }
 const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
-const READOUT_VERSION = 3
+const READOUT_VERSION = 4
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -6838,6 +6880,9 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const enginePrefs = Object.assign({}, src)
   enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
     ? Object.assign({}, src.effort) : {}
+  if (src.codexModels && typeof src.codexModels === 'object' && !Array.isArray(src.codexModels)) {
+    enginePrefs.codexModels = Object.assign({}, src.codexModels)
+  }
   let pinnedCount = 0
   let reason = null
   if (frozen && typeof frozen === 'object' && !Array.isArray(frozen)
@@ -6846,6 +6891,13 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       reason: `snapshot version ${JSON.stringify(frozen.version)} != expected ${READOUT_VERSION} (stale — ignored)` }
   }
   const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
+  const invalidCodexRow = rows.find((row) => row && typeof row === 'object'
+    && !row.fallbackToClaude && row.engine === 'codex'
+    && !enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort))
+  if (invalidCodexRow) {
+    return { overrides, enginePrefs, pinnedCount: 0,
+      reason: `invalid Codex model/effort pair for ${String(invalidCodexRow.role || 'unknown role')}` }
+  }
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
     if (row.kind === 'orchestration') continue
@@ -6861,14 +6913,24 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       pinnedCount++
     }
     const kind = row.kind === 'review-deep' ? 'review'
-      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' || row.kind === 'author-plan'
+        ? row.kind : null)
     const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
       ? _ENGINE_ROLE_KIND[kind] : null
     if (epKey && effectiveEngine && enginePrefTwin.ENGINES.indexOf(effectiveEngine) !== -1) {
       enginePrefs[epKey] = effectiveEngine
       pinnedCount++
     }
-    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()) {
+    if (!row.fallbackToClaude && effectiveEngine === 'codex' && typeof role === 'string'
+        && typeof row.engineModel === 'string'
+        && enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort)) {
+      if (!enginePrefs.codexModels) enginePrefs.codexModels = {}
+      enginePrefs.codexModels[role] = row.engineModel
+      pinnedCount++
+    }
+    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()
+        && !(effectiveEngine === 'codex' && typeof row.engineModel === 'string'
+          && !enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort))) {
       const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
       enginePrefs.effort[effortKind] = row.effort
       pinnedCount++

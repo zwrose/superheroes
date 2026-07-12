@@ -73,6 +73,39 @@ def test_resolve_effort_author_plan():
     assert EP.resolve_effort("codex", "author-plan", {"author-plan": "medium"}) == "medium"
 
 
+def test_resolve_engine_model_maps_shared_tiers_to_gpt_5_6_family():
+    assert EP.resolve_engine_model("codex", "mechanical", "haiku", {}) == "gpt-5.6-luna"
+    assert EP.resolve_engine_model("codex", "reviewer", "sonnet", {}) == "gpt-5.6-terra"
+    assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", {}) == "gpt-5.6-sol"
+    assert EP.resolve_engine_model("codex", "author-plan", "fable", {}) == "gpt-5.6-sol"
+
+
+def test_resolve_engine_model_persistent_codex_pin_wins_per_role():
+    prefs = {"codexModels": {"reviewer": "gpt-5.5", "builder": "gpt-5.6-terra"}}
+    assert EP.resolve_engine_model("codex", "reviewer", "sonnet", prefs) == "gpt-5.5"
+    assert EP.resolve_engine_model("codex", "builder", "opus", prefs) == "gpt-5.6-terra"
+    # A sibling role still derives from its tier; pins never become global.
+    assert EP.resolve_engine_model("codex", "reviewer-deep", "opus", prefs) == "gpt-5.6-sol"
+
+
+def test_resolve_engine_model_is_provider_isolated_and_fails_capable():
+    prefs = {"codexModels": {"reviewer": "gpt-5.5"}}
+    assert EP.resolve_engine_model("claude", "reviewer", "sonnet", prefs) is None
+    assert EP.resolve_engine_model("cursor", "reviewer", "sonnet", prefs) is None
+    assert EP.resolve_engine_model("codex", "reviewer", "experimental-tier", {}) == "gpt-5.6-sol"
+    assert EP.resolve_engine_model("codex", "reviewer", "sonnet",
+                                   {"codexModels": {"reviewer": "not-a-model"}}) == "gpt-5.6-terra"
+
+
+def test_codex_model_effort_validation_keeps_max_opt_in_and_5_6_only():
+    assert EP.valid_codex_model_effort("gpt-5.6-sol", "max") is True
+    assert EP.valid_codex_model_effort("gpt-5.6-terra", "max") is True
+    assert EP.valid_codex_model_effort("gpt-5.6-luna", "max") is True
+    assert EP.valid_codex_model_effort("gpt-5.5", "xhigh") is True
+    assert EP.valid_codex_model_effort("gpt-5.5", "max") is False
+    assert EP.valid_codex_model_effort("not-a-model", "high") is False
+
+
 def test_resolve_timeout_default_and_override():
     # Legacy back-compat: NO role supplied -> the finite 300s default (engine_authz probe path).
     assert EP.resolve_timeout() == EP.DEFAULT_STALL_LIMIT_SECONDS == 300
@@ -261,6 +294,38 @@ def test_load_engine_prefs_surfaces_plan_author(tmp_path):
     _write_core_with_prefs(repo2, {"planAuthor": "bogus"})
     got = EP.load_engine_prefs(repo2, root=os.path.join(repo2, "store"))
     assert got["planAuthor"] == "claude"   # normalized fail-open
+
+
+def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "codex",
+                                  "codexModels": {"reviewer": "gpt-5.5",
+                                                  "reviewer-deep": "gpt-5.6-luna",
+                                                  "builder": "gpt-5.6-sol",
+                                                  "fixer": "gpt-5.6-terra",
+                                                  "author-plan": "gpt-5.5",
+                                                  "bogus-role": "gpt-5.6-terra",
+                                                  }})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert got["codexModels"] == {"reviewer": "gpt-5.5",
+                                  "reviewer-deep": "gpt-5.6-luna",
+                                  "builder": "gpt-5.6-sol",
+                                  "fixer": "gpt-5.6-terra",
+                                  "author-plan": "gpt-5.5"}
+    invalid_repo = str(tmp_path / "invalid")
+    _write_core_with_prefs(invalid_repo, {"codexModels": {"fixer": "bogus-model"}})
+    assert EP.load_engine_prefs(
+        invalid_repo, root=os.path.join(invalid_repo, "store")).get("codexModels", {}) == {}
+
+
+def test_load_engine_prefs_rejects_persistent_five_five_plus_max_before_dispatch(tmp_path):
+    repo = str(tmp_path)
+    _write_core_with_prefs(repo, {"reviewer": "codex", "implementation": "claude",
+                                  "effort": {"review": "max"},
+                                  "codexModels": {"reviewer": "gpt-5.5"}})
+    got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
+    assert "reviewer" not in got.get("codexModels", {})
+    assert got["invalidCodexModels"]["reviewer"] == "gpt-5.5 + max is invalid"
 
 
 def test_load_engine_prefs_effort_non_dict_normalizes_to_empty(tmp_path):

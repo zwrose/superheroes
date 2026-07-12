@@ -87,7 +87,8 @@ function runGather(script, repo, store) {
     const frozenSnapshot = {
       workItem: 'wi', version: sr.READOUT_VERSION,
       phases: [
-        { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus', effort: 'high' },
+        { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus',
+          engineModel: 'gpt-5.6-sol', effort: 'high' },
       ],
     }
     // Persist through the REAL run_overrides.write, into the SAME store/cwd/root the gather reads with.

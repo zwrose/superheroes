@@ -76,7 +76,8 @@ function resetFoldGlobals() {
       const FROZEN = {
         workItem: 'wi', version: sr.READOUT_VERSION,
         phases: [
-          { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus', effort: 'high' },
+          { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus',
+            engineModel: 'gpt-5.6-sol', effort: 'high' },
         ],
       }
       const trace = {}
@@ -116,12 +117,16 @@ function resetFoldGlobals() {
         spec_present: false, tasks_present: true, tasks_gate: 'passed',
         run_overrides_present: true, frozen_snapshot: null,
       }, trace)
-      await sr.showrunner({ workItem: 'wi' })
+      const noApplyResult = await sr.showrunner({ workItem: 'wi' })
       assert.ok(logs.some((l) => /frozen readout snapshot present but NOT applied/.test(l)),
         'NO-APPLY: a present-on-disk record with a dropped snapshot must emit the loud no-apply narrator line')
+      assert.strictEqual(noApplyResult.outcome, 'parked',
+        'NO-APPLY: unknown confirmed snapshot state parks for a fresh preflight')
+      assert.ok(/fresh preflight confirmation required/.test(noApplyResult.reason),
+        'NO-APPLY: the park reason names the required recovery')
       assert.ok(!(globalThis.__SR_OVERRIDES && globalThis.__SR_OVERRIDES.builder),
-        'NO-APPLY: nothing pins — the run resolves live (no builder override)')
-      console.log('ok: frozen snapshot dropped in transit — loud no-apply narrator')
+        'NO-APPLY: nothing pins before the run parks')
+      console.log('ok: frozen snapshot dropped in transit — parks for fresh preflight')
     }
 
     console.log('ok: startup fold + narrator-hop closure')

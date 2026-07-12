@@ -30,7 +30,8 @@ async function main() {
     version: V,
     phases: [
       { phase: 'plan', role: 'author', kind: 'author', model: 'sonnet', overridden: true },
-      { phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'codex', effort: 'xhigh', overridden: true },
+      { phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'codex', model: 'sonnet',
+        engineModel: 'gpt-5.6-terra', effort: 'xhigh', overridden: true },
     ],
   }
   const baseOv = { author: 'opus' }        // config-derived model-tier map
@@ -42,6 +43,43 @@ async function main() {
   assert.strictEqual(merged.enginePrefs.reviewer, 'codex', 'a pinned engine must win over the config-derived value')
   assert.strictEqual(merged.enginePrefs.effort.review, 'xhigh', 'a pinned effort must seed the effort sub-map')
 
+  // GPT-5.6: the concrete Codex model freezes into the provider-specific map, while the shared tier
+  // remains in model overrides for a valid native Claude fallback.
+  const codexModelSnap = {
+    version: V,
+    phases: [
+      { phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'codex',
+        model: 'sonnet', engineModel: 'gpt-5.5', effort: 'high' },
+      { phase: 'plan', role: 'author-plan', kind: 'author-plan', engine: 'codex',
+        model: 'opus', engineModel: 'gpt-5.6-sol', effort: 'xhigh' },
+    ],
+  }
+  const codexMerged = sr.mergeFrozenSnapshot(codexModelSnap, {},
+    { reviewer: 'claude', implementation: 'claude', planAuthor: 'claude', effort: {}, codexModels: {} })
+  assert.strictEqual(codexMerged.overrides.reviewer, 'sonnet',
+    'the fallback-safe shared reviewer tier freezes separately')
+  assert.strictEqual(codexMerged.enginePrefs.codexModels.reviewer, 'gpt-5.5',
+    'the per-run GPT-5.5 pin freezes only in the Codex model map')
+  assert.strictEqual(codexMerged.enginePrefs.planAuthor, 'codex',
+    'the plan-author engine freezes through its own preference key')
+  assert.strictEqual(codexMerged.enginePrefs.codexModels['author-plan'], 'gpt-5.6-sol',
+    'the plan-author concrete Codex model freezes by tier role')
+
+  const invalidCodexPair = sr.mergeFrozenSnapshot({
+    version: V,
+    phases: [{ phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'codex',
+      model: 'sonnet', engineModel: 'gpt-5.5', effort: 'max' }],
+  }, {}, { reviewer: 'codex', implementation: 'claude', effort: { review: 'high' },
+    codexModels: { reviewer: 'gpt-5.6-terra' } })
+  assert.strictEqual(invalidCodexPair.enginePrefs.codexModels.reviewer, 'gpt-5.6-terra',
+    'an invalid frozen GPT-5.5 + max pair must not replace the live Codex model')
+  assert.strictEqual(invalidCodexPair.enginePrefs.effort.review, 'high',
+    'an invalid frozen GPT-5.5 + max pair must not replace the live effort')
+  assert.strictEqual(invalidCodexPair.pinnedCount, 0,
+    'an invalid frozen Codex pair rejects the entire snapshot so startup must re-confirm')
+  assert.ok(/invalid Codex model\/effort pair/.test(invalidCodexPair.reason || ''),
+    'the rejected snapshot names the invalid provider pair')
+
   // Behavior-preserving: no frozen snapshot -> the maps are returned unchanged (the rollback state).
   const passthrough = sr.mergeFrozenSnapshot(null, baseOv, baseEp)
   assert.deepStrictEqual(passthrough.overrides, baseOv, 'no snapshot -> config-derived overrides unchanged')
@@ -49,7 +87,8 @@ async function main() {
 
   // A role NOT named by any snapshot row keeps its config-derived value (the freeze only touches
   // roles the snapshot actually rendered a row for).
-  const partial = { version: V, phases: [{ phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'codex', overridden: true }] }
+  const partial = { version: V, phases: [{ phase: 'review-plan', role: 'reviewer', kind: 'review',
+    engine: 'codex', model: 'sonnet', engineModel: 'gpt-5.6-terra', effort: 'high', overridden: true }] }
   const m2 = sr.mergeFrozenSnapshot(partial, { author: 'opus' }, { reviewer: 'claude', implementation: 'claude', effort: {} })
   assert.strictEqual(m2.overrides.author, 'opus', 'a role absent from the snapshot keeps its config-derived model')
   assert.strictEqual(m2.enginePrefs.reviewer, 'codex', 'the pinned reviewer engine is applied')
@@ -77,7 +116,8 @@ async function main() {
     version: V,
     phases: [
       // plain (non-overridden) rows — displayed A's concrete values; MUST freeze to A.
-      { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus', effort: 'high' },
+      { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'opus',
+        engineModel: 'gpt-5.6-sol', effort: 'high' },
       { phase: 'review-code', role: 'reviewer-deep', kind: 'review-deep', engine: 'claude', model: 'opus', effort: null },
       // overridden row — the owner pinned it at the readout; MUST freeze to A.
       { phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'cursor', model: 'sonnet', effort: 'composer', overridden: true },
@@ -158,7 +198,8 @@ async function main() {
     version: V,
     phases: [
       // invalid model on a valid role — model NOT pinned; but its engine (codex, valid) IS pinned.
-      { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'gpt-9-turbo', effort: 'high' },
+      { phase: 'workhorse', role: 'builder', kind: 'build', engine: 'codex', model: 'gpt-9-turbo',
+        engineModel: 'gpt-5.6-sol', effort: 'high' },
       // invalid engine on a review row — engine NOT pinned; its model (valid) IS pinned.
       { phase: 'review-plan', role: 'reviewer', kind: 'review', engine: 'grok', model: 'sonnet', effort: 'high' },
     ],
