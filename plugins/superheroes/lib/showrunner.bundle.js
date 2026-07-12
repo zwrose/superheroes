@@ -5780,9 +5780,10 @@ function reviewCodeLeaves(tiers, opts) {
     const effortKey = REVIEW_DEEP.has(reviewer) ? 'review-deep' : 'review'
     if (rEngine !== 'claude') {
       const eff = enginePrefTwin.resolveEffort(rEngine, effortKey, _effortOverrides())
+      const dispatchWorkItem = typeof workItem === 'string' ? workItem : 'review-code'
       const res = await engineDispatch.dispatchExternal({
-        workItem: typeof workItem === 'string' ? workItem : 'review-code',
-        taskId: `${reviewer}-r${round}`,
+        workItem: dispatchWorkItem,
+        taskId: `${dispatchWorkItem}-${reviewer}-r${round}`,
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
