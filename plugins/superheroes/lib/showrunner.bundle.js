@@ -724,7 +724,7 @@ function roundGateFromDimensionResults(results, expectedRoster, finalConfirmatio
 module.exports = { compileFindings, roundGate, presentDeferred, decideTerminal, uncertifiedReason, compileDimensionResults, roundGateFromDimensionResults, presentBlockingFromDimensionResults, blockingFindingsFromDimensionResults, BLOCKING, SEV_RANK, _ACTION_TO_TERMINAL }
 };
 __modules["review_round_policy"] = function (module, exports, require) {
-const { isCritical } = require('./circuit_breaker.js')
+const { isCritical, isBlocking } = require('./circuit_breaker.js')
 const DEEP = 'reviewer-deep'
 const CHEAP = 'reviewer'
 const MAX_CONFIRMATIONS = 2
@@ -845,11 +845,24 @@ function isCrossCutting(changedSubjects, threshold = CROSS_CUTTING_SUBJECTS) {
   return new Set(subjects).size >= threshold
 }
 function confirmationFollowup(surfacedSeverities, confirmationsRun, crossCutting,
-  maxConfirmations = MAX_CONFIRMATIONS) {
+  maxConfirmations = MAX_CONFIRMATIONS, docMode = false) {
   const sevs = (surfacedSeverities || []).filter((s) => typeof s === 'string')
+  const atCap = confirmationsRun >= maxConfirmations
+  if (docMode) {
+    const hasBlocking = sevs.some((s) => isBlocking(s))
+    if (!hasBlocking) {
+      return { rearm: false, park: false, atCap,
+        reason: 'no open blocking finding — doc review certifies' }
+    }
+    if (atCap) {
+      return { rearm: false, park: true, atCap: true,
+        reason: 'open blocking finding at the doc-review round cap — park; certification withheld' }
+    }
+    return { rearm: true, park: false, atCap: false,
+      reason: 'open blocking finding in doc review — one more full confirmation panel required' }
+  }
   const hasCritical = sevs.some((s) => isCritical(s))
   const trigger = hasCritical || !!crossCutting
-  const atCap = confirmationsRun >= maxConfirmations
   if (!trigger) {
     return { rearm: false, park: false, atCap,
       reason: 'non-Critical findings, rework not cross-cutting — resolve by scoped verify; no further confirmation panel' }

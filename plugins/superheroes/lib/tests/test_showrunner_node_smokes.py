@@ -37,6 +37,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_final_review_tier_smoke.js",
     # #174: confirmation-bar economics — certify-after-scoped, severity-gated re-arm, hard cap.
     "plugins/superheroes/lib/tests/showrunner_confirmation_economics_smoke.js",
+    # Task 6 (#397 FR-8): confirmationFollowup docMode branch in the JS twin.
+    "plugins/superheroes/lib/tests/showrunner_review_round_policy_doc_mode_smoke.js",
     # mega-JSON regression: loop persistence ships paths + small scalars, never the record body.
     "plugins/superheroes/lib/tests/showrunner_reviewloop_payload_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
