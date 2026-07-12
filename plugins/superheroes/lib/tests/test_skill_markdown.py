@@ -172,6 +172,13 @@ def test_showrunner_step_1_5_preflight_readout_confirm_override_loop():
     assert "falls back to claude" in low, "step 1.5 must reference the FR-4 fallback row flag"
 
 
+def test_review_loop_has_doc_mode_carveout():
+    text = _read_repo("plugins/superheroes/reference/review-loop.md")
+    assert "review-loop-version: 2" in text
+    assert "document review" in text.lower() and "three completed rounds" in text.lower()
+    assert "any open blocking finding" in text.lower() or "Critical **or** Important" in text
+
+
 def test_host_maps_document_claude_dispatch_recovery_and_codex_asymmetry():
     claude_needles = (
         "dispatch reliability",
