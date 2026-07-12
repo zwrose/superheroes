@@ -596,7 +596,9 @@ function makeAgent(routes) {
           return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
         }
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-        if (prompt.includes('--sandbox') || prompt.includes('read-only')) {
+        // Match the hardened marker-courier run leaf only — not the broad 'read-only' substring (which
+        // can appear in unrelated exec prompts and mis-route a later staging leaf).
+        if (prompt.includes('Execute this exact shell command')) {
           return markedStdout('{"raw":"external review output"}\n__SR_DISPATCH__{"idleKilled":0,"idleSeconds":60,"exit":0,"outBytes":32,"truncated":0,"outPath":"/tmp/engine-codex-review-run.out"}')
         }
         return [{ index: 0, ok: true, stdout: '{}' }]
@@ -1063,22 +1065,15 @@ function makeAgent(routes) {
 
     // (a2b) SCHEMA-STAGE DENIAL: prompt staging succeeds, schema staging is blocked — exactly one
     // external_dispatch with outcome 'staging-denied' and a bounded reason (not a silent return).
+    // Route by staged PATH (each _stageInput rides its own single-command leaf) — do not depend on
+    // real bash/python for the prompt stage; a shell failure there would mislabel staging-failed.
     {
       d.__resetHarnessNotice()
       const jp = []
-      const { execFileSync } = require('child_process')
       global.agent = journalCollector(jp, [
         [d._SR_STAGE_SIG, (prompt) => {
-          const lines = prompt.split('\n').map((l) => l.match(/^\d+\.\s(.*)$/)).filter(Boolean).map((m) => m[1])
-          if (lines.length) {
-            return lines.map((c, i) => {
-              if (c.includes('.schema.json')) {
-                return { index: i, ok: false, stdout: DENIAL }
-              }
-              try { execFileSync('bash', ['-c', c], { stdio: 'pipe' }); return { index: i, ok: true, stdout: '' } }
-              catch (e) { return { index: i, ok: false, stdout: (e.stderr && e.stderr.toString()) || String(e.status) } }
-            })
-          }
+          if (prompt.includes('.schema.json')) return [{ index: 0, ok: false, stdout: DENIAL }]
+          if (prompt.includes('.prompt')) return [{ index: 0, ok: true, stdout: '' }]
           return [{ index: 0, ok: false, stdout: DENIAL }]
         }],
       ])
