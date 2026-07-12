@@ -419,14 +419,14 @@ Each round:
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
+   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 3 \
      --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
 
    - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved" (that belief is what this gate overrides).
    - **`exit_clean`** → **EXIT** the loop (then record the gate, §6).
    - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain PLAN READY.
-   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare PLAN READY (coverage may be incomplete).
+   - **`halt`** → the three-round cap (baseline + at most two confirmations) was hit with blocking findings still being revised: report them; do **not** declare PLAN READY (coverage may be incomplete).
 
 ### 6. Record the review gate
 
@@ -437,7 +437,7 @@ gate to set; say so and stop at the terminal summary).
 
 - **PLAN READY** (no unresolved Critical/Important; any Minor/Nit are informational) →
   record `passed`.
-- **REVISE BEFORE TASKS / MAJOR GAPS**, or the 7-round cap was hit with Critical/Important
+- **REVISE BEFORE TASKS / MAJOR GAPS**, or the three-round cap was hit with Critical/Important
   still open, or the user **skipped** a blocking finding → record `changes-requested` (the
   plan is not cleared to advance; report what remains).
 

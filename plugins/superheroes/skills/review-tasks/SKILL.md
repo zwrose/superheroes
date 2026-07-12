@@ -418,14 +418,14 @@ Each round:
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 7 \
+   python3 "$ROOT_DIR/lib/loop_state.py" --round <N> --max-rounds 3 \
      --compiled "$SESSION_DIR/compiled.json" --skipped-blocking <SKIPPED_BLOCKING>
    ```
 
    - **`review`** → `round += 1` and repeat from step 1. **MANDATORY** — you revised a blocking finding; re-review to verify it actually resolved and introduced nothing new. Do **not** exit because the revision "looks resolved."
    - **`exit_clean`** → **EXIT** the loop (then record the gate, §6).
    - **`exit_skipped`** → **EXIT**, listing the deliberately-skipped blocking finding(s) — not a plain TASKS READY.
-   - **`halt`** → the 7-round cap was hit with blocking findings still being revised: report them; do **not** declare TASKS READY.
+   - **`halt`** → the three-round cap (baseline + at most two confirmations) was hit with blocking findings still being revised: report them; do **not** declare TASKS READY.
 
 ### 6. Record the review gate
 
@@ -434,7 +434,7 @@ producer's Build reads (it supersedes the-architect's `tasks` self-certification
 this step entirely when `isDefinitionDoc == no`.**
 
 - **TASKS READY** (no unresolved Critical/Important) → record `passed`.
-- **REVISE BEFORE BUILD / MAJOR GAPS**, or the 7-round cap hit with Critical/Important still
+- **REVISE BEFORE BUILD / MAJOR GAPS**, or the three-round cap hit with Critical/Important still
   open, or the user **skipped** a blocking finding → record `changes-requested`.
 
 The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
