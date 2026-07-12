@@ -131,6 +131,10 @@ def compile_findings(findings, context_files=None):
             else:
                 merged = dict(ex)
             merged["dimension"] = dims
+            if not merged.get("docSection"):
+                preserved = ex.get("docSection") or f.get("docSection")
+                if preserved:
+                    merged["docSection"] = preserved
             by_id[fid] = merged
         else:
             by_id[fid] = dict(f)

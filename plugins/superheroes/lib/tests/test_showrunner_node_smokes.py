@@ -41,6 +41,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_reviewloop_payload_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_terminal_record_compose_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_defer_confirmation_fence_smoke.js",
+    # Task 4 (#397 FR-1): native doc reviewer + synthesis leaves steer to the document-severity bar.
+    "plugins/superheroes/lib/tests/showrunner_doc_severity_frame_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reconcile_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_resume_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_reviewcode_smoke.js",

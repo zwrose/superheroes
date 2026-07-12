@@ -109,6 +109,7 @@ const FINDINGS_SCHEMA = {
           evidence: { type: 'string' },
           suggestion: { type: 'string' },
           dimension: { type: 'string' },
+          docSection: { type: 'string' },
           classKey: { type: 'string' },
           taxonomy: { type: 'string' },
           tradeoff: { type: 'boolean' },
@@ -296,6 +297,20 @@ const REVIEW_DOC_ARTIFACT_READ_INSTRUCTION =
 
 const REVIEWER_RESULT_INSTRUCTION =
   'Return ONLY this shape: {"findings":[],"confidence":"high","verificationReceipt":{"artifact":"<exact receiptArtifact from prompt context>","chain":[{"step":"citation","evidence":"..."},{"step":"reachability","evidence":"..."},{"step":"missing-check","evidence":"..."},{"step":"tooling","evidence":"..."}],"coverageDecisionIds":["<every id from receiptCoverageDecisionIds>"]}}. Replace every placeholder with the actual review result. If a step has no evidence, return {"findings":[],"confidence":"low"} instead of a boilerplate receipt. Include usage only when the runtime provides real nonzero token counts; never report zero stubs.'
+
+// #397 FR-1: the document-severity steering both doc leaves carry. A document is judged
+// against its OWN job — a plan-level task/test granularity finding is non-blocking on a plan;
+// ambiguity fails closed to blocking; the incident-anchored classes always block.
+const DOC_SEVERITY_FRAME =
+  'Apply the "Document-review severity" section of the rubric: classify a finding BLOCKING ' +
+  'only if following this document as written would mislead the build or make it build ' +
+  'something unsafe or incorrect, judged against this document\'s own job. In a PLAN review, ' +
+  'task/test specification-granularity is NON-BLOCKING (it is the tasks doc\'s job). In a ' +
+  'TASKS review, a mis-specified task/test is judged directly against the bar. Ambiguity ' +
+  'fails closed to BLOCKING. For a document review, also set each finding\'s "docSection" to the ' +
+  'exact markdown heading (verbatim subsection title) it concerns; use "docSection": null only when ' +
+  'the finding genuinely spans more than one subsection or is structural.'
+module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 
 // Task 11 (FR-4) probe steering: an unattended leaf/reviewer that needs to *run* something to verify
 // its work must use the sanctioned throwaway-test-file-in-worktree + allowed test-run family (which the
@@ -682,7 +697,7 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
   })
   const out = await agent(
     `Run the ${reviewer} review of the ${context.docType} definition-doc at ${context.docPath} ` +
-    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)}\n\n` +
+    `against the ${rubric} rubric (reframed to a ${context.docType} doc). ${REVIEW_DOC_ARTIFACT_READ_INSTRUCTION} ${REVIEWER_RESULT_INSTRUCTION}${reviewerRetryCorrection(opts.retryReason)} ${DOC_SEVERITY_FRAME}\n\n` +
     `Prompt context: ${JSON.stringify(promptContext)}`,
     Object.assign({ model }, { label: reviewer, schema: FINDINGS_SCHEMA }))
   if (!out || !Array.isArray(out.findings)) return null
@@ -695,7 +710,7 @@ async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
-    `Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
+    `${DOC_SEVERITY_FRAME} Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
@@ -779,6 +794,8 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
 
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
 module.exports.runReviewDocPanel = runReviewDocPanel
+module.exports.docReviewerAgent = docReviewerAgent
+module.exports.docSynthesisLeaf = docSynthesisLeaf
 
 // docDirFor: the work-item's docs dir, storage-mode-aware. showrunner() resolves it ONCE at
 // startup (readStartupState runs definition_doc.resolve_work_item_dir Python-side — correct for
