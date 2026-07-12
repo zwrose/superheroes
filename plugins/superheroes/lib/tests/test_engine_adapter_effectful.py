@@ -41,6 +41,14 @@ def _trailer(repo, ref="HEAD"):
     return _git(repo, "log", "-1", "--format=%(trailers:key=Task-Id,valueonly)", ref).stdout.strip()
 
 
+def _subject(repo, ref="HEAD"):
+    return _git(repo, "log", "-1", "--format=%s", ref).stdout.strip()
+
+
+def _full_message(repo, ref="HEAD"):
+    return _git(repo, "log", "-1", "--format=%B", ref).stdout
+
+
 def test_commit_result_edits_only_makes_single_trailered_commit(tmp_path):
     repo = _repo(tmp_path)
     pre = _head(repo)
@@ -95,6 +103,86 @@ def test_multi_round_fold_prior_landed_commit_survives(tmp_path):
     count2 = _git(repo, "rev-list", "--count", "%s..HEAD" % pre2).stdout.strip()
     assert count2 == "1"
     assert _trailer(repo, "HEAD") == "task-1"
+
+
+def test_commit_result_preserves_engine_prescribed_message(tmp_path):
+    # (a) #386: the engine committed with the SPEC-PRESCRIBED message → the single folded commit
+    # carries THAT message + Task-Id trailer, and the trailer appears exactly once.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    prescribed = "feat: append acceptance-run dated line to target.txt"
+    (tmp_path / "repo" / "target.txt").write_text("dated line")
+    _git(repo, "add", "target.txt")
+    _git(repo, "commit", "-qm", prescribed)
+    res = EA.commit_result(repo, "task-9", pre)
+    assert res["ok"] is True
+    # exactly ONE commit above pre, subject is the prescribed message, trailer present once
+    count = _git(repo, "rev-list", "--count", "%s..HEAD" % pre).stdout.strip()
+    assert count == "1"
+    assert _subject(repo) == prescribed
+    assert _trailer(repo) == "task-9"
+    assert _full_message(repo).count("Task-Id:") == 1
+
+
+def test_commit_result_edits_only_uses_canned_subject(tmp_path):
+    # (b) #386: engine EDITED without committing (HEAD == pre) → canned subject + trailer (unchanged).
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    (tmp_path / "repo" / "g").write_text("engine wrote this")
+    res = EA.commit_result(repo, "task-42", pre)
+    assert res["ok"] is True
+    assert _head(repo) != pre
+    assert _subject(repo) == "build: apply external-engine change"
+    assert _trailer(repo) == "task-42"
+
+
+def test_commit_result_multi_commit_reuses_tip_message(tmp_path):
+    # (c) #386: engine left MULTIPLE commits → the TIP message is reused (the engine's final word),
+    # folded into a single commit.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    (tmp_path / "repo" / "a").write_text("first")
+    _git(repo, "add", "a")
+    _git(repo, "commit", "-qm", "wip: scaffolding")
+    (tmp_path / "repo" / "b").write_text("second")
+    _git(repo, "add", "b")
+    _git(repo, "commit", "-qm", "feat: the real change")
+    res = EA.commit_result(repo, "task-3", pre)
+    assert res["ok"] is True
+    count = _git(repo, "rev-list", "--count", "%s..HEAD" % pre).stdout.strip()
+    assert count == "1"
+    assert _subject(repo) == "feat: the real change"   # tip, not the first (wip) commit
+    assert _trailer(repo) == "task-3"
+
+
+def test_commit_result_does_not_double_existing_task_id_trailer(tmp_path):
+    # (d) #386: engine commit message ALREADY carries a Task-Id trailer → not doubled.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    (tmp_path / "repo" / "c").write_text("change")
+    _git(repo, "add", "c")
+    _git(repo, "commit", "-qm", "feat: do the thing\n\nTask-Id: task-OLD")
+    res = EA.commit_result(repo, "task-new", pre)
+    assert res["ok"] is True
+    msg = _full_message(repo)
+    assert msg.count("Task-Id:") == 1          # exactly one trailer
+    assert "task-OLD" not in msg               # the stale trailer was stripped
+    assert _trailer(repo) == "task-new"
+    assert _subject(repo) == "feat: do the thing"
+
+
+def test_commit_result_empty_message_falls_back_to_canned(tmp_path):
+    # (e) #386: engine commit whose message is empty/whitespace-only → canned fallback.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    (tmp_path / "repo" / "d").write_text("change")
+    _git(repo, "add", "d")
+    # allow-empty-message so git accepts a whitespace-only message
+    _git(repo, "commit", "--allow-empty-message", "-qm", "   \n\t  ")
+    res = EA.commit_result(repo, "task-e", pre)
+    assert res["ok"] is True
+    assert _subject(repo) == "build: apply external-engine change"
+    assert _trailer(repo) == "task-e"
 
 
 def test_commit_result_bad_worktree_returns_error_never_raises(tmp_path):
