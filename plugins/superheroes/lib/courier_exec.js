@@ -79,14 +79,18 @@ function currentAgent() {
 // record_composed shim); absent (node smokes with no wiring) it is a no-op. ALWAYS fail-open (UFR-2): a
 // record error NEVER blocks or delays the dispatch.
 //
-// Recursion barrier (#402 review — code-002/premortem-004/security-002): the recorder's OWN helper leaf
-// (`python3 -c '…permission_rules.record_composed…'`) re-enters this chokepoint through the same agent
-// wrapper. The synchronous `_recordingComposed` guard below covers ONLY a synchronous re-entry (the
-// smoke's case); it does NOT span the recorder's ASYNC fire-and-forget leaf, which re-enters on a later
-// tick after `finally` has cleared the flag. The REAL barrier for that async leaf is `_SPINE_STATE_WRITE`:
-// the helper command matches NONE of its alternatives (no base64.b64decode / *_cli.py / *_entry.py /
-// fence / ref_lock), so it early-returns at the regex gate and never re-records. Do NOT add any
-// permission_rules write shape to `_SPINE_STATE_WRITE` without a matching recursion cutout.
+// Recursion barrier (#402 review rounds 1+2): the recorder's OWN helper leaf
+// (`python3 -c '…permission_rules.record_composed…' <run> '<original command>' …`) re-enters this
+// chokepoint through the same agent wrapper — and `_SPINE_STATE_WRITE` does NOT filter it, because the
+// ORIGINAL state-write command (e.g. one containing `journal_entry.py`) rides inside the helper's argv,
+// so the regex matches the helper command too. The LOAD-BEARING barrier is the synchronous
+// `_recordingComposed` guard below: the whole chain composedRecorder → _composedRecorderFromRun →
+// _defaultRecordComposed → _permHelper → io().runHelper → __sh → globalThis.agent(recorderPrompt) →
+// recordComposedFromPrompt runs with NO intervening `await` (an async function executes synchronously
+// up to its first await, and the wrapper records at its top before awaiting anything), so the re-entrant
+// call arrives while the flag is still true and early-returns. Do NOT remove this guard, and do NOT
+// insert an `await` anywhere on that chain ahead of the wrapper's record call — either change turns
+// every registration into a recursive record-leaf spawn (one leaf per state-write spawning another).
 const _DISPATCH_LEADS = ['Run exactly this', 'Execute this exact shell command']
 // Registration is SCOPED to the spine's own STATE-WRITE seams — the classes that actually fall through
 // the auto-mode classifier and get blocked (#402 evidence: build-state stamps, journal appends, lease/

@@ -266,6 +266,52 @@ def test_record_composed_concurrent_distinct_appends_do_not_lose_update(monkeypa
     assert len(composed) == n, "all %d distinct concurrent appends accumulate, none clobbered" % n
 
 
+def test_record_composed_flock_failure_fails_open_and_leaks_no_fd(monkeypatch, tmp_path):
+    # #402 review round 2: the flock fail-open branch (ENOLCK/EOPNOTSUPP on NFS, EINTR) must (a) still
+    # perform the unlocked RMW — a lock failure degrades to today's behavior, never a raise/park — and
+    # (b) close the already-opened lock fd before dropping the reference (the finally only closes a
+    # non-None lock_fd, so reassigning without closing leaked one fd per registration).
+    import fcntl as _fcntl
+
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3e", "/cwd", root=str(tmp_path))
+
+    opened = []
+    real_open = os.open
+
+    def tracking_open(p, *a, **k):
+        fd = real_open(p, *a, **k)
+        if str(p).endswith(".lock"):
+            opened.append(fd)
+        return fd
+
+    def failing_flock(fd, op):
+        raise OSError(37, "No locks available")   # ENOLCK — the designed fail-open case
+
+    # manual save/restore (NOT monkeypatch.undo(), which would also undo _write_rules' config_key patch
+    # and break the frozen_rules read below).
+    real_flock = _fcntl.flock
+    os.open = tracking_open
+    _fcntl.flock = failing_flock
+    try:
+        cmd = "python3 lib/journal_entry.py --step flocked"
+        pr.record_composed("RUN3e", cmd, "/cwd", root=str(tmp_path))   # must not raise (fail-open)
+    finally:
+        os.open = real_open
+        _fcntl.flock = real_flock
+
+    composed = pr.frozen_rules("RUN3e", "/cwd", root=str(tmp_path))["composed"]
+    assert pr._hash(cmd) in composed, "a lock failure still performs the unlocked RMW (fail-open, UFR-2)"
+    assert len(opened) == 1, "the lock fd was opened exactly once"
+    for fd in opened:
+        try:
+            os.fstat(fd)
+            leaked = True
+        except OSError:
+            leaked = False   # EBADF -> the fd was closed, no leak
+        assert not leaked, "the lock fd is closed on the flock-failure path (no fd leak)"
+
+
 def test_frozen_composed_carries_only_the_hashes_it_was_given(monkeypatch, tmp_path):
     # #402 acceptance 3: the frozen run file carries executed-command hashes ONLY. record_composed stores
     # exactly what it is handed — no prompt hash is ever synthesized here. A hash that was never recorded

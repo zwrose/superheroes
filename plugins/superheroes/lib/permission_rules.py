@@ -410,7 +410,16 @@ def record_composed(run_id, command, cwd, root=None, work_item=None):
         lock_fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
     except OSError:
-        lock_fd = None   # fail-open: proceed unlocked rather than raise (UFR-2)
+        # fail-open: proceed unlocked rather than raise (UFR-2). If os.open succeeded but flock
+        # raised (ENOLCK/EOPNOTSUPP on e.g. NFS, EINTR), close the now-orphaned fd BEFORE dropping
+        # the reference — the finally below only closes a non-None lock_fd (#402 review round 2:
+        # a leaked fd per registration would exhaust the process fd table over a long run).
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+        lock_fd = None
     try:
         snapshot = frozen_rules(run_id, cwd, root, work_item=work_item)
         h = _hash(command)
