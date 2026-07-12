@@ -71,7 +71,7 @@ function __badCourierAnswer(a) {
 }
 async function __sh(cmd, opts) {
   var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
-  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\n\n' + __sc(cmd)
+  var prompt = __require('courier_exec').markedPromptFor(cmd)
   var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
   var ans = await globalThis.agent(prompt, o)
   if (__expectMarker && __badCourierAnswer(ans)) {
