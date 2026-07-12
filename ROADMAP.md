@@ -38,16 +38,17 @@ coarse: *planned → in window → cut → first-run-clean*.
 | Release | Theme | Core scope | Must prove before cut | Status |
 |---|---|---|---|---|
 | **0.11.1** | Engines tell the truth | #307 #308 #309 #310 #311 + the engine-dispatch fix chain the qualification itself surfaced (#341 #344 #347 #349 #357) | cursor genuinely builds AND codex genuinely reviews (≥1 genuine `ok` each, checked **per engine**); readout/journal tell the truth about who did what; acceptance FAILs any engine that didn't genuinely work | **cut 2026-07-11** (first-run-clean pending) |
-| **0.12.0** | Nothing degrades invisibly | degradation tallies + degraded-flag consumers; owner-declared degradation policy; sanitized-posture acceptance leg; #257; #299; harness architecture per its discovery; preflight-readout truth fixes + plan-review deep default (#368–#371) | an all-Claude run cannot look like an external-engine run; acceptance tests the permission posture real users ship; the owner sees a truthful preflight readout before approving | planned |
-| **0.13.0** | Built what you meant | terminal spec-fidelity instrument (discovery first); #230 #229 #189 #175 | "ready" is backed by a spec-vs-build receipt, used by the release-eval itself | planned |
-| **0.14.0** | Judgment and readable runs | trap-taxonomy review classes; agent read-back + plain-language park reasons; #219 #137 #32; guardrail edges (publish scope, checker-not-outmatched, gate provenance) | each new rubric class demonstrated firing; park reasons owner-readable; the never-publishes guarantee matches its prose | planned |
+| **0.12.0** | The record tells the truth | journal truth (#350 — absorbs #378 — #379 #375 #383 #384 #385); preflight-readout truth bundle #368 (absorbs #369–#371); engine-confinement tripwire #355; GPT-5.6 quick discovery #337; #257 verify-and-close (input side shipped in 0.11.2) | the next first-run shows none of the 2026-07-10/11/12 defect signatures — no doubled journal lines, no cross-session events, no silent re-execution, resume survives a final-review-fix park, review coverage unmaskable, the owner sees a truthful readout before approving | planned |
+| **0.13.0** | Degradation reaches the owner | degradation tallies + degraded-flag consumers #314; owner-declared degradation policy #325; routing audit #299; deniedAction disclosure carrier #359; two-leg acceptance epic #352 (#353 #354 #323) | an all-Claude run cannot look like an external-engine run; property-costing fallbacks follow the owner-declared policy (park by default); acceptance tests the permission posture real users ship and the modality they actually run | planned |
+| **0.14.0** | Built what you meant | terminal spec-fidelity instrument (discovery first); #230 #229 #189 #175 | "ready" is backed by a spec-vs-build receipt, used by the release-eval itself | planned |
+| **0.15.0** | Judgment and readable runs | trap-taxonomy review classes; agent read-back + plain-language park reasons; #219 #137 #32; guardrail edges (publish scope, checker-not-outmatched, gate provenance) | each new rubric class demonstrated firing; park reasons owner-readable; the never-publishes guarantee matches its prose | planned |
 
 **The build lane alongside the train** (mechanisms that mostly cut no version but are
 scheduled work): the **0.11.1 window** built the orientation review + ledgers
 (routine scheduled; first memo before the 0.12 cut); the **0.12 window** builds
 claim-based release eval (ships in 0.12, first mechanical use at the 0.13 cut) and
 extends the review benchmark (#131, unblocked now that 0.11.1 made reviews genuinely
-dual-vendor); the **0.13–0.14 windows**
+dual-vendor); the **0.14–0.15 windows**
 absorb the telemetry-checkpoint decisions (#184 #34 #250), the tuning loop (#35), and
 the task-granularity research recommendation.
 
