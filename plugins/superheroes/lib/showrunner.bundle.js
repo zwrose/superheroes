@@ -4131,9 +4131,10 @@ async function _dispatchExternalInner(o) {
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
   const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
+  const schemaText = JSON.stringify(stagedSchema)
   const promptStage = await _stageInput(promptPath, prompt || '')
   const schemaStage = promptStage.ok
-    ? await _stageInput(schemaPath, JSON.stringify(stagedSchema))
+    ? await _stageInput(schemaPath, schemaText)
     : { ok: false, results: [] }
   if (!(promptStage.ok && schemaStage.ok)) {
     const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
@@ -4154,11 +4155,22 @@ async function _dispatchExternalInner(o) {
     }
   }
   const run = (async () => {
-    const argvObj = await _execJson(
+    const buildArgvCmd =
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
       `--schema-path ${shq(schemaPath)}` +
-      (typeof model === 'string' && model ? ` --model ${shq(model)}` : ''))
+      (typeof model === 'string' && model ? ` --model ${shq(model)}` : '') +
+      ` --verify ${shq(promptPath + ':' + sha256hex(prompt || ''))}` +
+      ` --verify ${shq(schemaPath + ':' + sha256hex(schemaText))}`
+    let argvObj = await _execJson(buildArgvCmd)
+    if (argvObj && argvObj.ok === false && argvObj.reason === 'staged-input-mismatch') {
+      const rp = await _stageInput(promptPath, prompt || '')
+      const rs = rp.ok ? await _stageInput(schemaPath, schemaText) : { ok: false }
+      argvObj = (rp.ok && rs.ok) ? await _execJson(buildArgvCmd) : null
+      if (argvObj && argvObj.ok === false && argvObj.reason === 'staged-input-mismatch') {
+        return { ok: false, reason: 'staged-input-mismatch' }
+      }
+    }
     const argv = argvObj && Array.isArray(argvObj.argv) ? argvObj.argv : (Array.isArray(argvObj) ? argvObj : null)
     if (!argv) return { ok: false, reason: 'build-argv-failed' }
     resolvedArgv = argv
@@ -4269,6 +4281,18 @@ function _maybeHarnessDeadNotice(o, reason) {
       'falls open to Claude, silently violating enginePreferences. Harness/staging defect (see #277), not engine auth.')
   } catch (_) {}
 }
+let _stagingLieNoticeShown = false
+function _maybeStagingLieNotice(o, reason) {
+  if (_stagingLieNoticeShown || String(reason || '') !== 'staged-input-mismatch') return
+  _stagingLieNoticeShown = true
+  const engine = (o && o.engine) || 'external'
+  try {
+    globalThis.log('STAGED-INPUT-MISMATCH: engine ' + JSON.stringify(engine) + ' dispatch inputs failed ' +
+      'the deterministic hash verify twice (original stage + one re-stage) — a staging courier answered ' +
+      'ok on content the disk disproves (#395: possible payload hijack or staging corruption). The ' +
+      'dispatch failed closed; see the journal staged-input-mismatch line.')
+  } catch (_e) { /* notice is best-effort */ }
+}
 function _errText(e) {
   if (e == null) return String(e)
   const name = e.name || 'Error'
@@ -4279,15 +4303,18 @@ async function dispatchExternal(o) {
   try {
     const res = await _dispatchExternalInner(o || {})
     _maybeHarnessDeadNotice(o, res && res.reason)
+    _maybeStagingLieNotice(o, res && res.reason)
     return res
   } catch (e) {
     const reason = 'dispatch-error: ' + _errText(e)
     _maybeHarnessDeadNotice(o, reason)
+    _maybeStagingLieNotice(o, reason)
     return { ok: false, reason }
   }
 }
 function __resetHarnessNotice() { _harnessDeadNoticeShown = false }
-module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice,
+function __resetStagingLieNotice() { _stagingLieNoticeShown = false }
+module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarnessNotice, __resetStagingLieNotice,
   _STREAMS_WHEN_PIPED, strictify,
   COURIER_DECLINED_OUTCOME,
   STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
