@@ -139,9 +139,7 @@ def test_commit_result_preserves_engine_multiline_message(tmp_path):
     res = EA.commit_result(repo, "task-ml", pre)
     assert res["ok"] is True
     msg = _full_message(repo)
-    assert subject in msg
-    assert body in msg
-    assert footer in msg
+    assert msg.rstrip("\n") == prescribed.rstrip("\n") + "\n\nTask-Id: task-ml"
     assert msg.count("Task-Id:") == 1
     assert _trailer(repo) == "task-ml"
 
