@@ -37,6 +37,10 @@ EVENT_TYPES = {
     # ({reason, command_sha256, cwd}), written as-is — the command HASH (first 16 hex of
     # sha256), never the raw command text (which may embed tokens/secrets).
     "allowance_fired",
+    # #381 whole-branch final review: auditable handoff to review-code when the one-pass cap surfaces
+    # blockers, the fix batch lands, and post-fix verify is green. Structured non-secret `payload`
+    # ({branch, open_findings, fix_dispatched, ...}), written as-is; run_watch may render it.
+    "final_review_handoff",
 }
 
 

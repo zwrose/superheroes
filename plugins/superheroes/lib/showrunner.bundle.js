@@ -1788,6 +1788,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     if (decided.certification) verdictOut.certification = decided.certification
     if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
     if (own(decided, 'worklistReason')) verdictOut.worklistReason = decided.worklistReason
+    if (own(decided, 'haltKind')) verdictOut.haltKind = decided.haltKind
     return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
@@ -1848,7 +1849,7 @@ const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
 const VERIFY_SCHEMA = { type: 'object', required: ['result'],
   properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
 };
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
@@ -4269,13 +4270,14 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   EMIT_TAIL_BYTES }
 };
 __modules["build_phase"] = function (module, exports, require) {
-const { reviewPanel } = require('./review_panel_shell.js')
+const { reviewPanel, verifyAgent: shellVerifyAgent } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
 const modelTierTwin = require('./model_tier.js')
 const courier = require('./courier_exec.js')
 const workerRecoveryTwin = require('./worker_recovery.js')
 const taskReviewTwin = require('./task_review.js')
 const circuitBreaker = require('./circuit_breaker.js')
+const panelTally = require('./panel_tally.js')
 const engineDispatch = require('./engine_dispatch.js')
 const enginePrefTwin = require('./engine_pref.js')
 const { libPath, libRoot } = require('./lib_root.js')
@@ -4291,7 +4293,11 @@ function reviewTaskLabel(task, round) {
   return `review task ${task.id}:r${round}`
 }
 function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
-function ok() { return { confidence: 'high', assumptions: [] } }
+function ok(extras) {
+  const r = { confidence: 'high', assumptions: [] }
+  if (extras && extras.handoffSummary) r.handoffSummary = extras.handoffSummary
+  return r
+}
 function baseArg() {
   const b = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   return b ? ` --base ${shq(b)}` : ''
@@ -4437,11 +4443,16 @@ async function buildPhase(workItem, generation) {
     }
   }
   const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
+  let handoffSummary = null
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
-    if (fr.terminal !== 'clean') {
+    if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
       return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
+    }
+    if (fr.haltKind === 'round-cap') {
+      const journalResult = await journalFinalReviewHandoff(workItem, branch, fr)
+      handoffSummary = buildHandoffSummary(fr, journalResult)
     }
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
@@ -4453,7 +4464,7 @@ async function buildPhase(workItem, generation) {
     const p = await writeProvenance(workItem)
     if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown'))
   }
-  return ok()
+  return handoffSummary ? ok({ handoffSummary }) : ok()
 }
 async function resetUncommitted(wt, branch) {
   return agent(
@@ -4804,6 +4815,44 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
     round += 1
   }
 }
+async function capBlockingWorklist(runDir, verdict) {
+  const round = (verdict && verdict.round) || 1
+  const path = `${runDir}/round-records.json`
+  let raw
+  try {
+    raw = await io().readText(path)
+  } catch (_e) {
+    return { ok: false, reason: 'round-memory-unreadable' }
+  }
+  let records
+  try {
+    records = JSON.parse(raw)
+  } catch (_e) {
+    return { ok: false, reason: 'round-memory-corrupt' }
+  }
+  if (!Array.isArray(records)) {
+    return { ok: false, reason: 'round-memory-corrupt' }
+  }
+  const rec = records.find((r) => r && r.round === round) || records[records.length - 1]
+  if (!rec || !rec.dimensions) {
+    return { ok: true, blockers: [] }
+  }
+  const blockers = panelTally.blockingFindingsFromDimensionResults(rec.dimensions)
+    .filter((f) => circuitBreaker.isBlocking(f.severity))
+  return { ok: true, blockers }
+}
+function capOpenFindingsSummary(blockers) {
+  return (blockers || []).slice(0, 50).map((f) => ({
+    file: (f && f.file) || null,
+    line: (f && (f.line !== undefined ? f.line : null)),
+    title: (f && f.title) || '',
+    severity: (f && f.severity) || '',
+  }))
+}
+function _branchReviewerPayload(out) {
+  if (!out || !Array.isArray(out.findings)) return null
+  return out.confidence ? out : out.findings
+}
 async function runFinalReview(workItem, generation, branch, wt) {
   const script = [
     'import json, subprocess, sys',
@@ -4853,11 +4902,11 @@ async function runFinalReview(workItem, generation, branch, wt) {
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
         schema: FINAL_REVIEW_SCHEMA })
-      return (out && Array.isArray(out.findings)) ? out.findings : null
+      return _branchReviewerPayload(out)
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
       schema: FINAL_REVIEW_SCHEMA })
-    return (out && Array.isArray(out.findings)) ? out.findings : null
+    return _branchReviewerPayload(out)
   }
   globalThis.recordDeferred = async (report, verdict, rdir) => {
     const p = `${rdir}/deferred-set.json`
@@ -4865,8 +4914,19 @@ async function runFinalReview(workItem, generation, branch, wt) {
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
   }
-  const fixStep = async (_fixContext, verdict, _runDir) => {
-    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  let capBlockers = []
+  const fixStep = async (_fixContext, verdict, runDir) => {
+    let blockers
+    if (capBlockers.length) {
+      blockers = capBlockers.slice()
+    } else {
+      const wl = await capBlockingWorklist(runDir, verdict)
+      if (!wl.ok) return null
+      blockers = wl.blockers
+    }
+    if (!blockers.length) {
+      blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+    }
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
     await _implDispatch({
       workItem, roleKind: 'fix', taskId: workItem, wt, branch, model: fixerModel,  // #308
@@ -4879,10 +4939,108 @@ async function runFinalReview(workItem, generation, branch, wt) {
   }
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
-    runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
+    runKey: runDir, runDir, fixStep, maxRounds: 1,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
+  let haltKind = verdict && verdict.haltKind
+  let reason = verdict && verdict.reason
+  let fixPass = null
+  if (verdict && verdict.haltKind === 'round-cap' && !verdict.uncertified) {
+    const wl = await capBlockingWorklist(runDir, verdict)
+    if (!wl.ok) {
+      haltKind = 'other'
+      reason = wl.reason
+    } else {
+      capBlockers = wl.blockers
+    }
+  }
+  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap' && !verdict.uncertified) {
+    if (capBlockers.length === 0) {
+      haltKind = 'other'
+      reason = 'round-cap with empty blocking worklist — inconsistent with cap decider (fail closed)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
+    let fixReport = null
+    try { fixReport = await fixStep(null, verdict, runDir) } catch (_e) { fixReport = null }
+    if (!fixReport) {
+      haltKind = 'fix-failed'
+      reason = 'one-pass fix batch did not complete (fix dispatch failed or fence lost)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
+      try { await recordDeferred(fixReport, verdict, runDir) } catch (_e) { /* advisory by contract */ }
+      let postVerify = 'skipped'
+      if (verify && String(verify).trim().toLowerCase() !== 'none') {
+        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io()) }
+        catch (_e) { postVerify = 'fail' }
+      }
+      if (postVerify === 'pass' || postVerify === 'skipped') {
+        fixPass = { dispatched: true, fixed: (fixReport.fixed || []), postVerify }
+      } else {
+        haltKind = 'verify-fail'   // post-fix red verify PARKS — never swallowed into the handoff
+        reason = 'post-fix verify ' + (postVerify === 'timeout' ? 'timed out' : 'failed')
+          + ' after the one-pass fix batch — cannot hand off'
+      }
+    }
+    }
+  }
+  if (!capBlockers.length) {
+    capBlockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  }
+  const openFindings = capOpenFindingsSummary(capBlockers)
+  return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
+           openFindings, openFindingsCount: capBlockers.length,
+           uncertified: !!(verdict && verdict.uncertified) }
+}
+function buildHandoffSummary(fr, journalResult) {
+  const fixPass = (fr && fr.fixPass) || null
+  const summary = {
+    openFindingsCount: (fr && fr.openFindingsCount) || 0,
+    openFindings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    fixDispatched: !!(fixPass && fixPass.dispatched),
+    fixFixed: (fixPass && fixPass.fixed) || [],
+    postFixVerify: (fixPass && fixPass.postVerify) || 'none',
+    handoff: 'review-code',
+    handoffJournalOk: !!(journalResult && journalResult.ok),
+  }
+  if (!summary.handoffJournalOk) {
+    summary.handoffJournalError = (journalResult && journalResult.error)
+      || 'final_review_handoff journal write failed'
+  }
+  return summary
+}
+async function journalFinalReviewHandoff(workItem, branch, fr) {
+  const fixPass = (fr && fr.fixPass) || null
+  const summary = {
+    branch,
+    open_findings_count: (fr && fr.openFindingsCount) || 0,
+    open_findings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    fix_dispatched: !!(fixPass && fixPass.dispatched),
+    fix_fixed: (fixPass && fixPass.fixed) || [],
+    post_fix_verify: (fixPass && fixPass.postVerify) || 'none',
+    handoff: 'review-code',
+  }
+  const detail = `whole-branch final review reached the one-pass cap with `
+    + `${summary.open_findings_count} open finding(s); one fix pass dispatched `
+    + `(post-fix verify: ${summary.post_fix_verify}) — handing off to review-code (unvetted by this leg)`
+  try {
+    const r = await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type final_review_handoff --step ${shq('final_review')} `
+      + `--detail ${shq(detail)} --payload ${shq(JSON.stringify(summary))}`,
+      'journal final-review handoff')
+    if (r == null) {
+      return { ok: false, error: 'final_review_handoff journal write did not run (courier/exec failed)' }
+    }
+    if (r.ok !== true) {
+      return { ok: false, error: r.error || r.reason || 'final_review_handoff journal write failed' }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false,
+             error: (e && e.message) ? String(e.message) : 'final_review_handoff journal write failed' }
+  }
 }
 module.exports = { buildPhase, shq, MAX_ROUNDS, park, ok, implementTaskLabel, fixTaskLabel, reviewTaskLabel }
 module.exports.buildTaskPrompt = buildTaskPrompt
@@ -6983,7 +7141,10 @@ async function runPhases(workItem, fromStep, deps) {
     const saved = await persistPhase(workItem, {
       sideEffectCmd: (persist && persist.sideEffectCmd) || null,
       journalPayload: (persist && persist.journalPayload) ||
-        { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+        Object.assign(
+          { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+          phaseResult.handoffSummary ? { handoffSummary: phaseResult.handoffSummary } : null,
+        ),
       step: i, phase, sideEffect,
       journalOnly: !proceed,
       recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf

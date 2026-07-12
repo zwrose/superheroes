@@ -2590,7 +2590,10 @@ async function runPhases(workItem, fromStep, deps) {
     const saved = await persistPhase(workItem, {
       sideEffectCmd: (persist && persist.sideEffectCmd) || null,
       journalPayload: (persist && persist.journalPayload) ||
-        { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+        Object.assign(
+          { phase, gate, confidence: phaseResult.confidence, assumptions: phaseResult.assumptions || [] },
+          phaseResult.handoffSummary ? { handoffSummary: phaseResult.handoffSummary } : null,
+        ),
       step: i, phase, sideEffect,
       journalOnly: !proceed,
       recordCost: true,     // #130: fold this phase's cost telemetry into the save leaf

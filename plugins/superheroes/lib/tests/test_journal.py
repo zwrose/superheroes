@@ -291,3 +291,49 @@ def test_phases_skipped_event_is_recorded_with_payload(tmp_path, monkeypatch):
 def test_phases_skipped_is_a_known_event_type():
     # An unknown type would fail closed (DurableWriteError); phases_skipped must be registered.
     assert "phases_skipped" in journal.EVENT_TYPES
+
+
+def test_final_review_handoff_is_a_known_event_type():
+    # #381: the whole-branch final-review handoff breadcrumb must be in the vocabulary before
+    # journal_entry.py can append it (unknown types fail closed with DurableWriteError).
+    assert "final_review_handoff" in journal.EVENT_TYPES
+
+
+def test_journal_entry_cli_writes_final_review_handoff(tmp_path, monkeypatch):
+    # #381: build_phase.js shells journal_entry.py --event-type final_review_handoff; prove the
+    # CLI append succeeds and the event line is durable (not a mock — real journal_entry.py path).
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import control_plane
+    import journal
+    _lib = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..")
+    wi = "wi-final-review-handoff-%d" % _os.getpid()
+    monkeypatch.chdir(tmp_path)
+    payload = {
+        "branch": "feat/x",
+        "open_findings_count": 1,
+        "open_findings": [{"file": "a.js", "line": 1, "title": "blocker", "severity": "Critical"}],
+        "reason": "round cap",
+        "fix_dispatched": True,
+        "fix_fixed": ["blocker"],
+        "post_fix_verify": "skipped",
+        "handoff": "review-code",
+    }
+    out = _sp.run(
+        [_sys.executable, _os.path.join(_lib, "journal_entry.py"),
+         "--work-item", wi, "--event-type", "final_review_handoff",
+         "--step", "final_review",
+         "--detail", "handoff to review-code",
+         "--payload", _json.dumps(payload)],
+        capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert _json.loads(out.stdout) == {"ok": True}
+    events = control_plane.paths(str(tmp_path), wi)["events"]
+    evs = journal.read_events(events)
+    assert evs[-1]["type"] == "final_review_handoff"
+    assert evs[-1]["step"] == "final_review"
+    assert evs[-1]["payload"]["handoff"] == "review-code"
+    assert _os.path.exists(events)
+    assert any('"type": "final_review_handoff"' in line for line in open(events).read().splitlines())

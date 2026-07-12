@@ -571,6 +571,38 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
                 terminal = "continue"
                 reason = "awaiting final confirmation round"
 
+        # #381 STRUCTURED cap-halt discriminator. The caller (build_phase's whole-branch final-review
+        # gate) routes on this field, NEVER on the prose reason. Computed here at the verdict-assembly
+        # site from the same structured inputs the terminal decision used — no prose regexing.
+        #   'round-cap'  — the finding-churn cap: the breaker's max-iterations halt (round cap reached
+        #                  with blockers still present) with verify NOT red AND the round CERTIFIED
+        #                  (gate blocking + confidence high — never cannot-certify). This is the ONLY
+        #                  halt kind the caller acts on instead of parking: build_phase dispatches its
+        #                  ONE fix pass + a post-fix verify, and only when both land green hands off to
+        #                  review-code (the stronger branch gate) — otherwise it downgrades the kind
+        #                  to 'fix-failed'/'verify-fail' and parks. An uncertified cap halt is 'other'.
+        #   'verify-fail'— verify went red (fail/timeout). A blocking round with a red verify halts via
+        #                  the breaker WITHOUT tripping the clean→halted verify override above, so it is
+        #                  classified explicitly here — the cap-halt proceed path must never swallow a
+        #                  red verify (#381 fail-closed guard).
+        #   'fix-failed' — the fix step did not complete.
+        #   'other'      — breaker recurrence / no-net-progress / challenged-principle, confirmation-panel
+        #                  cap park, or any fail-closed halt. All park.
+        verify_red = verify_result is not None and verify_result not in _VERIFY_OK
+        halt_kind = None
+        if terminal == "halted":
+            if verify_red:
+                halt_kind = "verify-fail"
+            elif fix_status == "failed":
+                halt_kind = "fix-failed"
+            elif breaker_halt and brk.get("reason") == "max-iterations":
+                # #381: only a CERTIFIED blocking cap is the handoff kind — an uncertified/cannot-certify
+                # gate parks regardless (the uncertified flag rides the verdict for the consumer guard).
+                halt_kind = ("round-cap" if gate == "blocking" and confidence == "high"
+                             else "other")
+            else:
+                halt_kind = "other"
+
         out = {
             "ok": True,
             "schemaVersion": SCHEMA_VERSION,
@@ -585,6 +617,9 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
             "breaker": {"halt": breaker_halt, "reason": brk.get("reason"),
                         "detail": _clamp_reason(brk.get("detail"))},
         }
+        # #381 structured cap-halt discriminator (additive; the shell copies it onto the verdict).
+        if halt_kind is not None:
+            out["haltKind"] = halt_kind
         # #212 uncertified flag: a cannot-certify GATE rides the verdict even when this round routes
         # to the fix leg (terminal continue) — the readout/phase layer sees the coverage gap while
         # fixes land. Mirrors review_panel_shell.tallyRound's `if (gate === 'cannot-certify')`.
