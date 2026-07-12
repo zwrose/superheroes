@@ -1916,7 +1916,6 @@ const _SPINE_STATE_WRITE = new RegExp([
   'journal_entry\\.py',                        // journal appends
   'prov_entry\\.py',                           // provenance stamps (incl. the build-denial taint step)
   'fence_cli\\.py', 'ref_lock',                // lease acquire/renew/release + fence ops
-  'git\\s+reset\\s+--hard',                    // build_phase.resetUncommitted's fixed git command
 ].join('|'))
 let composedRecorder = null
 let _recordingComposed = false
@@ -1932,7 +1931,7 @@ function recordComposedFromPrompt(prompt) {
   try { composedRecorder(command) } catch (_e) { /* fail-open (UFR-2): never block a dispatch */ }
   finally { _recordingComposed = false }
 }
-const DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+const DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)/i
 function denialReason(text) {
   const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
   const m = s.match(DENIAL_SIG)
@@ -2082,9 +2081,9 @@ async function runCourierMarkedText(label, command, opts) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd, opts)
     lastAns = ans
-    const denial = denialReason(ans)
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
     if (_isBadAnswer(ans, opts)) {
+      const denial = denialReason(ans)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
       last = 'missing execution marker'
       continue
     }
@@ -2102,9 +2101,9 @@ async function runCourierMarkedJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
     lastAns = ans
-    const denial = denialReason(ans)
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
     if (badCourierAnswer(ans)) {
+      const denial = denialReason(ans)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
       last = 'missing execution marker'
       continue
     }
@@ -2133,9 +2132,9 @@ async function runCourierText(label, command) {
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
-    const denial = denialReason(stdoutOf(raw))
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, stdoutOf(raw)) }
     if (!commandOk(raw)) {
+      const denial = denialReason(stdoutOf(raw))
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, stdoutOf(raw)) }
       _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
@@ -2152,9 +2151,9 @@ async function runCourierJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
-    const denial = denialReason(out)
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, out) }
     if (!commandOk(raw)) {
+      const denial = denialReason(out)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, out) }
       _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }

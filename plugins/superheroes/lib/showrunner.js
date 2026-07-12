@@ -425,8 +425,11 @@ const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defau
 // calls with the EXACT bytes a dumb-pipe leaf is about to execute. It reads the active run identity from
 // globalThis.__SR_RUN_CTX (set at run start, right after the freeze) and threads it into record_composed, so a
 // registration lands in the run that composed the command — and only that run. No active run -> no-op
-// (FR-3: the allowance layer is inert with no live run). record_composed is idempotent (hash-set append),
-// so parallel dispatches appending to one run's set are safe. Fail-open lives in _defaultRecordComposed.
+// (FR-3: the allowance layer is inert with no live run). Concurrency (#402 review — premortem-002): the
+// recorder fires once per state-write on its own fire-and-forget leaf, so two record_composed processes
+// for one run can overlap; record_composed serialises its read-append-write under a per-run flock so
+// DISTINCT concurrent hashes accumulate (a REPEAT of the same hash is the idempotent no-op). Fail-open
+// lives in _defaultRecordComposed: a dropped registration degrades to the classifier path, never a park.
 function _composedRecorderFromRun(command) {
   const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
   if (!run || run.runId == null) return
@@ -1884,7 +1887,10 @@ async function showrunner({ workItem }) {
   // #402 Part A/B: publish the active run identity for the courier chokepoint's composed-exact recorder
   // (byte-exact registration BEFORE each dumb-pipe dispatch) and the decline-journal seam. Set AFTER the
   // freeze so the freeze's own helper leaf isn't recorded, and BEFORE any command dispatch so every
-  // spine-composed leaf command is registered. Cleared on no run by never being set (FR-3 inert).
+  // spine-composed leaf command is registered. The showrunner runs one work-item per process and exits,
+  // so this ambient global is process-scoped like __SR_ROOT/__SR_PHASE (#402 review — code-003: it is not
+  // cleared on return; a run that parks BEFORE this line — e.g. at the reconcile gate above — never sets it,
+  // and the recorders no-op on a null __SR_RUN_CTX, so no prior value can be misattributed in a fresh process).
   if (typeof globalThis !== 'undefined') {
     globalThis.__SR_RUN_CTX = { runId: r.generation, workItem: workItem, cwd: procCwd() }
   }

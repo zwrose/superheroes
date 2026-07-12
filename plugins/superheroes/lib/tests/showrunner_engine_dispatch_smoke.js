@@ -1077,8 +1077,11 @@ function makeAgent(routes) {
       const ed = jp.filter((p) => p.outcome === 'staging-denied')
       assert.strictEqual(jp.length, 1, '#373: exactly ONE external_dispatch journal line total (no stray outcome): ' + JSON.stringify(jp.map((p) => p.outcome)))
       assert.strictEqual(ed.length, 1, '#373: plain-staging clamp case journals one staging-denied line')
-      assert.ok(ed[0].reason.includes('Permission denied by auto mode classifier'),
-        '#373: the journaled reason contains the denial phrase: ' + ed[0].reason)
+      // #402: the denial signature is anchored to the classifier's own phrasing (a bare "Permission
+      // denied" no longer matches, so it can't false-fire on ordinary output). The reason window therefore
+      // opens at the "auto mode classifier" phrase — still an informative, classifier-naming denial reason.
+      assert.ok(ed[0].reason.includes('auto mode classifier'),
+        '#373: the journaled reason names the classifier denial: ' + ed[0].reason)
       assert.ok(ed[0].reason.length <= 201, '#373: the journaled reason is clamped to ≤201 chars (200 + ellipsis): len=' + ed[0].reason.length)
       assert.ok(!ed[0].reason.includes(secretPayload), '#373: the plain payload secret never leaks into the reason: ' + ed[0].reason)
       console.log('OK: engine_dispatch #373 denial-reason clamp + plain-staging leak guard (≤201 chars, no payload)')

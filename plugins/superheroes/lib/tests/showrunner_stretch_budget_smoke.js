@@ -545,6 +545,18 @@ async function main() {
       `justify against the #118 matrix or fold the new leaf`)
   }
 
+  // (2b) #402 review (test-003): the per-phase budgets above are CEILINGS, so raising them for the
+  // composed-exact registration leaves cannot, by itself, prove those leaves actually FIRE — a silent
+  // registration regression (recorder unwired / __SR_RUN_CTX unset / record_composed no-op) would only
+  // DROP counts and still pass `<= budget`. Pin a positive LOWER bound: the run must dispatch at least
+  // one composed-exact registration leaf (a courier shelling permission_rules.record_composed), and it
+  // must land in a state-write phase (workhorse/ship), the classes #402's evidence saw blocked.
+  const regLeaves = calls.filter((c) => /permission_rules\.record_composed/.test(c.prompt))
+  assert.ok(regLeaves.length >= 1,
+    '#402: at least one composed-exact registration leaf must fire (registration is wired and reaches a state write)')
+  assert.ok(regLeaves.some((c) => c.phase === 'workhorse' || c.phase === 'ship'),
+    '#402: a registration leaf fires in a state-write phase (workhorse/ship), not only bookkeeping')
+
   // (4) STARTUP is the deliberately-two-leaf stretch; assert EXACTLY the matrix shape.
   const startup = calls.filter((c) => c.phase === 'startup' && !isGenuine(c.label))
   assert.strictEqual(startup.length, 2,

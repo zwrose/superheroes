@@ -219,10 +219,9 @@ def test_record_composed_is_exact(monkeypatch, tmp_path):
 
 
 def test_record_composed_append_is_idempotent_and_accumulates(monkeypatch, tmp_path):
-    # #402 acceptance 4: parallel dispatches appending to one run's composed set are safe — the append is
-    # a hash-set (a repeat of the SAME executed command is a no-op, not a duplicate), and DISTINCT executed
-    # commands accumulate. (Serial here — control_plane.atomic_write makes each write atomic; a lost update
-    # under true concurrency only drops one registration, which fail-open degrades to the classifier path.)
+    # #402 acceptance 4 (serial leg): the append is a hash-set — a repeat of the SAME executed command is a
+    # no-op (not a duplicate), and DISTINCT executed commands accumulate. The concurrent leg (that distinct
+    # appends do not lost-update under true parallelism) is proven separately below.
     _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
     pr.freeze_run_rules("RUN3b", "/cwd", root=str(tmp_path))
     build_stamp = "python3 lib/build_state_cli.py record-reviewed --work-item wi"
@@ -234,6 +233,37 @@ def test_record_composed_append_is_idempotent_and_accumulates(monkeypatch, tmp_p
     assert composed.count(pr._hash(build_stamp)) == 1, "a repeated executed command appends once (idempotent)"
     assert pr._hash(journal_write) in composed, "a distinct executed command accumulates"
     assert len(composed) == 2, "only the two distinct executed-command hashes are frozen"
+
+
+def test_record_composed_concurrent_distinct_appends_do_not_lose_update(monkeypatch, tmp_path):
+    # #402 acceptance 4 (concurrent leg) + review premortem-002: the composed-exact recorder fires once per
+    # spine state-write, each on its OWN fire-and-forget leaf, so many record_composed PROCESSES for one run
+    # overlap. record_composed's read-append-write is guarded by a per-run flock, so N truly-concurrent
+    # appends of DISTINCT commands all land — no last-writer-wins lost update. Without the lock this fails
+    # intermittently (the whole-file atomic_write clobbers a concurrent append).
+    import multiprocessing as _mp
+
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    root = str(tmp_path)
+    pr.freeze_run_rules("RUN3d", "/cwd", root=root)
+    n = 24
+    cmds = ["python3 lib/journal_entry.py --step s%02d" % i for i in range(n)]
+
+    def _worker(cmd):
+        # re-import in the child (spawn start method reruns the module) and hammer the same run file.
+        import permission_rules as _pr
+        _pr.record_composed("RUN3d", cmd, "/cwd", root=root)
+
+    ctx = _mp.get_context("fork")   # fork keeps monkeypatched sys.path/cwd resolution simple in the child
+    procs = [ctx.Process(target=_worker, args=(c,)) for c in cmds]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(30)
+    composed = pr.frozen_rules("RUN3d", "/cwd", root=root)["composed"]
+    for c in cmds:
+        assert pr._hash(c) in composed, "every concurrent distinct append survives (no lost update): %s" % c
+    assert len(composed) == n, "all %d distinct concurrent appends accumulate, none clobbered" % n
 
 
 def test_frozen_composed_carries_only_the_hashes_it_was_given(monkeypatch, tmp_path):
@@ -454,10 +484,15 @@ def test_no_pending_request_state_is_ever_persisted(monkeypatch, tmp_path):
     assert pr.evaluate("python3 -m pytest -q", "/cwd", "R", root=str(store))[0] == "allow"  # allow path
     assert pr.evaluate("curl http://evil", "/cwd", "R", root=str(store))[0] == "fall"        # fall path
     perm = os.path.join(str(store), "projects", "KEY", "permission")
-    # (1) EXACT file inventory — no stray pending/queue/request file was written.
+    # (1) EXACT file inventory — no stray pending/queue/request file was written. #402: the empty advisory
+    # `runs/*.json.lock` sidecar (record_composed's per-run flock) carries NO state — a 0-byte lock file —
+    # so it is excluded here; it cannot hold pending-request structure and the byte-vocabulary check below
+    # would see nothing in it regardless.
     inventory = set()
     for dirpath, _dirs, files in os.walk(perm):
         for f in files:
+            if f.endswith(".lock"):
+                continue
             inventory.add(os.path.relpath(os.path.join(dirpath, f), perm))
     assert inventory == {"rules.json", "audit.json", os.path.join("runs", "R.json")}, inventory
     # (2) No file's bytes carry any pending/waiting/queued request vocabulary.

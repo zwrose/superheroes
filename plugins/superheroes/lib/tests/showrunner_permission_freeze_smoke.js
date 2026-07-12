@@ -81,13 +81,17 @@ async function buildNeverRecordsTheBuilderPrompt() {
 
   const savedRoot = globalThis.__SR_ROOT
   globalThis.__SR_ROOT = '/repo'
+  // #402 review (test-005): prove buildOneTask actually REACHED the builder dispatch — the exact point the
+  // removed #333 code recorded the prompt — so the negative assertion below is meaningful, not vacuously
+  // satisfied by an early crash before that point.
+  let reachedBuilderDispatch = false
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'exec') {
       if (prompt.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       return [{ index: 0, ok: true, stdout: JSON.stringify({ unmapped_commits: 0 }) }]
     }
-    if (label && label.startsWith('implement task')) return { ok: true, signal: 'ok', evidence: {} }
+    if (label && label.startsWith('implement task')) { reachedBuilderDispatch = true; return { ok: true, signal: 'ok', evidence: {} } }
     if (opts && opts.courier) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, read_back: true, task: '7' }) }]
     return { ok: true }
   }
@@ -101,6 +105,8 @@ async function buildNeverRecordsTheBuilderPrompt() {
     else delete globalThis.__SR_ROOT
   }
 
+  assert.ok(reachedBuilderDispatch,
+    'buildOneTask reached the builder dispatch (the removed #333 record site) — the negative check is not vacuous')
   assert.ok(!recorded.some((r) => r.command === builderPrompt),
     'the builder-leaf PROMPT is never registered as a composed-exact command (#333 dead weight removed)')
 }

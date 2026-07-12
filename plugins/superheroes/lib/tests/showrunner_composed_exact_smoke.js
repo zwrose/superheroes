@@ -35,6 +35,22 @@ function chokepointContract() {
       'python3 lib/journal_entry.py --step x 2>&1; echo __SR_EXIT:$?',
     ], 'records the exact executed bytes after the first blank line, for both dumb-pipe leads')
 
+    // EVERY _SPINE_STATE_WRITE alternative gets a positive case (#402 review — test-001): dropping any
+    // one of these allowlist arms must fail this test rather than silently reverting that state-write
+    // class to the auto-mode classifier (the #395 endgame park). One command per remaining arm:
+    seen.length = 0
+    const perClass = {
+      'prov_entry.py': 'python3 lib/prov_entry.py --step build --sha abc123',
+      'fence_cli.py': 'python3 lib/fence_cli.py renew --lease L7',
+      'ref_lock': 'python3 -c "import ref_lock; ref_lock.release(\'wi\')"',
+      'base64.b64decode (__SR_W io writer)': 'python3 -c \'import os,sys,base64\nopen(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))\' /store/x.json AA==',
+    }
+    for (const [cls, cmd] of Object.entries(perClass)) {
+      courier.recordComposedFromPrompt('Run exactly this command and return ONLY stdout, unchanged:\n\n' + cmd)
+    }
+    assert.deepStrictEqual(seen, Object.values(perClass),
+      'each remaining state-write class (prov, fence, ref_lock, base64 io-writer) registers its exact bytes')
+
     // a READ dumb pipe is NOT registered — reads are not blocked, and registering them would double cost.
     seen.length = 0
     courier.recordComposedFromPrompt('Run exactly this command and return ONLY stdout, unchanged:\n\ngit status')
@@ -95,10 +111,21 @@ function loadBundle() {
 }
 
 async function byteExactThroughPreamble() {
-  const { sandbox } = loadBundle()
+  const { sandbox, getLastDispatched } = loadBundle()
   const bundledCourier = sandbox.globalThis.__sr_require('courier_exec')
   const recorded = []
-  bundledCourier.setComposedRecorder((cmd) => recorded.push(cmd))
+  // #402 review (test-006): assert criterion 1's ordering — registration fires BEFORE the leaf dispatch,
+  // so the enforcer can see the frozen hash. On the FIRST dispatch through this fresh bundle the canned
+  // __realAgent has not run yet, so getLastDispatched() must still be null when the recorder fires.
+  let firstReg = true
+  bundledCourier.setComposedRecorder((cmd) => {
+    if (firstReg) {
+      assert.strictEqual(getLastDispatched(), null,
+        'registration precedes dispatch: the recorder fires before __realAgent (criterion 1)')
+      firstReg = false
+    }
+    recorded.push(cmd)
+  })
 
   // A dumb-pipe state-write dispatch through the bundle's globalThis.agent (the single choke-point
   // wrapper) records the FINAL prompt's command verbatim — this is what the leaf executes.

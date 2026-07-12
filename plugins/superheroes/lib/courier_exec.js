@@ -77,13 +77,20 @@ function currentAgent() {
 //
 // The recorder is INJECTED by the showrunner wiring (it closes over the run id + work-item + the Python
 // record_composed shim); absent (node smokes with no wiring) it is a no-op. ALWAYS fail-open (UFR-2): a
-// record error NEVER blocks or delays the dispatch. A re-entrancy guard stops the recorder's OWN helper
-// leaf (which re-enters this chokepoint through the same agent wrapper) from recursing.
+// record error NEVER blocks or delays the dispatch.
+//
+// Recursion barrier (#402 review — code-002/premortem-004/security-002): the recorder's OWN helper leaf
+// (`python3 -c '…permission_rules.record_composed…'`) re-enters this chokepoint through the same agent
+// wrapper. The synchronous `_recordingComposed` guard below covers ONLY a synchronous re-entry (the
+// smoke's case); it does NOT span the recorder's ASYNC fire-and-forget leaf, which re-enters on a later
+// tick after `finally` has cleared the flag. The REAL barrier for that async leaf is `_SPINE_STATE_WRITE`:
+// the helper command matches NONE of its alternatives (no base64.b64decode / *_cli.py / *_entry.py /
+// fence / ref_lock), so it early-returns at the regex gate and never re-records. Do NOT add any
+// permission_rules write shape to `_SPINE_STATE_WRITE` without a matching recursion cutout.
 const _DISPATCH_LEADS = ['Run exactly this', 'Execute this exact shell command']
 // Registration is SCOPED to the spine's own STATE-WRITE seams — the classes that actually fall through
 // the auto-mode classifier and get blocked (#402 evidence: build-state stamps, journal appends, lease/
-// fence ops, io writes, prov/deferred stamps, review-memory/telemetry writes, the reset-uncommitted git
-// command, verify-gate result writes). READ dumb pipes (gather snapshots, `cat`, `git status`, `gh …
+// fence ops, io writes, prov stamps). READ dumb pipes (gather snapshots, `cat`, `git status`, `gh …
 // view`, task-list reads) are deliberately NOT registered: they are not blocked, and registering every
 // dumb pipe would roughly DOUBLE the run's courier-leaf count (each registration rides its own store-
 // write leaf) AND break the deliberately-two-leaf startup stretch (#118). Narrowing NEVER widens the
@@ -92,7 +99,15 @@ const _DISPATCH_LEADS = ['Run exactly this', 'Execute this exact shell command']
 // The classes #402's evidence recorded as classifier-blocked (2026-07-12) — the acceptance-1/2 set,
 // kept deliberately NARROW to bound the leaf cost (each registration rides its own store-write leaf):
 //   build-state stamps (incl. record-final-review), journal appends, lease/fence ops, io writes
-//   (the __SR_W argv writer), provenance stamps, and resetUncommitted's fixed git reset.
+//   (the __SR_W argv writer), and provenance stamps.
+// NOTE (#402 review): resetUncommitted's git commands are NOT here. It composes
+// `git checkout -- . && git clean -fd .` (build_phase.js resetUncommitted) — and it dispatches as a
+// FREE-FORM schema courier ("In the build worktree at …"), not a "Run exactly this" dumb-pipe lead, so
+// the chokepoint's _DISPATCH_LEADS gate could never register it regardless. Those commands run inside the
+// managed worktree and are allowed by FR-5 (worktree-confined), never composed-exact — they were never
+// among the blocked classes. (An earlier draft carried a dead `git reset --hard` arm that matched no
+// composer; removed.) Every alternative below is covered by a positive registration case in
+// showrunner_composed_exact_smoke.js, so dropping any one fails a test rather than silently regressing.
 // Other spine writes (test-pilot artifacts, review telemetry/memory, coverage/dod/ci stamps) were NOT
 // among the blocked classes and are left to the normal flow — registering them would add leaf cost for
 // no observed benefit. Widening this set later is a deliberate, cost-visible change.
@@ -102,7 +117,6 @@ const _SPINE_STATE_WRITE = new RegExp([
   'journal_entry\\.py',                        // journal appends
   'prov_entry\\.py',                           // provenance stamps (incl. the build-denial taint step)
   'fence_cli\\.py', 'ref_lock',                // lease acquire/renew/release + fence ops
-  'git\\s+reset\\s+--hard',                    // build_phase.resetUncommitted's fixed git command
 ].join('|'))
 let composedRecorder = null
 let _recordingComposed = false
@@ -131,7 +145,17 @@ function recordComposedFromPrompt(prompt) {
 // staging-specific `_stagingDenial` imports DENIAL_SIG rather than duplicating it. `denialReason`
 // returns an already-scrubbed, base64-redacted, length-clamped reason (JS-only — no extra leaf), the
 // same bounded shape `_stagingDenial` produces, or null when the answer carries no denial signature.
-const DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+//
+// The signature is deliberately anchored to the auto-mode classifier's OWN machine-emitted refusal
+// phrasing (#402 review — code-001/premortem-003/test-002). The earlier draft also matched the bare
+// substrings `permission (?:was )?denied` and `denied by`, which fire on ORDINARY command output — a
+// git-over-SSH `Permission denied (publickey)`, an EACCES `Permission denied`, a `denied by policy`, or
+// a diff/log a courier legitimately returns — and (paired with the denial-terminal break-early) would
+// PARK a healthy run on its own output. Those two over-broad alternatives are removed; the canonical
+// classifier message ("Permission for this action was denied by the … auto mode classifier") still
+// matches via the two specific alternatives. Defence-in-depth: callers consult denialReason ONLY on the
+// not-executed / failed path (see the retry loops), so a proven-executed answer is never reinterpreted.
+const DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)/i
 function denialReason(text) {
   const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
   const m = s.match(DENIAL_SIG)
@@ -377,11 +401,13 @@ async function runCourierMarkedText(label, command, opts) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd, opts)
     lastAns = ans
-    // #402 Part B: a denial signature is terminal for these bytes — journal a scrubbed decline and fall
-    // to the caller's fail-closed path; never a second byte-identical outer attempt.
-    const denial = denialReason(ans)
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
     if (_isBadAnswer(ans, opts)) {
+      // #402 Part B: ONLY an answer that did not execute (no __SR_EXIT marker) can be a real classifier
+      // denial — a deterministic re-dispatch would just re-deny. Journal a scrubbed decline and fail
+      // closed; never a second byte-identical outer attempt. Gated on _isBadAnswer so a proven-executed
+      // answer whose stdout merely mentions a denial phrase is content, not a decline (code-001).
+      const denial = denialReason(ans)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
       last = 'missing execution marker'
       continue
     }
@@ -403,10 +429,12 @@ async function runCourierMarkedJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
     lastAns = ans
-    // #402 Part B: a denial is terminal — journal a scrubbed decline, fall to the caller's fail-closed path.
-    const denial = denialReason(ans)
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
     if (badCourierAnswer(ans)) {
+      // #402 Part B: a denial is terminal, but only a not-executed answer (no __SR_EXIT marker) can be a
+      // real classifier denial — journal a scrubbed decline and fail closed. A proven-executed answer
+      // whose stdout mentions a denial phrase is content, not a decline (code-001).
+      const denial = denialReason(ans)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
       last = 'missing execution marker'
       continue
     }
@@ -439,11 +467,13 @@ async function runCourierText(label, command) {
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
-    // #402 Part B: a denial answer is terminal for these bytes — journal a scrubbed decline and fail
-    // closed; a plain command error (commandOk false, no denial signature) is a real result, unchanged.
-    const denial = denialReason(stdoutOf(raw))
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, stdoutOf(raw)) }
     if (!commandOk(raw)) {
+      // #402 Part B: only a FAILED command (ok:false — a blocked Bash call never ran) can be a real
+      // classifier denial. Journal a scrubbed decline and fail closed on the denial signature; a plain
+      // command error (no denial signature) is a real result returned unchanged. Gated on !commandOk so a
+      // SUCCESSFUL command whose stdout merely contains a denial phrase is content, not a decline (code-001).
+      const denial = denialReason(stdoutOf(raw))
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, stdoutOf(raw)) }
       _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
@@ -461,11 +491,14 @@ async function runCourierJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
-    // #402 Part B: a denial answer is terminal — journal a scrubbed decline and fail closed (throw),
-    // never a byte-identical re-dispatch. A plain command failure (no denial signature) is unchanged.
-    const denial = denialReason(out)
-    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, out) }
     if (!commandOk(raw)) {
+      // #402 Part B: only a FAILED command (ok:false — a blocked Bash call never ran) can be a real
+      // classifier denial. Journal a scrubbed decline and fail closed (throw) on the denial signature;
+      // never a byte-identical re-dispatch. A plain command failure (no denial signature) is returned as
+      // the structured ok:false result, unchanged. Gated on !commandOk so a SUCCESSFUL command whose stdout
+      // merely contains a denial phrase is content, not a decline (code-001).
+      const denial = denialReason(out)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, out) }
       _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }
