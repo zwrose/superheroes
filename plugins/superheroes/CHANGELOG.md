@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.11.1...superheroes-v0.11.2) (2026-07-12)
+
+
+### Bug Fixes
+
+* **superheroes:** journal external dispatch attempts that die at staging/preSHA ([#373](https://github.com/zwrose/superheroes/issues/373)) ([#374](https://github.com/zwrose/superheroes/issues/374)) ([3ca6bca](https://github.com/zwrose/superheroes/commit/3ca6bca5b756c7e430fda0f326091c0a45fb7c64))
+* **superheroes:** stage engine dispatch payloads plain-readable with hash-verify ([#257](https://github.com/zwrose/superheroes/issues/257)) ([#377](https://github.com/zwrose/superheroes/issues/377)) ([3321580](https://github.com/zwrose/superheroes/commit/332158084b11e2ee2e63221744ee4cf1b31ea78a))
+* **superheroes:** the external-write committer preserves the engine's own commit message ([#386](https://github.com/zwrose/superheroes/issues/386)) ([#387](https://github.com/zwrose/superheroes/issues/387)) ([35a7b6f](https://github.com/zwrose/superheroes/commit/35a7b6f14181fce11950fa2778235f8ef4ad1211))
+* **superheroes:** whole-branch final review runs one review + one fix pass and hands off to review-code ([#381](https://github.com/zwrose/superheroes/issues/381)) ([#382](https://github.com/zwrose/superheroes/issues/382)) ([ec158de](https://github.com/zwrose/superheroes/commit/ec158dee50a19f7670fc9eec3c892af8f7b77f77))
+
 ## [0.11.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.11.0...superheroes-v0.11.1) (2026-07-10)
 
 

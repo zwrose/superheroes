@@ -203,7 +203,14 @@ function runHelperResponse(cmdline) {
         throw new Error('persist-skeleton --record-hash does not match --record-json')
       }
       if (recordJson.includes('"evidence"')) throw new Error('persist-skeleton shipped finding bodies (D3 skeleton contract)')
-      return JSON.stringify({ ok: true, contentHash: 'ch-round' })
+      const path = args[args.indexOf('--path') + 1]
+      const record = JSON.parse(recordJson)
+      let records = []
+      try { records = JSON.parse(files[path] || '[]') } catch (_) { records = [] }
+      records = records.filter((r) => r.round !== record.round)
+      records.push(record)
+      files[path] = JSON.stringify(records)
+      return JSON.stringify({ ok: true, contentHash: sha256(files[path]) })
     }
     if (args[0] === 'compose-terminal') {
       const p = args[args.indexOf('--path') + 1]

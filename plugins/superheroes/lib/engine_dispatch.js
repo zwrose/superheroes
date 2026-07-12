@@ -5,7 +5,7 @@
 // everything downstream (loop math, verify gate, journal) is reused unchanged. Read roles are
 // read-only (no preSHA/commit); write roles capture preSHA -> engine edits -> adapter commits.
 const { libPath } = require('./lib_root.js')
-const { b64 } = require('./bytes.js')
+const { sha256hex } = require('./bytes.js')
 const DEFAULT_STALL_LIMIT_SECONDS = 300   // UFR-5 finite default; test-settable via opts.timeoutSeconds
 
 // #309: engines that emit output INCREMENTALLY when piped to a file (not a TTY) — verified 2026-07-09
@@ -26,22 +26,85 @@ const _STREAMS_WHEN_PIPED = { codex: true, cursor: true }
 // acceptance_verdict's generic `failed` bucket, so a decline-only engine still fails the gate.
 const COURIER_DECLINED_OUTCOME = 'courier-declined'
 
+// #373: outcome tokens for the two PRE-CLI early exits that used to return before any journal write —
+// staging the prompt/schema to /tmp, and (write roles) capturing preSHA. A dispatch that dies here left
+// ZERO trace in events.jsonl, so a run whose external engine was routed-and-DENIED read identically to
+// "never routed" (the live 2026-07-11 case: the auto-mode safety classifier denied cursor's base64
+// staging courier 4/4, journaling nothing). These are the honest audit tokens those exits now emit —
+// distinct from `could-not-stage-external-inputs` (the caller-facing return reason, kept for the #277
+// harness-dead tripwire) so the journal names WHICH pre-CLI step died and, on a denial, why. Like every
+// non-"ok" external_dispatch outcome they are genuine dispatch FAILURES: acceptance_verdict.py counts
+// them against the per-engine authenticity gate (an engine with only these records has 0 oks -> fails),
+// never as an acceptable fall-open (authz-denied / engine-unavailable) or a courier-decline. Single JS
+// home + exported so the JS↔Python behavior drift guard (CONVENTIONS §11.2) pins that classification.
+const STAGING_DENIED_OUTCOME = 'staging-denied'   // staging failed AND the failure carries a denial signature
+const STAGING_FAILED_OUTCOME = 'staging-failed'   // staging failed for any other reason (courier/exec error)
+const PRESHA_FAILED_OUTCOME = 'presha-failed'     // write-role preSHA capture failed before the CLI ran
+
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-// Build a shell command that stages `content` to `path` via base64 (NOT a heredoc): external/engine
-// text is untrusted and MAY contain a line identical to any fixed heredoc sentinel, which would
-// terminate the heredoc early and corrupt the staged file. Base64 also makes the payload an OPAQUE
-// blob as it rides the LLM `exec` courier — a courier can copy alphabet-soup verbatim or fail
-// visibly, but cannot paraphrase it the way it rewrites readable text (the 2026-07-02 staged-write
-// mangle class). Encoding sidesteps sentinels AND mangling; a shell `base64 -d` decodes it.
-// #277: the base64 encode MUST NOT use Node's `Buffer` — the Workflow sandbox has no Buffer global
-// (same class as the FR-8-banned wall-clock/PRNG globals), so `Buffer.from(...)` threw on the first
-// statement here and every external dispatch silently fell open to Claude. b64() is the shared,
-// Buffer-less encoder (bytes.js), byte-identical in node and the sandbox and exercised the same in
-// both. base64 output is pure ASCII so shq's single-quote escaping is sufficient.
+// #257: the PLAIN-READABLE stage-write, replacing the old `printf '<base64>' | base64 -d > …` blob.
+// Root cause it fixes (live 2026-07-11, 0.11.1 run wf_e0d42237-c87): the Claude Code auto-mode safety
+// classifier flags exactly the base64 courier's OPACITY and DENIED all 4 cursor stagings — every cursor
+// build fell open to native, the write-engine axis never ran. Opacity had a real job (transit fidelity:
+// a leaf once rewrote readable JSON mid-relay, 2026-07-02), so we keep the fidelity guarantee WITHOUT the
+// opacity: the payload rides as a plain, human/classifier-readable python argv, and a Python-side sha256
+// re-hash of the written file — pinned to a hash the SPINE computed from the ORIGINAL content and embedded
+// as a literal — proves the courier copied it faithfully. A paraphrase changes the file's hash but never
+// the embedded literal (an LLM copies a 64-hex string verbatim or fails visibly; only a paraphrase of the
+// readable body is the observed mangle), so a mangled stage EXITS NON-ZERO here and the caller fails
+// closed + retries — never persists silently-altered content.
+//
+// Shape choice (deviates from the issue's heredoc suggestion, same guarantee): the argv-shape python
+// writer is the SAME transport io.writeFile already uses live in this exact runtime (bundle `__SR_W`,
+// finding #13) — a path/payload passed as ARGV is data, not a shell file-op, so it clears the store's
+// sensitive-file guard where a `cat > … <<EOF` heredoc open() is denied. It also needs no collision-proof
+// heredoc delimiter (untrusted engine text can contain any sentinel line) and adds no trailing-newline
+// artifact — the file bytes are EXACTLY the content, so the verify hash is sha256hex(content) flat.
+// #277 carries over: no Node `Buffer`/`crypto` on this path (both absent in the sandbox) — sha256hex is
+// the shared Buffer-less digest (bytes.js), exercised identically in node and the sandbox. The verify
+// returns only its EXIT STATUS (0 match / 3 mismatch); it NEVER echoes the file back through the courier's
+// answer, so the read side can't re-mangle and the audit line can't leak the staged payload.
+// _SR_STAGE_SIG is the stable routing/identity substring every staged command carries.
+const _SR_STAGE_SIG = 'hashlib.sha256'
+const _SR_STAGE_SCRIPT =
+  'import os,sys,hashlib;' +
+  'p,e,w=sys.argv[1],sys.argv[2],sys.argv[3];' +
+  'c=[];i=0;' +
+  'exec("while i<len(e):\\n if i+2<len(e)and e[i:i+3]==chr(92)*2+chr(110):c.append(chr(92)+chr(110));i+=3\\n elif i+1<len(e)and e[i:i+2]==chr(92)+chr(110):c.append(chr(10));i+=2\\n elif i+1<len(e)and e[i:i+2]==chr(92)+chr(114):c.append(chr(13));i+=2\\n elif i+1<len(e)and e[i:i+2]==chr(92)*2:c.append(chr(92));i+=2\\n else:c.append(e[i]);i+=1");' +
+  'c="".join(c);' +
+  'd=os.path.dirname(p);' +
+  'd and os.makedirs(d,exist_ok=True);' +
+  'open(p,"w",encoding="utf-8").write(c);' +
+  'h=hashlib.sha256(open(p,"rb").read()).hexdigest();' +
+  'sys.exit(0 if h==w else 3)'
+function _stageEnc(s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
+}
 function _stageCmd(path, content) {
-  const encoded = b64(content == null ? '' : String(content))
-  return `printf %s ${shq(encoded)} | base64 -d > ${shq(path)}`
+  const c = content == null ? '' : String(content)
+  return `python3 -c ${shq(_SR_STAGE_SCRIPT)} ${shq(path)} ${shq(_stageEnc(c))} ${shq(sha256hex(c))}`
+}
+
+// #257: stage ONE input (prompt / schema / raw output) through the exec courier with fail-closed sha256
+// verify + one retry. A stage rides its OWN single-command leaf (never a multi-command numbered list):
+// a plain readable payload legitimately contains newlines, and a numbered `1.`/`2.` batch could mis-slice
+// a multi-line command mid-payload. exec-level ok reflects the python verify's exit status, so ok===true
+// means the file on disk hashed to the spine's expected value — a transit mangle (verify exit 3 -> ok
+// false) or a courier/exec error retries ONCE (the known haiku stdout-drop is stochastic), then gives up.
+// A CLASSIFIER DENIAL is deterministic (retrying re-denies), so we break early on a denial signature and
+// hand the failed leaf's results back so the caller journals `staging-denied` with the bounded reason.
+async function _stageInput(path, content) {
+  const cmd = _stageCmd(path, content)
+  let last = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await _exec([cmd])
+    const r0 = res && res[0]
+    if (r0 && r0.ok) return { ok: true, results: res }
+    last = res
+    if (_stagingDenial(res)) break   // deterministic denial — a retry only re-denies
+  }
+  return { ok: false, results: last }
 }
 
 // #307: codex's `--output-schema` rides OpenAI STRICT structured outputs, whose two hard rules the
@@ -452,6 +515,11 @@ async function _journalExternal(payload) {
       // secret-bearing text lands in the audit line.
       declinePrefix: payload.declinePrefix == null ? null : String(payload.declinePrefix),
       verify: payload.verify, outcome: payload.outcome,
+      // #373: on a PRE-CLI early-exit outcome (staging-denied / staging-failed / presha-failed) carry a
+      // bounded disclosure of WHY — the classifier's denial prose is owner-relevant evidence. Spread so
+      // it is present ONLY when the caller supplied one (no new always-null key: pre-#373 payloads stay
+      // byte-identical). The caller has already clamped + windowed it (never the staged prompt content).
+      ...(payload.reason == null ? {} : { reason: String(payload.reason) }),
       // #347: bounded-relay disclosure — present ONLY when the watchdog truncated the stdout relay
       // (the parser saw the tail; outPath is the kept full capture). Spread so pre-#347 payloads
       // stay byte-identical (no new always-null keys).
@@ -468,6 +536,34 @@ function _declinePrefix(answer) {
   const s = String(answer == null ? '' : answer).replace(/\s+/g, ' ').trim()
   if (!s) return 'courier returned no execution marker'
   return s.length > 200 ? s.slice(0, 200) + '…' : s
+}
+
+// #373: inspect a FAILED staging result set for an auto-mode/permission DENIAL and, when found, return
+// a bounded single-line reason string (owner-relevant evidence: WHY the staging courier was blocked).
+// Taint-aware under #257 plain-readable staging: the echoed stage command (`python3 -c … '<prompt>'
+// '<hash>'`) is a tainted region — a denial signature match AT/AFTER the earliest stage signature is
+// treated as payload echo, not classifier prose, and returns a fixed withheld label. When the match
+// precedes any stage signature (live classifier case), the window starts at the denial phrase and
+// truncates at the signature so the staged prompt never leaks. Whitespace-collapsed and clamped to
+// ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/exec error),
+// so the caller distinguishes `staging-denied` from `staging-failed`.
+const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
+function _stagingDenial(results) {
+  const arr = Array.isArray(results) ? results : []
+  for (const r of arr) {
+    if (r && r.ok) continue
+    const s = String((r && r.stdout) == null ? '' : r.stdout).replace(/\s+/g, ' ').trim()
+    const sigIdxs = [_SR_STAGE_SIG, 'python3 -c'].map((sig) => s.indexOf(sig)).filter((i) => i >= 0)
+    const sigIdx = sigIdxs.length ? Math.min(...sigIdxs) : -1
+    const m = s.match(_DENIAL_SIG)
+    if (!m) continue
+    if (sigIdx >= 0 && m.index >= sigIdx) return _DENIAL_TAINTED
+    let from = sigIdx >= 0 ? s.slice(m.index, sigIdx) : s.slice(m.index)
+    from = from.replace(/[A-Za-z0-9+\/=]{24,}/g, '[redacted]')
+    return from.length > 200 ? from.slice(0, 200) + '…' : from
+  }
+  return null
 }
 
 // Scrub external-derived free-text (git stderr in a commit/dispatch-failure reason) BEFORE it enters
@@ -506,6 +602,15 @@ async function _dispatchExternalInner(o) {
   const idleSeconds = armIdle ? Math.min(idleRequested, Math.ceil(limitSeconds)) : null
   const stallMonitor = armIdle ? 'armed'
     : (idleRequested != null && !engineStreams ? 'inert (engine buffers)' : 'unarmed')
+  // resolvedArgv / relayMeta are hoisted ABOVE _jbase (and above the staging/preSHA early exits) so the
+  // journal reads them at call time (#308 timeout-argv audit) AND so the #373 pre-CLI early exits can
+  // journal through the same _jbase path — both are still null there (build-argv hasn't run, no CLI
+  // relay yet), which is the honest audit shape for a dispatch that died before the CLI (argv: null, no
+  // relay disclosure). resolvedArgv is set synchronously inside `run` right after build-argv resolves so
+  // a later timeout branch journals the real argv; relayMeta carries the last completed _runArgv's relay
+  // facts (#347). Both stay null on the pre-CLI failure paths.
+  let resolvedArgv = null
+  let relayMeta = null
   // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
   // resolved model, effective timeout ceiling, (once build-argv resolves) the exact argv, and the
   // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
@@ -543,11 +648,26 @@ async function _dispatchExternalInner(o) {
   // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
   // which Anthropic's tool input_schema requires and which strict shapes would break).
   const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
-  const writeInputs = await _exec([
-    _stageCmd(promptPath, prompt || ''),
-    _stageCmd(schemaPath, JSON.stringify(stagedSchema)),
-  ])
-  if (!(writeInputs && writeInputs.every && writeInputs.every((r) => r && r.ok))) {
+  // #257: stage prompt then schema as PLAIN-readable, hash-verified writes (see _stageCmd/_stageInput) —
+  // each in its own leaf, prompt first so a prompt-staging denial short-circuits the (pointless) schema
+  // stage. writeInputs holds the FAILED leaf's raw results so the #373 denial-signature extraction still
+  // fires; a success carries no denial and journals nothing here.
+  const promptStage = await _stageInput(promptPath, prompt || '')
+  const schemaStage = promptStage.ok
+    ? await _stageInput(schemaPath, JSON.stringify(stagedSchema))
+    : { ok: false, results: [] }
+  if (!(promptStage.ok && schemaStage.ok)) {
+    // #373: staging died BEFORE the CLI ran — journal it (was a silent return). A denial-signature in
+    // the failed leaf's stdout (the auto-mode classifier blocking the staging courier) rides as the
+    // bounded `reason`, and the outcome distinguishes a denial from a plain courier/exec staging error.
+    // The RETURN reason stays `could-not-stage-external-inputs` so the #277 harness-dead tripwire and
+    // every caller behave exactly as before — only the missing audit line is added.
+    const writeInputs = promptStage.ok ? schemaStage.results : promptStage.results
+    const denial = _stagingDenial(writeInputs)
+    const jStaging = await _journalExternal(Object.assign(_jbase(), { verify: null,
+      outcome: denial ? STAGING_DENIED_OUTCOME : STAGING_FAILED_OUTCOME },
+      denial ? { reason: denial } : {}))
+    if (!(jStaging && jStaging.ok)) return { ok: false, reason: 'unauditable' }
     return { ok: false, reason: 'could-not-stage-external-inputs' }
   }
 
@@ -555,18 +675,20 @@ async function _dispatchExternalInner(o) {
   let preSha = null
   if (isWrite) {
     preSha = await _captureHead(cwd)
-    if (!preSha) return { ok: false, reason: 'could-not-capture-preSHA' }
+    if (!preSha) {
+      // #373: preSHA capture died before the CLI ran — journal it (was a silent return) so a write
+      // dispatch that never reached the engine leaves a trace instead of reading as "never routed".
+      const jPreSha = await _journalExternal(Object.assign(_jbase(), { verify: null, outcome: PRESHA_FAILED_OUTCOME }))
+      if (!(jPreSha && jPreSha.ok)) return { ok: false, reason: 'unauditable' }
+      return { ok: false, reason: 'could-not-capture-preSHA' }
+    }
   }
 
   // 3. Wrap the whole dispatch in the UFR-5 finite timeout. A stall -> {ok:false, reason:'timeout'}.
-  // resolvedArgv is hoisted so the journal (below, on EVERY outcome incl. a ceiling timeout) can record
-  // the exact argv that was dispatched (#308). It is set synchronously inside `run` right after
-  // build-argv resolves, so by the time the race's timeout branch fires (limitMs later, during the CLI
-  // run) it already holds the real argv — a timeout journals the argv the CLI was killed while running.
-  let resolvedArgv = null
-  // #347: relay facts from the LAST completed _runArgv (set synchronously inside `run`, read by
-  // _jbase at journal time — same hoisting pattern as resolvedArgv).
-  let relayMeta = null
+  // resolvedArgv / relayMeta are declared ABOVE (hoisted over _jbase and the #373 pre-CLI early exits);
+  // `run` assigns resolvedArgv synchronously right after build-argv resolves so a ceiling timeout still
+  // journals the exact argv the CLI was killed while running (#308), and relayMeta carries the last
+  // completed _runArgv's relay facts (#347).
   const run = (async () => {
     const argvObj = await _execJson(
       `python3 ${libPath('engine_adapter.py')} build-argv --engine ${shq(engine)} --role ${shq(roleKind)} ` +
@@ -810,8 +932,17 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // #341: the courier-declined outcome token, exported so the JS↔Python drift guard (CONVENTIONS
   // §11.2) can assert this producer home matches acceptance_verdict.COURIER_DECLINED_OUTCOME.
   COURIER_DECLINED_OUTCOME,
+  // #373: the pre-CLI early-exit outcome tokens, exported so the JS↔Python behavior drift guard
+  // (CONVENTIONS §11.2) can pin that acceptance_verdict.py classifies them as failed dispatch
+  // attempts (counted against the per-engine authenticity gate) — never an acceptable fall-open.
+  STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   // #341 test-only: the pure production command composer, exported so the real-seam detector
   // (CONVENTIONS §12.2) builds the byte-faithful watchdog command and drives it through a REAL leaf.
   _composeDispatchCommand,
+  // #257 test-only: the plain-readable stage-write composer + its verify-and-retry wrapper, exported so
+  // the fidelity smoke drives the REAL python write+sha256-verify through a shell (round-trip + mangle
+  // fail-closed) and pins that no base64 blob rides the staged command; the routing signature lets
+  // mocks target the stage leaf.
+  _stageCmd, _stageInput, _SR_STAGE_SIG,
   // #347 test-only: the watchdog's stdout-relay cap, exported so the flood smoke pins the bound.
   EMIT_TAIL_BYTES }

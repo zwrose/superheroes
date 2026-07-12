@@ -191,7 +191,7 @@ const d = require('../engine_dispatch.js')
         const runCmd = prompt.slice(prompt.indexOf('\n\n') + 2)
         return realExec(runCmd, 0).stdout
       }
-      // staging (base64 -d > file): the plain exec() dumb-pipe (numbered list) — really run it in a shell.
+      // staging (#257 plain python write+sha256-verify): the exec() dumb-pipe — really run it in a shell.
       const cmds = extractCommands(prompt)
       return cmds.map((c, i) => realExec(c, i))
     }
@@ -354,7 +354,8 @@ const d = require('../engine_dispatch.js')
       }
       // #349 corruption-vector guard: engine STDOUT must never be re-staged through a courier
       // (prompt/schema INPUT staging is ours and small — only the rawPath re-stage is the hazard).
-      if (/base64 -d > '\/tmp\/engine-[^']*\.out'/.test(prompt)) restageCmds.push(prompt.slice(0, 120))
+      // #257: a re-stage now rides the plain hash-verified stage command, not a base64 blob.
+      if (/hashlib\.sha256/.test(prompt) && /'\/tmp\/engine-[^']*\.out'/.test(prompt)) restageCmds.push(prompt.slice(0, 120))
       if (prompt.includes('Execute this exact shell command')) {
         const answer = await courier(prompt)
         courierAnswerBytes = String(answer).length

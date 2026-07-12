@@ -68,6 +68,13 @@ function runHelperResponse(cmdline) {
       if (sha256(recordJson) !== args[args.indexOf('--record-hash') + 1]) {
         throw new Error('persist-skeleton --record-hash does not match --record-json')
       }
+      const path = args[args.indexOf('--path') + 1]
+      const record = JSON.parse(recordJson)
+      let records = []
+      try { records = JSON.parse(files[path] || '[]') } catch (_) { records = [] }
+      records = records.filter((r) => r.round !== record.round)
+      records.push(record)
+      files[path] = JSON.stringify(records)
       // (4) first persist answer comes back as prose AFTER the write applied — the runtime
       // must retry and converge (the helper side answers idempotently on the real retry).
       if (counters.mangledAnswers === 0) {
@@ -75,7 +82,7 @@ function runHelperResponse(cmdline) {
         return 'The round record was persisted successfully to the memory file.'
       }
       counters.mangledAnswers += 1
-      return JSON.stringify({ ok: true, contentHash: 'ch-round' })
+      return JSON.stringify({ ok: true, contentHash: sha256(files[path]) })
     }
     if (args[0] === 'compose-persist') throw new Error('compose-persist rode a leaf (D3 replaced it)')
     if (args[0] === 'update-round') return JSON.stringify({ ok: true, contentHash: 'ch-postfix' })

@@ -202,9 +202,12 @@ function produceAgent({ usableSeq, externalOk, externalRuns = [], nativeAuthorCa
         writeMarkerPrompts.push(prompt)
         return [{ index: 0, ok: true, stdout: JSON.stringify({ wrote: true }) }]
       }
-      if (stagedExternalPrompts && prompt.includes('base64 -d') && /\.prompt/.test(prompt)) {
-        const m = prompt.match(/printf %s '([A-Za-z0-9+/=]+)' \| base64 -d > '[^']+\.prompt'/)
-        if (m) stagedExternalPrompts.push(Buffer.from(m[1], 'base64').toString('utf8'))
+      if (stagedExternalPrompts && prompt.includes('hashlib.sha256') && /\.prompt/.test(prompt)) {
+        // #257: the prompt is staged PLAIN-readable now — recover it straight from the python argv
+        // (between the `.prompt` path arg and the trailing 64-hex verify hash), reversing shq's
+        // single-quote escaping (`'\''` -> `'`). No base64 decode.
+        const m = prompt.match(/\.prompt' '([\s\S]*)' '[0-9a-f]{64}'/)
+        if (m) stagedExternalPrompts.push(m[1].replace(/'\\''/g, "'"))
       }
       if (prompt.includes('engine_adapter.py build-argv')) {
         externalRuns.push(prompt)

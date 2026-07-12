@@ -106,17 +106,17 @@ function assertStrict(schema, label) {
 })()
 
 // ---------------------------------------------------------------------
-// (c) STAGING ROUND-TRIP — the staging seam is executed for real (base64 stage runs against /tmp), and
-// the on-disk schema file is read back. NO stubbing of the staging write itself.
+// (c) STAGING ROUND-TRIP — the staging seam is executed for real (#257's plain write+sha256-verify runs
+// against /tmp), and the on-disk schema file is read back. NO stubbing of the staging write itself.
 // ---------------------------------------------------------------------
 function makeStagingAgent(routes) {
-  // Parse the numbered command list the exec dumb-pipe builds; RUN the base64 staging commands for
-  // real (real file writes to /tmp), and route every other single command by substring like the
-  // canonical engine smoke does.
+  // Parse the numbered command list the exec dumb-pipe builds; RUN the #257 plain hash-verified staging
+  // commands for real (real file writes to /tmp — exit 0 proves the sha256 verify passed too), and route
+  // every other single command by substring like the canonical engine smoke does.
   return async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     const lines = prompt.split('\n').map((l) => l.match(/^\d+\.\s(.*)$/)).filter(Boolean).map((m) => m[1])
-    if (lines.length && lines.every((c) => /base64 -d >/.test(c))) {
+    if (lines.length && lines.every((c) => /hashlib\.sha256/.test(c))) {
       return lines.map((c, i) => { execSync(c, { shell: '/bin/bash' }); return { index: i, ok: true, stdout: '' } })
     }
     for (const [needle, resp] of routes) {

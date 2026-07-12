@@ -14,9 +14,10 @@ require('./_smoke_checkout_root.js')
 //     dispatches externally for a write role), using the require.cache-reset idiom (mirrors
 //     showrunner_cmdrunner_cwd_smoke.js) so the module-level _writeAuthOk cache does not leak across
 //     scenarios in this single process.
-//   - FIX I5: the final-fixer's fixStep closure ALWAYS returns the {fixed,deferred} report shape (never
-//     _implDispatch's raw {ok,...} result / undefined), so review_panel_shell.runFixStep does not treat
-//     a successful external fix as a fix-failure.
+//   - #381 one-fix-pass handoff over external engines: an external-reviewer blocker at the one-pass
+//     cap (maxRounds:1) dispatches the fix batch to the implementation engine EXACTLY ONCE, re-runs
+//     the verify gate post-fix, and halts with the STRUCTURED haltKind 'round-cap' + an open-findings
+//     summary, so the caller hands off to review-code rather than parking.
 //   - the commit-discipline multi-round fold invariant: two external fix rounds dispatch TWICE with the
 //     SAME taskId.
 'use strict'
@@ -323,55 +324,53 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
   }
 
   // ===========================================================================
-  // Scenario 4: FIX I5 — the final-fixer's fixStep closure returns {fixed,deferred}, never the raw
-  // _implDispatch result / undefined, so runFixStep does not treat a successful external fix as a
-  // failure (which would halt the panel instead of continuing to re-review).
+  // Scenario 4: #381 one-fix-pass handoff over EXTERNAL engines. Under the single-pass contract
+  // (maxRounds:1) a whole-branch final review whose external reviewer surfaces a blocker hits the
+  // one-pass cap; the ONE fix pass then dispatches roleKind:'fix' to the implementation engine
+  // EXACTLY ONCE (the fixStep closure: fence-before-write + _implDispatch + the {fixed,deferred}
+  // report reaching the deferred-set), the post-fix verify re-runs the verify gate, and the result
+  // carries the STRUCTURED haltKind 'round-cap' — the shape the caller (buildPhase gate) hands off
+  // to review-code rather than parking. Routing keys on haltKind, not the prose reason.
   // ===========================================================================
   {
     delete require.cache[require.resolve('../build_phase.js')]
     delete require.cache[require.resolve('../engine_dispatch.js')]
     const engineDispatch = require('../engine_dispatch.js')
+    let externalFixDispatches = 0
     engineDispatch.dispatchExternal = async (o) => {
       if (o.roleKind === 'review') {
-        return { findings: [] } // second round is clean
+        return { findings: [{ severity: 'Critical', file: 'y.js', title: 'blocker', line: 1, evidence: 'x' }] }
       }
-      // the fix dispatch itself succeeds, returning the raw {ok,signal,evidence} dispatch shape —
-      // NOT a {fixed,deferred} report. The fixStep closure must translate this into a report.
+      if (o.roleKind === 'fix') externalFixDispatches += 1
       return { ok: true, signal: 'ok', evidence: {} }
     }
     const bp = require('../build_phase.js')
-    globalThis.__SR_ENGINE_PREFS = { reviewer: 'claude', implementation: 'codex', effort: {} }
-    // runFinalReview's runDir is derived internally from workItem (not the caller-supplied wt), and
-    // build_phase.js installs its OWN globalThis.recordDeferred (writing via io() to <runDir>/deferred-
-    // set.json) — a test-local override set before the call would just be clobbered. Reset + recreate
-    // the fixed runDir (mirrors production: showrunner.js mkdirp's the runDir before invoking the
-    // phase) so the io()-backed write succeeds AND no earlier scenario's accumulator/deferred-set leaks in.
+    globalThis.__SR_ENGINE_PREFS = { reviewer: 'codex', implementation: 'codex', effort: {} }
+    // build_phase installs its OWN globalThis.recordDeferred (io()-backed write to <runDir>/deferred-
+    // set.json); reset + recreate the fixed runDir so the write lands and no earlier scenario leaks in.
     const deferredSetPath = `${resetRunDir(WI)}/deferred-set.json`
+    let verifyRuns = 0
     global.agent = makeAgent([
       execRoute((p) => standardLeaf(p)),
-      ['review', (() => {
-        let n = 0
-        return () => {
-          n += 1
-          if (n === 1) return { findings: [{ severity: 'Critical', file: 'y.js', title: 'blocker', line: 1, evidence: 'x' }] }
-          return { findings: [] }
-        }
-      })()],
-      ['verify_gate.py', (cmd) => verifyGateStub(cmd, 'pass')],
+      ['verify_gate.py', (cmd) => { verifyRuns += 1; return verifyGateStub(cmd, 'pass') }],
     ])
     const fr = await bp.runFinalReview(WI, 5, 'br', fs.mkdtempSync(path.join(os.tmpdir(), 'bpe-')))
-    assertTerminal(fr, 'clean',
-      'FIX I5: a successful external final-fix is NOT treated as a fix-failure (would halt otherwise)')
-    // recordDeferred (installed by build_phase.js itself) only reaches its io().writeFile call if
-    // runFixStep received a TRUTHY {fixed,deferred} report from the fixStep closure — a raw
-    // _implDispatch result ({ok,signal,evidence}) or undefined would have made runFixStep return
-    // {ok:false} instead, short-circuiting to 'halted' before recordDeferred ever ran. So the mere
-    // presence of the written deferred-set.json + the blocker's id inside it IS the FIX I5 contract
-    // assertion (the terminal:'clean' assertion above already proves runFixStep did not fail-halt).
+    assertTerminal(fr, 'halted',
+      '#381: an external-reviewer blocker at the one-pass cap halts (round-cap), not clean')
+    assert.strictEqual(fr.haltKind, 'round-cap',
+      '#381: the halt carries the STRUCTURED round-cap discriminator (the caller hands off to review-code)')
+    assert.strictEqual(externalFixDispatches, 1,
+      '#381: the one fix pass dispatches roleKind fix to the implementation engine EXACTLY ONCE')
+    assert.strictEqual(verifyRuns, 2,
+      '#381: the post-fix verify re-runs the verify gate once (round verify + post-fix verify)')
+    assert.strictEqual(fr.openFindingsCount, 1,
+      '#381: the open finding the external reviewer surfaced is summarized for the handoff journal')
+    // The {fixed,deferred} report reaching the deferred-set is the audit channel the shell's
+    // runFixStep wrote pre-#381 — preserved on the direct fix-pass path.
     const written = JSON.parse(fs.readFileSync(deferredSetPath, 'utf8'))
     assert.ok(Object.prototype.hasOwnProperty.call(written, 'blocker'),
-      'the fixStep report\'s {fixed:[...]} ids (from blockers.map) reached recordDeferred/deferred-set.json')
-    console.log('OK: final-fixer {fixed,deferred} report contract preserved with an external implementation engine')
+      '#381: the fix report ids (blockers.map) reached recordDeferred/deferred-set.json')
+    console.log('OK: #381 one-fix-pass handoff over external engines (fix dispatched once + post-fix verify + deferred-set)')
   }
 
   // ===========================================================================
@@ -597,5 +596,5 @@ function standardLeaf(p, { authzOk = true, authzCalls = null, provOk = true } = 
   }
 
   delete globalThis.__SR_ENGINE_PREFS
-  console.log('OK: build_phase engine branch (worker/fixer/final-review routing, UFR-2/4, FR-15, FIX I5)')
+  console.log('OK: build_phase engine branch (worker/fixer/final-review routing, UFR-2/4, FR-15, #381 round-cap handoff)')
 })().catch((e) => { console.error('FAIL:', e.message || e, e.stack || ''); process.exit(1) })

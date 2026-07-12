@@ -6,7 +6,7 @@
 // old "trust-the-leaf-JSON" *_cli.py bridge is gone). It makes NO PR/merge/force-push (FR-10).
 // FR-4a (#115): build state lives in memory during a continuous run. build_state gather /
 // build_progress.reconcile are called ONLY on entry/resume (not per loop iteration).
-const { reviewPanel } = require('./review_panel_shell.js')
+const { reviewPanel, verifyAgent: shellVerifyAgent } = require('./review_panel_shell.js')
 const { io } = require('./io_seam.js')
 const modelTierTwin = require('./model_tier.js')
 const courier = require('./courier_exec.js')
@@ -20,6 +20,7 @@ const taskReviewTwin = require('./task_review.js')
 // verdicts from an external engine's findings-only result and to filter whole-branch blockers for the
 // final-review fixer (below). Pure module, safe to require at top level (no load-time cycle).
 const circuitBreaker = require('./circuit_breaker.js')
+const panelTally = require('./panel_tally.js')
 // #38 Task 11: the engine-axis resolver twin + the spine leaf wrapper that dispatches external
 // engines (codex|cursor) for the write (build|fix) and read (review) roles.
 const engineDispatch = require('./engine_dispatch.js')
@@ -45,7 +46,11 @@ function reviewTaskLabel(task, round) {
   return `review task ${task.id}:r${round}`
 }
 function park(reason) { return { confidence: 'low', assumptions: [reason], parkReason: reason } }
-function ok() { return { confidence: 'high', assumptions: [] } }
+function ok(extras) {
+  const r = { confidence: 'high', assumptions: [] }
+  if (extras && extras.handoffSummary) r.handoffSummary = extras.handoffSummary
+  return r
+}
 
 // FR-8: the configured base (--base) arg, threaded into EVERY build_state_cli gather so the entry
 // gather and the per-task UFR-7 check measure against the same base. Extracted to one helper so the
@@ -303,16 +308,43 @@ async function buildPhase(workItem, generation) {
   // current HEAD. If this walk built/reviewed anything, HEAD moved — the entry's final_review.clean
   // is STALE, so RE-RUN the whole-branch final review over the new HEAD (#115 final review FIX 3).
   const alreadyFinalClean = !didWork && state.final_review && state.final_review.clean
+  let handoffSummary = null
   if (!alreadyFinalClean) {
     const fr = await runFinalReview(workItem, generation, branch, wt)
-    // UFR-4 fail-closed intent: only a 'clean' terminal advances. Parking on
-    // 'clean-with-skips'/'halted'/'cannot-certify' is deliberate — a skipped blocker must park.
-    // #279: carry the verdict's reason into the park so the owner sees WHY (e.g. the verify error),
-    // not a bare terminal — the sole difference between a real regression and a transient flake.
-    if (fr.terminal !== 'clean') {
+    // #381 terminal routing. The whole-branch final review runs ONE review pass + ONE fix pass
+    // (maxRounds:1; the fix pass dispatches inside runFinalReview after the cap halt) and is NOT the
+    // branch's gate — review-code (5 specialist panels, circuit breaker, verify gate, confirmation
+    // rounds) is the strictly stronger gate that runs next and vets the (deliberately unvetted) fix
+    // batch. So:
+    //   - 'clean'          → advance (stamp coverage, then provenance), unchanged.
+    //   - round-cap halt   → the single review pass surfaced blockers at the one-pass cap, the fix
+    //                        batch LANDED, and the post-fix verify (if configured) is green —
+    //                        runFinalReview only lets haltKind 'round-cap' survive when all three
+    //                        hold. Journal the handoff (open findings + fix-pass facts, auditable)
+    //                        and HAND OFF to review-code, stamping coverage + advancing exactly like
+    //                        the clean path.
+    //   - everything else  → PARK, fail-closed, unchanged: verify red pre- OR post-fix (haltKind
+    //                        'verify-fail'), a failed fix dispatch / lost fence ('fix-failed'),
+    //                        breaker recurrence/no-progress or a confirmation-cap park ('other'),
+    //                        no review obtainable / cannot-certify, clean-with-skips. Only the
+    //                        finding-churn park is removed; process failures still fail closed. The
+    //                        routing keys on the STRUCTURED haltKind field, never on the prose reason.
+    // #279: carry the verdict's reason into the park/handoff so the owner sees WHY, not a bare terminal.
+    // #381: an uncertified verdict parks fail-closed regardless of haltKind — only a certified
+    // round-cap handoff proceeds (haltKind 'round-cap' AND NOT uncertified).
+    if (fr.uncertified || (fr.terminal !== 'clean' && fr.haltKind !== 'round-cap')) {
       const detail = fr.reason ? ' (' + fr.reason + ')' : ''
       return park('whole-branch final review did not reach clean: ' + fr.terminal + detail)
     }
+    if (fr.haltKind === 'round-cap') {
+      // Auditable handoff record (best-effort/fail-open), THEN stamp + advance like the clean path.
+      const journalResult = await journalFinalReviewHandoff(workItem, branch, fr)
+      handoffSummary = buildHandoffSummary(fr, journalResult)
+    }
+    // recordFinalReviewClean stamps `final_review.clean`. Under #381 its semantics are: "branch scan +
+    // one fix pass completed; the branch gate is review-code" — written on BOTH a clean terminal and a
+    // round-cap handoff, so the resume router (build_progress twins), build_state gather, and run_watch
+    // all continue to read the same stamp and resume forward-walk correctly past this leg.
     const coverage = await recordFinalReviewClean(workItem)
     if (!(coverage && coverage.ok === true && coverage.read_back === true)) {
       return park('final review coverage stamp failed read-back')
@@ -327,7 +359,7 @@ async function buildPhase(workItem, generation) {
     if (!p.ok) return park('provenance not recorded: ' + (p.error || 'unknown'))
   }
 
-  return ok()
+  return handoffSummary ? ok({ handoffSummary }) : ok()
 }
 
 // Reset ONLY uncommitted/untracked changes; never discard a commit (UFR-12). Returns {ok,error?}
@@ -352,7 +384,11 @@ async function writeProvenance(workItem) {
   return r
 }
 
-// Record final-review-clean. Caller does not check .ok today (preserve that), but stay fail-closed-safe.
+// Stamp `final_review.clean`. #381: the stamp means "branch scan + one fix pass completed; the branch
+// gate is review-code" — it is written on a clean terminal AND on a round-cap handoff (blockers found
+// at the one-pass cap, handed to review-code), never on a process-failure park. The stamp shape is
+// unchanged, so the resume router (build_progress twins), build_state gather, and run_watch read it
+// exactly as before. Caller checks .ok/.read_back for the stamp; stay fail-closed-safe on a throw.
 async function recordFinalReviewClean(workItem) {
   try {
     return await courier.runCourierJson(
@@ -919,6 +955,54 @@ async function reviewLoop(workItem, generation, task, branch, wt) {
   }
 }
 
+// #381: the cap decider's presentBlocking counts RAW dimension findings (including citation-less
+// blockers that compileFindings drops from verdict.findings). The manual post-cap fix/handoff path
+// must consume the SAME durable worklist the gate/breaker saw — read it from round-records.json
+// (the panel persists dimension findings there before the cap halt returns), mirroring the panel's
+// own fix leg which dispatches from the on-disk worklist rather than the compiled verdict.
+async function capBlockingWorklist(runDir, verdict) {
+  const round = (verdict && verdict.round) || 1
+  const path = `${runDir}/round-records.json`
+  let raw
+  try {
+    raw = await io().readText(path)
+  } catch (_e) {
+    return { ok: false, reason: 'round-memory-unreadable' }
+  }
+  let records
+  try {
+    records = JSON.parse(raw)
+  } catch (_e) {
+    return { ok: false, reason: 'round-memory-corrupt' }
+  }
+  if (!Array.isArray(records)) {
+    return { ok: false, reason: 'round-memory-corrupt' }
+  }
+  const rec = records.find((r) => r && r.round === round) || records[records.length - 1]
+  if (!rec || !rec.dimensions) {
+    return { ok: true, blockers: [] }
+  }
+  const blockers = panelTally.blockingFindingsFromDimensionResults(rec.dimensions)
+    .filter((f) => circuitBreaker.isBlocking(f.severity))
+  return { ok: true, blockers }
+}
+
+function capOpenFindingsSummary(blockers) {
+  return (blockers || []).slice(0, 50).map((f) => ({
+    file: (f && f.file) || null,
+    line: (f && (f.line !== undefined ? f.line : null)),
+    title: (f && f.title) || '',
+    severity: (f && f.severity) || '',
+  }))
+}
+
+// reviewerAgent returns findings[] for the common path; when the leaf also reports confidence
+// (smoke harness / external engines), ride the shaped object through so the panel gate sees it.
+function _branchReviewerPayload(out) {
+  if (!out || !Array.isArray(out.findings)) return null
+  return out.confidence ? out : out.findings
+}
+
 async function runFinalReview(workItem, generation, branch, wt) {
   const script = [
     'import json, subprocess, sys',
@@ -980,11 +1064,11 @@ async function runFinalReview(workItem, generation, branch, wt) {
       if (res && Array.isArray(res.findings)) return res.findings
       const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
         schema: FINAL_REVIEW_SCHEMA })
-      return (out && Array.isArray(out.findings)) ? out.findings : null
+      return _branchReviewerPayload(out)
     }
     const out = await agent(prompt, { label: `branch-reviewer:r${round}`, model: reviewerModel,
       schema: FINAL_REVIEW_SCHEMA })
-    return (out && Array.isArray(out.findings)) ? out.findings : null
+    return _branchReviewerPayload(out)
   }
   // recordDeferred writes the deferred-set (the channel the in-process tally reads) with one cheap
   // direct io-seam write — no genuine agent. (build_phase has no exec seam; the awaited io write below
@@ -997,11 +1081,23 @@ async function runFinalReview(workItem, generation, branch, wt) {
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
     await io().writeFile(p, JSON.stringify(set))
   }
-  const fixStep = async (_fixContext, verdict, _runDir) => {
-    // #276: filter blockers through the shared fail-closed predicate (was a case-sensitive hand-rolled
-    // Critical/Important check) so a whole-branch reviewer emitting a foreign/lowercase blocking
-    // severity is dispatched to the fixer, never silently counted nowhere.
-    const blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  // Populated after reviewPanel returns on a round-cap halt; fixStep reads it when dispatching.
+  let capBlockers = []
+  const fixStep = async (_fixContext, verdict, runDir) => {
+    // #381: consume the cap decider's raw blocking worklist (round-records), not verdict.findings
+    // (the compiled set that drops citation-less blockers). Fall back to compiled findings only when
+    // the durable record is absent (resume/degrade paths).
+    let blockers
+    if (capBlockers.length) {
+      blockers = capBlockers.slice()
+    } else {
+      const wl = await capBlockingWorklist(runDir, verdict)
+      if (!wl.ok) return null
+      blockers = wl.blockers
+    }
+    if (!blockers.length) {
+      blockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+    }
     // Fence before the only branch-mutating final-review path (UFR-10: the module's fence-before-write
     // invariant). A lost lease -> null -> reviewPanel treats it as a fix failure -> halted -> phase parks.
     if (!(await fenceOrPark(workItem, generation))) return null   // UFR-10 fence — UNCHANGED
@@ -1019,12 +1115,156 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // This preserves the exact contract of the real build_phase.js:504-511 (`return { fixed: [...] }`).
     return { fixed: blockers.map((b) => b.id || b.title), deferred: [] }
   }
+  // #381: the whole-branch final review runs ONE review pass + ONE fix pass, no re-review loop.
+  // maxRounds:1 caps the panel at a single review round; a round that surfaces blockers halts at
+  // the cap (haltKind 'round-cap') BEFORE the panel's own fix leg runs (the fix leg only fires on a
+  // 'continue' terminal, and cap 1 makes a blocking round terminal). The one fix pass is dispatched
+  // BELOW, after the panel returns — then the caller proceeds to review-code (the strictly stronger
+  // branch gate: 5 specialist panels, circuit breaker, confirmation rounds) rather than parking on
+  // the weakest instrument's expected finding-churn. MAX_ROUNDS (and the per-task review loops that
+  // use it) are deliberately untouched.
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
-    runKey: runDir, runDir, fixStep, maxRounds: MAX_ROUNDS,
+    runKey: runDir, runDir, fixStep, maxRounds: 1,
     legKind: { panel: false, code: true }, verifyCommand: verify,
   })
-  return { terminal: verdict && verdict.terminal, reason: verdict && verdict.reason }
+  // haltKind is the STRUCTURED cap-halt discriminator (review_loop_plan.tally-round → the shell's
+  // verdict). At the decider it means "round cap reached with blockers present, verify not red"; the
+  // block below then executes the owner-ratified ONE FIX PASS, so by the time haltKind reaches the
+  // caller, 'round-cap' means "blockers surfaced at the cap AND the fix batch landed AND the post-fix
+  // verify (if configured) is green" — the ONLY kind the caller hands off to review-code. Every other
+  // halt kind (verify-fail pre- or post-fix, fix-failed/fence-lost, breaker 'other') and every
+  // non-halt non-clean terminal parks. Routing keys on this field, never on prose.
+  let haltKind = verdict && verdict.haltKind
+  let reason = verdict && verdict.reason
+  let fixPass = null
+  // #381: load the cap worklist once from round-records (same raw blocking source the decider
+  // counted). Only needed on a certified round-cap halt — uncertified caps park with no fix dispatch.
+  if (verdict && verdict.haltKind === 'round-cap' && !verdict.uncertified) {
+    const wl = await capBlockingWorklist(runDir, verdict)
+    if (!wl.ok) {
+      haltKind = 'other'
+      reason = wl.reason
+    } else {
+      capBlockers = wl.blockers
+    }
+  }
+  if (verdict && verdict.terminal === 'halted' && haltKind === 'round-cap' && !verdict.uncertified) {
+    // Fail closed: the decider stamped round-cap only when presentBlocking > 0; an empty derived
+    // worklist means the fix/handoff path disagrees with the gate — park, never stamp-and-advance.
+    if (capBlockers.length === 0) {
+      haltKind = 'other'
+      reason = 'round-cap with empty blocking worklist — inconsistent with cap decider (fail closed)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
+    // The ONE fix pass (#381, owner-ratified: "single review AND single fix pass, just no loop — not
+    // advisory only"). Reuse the panel's own fixStep closure verbatim: fence-before-write (UFR-10),
+    // _implDispatch (external engine + UFR-2 fall-open), the {fixed,deferred} report contract. A lost
+    // fence returns null; a thrown dispatch is caught — both downgrade to 'fix-failed' (park). The fix
+    // batch is deliberately UNVETTED by this leg (no re-review — that is the loop being removed);
+    // review-code, the next phase, is the gate that vets it.
+    let fixReport = null
+    try { fixReport = await fixStep(null, verdict, runDir) } catch (_e) { fixReport = null }
+    if (!fixReport) {
+      haltKind = 'fix-failed'
+      reason = 'one-pass fix batch did not complete (fix dispatch failed or fence lost)'
+        + (reason ? ' — cap halt was: ' + reason : '')
+    } else {
+      // Deferred-set recording, exactly as the shell's runFixStep would have done (advisory skip-set;
+      // a failed write degrades the audit trail, never the run — same deliberate-degrade contract).
+      try { await recordDeferred(fixReport, verdict, runDir) } catch (_e) { /* advisory by contract */ }
+      // Post-fix verify, ONCE (the fix changed the tree — the round's pre-fix verify result is stale).
+      // Reuse the shell's verifyAgent leaf (round-stamped file authoritative, anti-fabrication
+      // fail-closed); round 2 stamps a distinct verify-result-r2.json (cap 1 → no real round 2 exists).
+      // No verify configured ('none') → skipped without a dispatch, green by the spec's "if configured".
+      let postVerify = 'skipped'
+      if (verify && String(verify).trim().toLowerCase() !== 'none') {
+        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io()) }
+        catch (_e) { postVerify = 'fail' }
+      }
+      if (postVerify === 'pass' || postVerify === 'skipped') {
+        // Fix landed + verify green → the handoff stands; the caller journals + proceeds.
+        fixPass = { dispatched: true, fixed: (fixReport.fixed || []), postVerify }
+      } else {
+        haltKind = 'verify-fail'   // post-fix red verify PARKS — never swallowed into the handoff
+        reason = 'post-fix verify ' + (postVerify === 'timeout' ? 'timed out' : 'failed')
+          + ' after the one-pass fix batch — cannot hand off'
+      }
+    }
+    }
+  }
+  // openFindings is a COMPACT summary (no evidence bodies) the caller journals on a round-cap handoff
+  // so the still-open findings review-code will vet stay auditable — a summary, not a prose wall.
+  // Built from the SAME cap worklist the fix batch consumed (raw blocking set), not verdict.findings.
+  if (!capBlockers.length) {
+    capBlockers = (verdict && verdict.findings || []).filter((f) => circuitBreaker.isBlocking(f.severity))
+  }
+  const openFindings = capOpenFindingsSummary(capBlockers)
+  return { terminal: verdict && verdict.terminal, reason, haltKind, fixPass,
+           openFindings, openFindingsCount: capBlockers.length,
+           uncertified: !!(verdict && verdict.uncertified) }
+}
+
+// #381 handoff audit: on a round-cap handoff (the whole-branch final review found blockers at the
+// one-pass cap, dispatched the one fix pass, and hands the branch to review-code), journal the
+// still-open findings + the fix-pass facts so they are auditable — a COMPACT summary
+// (file/line/title/severity, no evidence walls), clamped in count.
+// Best-effort/fail-OPEN like the readout-disclosure journal (UFR-2): the auditable breadcrumb never
+// gates the handoff, and execJson already retries once on a dropped courier stdout. The proceed
+// decision is the caller's; this only records why the branch advanced with findings still open.
+// Returns {ok} or {ok:false, error} so the caller can surface a failed write on the phase record
+// (handoffSummary) without failing closed — review-code re-vets downstream.
+function buildHandoffSummary(fr, journalResult) {
+  const fixPass = (fr && fr.fixPass) || null
+  const summary = {
+    openFindingsCount: (fr && fr.openFindingsCount) || 0,
+    openFindings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    fixDispatched: !!(fixPass && fixPass.dispatched),
+    fixFixed: (fixPass && fixPass.fixed) || [],
+    postFixVerify: (fixPass && fixPass.postVerify) || 'none',
+    handoff: 'review-code',
+    handoffJournalOk: !!(journalResult && journalResult.ok),
+  }
+  if (!summary.handoffJournalOk) {
+    summary.handoffJournalError = (journalResult && journalResult.error)
+      || 'final_review_handoff journal write failed'
+  }
+  return summary
+}
+
+async function journalFinalReviewHandoff(workItem, branch, fr) {
+  const fixPass = (fr && fr.fixPass) || null
+  const summary = {
+    branch,
+    open_findings_count: (fr && fr.openFindingsCount) || 0,
+    open_findings: (fr && fr.openFindings) || [],
+    reason: (fr && fr.reason) || '',
+    fix_dispatched: !!(fixPass && fixPass.dispatched),
+    fix_fixed: (fixPass && fixPass.fixed) || [],
+    post_fix_verify: (fixPass && fixPass.postVerify) || 'none',
+    handoff: 'review-code',
+  }
+  const detail = `whole-branch final review reached the one-pass cap with `
+    + `${summary.open_findings_count} open finding(s); one fix pass dispatched `
+    + `(post-fix verify: ${summary.post_fix_verify}) — handing off to review-code (unvetted by this leg)`
+  try {
+    const r = await execJson(
+      `python3 ${libPath('journal_entry.py')} --work-item ${shq(workItem)} `
+      + `--event-type final_review_handoff --step ${shq('final_review')} `
+      + `--detail ${shq(detail)} --payload ${shq(JSON.stringify(summary))}`,
+      'journal final-review handoff')
+    if (r == null) {
+      return { ok: false, error: 'final_review_handoff journal write did not run (courier/exec failed)' }
+    }
+    if (r.ok !== true) {
+      return { ok: false, error: r.error || r.reason || 'final_review_handoff journal write failed' }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false,
+             error: (e && e.message) ? String(e.message) : 'final_review_handoff journal write failed' }
+  }
 }
 
 // Exported to pin label formats in CI (showrunner_workhorse_label_smoke.js) — no runtime consumers.

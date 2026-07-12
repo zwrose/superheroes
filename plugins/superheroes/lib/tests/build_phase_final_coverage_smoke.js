@@ -18,8 +18,12 @@ global.parallel = async (fns) => { for (const f of (fns || [])) await f() }
       return [{ ok: true, stdout: JSON.stringify({ ok: true, verify_command: 'none', minors: [] }) }]
     }
     if (label.startsWith('branch-reviewer:')) {
+      // #381: the whole-branch final review is now a SINGLE review pass (maxRounds:1). A clean round
+      // certifies clean and stamps coverage — the coverage-fold read still runs at round entry. (The
+      // blocker-then-clean 2-round cycle this test used pre-#381 no longer exists; the round-cap
+      // handoff contract is covered by build_phase_final_review_smoke.js.)
       reviewerCalls += 1
-      return { findings: reviewerCalls === 1 ? [{ id: 'F-1', title: 'bug', file: 'a.js', line: 1, severity: 'Important', evidence: 'e' }] : [] }
+      return { findings: [] }
     }
     if (label === 'exec' && prompt.includes('fence_cli.py')) {
       return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]

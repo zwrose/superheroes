@@ -924,6 +924,9 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     // #211 fix-context pointer (written by the folded decider on a continue) — never inlined findings.
     if (own(decided, 'worklistPath')) verdictOut.worklistPath = decided.worklistPath
     if (own(decided, 'worklistReason')) verdictOut.worklistReason = decided.worklistReason
+    // #381 structured cap-halt discriminator (from the decider) — the whole-branch final-review gate
+    // routes on this (round-cap → hand off to review-code; every other halt kind parks), never on prose.
+    if (own(decided, 'haltKind')) verdictOut.haltKind = decided.haltKind
     return verdictOut
   } catch (exc) {
     return Object.assign({ schemaVersion: SCHEMA_VERSION, gate: 'cannot-certify', confidence: 'low',
@@ -990,4 +993,8 @@ const VERIFY_SCHEMA = { type: 'object', required: ['result'],
 
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 
-module.exports = { reviewPanel, gatherReviewSetup, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+// verifyAgent exported for #381: build_phase's whole-branch final review re-runs the verify gate ONCE
+// after its one-pass fix batch lands (the fix changed the tree, so the round's pre-fix verify result is
+// stale) — reusing this leaf keeps the verify contract (round-stamped file authoritative, anti-
+// fabrication fail-closed) single-sourced instead of duplicating it at the call site.
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
