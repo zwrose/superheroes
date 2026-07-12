@@ -1131,7 +1131,12 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // the launching session's directory — false red (a broken session tree parks a good branch) and,
     // worse, false green (the branch's changes are never in the tested tree). verifyCwd threads to
     // verifyAgent's --cwd; the #382 post-cap fix-pass verify below is rooted the same way.
-    legKind: { panel: false, code: true }, verifyCommand: verify, verifyCwd: wt,
+    // #394: this single-generalist leg's reviewerAgent (above) is tier-blind — it ALWAYS dispatches
+    // at the reviewer-deep model + review-deep effort. Declaring dispatchTier makes the scheduled
+    // run-tier tell that truth, so a post-baseline (resumed) round with prior findings no longer arms
+    // the cheap-first escalation into a byte-identical re-dispatch that discards the first (already
+    // deep) answer. The per-task panel legs keep their honest cheap-first escalation.
+    legKind: { panel: false, code: true, dispatchTier: 'reviewer-deep' }, verifyCommand: verify, verifyCwd: wt,
   })
   // haltKind is the STRUCTURED cap-halt discriminator (review_loop_plan.tally-round → the shell's
   // verdict). At the decider it means "round cap reached with blockers present, verify not red"; the

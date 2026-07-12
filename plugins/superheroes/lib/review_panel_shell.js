@@ -556,6 +556,23 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
 
     const scheduled = plan.dimensions || {}
+    // #394: a leg whose reviewerAgent ALWAYS dispatches at a single fixed tier declares that tier
+    // (legKind.dispatchTier). The whole-branch final-review leg (legKind.panel:false, build_phase's
+    // tier-blind reviewerAgent) is the case: it unconditionally dispatches deep. But the round policy
+    // tiers a post-baseline round with prior findings as CHEAP ('reviewer'), which — via
+    // _shapeReviewerResult stamping a findings-bearing cheap answer 'low' — arms dispatchReviewer's
+    // cheap->deep escalation into a BYTE-IDENTICAL re-dispatch of the already-deep review (the first,
+    // completed answer discarded). Pinning the scheduled run-tier to the leg's honest dispatch tier
+    // makes the confidence stamp truthful and the escalation branch never arm. The per-task panel legs
+    // (legKind.panel:true) declare no dispatchTier, so their real cheap->deep escalation is untouched.
+    if (legKind && legKind.dispatchTier) {
+      for (const name of Object.keys(scheduled)) {
+        const sched = scheduled[name]
+        if (sched && sched.action === 'run' && sched.tier !== legKind.dispatchTier) {
+          scheduled[name] = Object.assign({}, sched, { tier: legKind.dispatchTier })
+        }
+      }
+    }
     const roundFindings = {}
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: coverageDecisions.map((d) => d.id).filter(Boolean) }
     await parallel(reviewerSet

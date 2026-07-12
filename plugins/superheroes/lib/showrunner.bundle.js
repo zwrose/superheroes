@@ -1493,6 +1493,14 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       }
     }
     const scheduled = plan.dimensions || {}
+    if (legKind && legKind.dispatchTier) {
+      for (const name of Object.keys(scheduled)) {
+        const sched = scheduled[name]
+        if (sched && sched.action === 'run' && sched.tier !== legKind.dispatchTier) {
+          scheduled[name] = Object.assign({}, sched, { tier: legKind.dispatchTier })
+        }
+      }
+    }
     const roundFindings = {}
     const receiptContext = { artifact: runId + ':round-' + round, coverageDecisionIds: coverageDecisions.map((d) => d.id).filter(Boolean) }
     await parallel(reviewerSet
@@ -4948,7 +4956,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
     runKey: runDir, runDir, fixStep, maxRounds: 1,
-    legKind: { panel: false, code: true }, verifyCommand: verify, verifyCwd: wt,
+    legKind: { panel: false, code: true, dispatchTier: 'reviewer-deep' }, verifyCommand: verify, verifyCwd: wt,
   })
   let haltKind = verdict && verdict.haltKind
   let reason = verdict && verdict.reason

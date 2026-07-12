@@ -31,6 +31,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
+    # #394: the whole-branch final-review leg (panel:false) schedules its honest deep dispatch tier,
+    # so a post-baseline round with prior findings does NOT arm a byte-identical escalation re-dispatch;
+    # the per-task panel legs (panel:true) keep their real cheap->deep escalation.
+    "plugins/superheroes/lib/tests/showrunner_final_review_tier_smoke.js",
     # #174: confirmation-bar economics — certify-after-scoped, severity-gated re-arm, hard cap.
     "plugins/superheroes/lib/tests/showrunner_confirmation_economics_smoke.js",
     # mega-JSON regression: loop persistence ships paths + small scalars, never the record body.
