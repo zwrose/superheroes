@@ -268,21 +268,61 @@ def _git(worktree, *args):
                           capture_output=True, text=True)
 
 
+# The canned message used when the engine committed nothing (edits only) OR left a commit whose
+# captured message is empty/unusable. When the engine DID leave a usable message, that message is
+# preserved (see _capture_engine_message + commit_result) so spec-prescribed commit messages
+# survive an external build (#386).
+_CANNED_COMMIT_SUBJECT = "build: apply external-engine change"
+
+
+def _capture_engine_message(worktree):
+    """Capture the message of the TIP of the engine's own commits (`git log -1 --format=%B HEAD`)
+    for reuse as the folded commit's message. The TIP is chosen deliberately: it is the engine's
+    final word on what the change is — a multi-commit engine output folds to one commit, and its
+    last message is the authoritative summary of the whole (a WIP first commit is exactly the
+    message we do NOT want). Returns the sanitized message body, or "" when unusable so the caller
+    falls back to the canned subject:
+      - trailing whitespace stripped (empty/whitespace-only → "" → canned fallback);
+      - any pre-existing Task-Id trailer line removed, so composing our own never doubles it (#386).
+
+    Scrubbed via the same readout.scrub seam as parse_result: every external free-text surface
+    at this trust boundary is scrubbed before persistence. Commit messages reach public PR
+    history via ship_phase pushes, so an engine tip message is in scope."""
+    log = _git(worktree, "log", "-1", "--format=%B", "HEAD")
+    if log.returncode != 0:
+        return ""
+    # Drop any pre-existing Task-Id trailer line(s) (exact "Task-Id:" prefix — the format we emit)
+    # so the trailer we append is never doubled.
+    kept = [ln for ln in log.stdout.split("\n")
+            if not ln.strip().startswith(TASK_ID_TRAILER + ":")]
+    scrubbed = _scrub("\n".join(kept))
+    return scrubbed.strip() if isinstance(scrubbed, str) else ""
+
+
 def commit_result(worktree, task_id, pre_sha):
     """The SOLE committer for external writes. HEAD==pre_sha (engine only edited) → make the
-    single Task-Id-trailered commit. HEAD!=pre_sha (engine left stray commits) → soft-reset to
+    single Task-Id-trailered commit with the canned subject. HEAD!=pre_sha (engine left its own
+    commit(s)) → capture the engine's tip commit message BEFORE the soft-reset, soft-reset to
     pre_sha (folds ONLY this dispatch's commits — pre_sha is per-dispatch), then the single
-    trailered commit. Never a hard reset; discards no prior work. Never raises."""
-    msg = "build: apply external-engine change\n\n%s: %s" % (TASK_ID_TRAILER, task_id)
+    trailered commit REUSING the engine's message (falling back to the canned subject when the
+    engine left no usable message, #386). Never a hard reset; discards no prior work. Never raises."""
     try:
         head = _git(worktree, "rev-parse", "HEAD")
         if head.returncode != 0:
             return {"ok": False, "error": "cannot resolve HEAD: %s" % head.stderr.strip()}
+        subject = _CANNED_COMMIT_SUBJECT
         if head.stdout.strip() != pre_sha:
+            # Capture the engine's own commit message BEFORE folding — after the soft-reset the
+            # engine's commits (and their messages) are gone from HEAD. A usable message is reused
+            # so spec-prescribed commit messages survive; empty/unusable → canned fallback.
+            captured = _capture_engine_message(worktree)
+            if captured:
+                subject = captured
             # fold ONLY this dispatch's commits back into the index (prior work is below pre_sha)
             r = _git(worktree, "reset", "--soft", pre_sha)
             if r.returncode != 0:
                 return {"ok": False, "error": "soft-reset failed: %s" % r.stderr.strip()}
+        msg = "%s\n\n%s: %s" % (subject, TASK_ID_TRAILER, task_id)
         add = _git(worktree, "add", "-A")
         if add.returncode != 0:
             return {"ok": False, "error": "git add failed: %s" % add.stderr.strip()}
