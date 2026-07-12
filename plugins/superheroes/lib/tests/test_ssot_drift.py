@@ -425,3 +425,21 @@ def test_uncertified_flag_single_sourced():
     shell = _read(os.path.join("lib", "review_panel_shell.js"))
     assert 'decided.uncertified' in shell and 'verdictOut.uncertified' in shell, (
         "review_panel_shell.js must copy the decider's uncertified flag onto the verdict")
+
+
+# --- Cluster 9: journal event vocabulary (#397) ----------------------------
+
+def test_journal_event_types_known_to_renderers():
+    """CONVENTIONS §11: journal.EVENT_TYPES is the append writer's single source; run_watch and
+    run_readout each carry a known-type map so a new event type can't be added to the journal
+    without updating the renderers (the #397 doc-review routing + convergence vocabulary)."""
+    import journal
+    import run_readout
+    import run_watch
+    home = journal.EVENT_TYPES
+    assert home <= run_watch.KNOWN_JOURNAL_EVENT_TYPES, (
+        "run_watch.KNOWN_JOURNAL_EVENT_TYPES missing journal types: %r"
+        % (home - run_watch.KNOWN_JOURNAL_EVENT_TYPES))
+    assert home <= run_readout.KNOWN_JOURNAL_EVENT_TYPES, (
+        "run_readout.KNOWN_JOURNAL_EVENT_TYPES missing journal types: %r"
+        % (home - run_readout.KNOWN_JOURNAL_EVENT_TYPES))

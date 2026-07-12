@@ -41,6 +41,15 @@ EVENT_TYPES = {
     # blockers, the fix batch lands, and post-fix verify is green. Structured non-secret `payload`
     # ({branch, open_findings, fix_dispatched, ...}), written as-is; run_watch may render it.
     "final_review_handoff",
+    # #397 doc-review legibility: a tasks-review non-blocking finding routed to the journal
+    # (FR-4), never into build instructions (FR-5). Structured non-secret payload, written as-is.
+    "routed_forward",
+    # #397 FR-15: the per-review convergence record — rounds used, per-round blocking vs
+    # routed-forward counts, and the outcome — at every doc-review terminal.
+    "review_convergence",
+    # #397 FR-3 receipt: the tasks phase journaled that it was handed the plan review's
+    # hand-off list (or, per UFR-5, that it could not be read).
+    "handoff_provided",
 }
 
 

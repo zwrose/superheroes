@@ -22,6 +22,34 @@ import task_list
 
 REVIEW_ROOT = "/tmp"
 
+# Plain-language labels for journal event types the live watch renders (CONVENTIONS §11 copy-holder;
+# drift-guarded against journal.EVENT_TYPES in test_ssot_drift.py).
+JOURNAL_EVENT_LABELS = {
+    "run_started": "run started",
+    "step_entered": "step entered",
+    "step_completed": "step completed",
+    "notify": "notify",
+    "gate": "gate",
+    "error": "error",
+    "resumed": "resumed",
+    "lease_acquired": "lease acquired",
+    "lease_reclaimed": "lease reclaimed",
+    "ci_fix_attempt": "ci fix attempt",
+    "parked": "parked",
+    "run_completed": "run completed",
+    "phase_record": "phase record",
+    "external_dispatch": "external dispatch",
+    "phase_cost": "phase cost",
+    "phases_skipped": "phases skipped",
+    "permission_denied": "permission denied",
+    "allowance_fired": "allowance fired",
+    "final_review_handoff": "final review handoff",
+    "routed_forward": "finding routed forward",
+    "review_convergence": "review convergence",
+    "handoff_provided": "handoff provided",
+}
+KNOWN_JOURNAL_EVENT_TYPES = frozenset(JOURNAL_EVENT_LABELS)
+
 
 def _now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -302,7 +330,8 @@ def _read_run(root, work_item, events):
             state = "parked"
         elif typ in ("run_started", "resumed", "lease_acquired", "lease_reclaimed",
                      "step_entered", "step_completed", "gate", "ci_fix_attempt",
-                     "phase_record", "external_dispatch", "notify", "phases_skipped"):
+                     "phase_record", "external_dispatch", "notify", "phases_skipped",
+                     "routed_forward", "review_convergence", "handoff_provided"):
             state = "active"
         elif typ == "error":
             state = "error"
@@ -532,8 +561,27 @@ def format_journal_event(evt):
         skipped = payload.get("skipped")
         names = ", ".join(skipped) if isinstance(skipped, list) and skipped else "front-half phases"
         return "%s  ⏭ %s route — skipped %s" % (clock, route, names)
+    if typ == "routed_forward":
+        # #397 FR-4: a tasks-review non-blocking finding routed to the journal, never into build.
+        payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
+        doc = payload.get("doc") or "doc"
+        return "%s  → %s %s" % (clock, doc, JOURNAL_EVENT_LABELS[typ])
+    if typ == "review_convergence":
+        # #397 FR-15: per-review convergence record at every doc-review terminal.
+        payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
+        doc = payload.get("doc") or "doc"
+        outcome = payload.get("outcome") or "recorded"
+        return "%s  · %s %s — %s" % (clock, doc, JOURNAL_EVENT_LABELS[typ], outcome)
+    if typ == "handoff_provided":
+        # #397 FR-3: tasks phase receipt that the plan hand-off was provided (or unreadable).
+        payload = evt.get("payload") if isinstance(evt.get("payload"), dict) else {}
+        doc = payload.get("doc") or "plan"
+        return "%s  · %s hand-off %s" % (clock, doc, JOURNAL_EVENT_LABELS[typ])
     if typ in ("lease_acquired", "lease_reclaimed"):
         return "%s  · %s%s" % (clock, typ.replace("_", " "), _detail_suffix(evt))
+    label = JOURNAL_EVENT_LABELS.get(typ)
+    if label:
+        return "%s  · %s%s" % (clock, label, _detail_suffix(evt))
     return "%s  · %s%s" % (clock, typ.replace("_", " "), _detail_suffix(evt))
 
 
