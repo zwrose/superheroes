@@ -529,6 +529,7 @@ function reviewCodeLeaves(tiers, opts) {
       // (review/review-deep); the owner `timeout` override still wins.
       const res = await engineDispatch.dispatchExternal({
         workItem: typeof workItem === 'string' ? workItem : 'review-code',
+        taskId: `${reviewer}-r${round}`,
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,

@@ -635,11 +635,18 @@ async function _dispatchExternalInner(o) {
   //    build-argv via --schema-path (codex --output-schema for read roles).
   // runId is built from CALLER-SUPPLIED identifiers only — no wall-clock time or PRNG calls (FR-8:
   // the Workflow sandbox has no time/random globals, and the bundle-smoke statically bans those APIs
-  // because they break deterministic resume). taskId (write roles) or workItem (read roles) plus
-  // engine/roleKind give a stable-enough per-dispatch key; callers that omit both share a fallback
-  // key, which is safe because writeInputs/rawPath are consumed synchronously within this single
-  // dispatch and never read back across calls.
-  const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  // because they break deterministic resume). taskId (write roles and callers that pass one) wins;
+  // workItem-only keys append a deterministic content suffix so a review panel fanning out parallel
+  // reviewers (same workItem/roleKind/engine) never share one /tmp staging path — without that,
+  // concurrent dispatches clobber each other's prompt/schema between stage, verify, and _runArgv.
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
+  const schemaText = JSON.stringify(stagedSchema)
+  const runKeyBase = o.taskId
+    ? String(o.taskId)
+    : (o.workItem
+      ? `${String(o.workItem)}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
+      : 'run')
+  const runKey = runKeyBase.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
@@ -647,8 +654,6 @@ async function _dispatchExternalInner(o) {
   // (see strictify above). ONLY on the codex path — cursor ignores the schema entirely, and the
   // native Claude path never reaches this seam (it calls agent() with the original permissive schema,
   // which Anthropic's tool input_schema requires and which strict shapes would break).
-  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
-  const schemaText = JSON.stringify(stagedSchema)
   // #257: stage prompt then schema as PLAIN-readable, hash-verified writes (see _stageCmd/_stageInput) —
   // each in its own leaf, prompt first so a prompt-staging denial short-circuits the (pointless) schema
   // stage. writeInputs holds the FAILED leaf's raw results so the #373 denial-signature extraction still

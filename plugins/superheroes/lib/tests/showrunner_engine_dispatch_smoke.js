@@ -614,6 +614,40 @@ function makeAgent(routes) {
     d.__resetStagingLieNotice()
   }
 
+  // #395 parallel reviewers: same workItem/roleKind/engine without taskId must not share staging paths
+  // (concurrent clobber was the race between stage, verify, and _runArgv).
+  {
+    const verifyPaths = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        if (prompt.includes('hashlib.sha256')) {
+          return [{ index: 0, ok: true, stdout: '' }]
+        }
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          for (const m of prompt.matchAll(/--verify '([^']+:[0-9a-f]{64})'/g)) verifyPaths.push(m[1].split(':')[0])
+          return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        }
+        if (prompt.includes('journal_entry.py')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    await Promise.all([
+      d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
+        prompt: 'You are the security-reviewer.', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-parallel' }),
+      d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
+        prompt: 'You are the code-reviewer.', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-parallel' }),
+    ])
+    const promptPaths = [...new Set(verifyPaths.filter((p) => p.endsWith('.prompt')))]
+    assert.strictEqual(promptPaths.length, 2,
+      '#395: parallel same-workItem reviewers must not share one staging path')
+  }
+
   console.log('OK: engine_dispatch #395 staged-input verify + fail-closed re-stage')
 
   // ---------------------------------------------------------------------

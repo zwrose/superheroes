@@ -4126,12 +4126,17 @@ async function _dispatchExternalInner(o) {
     (relayMeta && relayMeta.truncated)
       ? { outputTruncated: true, outBytes: relayMeta.outBytes, outPath: relayMeta.outPath } : {})
   const isAuthor = (roleKind === 'author-plan')
-  const runKey = String(o.taskId || o.workItem || 'run').replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
+  const schemaText = JSON.stringify(stagedSchema)
+  const runKeyBase = o.taskId
+    ? String(o.taskId)
+    : (o.workItem
+      ? `${String(o.workItem)}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
+      : 'run')
+  const runKey = runKeyBase.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
-  const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
-  const schemaText = JSON.stringify(stagedSchema)
   const promptStage = await _stageInput(promptPath, prompt || '')
   const schemaStage = promptStage.ok
     ? await _stageInput(schemaPath, schemaText)
@@ -5777,6 +5782,7 @@ function reviewCodeLeaves(tiers, opts) {
       const eff = enginePrefTwin.resolveEffort(rEngine, effortKey, _effortOverrides())
       const res = await engineDispatch.dispatchExternal({
         workItem: typeof workItem === 'string' ? workItem : 'review-code',
+        taskId: `${reviewer}-r${round}`,
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
