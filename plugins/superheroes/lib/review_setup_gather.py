@@ -47,7 +47,7 @@ def _load_deferred_set(path):
 
 
 def gather(run_dir, records_path, dimensions, extras_path, deferred_path,
-           coverage_path, coverage_mode):
+           coverage_path, coverage_mode, doc_mode=False):
     # (1) the run-dir mkdir fold — the shell no longer mkdirs separately.
     if run_dir:
         os.makedirs(run_dir, exist_ok=True)
@@ -71,7 +71,7 @@ def gather(run_dir, records_path, dimensions, extras_path, deferred_path,
         extras = resume.get("extras")
         changed = extras.get("changedSubjects") if isinstance(extras, dict) else None
         plan = review_loop_plan.plan_round_decider(records_path, resume.get("round"), dimensions,
-                                                   changed, just_marked=False)
+                                                   changed, just_marked=False, doc_mode=doc_mode)
     return {"ok": True, "resume": resume, "plan": plan,
             "deferredSet": deferred_set, "coverage": coverage}
 
@@ -87,6 +87,7 @@ def main(argv=None):
     g.add_argument("--deferred-path")
     g.add_argument("--coverage-path", required=True)
     g.add_argument("--coverage-mode", choices=["doc", "code"], default="code")
+    g.add_argument("--doc-mode", action="store_true")
     g.add_argument("--out-path",
                    help="when the gathered blob is larger than --receipt-threshold, write it here "
                         "and answer a small receipt for verified chunk reads")
@@ -95,7 +96,7 @@ def main(argv=None):
     if args.cmd == "gather":
         result = gather(args.run_dir, args.records_path, json.loads(args.dimensions),
                         args.extras_path, args.deferred_path, args.coverage_path,
-                        args.coverage_mode)
+                        args.coverage_mode, doc_mode=args.doc_mode)
         ok = review_memory._print_receipted_or_direct("review-setup-gather", result,
                                                       out_path=args.out_path,
                                                       threshold=args.receipt_threshold)

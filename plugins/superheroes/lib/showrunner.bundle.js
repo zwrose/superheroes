@@ -1123,7 +1123,7 @@ function _jsonAnswer(out) {
   try { const p = JSON.parse((out && out.stdout) || ''); return (p && typeof p === 'object') ? p : null }
   catch (_) { return null }
 }
-async function planRoundDecider({ runDir, round, roster, changedSubjects, justMarked, coverageTarget, ioApi }) {
+async function planRoundDecider({ runDir, round, roster, changedSubjects, justMarked, coverageTarget, docMode, ioApi }) {
   const args = [libPath('review_loop_plan.py'), 'plan-round',
     '--path', ioApi.join(runDir, 'round-records.json'),
     '--round', String(round),
@@ -1131,6 +1131,7 @@ async function planRoundDecider({ runDir, round, roster, changedSubjects, justMa
   if (coverageTarget) args.push('--coverage-path', coverageTarget.path, '--coverage-mode', coverageTarget.mode)
   if (changedSubjects !== null && changedSubjects !== undefined) args.push('--changed-subjects', JSON.stringify(changedSubjects))
   if (justMarked) args.push('--just-marked')
+  if (docMode) args.push('--doc-mode')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'plan review round', courier: true }))
     if (ans && ans.ok) return ans
@@ -1139,7 +1140,7 @@ async function planRoundDecider({ runDir, round, roster, changedSubjects, justMa
 }
 async function tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
   presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
-  worklistOutPath, ioApi }) {
+  worklistOutPath, docMode, ioApi }) {
   const args = [libPath('review_loop_plan.py'), 'tally-round',
     '--path', ioApi.join(runDir, 'round-records.json'),
     '--round', String(round),
@@ -1156,6 +1157,7 @@ async function tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confi
   if (verifyResult !== null && verifyResult !== undefined) args.push('--verify-result', String(verifyResult))
   if (enterConfirmation) args.push('--enter-confirmation')
   if (uncertifiedReason) args.push('--uncertified-reason', uncertifiedReason)
+  if (docMode) args.push('--doc-mode')
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = _jsonAnswer(await ioApi.runHelper('python3', args, { label: 'tally review round', courier: true }))
     if (ans && typeof ans.terminal === 'string') return ans
@@ -1426,6 +1428,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
     '--coverage-mode', target.mode === 'doc' ? 'doc' : 'code',
     '--out-path', api.join(runDir, 'review-setup-gather.json'),
     '--receipt-threshold', String(_SUMMARY_RECEIPT_BOUND)]
+  if (legKind && legKind.docMode) args.push('--doc-mode')
   const out = await api.runHelper('python3', args, { payload: true })
   let parsed = _jsonFromStdout(out)
   if (parsed && parsed.receipt === 'review-setup-gather') {
@@ -1471,7 +1474,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     const v = await tallyRound({ runDir, round, roster: reviewerSet || [], maxRounds,
                                    roundFindings: {}, legKind, verifyResult: null,
                                    policy: { roundKind: 'baseline' }, coverageDecisions: [],
-                                   coverageTarget: null, runId, extras: lastExtras, ioApi })
+                                   coverageTarget: null, runId, extras: lastExtras, docMode: legKind && legKind.docMode, ioApi })
     return _usable(v) ? await finalizeVerdict(v, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi) : _failClosed()
   }
   while (true) {
@@ -1483,7 +1486,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     } else {
       plan = await planRoundDecider({ runDir, round, roster: reviewerSet,
         changedSubjects: (lastExtras && lastExtras.changedSubjects),
-        justMarked: justMarkedForConfirmation, coverageTarget, ioApi })
+        justMarked: justMarkedForConfirmation, coverageTarget, docMode: legKind && legKind.docMode, ioApi })
       if (!plan) {
         return await finalizeVerdict(
           { schemaVersion: SCHEMA_VERSION, terminal: 'cannot-certify', reason: 'round-plan-unreadable', round },
@@ -1564,7 +1567,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     memoryContentHash = persisted.contentHash
     const verdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
       roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
-      coverageTarget, runId, extras: lastExtras, enterConfirmation, ioApi })
+      coverageTarget, runId, extras: lastExtras, enterConfirmation, docMode: legKind && legKind.docMode, ioApi })
     if (!_usable(verdict)) return _failClosed()
     if (verdict.terminal !== 'continue') {
       return await finalizeVerdict(verdict, reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
@@ -1584,7 +1587,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     if (!fixResult.ok) {
       const failVerdict = await tallyRound({ runDir, round, roster: reviewerSet, maxRounds,
         roundFindings, legKind, synthesized, verifyResult, policy: { roundKind }, coverageDecisions: roundCoverageDecisions,
-        coverageTarget, runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation, ioApi })
+        coverageTarget, runId, extras: fixResult.extras || lastExtras, fixStatus: 'failed', enterConfirmation, docMode: legKind && legKind.docMode, ioApi })
       return await finalizeVerdict(
         _usable(failVerdict) ? failVerdict : _failClosed(),
         reviewerSet, round, legKind, fixRanThisRun, allUsage, runDir, runId, lease, ioApi)
@@ -1781,7 +1784,7 @@ function verifyResultFromPayload(verifyCommand, payload, opts) {
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {},
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
-                           coverageTarget = null, runId, enterConfirmation = false, ioApi }) {
+                           coverageTarget = null, runId, enterConfirmation = false, docMode = false, ioApi }) {
   const api = ioApi || io()
   const safeExtras = {}
   if (extras && typeof extras === 'object') {
@@ -1813,7 +1816,7 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     const uncertifiedReason = (gate === 'cannot-certify') ? panelTally.uncertifiedReason(roundFindings, roster) : null
     const decided = await tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
       presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
-      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), ioApi: api })
+      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), docMode, ioApi: api })
     if (!decided || typeof decided.terminal !== 'string') return _failClosed()
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
@@ -1882,7 +1885,7 @@ const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
 const VERIFY_SCHEMA = { type: 'object', required: ['result'],
   properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
 };
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
@@ -5957,7 +5960,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (fixContext, verdict, rd) => docReviser(fixContext, verdict, rd, context),
-    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none', preloaded })
+    maxRounds: 3, legKind: { panel: true, code: false, docMode: true }, verifyCommand: 'none', preloaded })
 }
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
 module.exports.runReviewDocPanel = runReviewDocPanel
@@ -6260,7 +6263,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   const docPath = docPathFor(workItem, doc)
   const setup = await gatherReviewSetup({
     runDir, reviewerSet: DOC_REVIEWERS, context: { workItem, docType: doc, docPath },
-    legKind: { panel: true, code: false }, ioApi: io(),
+    legKind: { panel: true, code: false, docMode: true }, ioApi: io(),
   })
   if (!setup) await io().mkdirp(runDir)
   const deferred = new Map()

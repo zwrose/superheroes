@@ -789,7 +789,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   return reviewPanel({
     reviewerSet: DOC_REVIEWERS, context, rubric: 'review-base', runKey: runDir, runDir,
     fixStep: (fixContext, verdict, rd) => docReviser(fixContext, verdict, rd, context),
-    maxRounds: 7, legKind: { panel: true, code: false }, verifyCommand: 'none', preloaded })
+    maxRounds: 3, legKind: { panel: true, code: false, docMode: true }, verifyCommand: 'none', preloaded })
 }
 
 module.exports.DOC_REVIEWERS = DOC_REVIEWERS
@@ -1179,7 +1179,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   // a plain mkdir and let the panel read its own entry state (correct, just unfolded).
   const setup = await gatherReviewSetup({
     runDir, reviewerSet: DOC_REVIEWERS, context: { workItem, docType: doc, docPath },
-    legKind: { panel: true, code: false }, ioApi: io(),
+    legKind: { panel: true, code: false, docMode: true }, ioApi: io(),
   })
   if (!setup) await io().mkdirp(runDir)
   const deferred = new Map()
