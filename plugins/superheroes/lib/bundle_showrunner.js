@@ -160,7 +160,9 @@ async function __sh(cmd, opts) {
   // ~2.6x vs the default full-surface dispatch. agentType and model are orthogonal — the wrapper still
   // applies the cheapest-model pin (or the fixer tier for payload leaves), so the two never interact.
   var o = Object.assign({ label: 'io', courier: true, agentType: 'superheroes:courier' }, opts || {})
-  var prompt = 'Execute this exact shell command via your command tool and return ONLY its stdout, unchanged. Do not echo, fence, summarize, or describe the command:\\n\\n' + __sc(cmd)
+  // #395: delegate prompt text to courier_exec.markedPromptFor (SSOT) so the preamble __sh path
+  // carries the payload-is-data clause and tool-budget text — same as dispatchMarked.
+  var prompt = __require('courier_exec').markedPromptFor(cmd)
   // Prompt-drop guard (repo memory: subagent-prompt-drop-bug — a plugin-type subagent dispatch
   // INTERMITTENTLY starts WITHOUT the task prompt, so the leaf never runs the command). Only a
   // command that echoes __SR_EXIT can be checked this way; for it, __badCourierAnswer() detects both

@@ -58,6 +58,17 @@ function makeAgent(routes) {
   assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' \d+ 'codex' 'exec'/.test(runCmd),
     'FIX 2: run command must wrap the CLI with the perl-alarm kill guard: ' + runCmd)
 
+  // #395: the staging leaf's prompt (the seam the live hijack fired on) carries the clause AND
+  // the explicit numeric tool budget (issue fix shape 2: "exactly N Bash calls, no Read").
+  const stagingPrompt = execLog.find((c) => c.includes('hashlib.sha256'))
+  assert.ok(stagingPrompt && stagingPrompt.includes('never a task for you'),
+    '#395: exec() staging prompt must carry the payload-is-data clause')
+  assert.ok(stagingPrompt && /hard tool budget is exactly 1 Bash call/.test(stagingPrompt),
+    '#395: exec() staging prompt must state the numeric tool budget')
+  const bcmd = execLog.find((c) => c.includes('engine_adapter.py build-argv'))
+  assert.ok(bcmd && bcmd.includes('--verify') && /\.prompt:[0-9a-f]{64}/.test(bcmd) &&
+    /\.schema\.json:[0-9a-f]{64}/.test(bcmd), '#395: build-argv carries prompt+schema verify hashes')
+
   console.log('OK: engine_dispatch review-path')
 
   // ---------------------------------------------------------------------
@@ -539,6 +550,108 @@ function makeAgent(routes) {
   console.log('OK: engine_dispatch #277 harness-dead tripwire (named once; all three pre-CLI keying disjuncts asserted)')
 
   // ---------------------------------------------------------------------
+  // #395: deterministic staged-input verify + fail-closed re-stage in dispatchExternal.
+  // ---------------------------------------------------------------------
+  {
+    // #395: a LYING staging courier (fabricated ok:true) must fail the dispatch closed — the
+    // external CLI never runs on unverified inputs, and the mismatch reason rides the journal.
+    d.__resetStagingLieNotice(); logs.length = 0
+    const execLog5 = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLog5.push(prompt)
+        if (prompt.includes('hashlib.sha256')) return [{ index: 0, ok: true, stdout: '' }]  // the lie
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, reason: 'staged-input-mismatch', path: '/tmp/x.prompt' }) }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const r5 = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300 })
+    assert.strictEqual(r5.ok, false)
+    assert.strictEqual(r5.reason, 'staged-input-mismatch')
+    assert.ok(!execLog5.some((c) => c.includes('--sandbox') && c.includes(' < ')),
+      '#395: CLI must never run on unverified staged inputs')
+    assert.strictEqual(execLog5.filter((c) => c.includes('hashlib.sha256')).length, 4,
+      '#395: exactly one re-stage round (2 stage writes x 2 rounds)')
+    assert.ok(execLog5.some((c) => c.includes('journal_entry.py') && c.includes('staged-input-mismatch')),
+      '#395: the mismatch outcome is journaled')
+    assert.strictEqual(logs.filter((l) => /STAGED-INPUT-MISMATCH/.test(l)).length, 1,
+      '#395: the dedicated once-per-run mismatch notice fired exactly once')
+
+    // #395: first build-argv verify mismatches, the re-stage runs, the second build-argv succeeds —
+    // the dispatch must complete normally and the notice must NOT fire.
+    d.__resetStagingLieNotice(); logs.length = 0
+    const execLog6 = []
+    let buildArgvCalls = 0
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        execLog6.push(prompt)
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          buildArgvCalls += 1
+          if (buildArgvCalls === 1) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: false, reason: 'staged-input-mismatch', path: '/tmp/x.prompt' }) }]
+          return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        }
+        if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        // Match the hardened marker-courier run leaf only — not the broad 'read-only' substring (which
+        // can appear in unrelated exec prompts and mis-route a later staging leaf).
+        if (prompt.includes('Execute this exact shell command')) {
+          return markedStdout('{"raw":"external review output"}\n__SR_DISPATCH__{"idleKilled":0,"idleSeconds":60,"exit":0,"outBytes":32,"truncated":0,"outPath":"/tmp/engine-codex-review-run.out"}')
+        }
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    const r6 = await d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, idleSeconds: 60 })
+    assert.deepStrictEqual(r6.findings, [], '#395: recovery path completes the dispatch normally')
+    assert.strictEqual(buildArgvCalls, 2, '#395: build-argv ran twice (verify, re-verify)')
+    assert.strictEqual(execLog6.filter((c) => c.includes('hashlib.sha256')).length, 4,
+      '#395: recovery re-staged both inputs once')
+    assert.strictEqual(logs.filter((l) => /STAGED-INPUT-MISMATCH/.test(l)).length, 0,
+      '#395: a healed single mismatch fires no notice')
+    d.__resetStagingLieNotice()
+  }
+
+  // #395 parallel reviewers: same workItem/roleKind/engine without taskId must not share staging paths
+  // (concurrent clobber was the race between stage, verify, and _runArgv).
+  {
+    const verifyPaths = []
+    global.agent = makeAgent([
+      ['exec', (prompt) => {
+        if (prompt.includes('hashlib.sha256')) {
+          return [{ index: 0, ok: true, stdout: '' }]
+        }
+        if (prompt.includes('engine_adapter.py build-argv')) {
+          for (const m of prompt.matchAll(/--verify '([^']+:[0-9a-f]{64})'/g)) verifyPaths.push(m[1].split(':')[0])
+          return [{ index: 0, ok: true, stdout: JSON.stringify(['codex', 'exec', '--sandbox', 'read-only', '-']) }]
+        }
+        if (prompt.includes('engine_adapter.py parse-result')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, findings: [] }) }]
+        }
+        if (prompt.includes('journal_entry.py')) {
+          return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
+        }
+        if (prompt.includes('--sandbox')) return markedStdout('{}')
+        return [{ index: 0, ok: true, stdout: '{}' }]
+      }],
+    ])
+    await Promise.all([
+      d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
+        prompt: 'You are the security-reviewer.', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-parallel' }),
+      d.dispatchExternal({ engine: 'codex', roleKind: 'review', effort: 'high',
+        prompt: 'You are the code-reviewer.', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 300, workItem: 'wi-parallel' }),
+    ])
+    const promptPaths = [...new Set(verifyPaths.filter((p) => p.endsWith('.prompt')))]
+    assert.strictEqual(promptPaths.length, 2,
+      '#395: parallel same-workItem reviewers must not share one staging path')
+  }
+
+  console.log('OK: engine_dispatch #395 staged-input verify + fail-closed re-stage')
+
+  // ---------------------------------------------------------------------
   // FIX 4a: _execJson courier-drop retry — a single empty/garbled stdout on a durable command is
   // retried ONCE (mirrors build_phase.js's canonical execJson contract); a PERSISTENT empty stdout
   // still fails closed after the retry.
@@ -987,22 +1100,15 @@ function makeAgent(routes) {
 
     // (a2b) SCHEMA-STAGE DENIAL: prompt staging succeeds, schema staging is blocked — exactly one
     // external_dispatch with outcome 'staging-denied' and a bounded reason (not a silent return).
+    // Route by staged PATH (each _stageInput rides its own single-command leaf) — do not depend on
+    // real bash/python for the prompt stage; a shell failure there would mislabel staging-failed.
     {
       d.__resetHarnessNotice()
       const jp = []
-      const { execFileSync } = require('child_process')
       global.agent = journalCollector(jp, [
         [d._SR_STAGE_SIG, (prompt) => {
-          const lines = prompt.split('\n').map((l) => l.match(/^\d+\.\s(.*)$/)).filter(Boolean).map((m) => m[1])
-          if (lines.length) {
-            return lines.map((c, i) => {
-              if (c.includes('.schema.json')) {
-                return { index: i, ok: false, stdout: DENIAL }
-              }
-              try { execFileSync('bash', ['-c', c], { stdio: 'pipe' }); return { index: i, ok: true, stdout: '' } }
-              catch (e) { return { index: i, ok: false, stdout: (e.stderr && e.stderr.toString()) || String(e.status) } }
-            })
-          }
+          if (prompt.includes('.schema.json')) return [{ index: 0, ok: false, stdout: DENIAL }]
+          if (prompt.includes('.prompt')) return [{ index: 0, ok: true, stdout: '' }]
           return [{ index: 0, ok: false, stdout: DENIAL }]
         }],
       ])

@@ -134,6 +134,20 @@ def test_rejected_persistent_codex_pin_is_loud_in_preflight():
     assert "invalid persistent Codex selection" in preflight_readout.render(snap)
 
 
+def test_unknown_persistent_codex_model_is_loud_in_preflight():
+    message = "unknown model 'gpt-5.6-solar' rejected"
+    prefs = {"reviewer": "codex", "implementation": "claude", "effort": {},
+             "invalidCodexModels": {"reviewer": message}}
+    reviewer = next(r for r in preflight_readout.enumerate_dispatch(prefs, {})
+                    if r["role"] == "reviewer")
+    assert reviewer["engineModel"] == "gpt-5.6-terra"
+    assert reviewer["configInvalid"] == message
+    snap = _snapshot_default()
+    snap["phases"] = [reviewer]
+    rendered = preflight_readout.render(snap)
+    assert message in rendered and "⚠" in rendered
+
+
 def test_unconfigured_role_labeled_default_configured_role_labeled_configured():
     # FR-5 second criterion: an empty tier-override map -> every row is a "default"; an explicit
     # per-role override -> that row is "configured".

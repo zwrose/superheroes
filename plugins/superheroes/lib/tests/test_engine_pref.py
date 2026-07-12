@@ -312,10 +312,14 @@ def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_pat
                                   "builder": "gpt-5.6-sol",
                                   "fixer": "gpt-5.6-terra",
                                   "author-plan": "gpt-5.5"}
+    assert got["invalidCodexModels"]["bogus-role"] == "unknown role 'bogus-role' rejected"
     invalid_repo = str(tmp_path / "invalid")
-    _write_core_with_prefs(invalid_repo, {"codexModels": {"fixer": "bogus-model"}})
-    assert EP.load_engine_prefs(
-        invalid_repo, root=os.path.join(invalid_repo, "store")).get("codexModels", {}) == {}
+    _write_core_with_prefs(invalid_repo, {"codexModels": {"fixer": "gpt-5.6-solar"}})
+    invalid_got = EP.load_engine_prefs(invalid_repo, root=os.path.join(invalid_repo, "store"))
+    assert invalid_got.get("codexModels", {}) == {}
+    assert invalid_got["invalidCodexModels"]["fixer"] == (
+        "unknown model 'gpt-5.6-solar' rejected"
+    )
 
 
 def test_load_engine_prefs_rejects_persistent_five_five_plus_max_before_dispatch(tmp_path):

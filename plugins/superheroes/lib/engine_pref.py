@@ -193,7 +193,11 @@ def load_engine_prefs(cwd, root=None):
         pins = {}
         invalid = {}
         for role, model in codex_models.items():
-            if role not in CODEX_PIN_ROLES or not isinstance(model, str) or model not in CODEX_MODELS:
+            if role not in CODEX_PIN_ROLES:
+                invalid[role] = "unknown role %r rejected" % role
+                continue
+            if not isinstance(model, str) or model not in CODEX_MODELS:
+                invalid[role] = "unknown model %r rejected" % model
                 continue
             role_effort = resolve_effort("codex", CODEX_ROLE_KIND[role], out["effort"])
             if valid_codex_model_effort(model, role_effort):

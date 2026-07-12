@@ -230,6 +230,14 @@ async function partB() {
   assert.ok(dispatchCalls.every((c) => c.roleKind === 'review' || c.roleKind === 'fix'),
     'FAIL (b1e): dispatchExternal must never be called for synthesis — only roleKind:review or roleKind:fix')
 
+  // (b1f-key) staging-path-key-derivation: engine_dispatch's runKeyBase uses taskId ALONE when
+  // present (it wins over workItem) — a bare `${reviewer}-r${round}` taskId would collide across
+  // DIFFERENT work items reviewing concurrently on the same host (same reviewer name + round land on
+  // one shared /tmp staging path). The reviewer taskId must be prefixed with the resolved workItem so
+  // it stays unique per work-item AND per reviewer/round.
+  assert.ok(reviewDispatch.every((c) => typeof c.taskId === 'string' && c.taskId.startsWith(`wi-eng-review${SFX}-`)),
+    'FAIL (b1f-key): review taskId must be prefixed with the resolved workItem to avoid cross-run /tmp staging collisions')
+
   // (b1f/g) depth-aware effort (FR-9): the deep reviewers (security/architecture — the reviewer-deep
   // tier) dispatch codex at xhigh; the regular reviewers (code/test/premortem) at high. roleKind stays
   // 'review' for all (asserted above); only the resolved effort differs by reviewer depth.
