@@ -632,7 +632,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         # the shell parks rather than dispatch a fixer with no worklist.
         if terminal == "continue" and worklist_out_path:
             fc = compose_fix_context(path, current_findings_path, coverage_path, coverage_mode,
-                                     round_no, roster, worklist_out_path)
+                                     round_no, roster, worklist_out_path, doc_mode=doc_mode)
             if fc.get("ok"):
                 out["worklistPath"] = fc.get("path")
                 out["worklistBytes"] = fc.get("bytes")
@@ -652,7 +652,7 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
 
 # ── decider: compose-fix-context — write the worklist, answer a pointer ──
 def compose_fix_context(records_path, current_findings_path, coverage_path, coverage_mode,
-                        round_no, dimensions, out_path):
+                        round_no, dimensions, out_path, doc_mode=False):
     """Write the fixer's worklist to a runDir FILE and answer only {ok, path, bytes, sha256}.
 
     Content flows disk → the fixer's Read, never through a courier answer. The worklist mirrors
@@ -713,6 +713,10 @@ def compose_fix_context(records_path, current_findings_path, coverage_path, cove
                 current_findings = [f for f in loaded["findings"] if isinstance(f, dict)]
         except (OSError, ValueError):
             current_findings = []
+
+    if doc_mode:
+        prior_findings = [f for f in prior_findings if circuit_breaker.is_blocking(f.get("severity"))]
+        current_findings = [f for f in current_findings if circuit_breaker.is_blocking(f.get("severity"))]
 
     # round order: prior rounds' skeletons first, then this round's full-bodied findings.
     all_findings = prior_findings + current_findings
@@ -792,6 +796,7 @@ def _build_parser():
     fc.add_argument("--round", required=True, type=int)
     fc.add_argument("--dimensions", default="[]")
     fc.add_argument("--out-path", required=True)
+    fc.add_argument("--doc-mode", action="store_true")
     return p
 
 
@@ -819,7 +824,8 @@ def main(argv):
     elif args.cmd == "compose-fix-context":
         result = compose_fix_context(
             args.records_path, args.current_findings_path, args.coverage_path,
-            args.coverage_mode, args.round, _json_arg(args.dimensions, []), args.out_path)
+            args.coverage_mode, args.round, _json_arg(args.dimensions, []), args.out_path,
+            doc_mode=args.doc_mode)
     else:  # pragma: no cover — argparse `required=True` forbids this
         sys.stderr.write("unknown command\n")
         return 2

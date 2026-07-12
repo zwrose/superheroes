@@ -824,6 +824,33 @@ def test_compose_fix_context_includes_current_round_skeleton_when_no_staged_file
         "the current round's skeleton must be included when no full-body file is staged"
 
 
+def test_compose_fix_context_doc_mode_excludes_non_blocking(tmp_path):
+    records_path = _write_records(tmp_path, [
+        {"round": 1, "findings": [
+            {"file": "plan.md", "title": "unauth path", "severity": "Critical"},
+            {"file": "plan.md", "title": "no named unit test", "severity": "Minor"},
+        ], "dimensions": {}}])
+    out = str(tmp_path / "worklist.json")
+    res = rlp.compose_fix_context(records_path, None, None, "code", 1, FULL_ROSTER, out, doc_mode=True)
+    assert res["ok"]
+    wl = json.loads(open(out).read())
+    titles = [f["title"] for f in wl["findings"]]
+    assert "unauth path" in titles and "no named unit test" not in titles
+
+
+def test_compose_fix_context_doc_mode_empty_when_only_non_blocking(tmp_path):
+    records_path = _write_records(tmp_path, [
+        {"round": 1, "findings": [
+            {"file": "plan.md", "title": "no named unit test", "severity": "Minor"},
+            {"file": "plan.md", "title": "nit: spacing", "severity": "Nit"},
+        ], "dimensions": {}}])
+    out = str(tmp_path / "worklist.json")
+    res = rlp.compose_fix_context(records_path, None, None, "code", 1, FULL_ROSTER, out, doc_mode=True)
+    assert res["ok"]
+    wl = json.loads(open(out).read())
+    assert wl["findings"] == []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # the #211 SIZE invariant — no decider answer scales with run size
 # ─────────────────────────────────────────────────────────────────────────────
