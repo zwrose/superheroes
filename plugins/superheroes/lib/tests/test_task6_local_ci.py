@@ -1,9 +1,8 @@
 """#395 Task 6: diff-verifiable local CI gate (CLAUDE.md battery).
 
-Pins the validator scripts and the CI pytest inventory count so Task 6 attestation is
-independently checkable from the diff, not only from the commit message."""
+Pins the validator scripts and the CI pytest paths so Task 6 attestation is independently
+checkable from the diff, not only from the commit message."""
 import os
-import re
 import subprocess
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -13,8 +12,8 @@ _CI_PATHS = [
     "plugins/superheroes/eval/tests/",
     "eval/lib/tests/",
 ]
-# Task 6 2026-07-12 inventory (includes this file + test_bundle_395_hardening.py); bump when CI grows.
-_EXPECTED_COLLECTED = 3320
+# Exclude this file so the battery subprocess does not recurse into itself.
+_CI_PYTEST_IGNORE = "plugins/superheroes/lib/tests/test_task6_local_ci.py"
 
 
 def _run(cmd, timeout=120):
@@ -36,9 +35,18 @@ def test_validate_skills():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_ci_pytest_inventory_count():
-    r = _run(["python3", "-m", "pytest", *_CI_PATHS, "--collect-only", "-q"])
-    assert r.returncode == 0, r.stderr
-    m = re.search(r"(\d+) tests collected", r.stdout)
-    assert m, "expected 'N tests collected' in collect-only output:\n" + r.stdout
-    assert int(m.group(1)) == _EXPECTED_COLLECTED
+def test_ci_pytest_battery():
+    """Run the same pytest invocation as .github/workflows/ci.yml (CLAUDE.md § CI)."""
+    r = _run(
+        [
+            "python3",
+            "-m",
+            "pytest",
+            *_CI_PATHS,
+            "--ignore",
+            _CI_PYTEST_IGNORE,
+            "-q",
+        ],
+        timeout=1800,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
