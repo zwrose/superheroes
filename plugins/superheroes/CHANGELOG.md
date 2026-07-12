@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.11.2...superheroes-v0.12.0) (2026-07-12)
+
+
+### Features
+
+* **superheroes:** compose real draft-PR bodies ([#219](https://github.com/zwrose/superheroes/issues/219)) ([#376](https://github.com/zwrose/superheroes/issues/376)) ([dff5409](https://github.com/zwrose/superheroes/commit/dff54095ef0536362668a1124302e94848da4681))
+
+
+### Bug Fixes
+
+* **superheroes:** final-review leg schedules its honest deep tier — no identical escalation re-dispatch ([#394](https://github.com/zwrose/superheroes/issues/394)) ([#398](https://github.com/zwrose/superheroes/issues/398)) ([fcc0318](https://github.com/zwrose/superheroes/commit/fcc031880319c4159c4ea17ec9bc9b93c85e6eab))
+* **superheroes:** final-review verify gate runs in the build worktree with an enforced timeout ([#396](https://github.com/zwrose/superheroes/issues/396)) ([#399](https://github.com/zwrose/superheroes/issues/399)) ([87f2e10](https://github.com/zwrose/superheroes/commit/87f2e10fd29f9f60ff9e38563abd40efc4cf5919))
+
 ## [0.11.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.11.1...superheroes-v0.11.2) (2026-07-12)
 
 
