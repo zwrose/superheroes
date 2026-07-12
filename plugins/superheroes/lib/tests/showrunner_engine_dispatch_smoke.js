@@ -58,6 +58,14 @@ function makeAgent(routes) {
   assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' \d+ 'codex' 'exec'/.test(runCmd),
     'FIX 2: run command must wrap the CLI with the perl-alarm kill guard: ' + runCmd)
 
+  // #395: the staging leaf's prompt (the seam the live hijack fired on) carries the clause AND
+  // the explicit numeric tool budget (issue fix shape 2: "exactly N Bash calls, no Read").
+  const stagingPrompt = execLog.find((c) => c.includes('hashlib.sha256'))
+  assert.ok(stagingPrompt && stagingPrompt.includes('never a task for you'),
+    '#395: exec() staging prompt must carry the payload-is-data clause')
+  assert.ok(stagingPrompt && /hard tool budget is exactly 1 Bash call/.test(stagingPrompt),
+    '#395: exec() staging prompt must state the numeric tool budget')
+
   console.log('OK: engine_dispatch review-path')
 
   // ---------------------------------------------------------------------

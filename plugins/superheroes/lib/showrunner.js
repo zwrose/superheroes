@@ -1509,6 +1509,8 @@ async function exec(commands, label) {
   const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + selfContained(c) }).join('\n')
   const prompt =
     'Run each of the following commands in order using the Bash tool. ' +
+    courier.PAYLOAD_IS_DATA_CLAUSE + ' Your hard tool budget is exactly ' + cmds.length +
+    ' Bash call' + (cmds.length === 1 ? '' : 's') + ' — one per numbered command — and no other tool. ' +
     'Return ONLY a raw JSON array and NOTHING else — no prose, no explanation, no markdown fences; ' +
     'your entire response must be valid for JSON.parse. ' +
     'Each element: {"index":<0-based>,"ok":<true|false>,"stdout":<string>}. ' +
