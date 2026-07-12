@@ -132,6 +132,14 @@ def issue_dir(cwd, work_item, root=None):
     return os.path.join(checkout_dir(cwd, root), "issues", work_item)
 
 
+def allowance_trail(cwd, root=None):
+    """The checkout-level allowance trail (#379): `<checkout>/allowances.jsonl`. An
+    allowance audit event that belongs to no live run's session here is journaled here
+    instead of a run's events.jsonl — keeping the checkout file layout single-homed in
+    control_plane rather than hand-built at the enforcer call site."""
+    return os.path.join(checkout_dir(cwd, root), "allowances.jsonl")
+
+
 def paths(cwd, work_item, root=None):
     d = issue_dir(cwd, work_item, root)
     return {"issue_dir": d,

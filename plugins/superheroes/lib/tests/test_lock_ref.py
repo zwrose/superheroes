@@ -137,3 +137,52 @@ def test_ttl_expiry_still_reclaims(tmp_path):
                                 "bootId": None, "generation": 1, "ttl": 1})
     ok, gen, reason = lock.acquire(s, "wi")
     assert ok is True and gen == 2 and reason == "stolen"
+
+
+# --- #379: the lease records the owning session's launch cwd (sessionCwd) so allowance
+# journaling can attribute an event to a run ONLY when the triggering session IS the run's
+# session. Backward-compatible: acquire WITHOUT session_cwd leaves the field absent (legacy).
+
+
+def test_acquire_records_session_cwd(tmp_path):
+    # #379: acquire stamps the owning session's launch cwd onto the lease so a later hook can
+    # tell whether a triggering session owns this run.
+    s = _store(tmp_path)
+    ok, gen, _ = lock.acquire(s, "wi", session_cwd="/some/session/dir")
+    assert ok and gen == 1
+    _sha, lease = lock.read_lease(s, "wi")
+    assert lease["sessionCwd"] == "/some/session/dir"
+
+
+def test_acquire_without_session_cwd_omits_field(tmp_path):
+    # Backward compatibility: a caller that does not pass session_cwd (pre-#379 or a non-run
+    # acquire) leaves the field ABSENT — attribution then falls back to today's behavior.
+    s = _store(tmp_path)
+    ok, _gen, _ = lock.acquire(s, "wi")
+    assert ok
+    _sha, lease = lock.read_lease(s, "wi")
+    assert "sessionCwd" not in lease
+
+
+def test_renew_preserves_session_cwd(tmp_path):
+    # A heartbeat re-stamps acquiredAt but MUST carry the sessionCwd forward — else attribution
+    # would break the moment the first fence/renew fires mid-run.
+    s = _store(tmp_path)
+    ok, gen, _ = lock.acquire(s, "wi", session_cwd="/session/A")
+    assert ok
+    assert lock.renew(s, "wi", gen) is True
+    _sha, lease = lock.read_lease(s, "wi")
+    assert lease["sessionCwd"] == "/session/A", "renew must not drop the owning session cwd"
+
+
+def test_stale_steal_records_new_session_cwd(tmp_path):
+    # Stealing a stale lease records the STEALING session's cwd (the new owner), not the old.
+    s = _store(tmp_path)
+    lock._force_lease(s, "wi", {"pid": 999999, "host": lock._host(),
+                                "acquiredAt": "1970-01-01T00:00:00Z",
+                                "bootId": None, "generation": 1, "ttl": 1,
+                                "sessionCwd": "/old/session"})
+    ok, gen, reason = lock.acquire(s, "wi", session_cwd="/new/session")
+    assert ok and reason == "stolen" and gen == 2
+    _sha, lease = lock.read_lease(s, "wi")
+    assert lease["sessionCwd"] == "/new/session"
