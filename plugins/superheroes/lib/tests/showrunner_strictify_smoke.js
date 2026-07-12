@@ -150,15 +150,32 @@ const STAGE_SCHEMA = {
   // convention (new smokes mint pid-unique /tmp names).
   const WI = `wi-strictify-${process.pid}`
 
+  // #395: workItem-only dispatches append a deterministic content suffix to the staging key, so
+  // the exact path is no longer predictable here — glob by the pid-unique WI prefix instead. The
+  // single-match assertion keeps the "really written to disk" strength.
+  const stagedSchemaFor = (engine) => {
+    const names = fs.readdirSync('/tmp').filter((n) =>
+      n.startsWith(`engine-${engine}-review-${WI}-`) && n.endsWith('.schema.json'))
+    assert.strictEqual(names.length, 1,
+      `exactly one staged ${engine} schema for ${WI}: ` + JSON.stringify(names))
+    return '/tmp/' + names[0]
+  }
+  const cleanStaged = (engine) => {
+    for (const n of fs.readdirSync('/tmp').filter((x) =>
+      x.startsWith(`engine-${engine}-review-${WI}-`))) {
+      try { fs.unlinkSync('/tmp/' + n) } catch (_) {}
+    }
+  }
+
   // codex read role: the staged schema file must be strictified.
-  const codexSchemaPath = `/tmp/engine-codex-review-${WI}.schema.json`
-  try { fs.unlinkSync(codexSchemaPath) } catch (_) {}
+  cleanStaged('codex')
   global.agent = makeStagingAgent(reviewRoutes)
   const rCodex = await d.dispatchExternal({
     engine: 'codex', roleKind: 'review', effort: 'high', prompt: 'review please',
     cwd: '/tmp', schema: STAGE_SCHEMA, timeoutSeconds: 300, workItem: WI,
   })
   assert.ok(rCodex && Array.isArray(rCodex.findings), 'codex review dispatch completed: ' + JSON.stringify(rCodex))
+  const codexSchemaPath = stagedSchemaFor('codex')
   assert.ok(fs.existsSync(codexSchemaPath), 'the codex path must actually WRITE the schema file to disk')
   const staged = JSON.parse(fs.readFileSync(codexSchemaPath, 'utf8'))
   // The exact defect the API 400'd on: additionalProperties:false + a required listing every key,
@@ -172,12 +189,11 @@ const STAGE_SCHEMA = {
   // And it must differ from the raw literal — proving the transform actually ran end-to-end to disk.
   assert.notStrictEqual(JSON.stringify(staged), JSON.stringify(STAGE_SCHEMA),
     'the staged codex schema must be the STRICTIFIED form, not the raw literal')
-  try { fs.unlinkSync(codexSchemaPath) } catch (_) {}
+  cleanStaged('codex')
   console.log('OK: strictify staging round-trip — codex path writes the strictified schema to disk')
 
   // cursor read role: cursor ignores schemas, so the ORIGINAL (unstrictified) schema is staged.
-  const cursorSchemaPath = `/tmp/engine-cursor-review-${WI}.schema.json`
-  try { fs.unlinkSync(cursorSchemaPath) } catch (_) {}
+  cleanStaged('cursor')
   global.agent = makeStagingAgent([
     ['engine_adapter.py build-argv', JSON.stringify(['cursor-agent', '--model', 'x', '-p', '--trust', '--mode', 'plan', '--output-format', 'stream-json'])],
     ['engine_adapter.py parse-result', JSON.stringify({ ok: true, findings: [] })],
@@ -190,10 +206,11 @@ const STAGE_SCHEMA = {
     engine: 'cursor', roleKind: 'review', effort: 'high', prompt: 'review please',
     cwd: '/tmp', schema: STAGE_SCHEMA, timeoutSeconds: 300, workItem: WI,
   })
+  const cursorSchemaPath = stagedSchemaFor('cursor')
   assert.ok(fs.existsSync(cursorSchemaPath), 'the cursor path stages a schema file too')
   const cursorStaged = JSON.parse(fs.readFileSync(cursorSchemaPath, 'utf8'))
   assert.strictEqual(JSON.stringify(cursorStaged), JSON.stringify(STAGE_SCHEMA),
     'cursor must stage the ORIGINAL schema unchanged (strictify is codex-only)')
-  try { fs.unlinkSync(cursorSchemaPath) } catch (_) {}
+  cleanStaged('cursor')
   console.log('OK: strictify is codex-only — cursor stages the original schema unchanged')
 })()
