@@ -57,6 +57,7 @@ const GENUINE = [
   /^branch-reviewer:r\d+$/,
   /^plan-tests$/,
   /^browser-pass$/,
+  /^compose PR body$/,             // #219: the Sonnet draft-PR body composer (a genuine judgment leaf)
 ]
 function isGenuine(label) { return GENUINE.some((re) => re.test(label)) }
 
@@ -101,6 +102,7 @@ const COURIER_ALLOW = [
   /^write provenance$/,            // buildPhase: prov_entry.py
   /^resolve head$/,                // resolveHead: git rev-parse
   /^read pr$/,                     // loadPr: checkpoint_entry.py --read-pr
+  /^pr-body context$/,             // #219: composePrBody's context courier (pr_body.py context)
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -142,8 +144,13 @@ const PHASE_BUDGETS = {
   // (in-memory tally), 12 post-D3, 29 pre-D3. (The clean green path parks nothing, so
   // renderAndPostReadout's terminal-record compose-terminal write does not fire here.)
   'review-code': 10,
-  // open draft PR + save phase progress
-  'draft-PR': 2,
+  // #219: resolve review target (the SAME build-worktree entry gather review-code/test-pilot/ship
+  // use — review finding: composePrBody and pr_entry's --worktree must describe the build branch,
+  // not the launch checkout, so draft-PR resolves it too) + pr-body context (composePrBody's Python
+  // gather courier, now rooted at the resolved worktree) + io:write (the composed body's durable
+  // file) + open draft PR + save phase progress. The Sonnet 'compose PR body' leaf itself is a
+  // genuine judgment agent (not a courier), so it does not count here. Was 2 pre-#219, 4 pre-worktree-fix.
+  'draft-PR': 5,
   // resolve review target (build-worktree pin) + read test context + plan/results/server/seed
   // artifact staging (writeJson = mkdir+write pairs) + prepare test run + milestone status writes
   // + final artifacts + restore-baseline + write test status + publish tested head + save phase
@@ -411,6 +418,8 @@ const COURIER_JSON = {
   'stamp build coverage': () => JSON.stringify({ ok: true, read_back: true }),
   'stamp review coverage': () => JSON.stringify({ ok: true, read_back: true }),
   'resolve review target': () => JSON.stringify({ ok: true, worktree: '/tmp/wt', expectedHead: 'abc123', config: { verifyCommand: 'none', tiers: {} }, cwdHead: 'cwd000' }),
+  // #219: the composePrBody context gather (no usable prior body -> the fresh compose path runs).
+  'pr-body context': () => JSON.stringify({ work_item: 'wi', commits: [], prior_body_usable: false }),
   'open draft PR': () => JSON.stringify({ ok: true, read_back: true, pr: PR }),
   'mark PR ready': () => JSON.stringify({ ok: true, read_back: true }),
   'read test context': () => JSON.stringify({ head: 'abc123', branch: 'superheroes/wi-x', pr: { number: 7 }, profile: { baseUrl: 'http://x' }, browserTool: { kind: 'mcp' }, allowedOrigins: ['http://x'], diff: { files: ['a'] }, detectors: { browser: true }, store: null }),
@@ -450,6 +459,7 @@ const GENUINE_RESPONSES = [
   [/^plan-tests$/, () => ({ records: [{ branch: 'superheroes/wi-x', steps: [{ id: 's1', instruction: 'i', expected: 'e', scenarioIds: [] }] }], coverageRationale: 'r' })],
   [/^browser-pass$/, () => ({ source: 'browser', baseUrl: 'http://x', steps: [{ id: 's1', status: 'passed', browserExecuted: true }] })],
   [/^revise-doc$|^fix-/, () => ({ fixes: [], deferred: [], changedSubjects: [], coverageDecisions: [] })],
+  [/^compose PR body$/, () => ({ body: 'A composed body.\n\nCloses #219' })],   // #219 Sonnet draft-PR body
 ]
 
 const calls = []

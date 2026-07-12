@@ -121,3 +121,17 @@ def test_author_plan_malformed_override_falls_back_to_author_resolution():
 
 def test_roles_tuple_includes_split_roles():
     assert "author-plan" in MT.ROLES and "author" in MT.ROLES
+
+
+def test_pr_body_role_defaults_to_sonnet():
+    # #219: the durable draft-PR body composer (showrunner composePrBody) is a Sonnet leaf.
+    assert MT.DEFAULT_TIERS["pr-body"] == "sonnet"
+    assert MT.resolve_model("pr-body") == "sonnet"
+    assert "pr-body" in MT.ROLES
+
+
+def test_pr_body_override_wins():
+    # An explicit override must reach pr-body SPECIFICALLY — proving it is a real distinct role,
+    # not the unknown-role reviewer fallback (which also happens to yield 'sonnet').
+    assert MT.resolve_model("pr-body", {"pr-body": "opus"}) == "opus"
+    assert MT.resolve_model("reviewer", {"pr-body": "opus"}) == "sonnet"  # untouched -> default

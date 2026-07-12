@@ -77,13 +77,19 @@ def _gh_pr_body(number):
 
 
 def _gh_edit_body(number, body):
+    """Set the PR body via `gh pr edit --body-file`. Returns the CompletedProcess (rc is the
+    caller's success signal) or None on timeout. Best-effort callers (`_seed_pr_body`) ignore the
+    return; the strict body-set (`_set_prose_body`, #219) reads rc to fail-close on create."""
     import tempfile
     fd, tmp = tempfile.mkstemp(prefix="pr-body-", suffix=".md")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(body)
-        subprocess.run(["gh", "pr", "edit", str(number), "--body-file", tmp],
-                       capture_output=True, text=True, timeout=60)
+        try:
+            return subprocess.run(["gh", "pr", "edit", str(number), "--body-file", tmp],
+                                  capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            return None
     finally:
         try:
             os.unlink(tmp)
@@ -131,10 +137,63 @@ def _seed_pr_body(root, work_item, branch, base, number):
     _gh_edit_body(number, new_body)
 
 
-def _draft_success(root, work_item, branch, base, pr, read_back):
-    """Seed the PR body (best-effort), then emit the draft-step success JSON and exit."""
+def _set_prose_body(root, work_item, branch, base, number, body_file, worktree=None):
+    """Set the durable "what & why" PROSE body (issue #219) on the draft PR. Returns None on
+    success or a deliberate no-op, else a reason string (the caller decides park vs best-effort).
+
+    Fail-closed read: an unreadable current body returns a reason. Adopt no-clobber: only a
+    PLACEHOLDER prose (`--fill-first` commit-trailer junk / blank) is replaced — a real composed
+    body or an owner-authored one is left untouched (return None, no Sonnet re-spend on resume).
+    The #228 generated tail (DoD table / stubbed seams) is split off and re-attached UNCHANGED so
+    a filled DoD table is never lost. The composed prose comes from `pr_body.resolve_body`
+    (composed body-file if usable, else the deterministic fallback), which is always scrubbed and
+    carries `Closes #N`.
+
+    Two distinct locations (review-code finding — a build worktree conflated both): the GIT ops
+    (commits/diff for the fallback body) run against the MANAGED build `worktree` the branch being
+    opened lives in (the spine's --worktree / resolveBuildTarget), while definition-DOC resolution
+    (issue + intent, so `Closes #N` and the "why" survive) runs against `root` — the launch
+    checkout `pr_entry` ran from (couriers cd into it). This matters for in-repo GITIGNORED docs,
+    which live only in the launch checkout and are absent from a fresh build-worktree checkout;
+    rooting docs at the worktree there would silently drop the issue/intent. `worktree` falls back
+    to `root` only when the spine could not resolve one."""
+    import pr_body
+    if not number:
+        return None
+    current = _gh_pr_body(number)
+    if current is None:
+        return "PR body unreadable — cannot set the prose body"
+    prose, tail = pr_body.split_prose(current or "")
+    if not pr_body.is_placeholder_body(prose):
+        return None                                      # never clobber a real/owner prose
+    new_prose = pr_body.resolve_body(body_file, work_item, root=root,
+                                     worktree=(worktree or root), base=base)
+    tail = (tail or "").strip()
+    final = new_prose + (("\n\n" + tail) if tail else "") + "\n"
+    cp = _gh_edit_body(number, final)
+    if cp is None or cp.returncode != 0:
+        return "gh pr edit failed to set the PR body"
+    return None
+
+
+def _draft_success(root, work_item, branch, base, pr, read_back, body_file, strict_body, worktree=None):
+    """Set the prose body FIRST (so `_seed_pr_body` appends the DoD/stubs blocks onto real prose),
+    then seed those blocks (best-effort), then emit the draft-step success JSON and exit. On the
+    CREATE path (strict_body=True) a body-set failure parks fail-closed — resume adopts the PR and
+    sets the body then (exactly-once preserved). On the ADOPT path (strict_body=False) a body-set
+    failure is best-effort (a stderr note, like seeding)."""
+    number = pr.get("number") if isinstance(pr, dict) else None
     try:
-        _seed_pr_body(root, work_item, branch, base, pr.get("number") if isinstance(pr, dict) else None)
+        body_reason = _set_prose_body(root, work_item, branch, base, number, body_file, worktree=worktree)
+    except Exception as e:                               # a body-set crash is never a ship blocker
+        body_reason = "prose body-set errored: %s" % e
+    if body_reason is not None:
+        if strict_body:
+            print(json.dumps({"ok": False, "read_back": False, "reason": body_reason}))
+            sys.exit(0)
+        sys.stderr.write("draft-PR prose set skipped: %s\n" % body_reason)
+    try:
+        _seed_pr_body(root, work_item, branch, base, number)
     except Exception as e:                               # seeding is best-effort; never fail the draft
         sys.stderr.write("draft-PR body seed skipped: %s\n" % e)
     print(json.dumps({"ok": True, "pr": pr, "read_back": bool(read_back)}))
@@ -149,6 +208,12 @@ def main(argv=None):
                     help="IO-only mode: world-read the PR and emit {pr} without judgment or creation")
     ap.add_argument("--base", default=None,
                     help="configurable PR target base branch; absent -> gh uses remote default (current behavior)")
+    ap.add_argument("--body-file", default=None,
+                    help="composed 'what & why' PR-body prose (#219); absent -> deterministic fallback")
+    ap.add_argument("--worktree", default=None,
+                    help="the MANAGED build worktree this PR's branch lives in (review-code review "
+                         "finding); threaded into the prose body-set's git/doc reads so a fallback "
+                         "body describes the build branch, not the launch checkout cwd defaults to")
     a = ap.parse_args(argv)
     root = os.getcwd()
     paths = control_plane.paths(root, a.work_item)
@@ -178,7 +243,10 @@ def main(argv=None):
         if act == "adopt":
             current = _gh_pr(branch)
             read_back = isinstance(current, dict) and isinstance(world["pr"], dict) and current.get("number") == world["pr"].get("number")
-            _draft_success(root, a.work_item, branch, a.base, world["pr"], read_back)
+            # adopt: best-effort body-set (never re-park a PR that already exists; a placeholder
+            # prose is replaced, a real/owner body is left untouched).
+            _draft_success(root, a.work_item, branch, a.base, world["pr"], read_back,
+                           a.body_file, strict_body=False, worktree=a.worktree)
         # create: only after the ship-gate proves SDD build + review-code ran over the SHIPPED HEAD —
         # the build branch's tip (what the PR ships), resolved from checkpoint.branch, not the cwd HEAD.
         try:
@@ -235,7 +303,9 @@ def main(argv=None):
             sys.exit(0)
         current = _gh_pr(branch)
         read_back = isinstance(current, dict) and current.get("number") == pr.get("number")
-        _draft_success(root, a.work_item, branch, a.base, pr, read_back)
+        # create: strict body-set — a failed set parks fail-closed (resume adopts and sets it).
+        _draft_success(root, a.work_item, branch, a.base, pr, read_back,
+                       a.body_file, strict_body=True, worktree=a.worktree)
     else:  # mark-ready
         pr = _gh_pr(branch)
         decision = pr_phase.mark_ready_action(pr)

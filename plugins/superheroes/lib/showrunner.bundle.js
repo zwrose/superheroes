@@ -5069,6 +5069,7 @@ const DEFAULT_TIERS = {
   fixer: 'sonnet',
   author: 'opus',
   builder: 'opus',               // native build-phase implementer (a smart leaf; owner policy defaults to opus)
+  'pr-body': 'sonnet',           // #219: durable draft-PR body composer (showrunner composePrBody)
 }
 const KNOWN_MODELS = ['haiku', 'sonnet', 'opus', 'fable']
 const _FIXER_BY_CONTEXT = { code: 'sonnet', doc: 'opus' }
@@ -5466,6 +5467,14 @@ const FIX_RESULT_SCHEMA = {
     extras: { type: 'object' },
   },
 }
+const PR_BODY_SCHEMA = { type: 'object', required: ['body'], properties: { body: { type: 'string' } } }
+const PR_BODY_COMPOSE_INSTRUCTION =
+  'Write the GitHub pull-request DESCRIPTION for this change, from the provided context. It becomes ' +
+  'the squash-merge commit message, so write a lean "what & why": a one-paragraph summary of what ' +
+  'changed and why, then a short bulleted list of the notable changes. Do NOT include CI status, ' +
+  'test results, or spot-check checkboxes (those live elsewhere). If the context has an "issue" ' +
+  'number, end the body with a line "Closes #<issue>". Return ONLY the markdown body via the schema ' +
+  "'body' field — no code fences, no preamble."
 function _policySubject(value) {
   if (typeof value !== 'string' || !value) return null
   if (POLICY_SUBJECTS.has(value)) return value
@@ -6804,7 +6813,7 @@ async function readStartupState(workItem) {
 }
 const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'implementation',
   'author-plan': 'planAuthor' }
-const READOUT_VERSION = 2
+const READOUT_VERSION = 3
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -7407,14 +7416,44 @@ async function loadPr(workItem) {
     `python3 ${libPath('checkpoint_entry.py')} --work-item ${shq(workItem)} --read-pr`, 'read pr')
   return (out && out.pr !== undefined) ? out.pr : null
 }
+async function composePrBody(workItem, worktree) {
+  const bodyPath = `/tmp/showrunner-${workItem}-pr-body.md`
+  const base = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const baseArg = base ? ` --base ${shq(base)}` : ''
+  const _docRoot = checkoutRoot()
+  const wtArg = (worktree ? ` --worktree ${shq(worktree)}` : '') + (_docRoot ? ` --root ${shq(_docRoot)}` : '')
+  const ctx = await execJson(
+    `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg}${wtArg} --body-path ${shq(bodyPath)}`,
+    'pr-body context')
+  if (!ctx) return null                                  // context gather failed -> fallback
+  if (ctx.prior_body_usable === true) return bodyPath     // resume-cheap: no Sonnet re-spend
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('pr-body', overrides, null)
+  let out = null
+  try {
+    out = await globalThis.agent(
+      `${PR_BODY_COMPOSE_INSTRUCTION}\n\nContext: ${JSON.stringify(ctx)}`,
+      { model, label: 'compose PR body', schema: PR_BODY_SCHEMA })
+  } catch (_) { return null }
+  const body = (out && typeof out.body === 'string') ? out.body.trim() : ''  // null-guarded (#280 lesson)
+  if (!body) return null
+  try { await io().writeFile(bodyPath, body) } catch (_) { return null }
+  return bodyPath
+}
+module.exports.composePrBody = composePrBody
 async function draftPRPhase(workItem) {
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
+  const _target = await resolveBuildTarget(workItem).catch(() => null)
+  const _wt = (_target && _target.worktree) || null
+  const _bodyPath = await composePrBody(workItem, _wt)
+  const _bodyArg = _bodyPath ? ` --body-file ${shq(_bodyPath)}` : ''
+  const _wtArg = _wt ? ` --worktree ${shq(_wt)}` : ''
   let out = null
   try {
     out = await courier.runCourierJson(
       'open draft PR',
-      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
+      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}${_bodyArg}${_wtArg}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {

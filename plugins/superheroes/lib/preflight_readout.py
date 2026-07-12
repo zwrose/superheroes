@@ -14,14 +14,18 @@ import engine_adapter  # for the external-engine display model constants (single
 import model_tier_overrides
 import engine_detect
 
-# Bumped to 2 (freeze-consume hardening): a frozenSnapshot persisted by an EARLIER commit of this
-# branch carries version 1 but predates the widened merge exclusions (fallbackToClaude/unavailable/
-# unrecognized) + the merge-boundary set validation. mergeFrozenSnapshot ignores any snapshot whose
-# `version` != this constant (falls through to live config, the documented rollback state), so every
-# pre-fix record is treated stale-and-ignored. The JS side learns this value from the snapshot Python
-# wrote and, in a drift smoke, from a `python3 -c` dump of this constant — never a hand-duplicated JS
-# literal. BUMP this on any change that re-interprets an already-persisted snapshot.
-READOUT_VERSION = 2
+# Bumped to 3 (#219 pr-body dispatch row): a frozenSnapshot persisted by an EARLIER commit (version
+# 2 or lower) predates the concrete "pr-body" dispatch row added for draft-PR's compose-PR-body leaf
+# — those older snapshots only carry the old draft-PR `kind: none` row, so pr-body would be absent
+# from a pinned snapshot and mergeFrozenSnapshot would leave it unpinned, letting showrunner.js
+# resolve it from LIVE __SR_OVERRIDES at dispatch time and silently bypass the confirmed preflight
+# readout for that leaf. mergeFrozenSnapshot ignores any snapshot whose `version` != this constant
+# (falls through to live config, the documented rollback state), so every pre-fix record is treated
+# stale-and-ignored. The JS side learns this value from the snapshot Python wrote and, in a drift
+# smoke, from a `python3 -c` dump of this constant — never a hand-duplicated JS literal. BUMP this on
+# any change that re-interprets an already-persisted snapshot (a new row, a changed exclusion, or a
+# changed set-validation rule).
+READOUT_VERSION = 3
 
 # The spine's phase roster is the single source of truth. Kept as a literal that MUST equal
 # showrunner.js's PHASES; the roster-parity node smoke (Task 12) asserts they match so a phase
@@ -31,10 +35,10 @@ PHASES = ["plan", "review-plan", "tasks", "review-tasks", "workhorse",
 
 # Per phase: the ordered roles it dispatches. Each role is (roleLabel, model_tier role, role_kind,
 # kind-tag). kind-tag drives engine selection (review/build/fix) + the orchestration/None marker.
-# 'draft-PR' and 'mark-ready' dispatch no agent (deterministic spine steps): they contribute a single
-# non-agent placeholder row (kind "none") so the readout still NAMES every spine phase and the roster
-# stays row-for-phase complete against showrunner.js's PHASES (roster-parity guard) — a phase can
-# never be silently dropped from the readout. A "none"-kind row pins no engine/model/effort.
+# 'mark-ready' dispatches no agent (a deterministic spine step): it contributes a single non-agent
+# placeholder row (kind "none") so the readout still NAMES every spine phase and the roster stays
+# row-for-phase complete against showrunner.js's PHASES (roster-parity guard) — a phase can never
+# be silently dropped from the readout. A "none"-kind row pins no engine/model/effort.
 _PHASE_ROLES = {
     "plan":         [("author", "author", None, "author")],
     "review-plan":  [("reviewer", "reviewer", "review", "review")],
@@ -51,7 +55,17 @@ _PHASE_ROLES = {
     # config edit leak into the synthesis model. Model rides the "synthesis" tier role (opus).
     "review-code":  [("deep reviewer", "reviewer-deep", "review", "review-deep"),
                      ("synthesis judge", "synthesis", None, "synthesis")],
-    "draft-PR":     [("no agent (deterministic step)", None, None, "none")],
+    # draft-PR (#219): showrunner.js's composePrBody dispatches a genuine Sonnet leaf ("compose PR
+    # body") that composes the durable "what & why" prose BEFORE the deterministic pr_entry.py step
+    # opens/adopts the PR — a real dispatch on the "pr-body" model tier, not a no-agent step (the
+    # prior single "none" row hid it from frozen preflight snapshots, letting it run on live config
+    # after the owner-confirmed readout). Its kind-tag "pr-body" is not review/build/fix, so
+    # _engine_for resolves "claude" (matches the real dispatch: composePrBody calls agent() directly,
+    # never engine-routed) and _effort_for resolves None (matches: no engine_pref effort applies).
+    # The PR-open/adopt step itself is still the deterministic dumb-pipe courier, kept as its own
+    # "none" row.
+    "draft-PR":     [("compose PR body", "pr-body", None, "pr-body"),
+                     ("open/adopt draft PR (deterministic step)", None, None, "none")],
     "test-pilot":   [("orchestration", "orchestrator", None, "orchestration")],
     "mark-ready":   [("no agent (deterministic step)", None, None, "none")],
     "ship":         [("fixer (on CI failure)", "fixer", "fix", "fix")],

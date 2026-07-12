@@ -149,6 +149,17 @@ const FIX_RESULT_SCHEMA = {
     extras: { type: 'object' },
   },
 }
+// #219: the PR-body composer. body is typed (verdict-bearing field — the #275 lesson); the leaf
+// returns ONLY the markdown prose, no code fences. It becomes the squash-merge commit message —
+// lean what & why; CI/test/spot-check live in the readout comment, never here.
+const PR_BODY_SCHEMA = { type: 'object', required: ['body'], properties: { body: { type: 'string' } } }
+const PR_BODY_COMPOSE_INSTRUCTION =
+  'Write the GitHub pull-request DESCRIPTION for this change, from the provided context. It becomes ' +
+  'the squash-merge commit message, so write a lean "what & why": a one-paragraph summary of what ' +
+  'changed and why, then a short bulleted list of the notable changes. Do NOT include CI status, ' +
+  'test results, or spot-check checkboxes (those live elsewhere). If the context has an "issue" ' +
+  'number, end the body with a line "Closes #<issue>". Return ONLY the markdown body via the schema ' +
+  "'body' field — no code fences, no preamble."
 
 function _policySubject(value) {
   if (typeof value !== 'string' || !value) return null
@@ -2156,7 +2167,12 @@ const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'i
 // rollback state). This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
 // smoke asserts it equals preflight_readout.READOUT_VERSION via a `python3 -c` dump (roster-parity
 // pattern), so a Python-side bump that isn't mirrored here fails CI rather than silently ungating.
-const READOUT_VERSION = 2
+// Bumped to 3 (#219 pr-body dispatch row): older snapshots (version 2 or lower) predate the concrete
+// "pr-body" row for draft-PR's compose-PR-body leaf and only carry the old `kind: none` row, so
+// re-interpreting them would leave pr-body unpinned and let it resolve from LIVE config at dispatch —
+// silently bypassing the confirmed preflight readout. Ignored (falls through to live) rather than
+// mis-merged.
+const READOUT_VERSION = 3
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -2955,15 +2971,70 @@ async function loadPr(workItem) {
   return (out && out.pr !== undefined) ? out.pr : null
 }
 
-// draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}.
+// #219: compose the durable draft-PR prose with a Sonnet leaf. Returns a durable file path that
+// pr_entry consumes via --body-file, or null (pr_entry then falls back to a deterministic real
+// body). Never throws — a compose failure is a body-quality concern, never a ship blocker (owner
+// Decision 2). Resume-cheap: the context courier (Python) reports prior_body_usable so an
+// adopt/resume never re-spends Sonnet — and the spine never io()-reads a maybe-missing file
+// (proseReads === 0; rev 2 of the tasks doc, learned from run 1).
+// `worktree` (review-code review finding): the MANAGED build worktree the branch this PR ships
+// actually lives in (resolveBuildTarget) — NOT checkoutRoot()/__SR_ROOT, which courier's
+// rootedCommand() always cds into and which is the acquire-authority/base checkout (same class
+// of bug the PR #261 CI-settle finding fixed for the mark-ready wait). Without it, pr_body.py's
+// `context` gather defaults `worktree` to os.getcwd() (== checkoutRoot()) and diffs
+// `base...HEAD` against THAT checkout's HEAD, describing whatever the launch checkout has
+// checked out rather than the build branch. --worktree (git ops: commits/diff) is the build
+// worktree; --root (definition-doc resolution) is the LAUNCH checkout (checkoutRoot()/__SR_ROOT).
+// In-repo GITIGNORED docs live only in the launch checkout, absent from a fresh build-worktree
+// checkout, so rooting docs at the worktree would drop the issue/intent (and `Closes #N`); for
+// out-of-repo storage both share a git common-dir → same store either way. A null/failed resolve
+// of either falls back to the prior (unrooted) default rather than blocking compose.
+async function composePrBody(workItem, worktree) {
+  const bodyPath = `/tmp/showrunner-${workItem}-pr-body.md`
+  const base = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
+  const baseArg = base ? ` --base ${shq(base)}` : ''
+  const _docRoot = checkoutRoot()
+  const wtArg = (worktree ? ` --worktree ${shq(worktree)}` : '') + (_docRoot ? ` --root ${shq(_docRoot)}` : '')
+  const ctx = await execJson(
+    `python3 ${libPath('pr_body.py')} context --work-item ${shq(workItem)}${baseArg}${wtArg} --body-path ${shq(bodyPath)}`,
+    'pr-body context')
+  if (!ctx) return null                                  // context gather failed -> fallback
+  if (ctx.prior_body_usable === true) return bodyPath     // resume-cheap: no Sonnet re-spend
+  const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
+  const model = modelTierTwin.resolveModel('pr-body', overrides, null)
+  let out = null
+  try {
+    out = await globalThis.agent(
+      `${PR_BODY_COMPOSE_INSTRUCTION}\n\nContext: ${JSON.stringify(ctx)}`,
+      { model, label: 'compose PR body', schema: PR_BODY_SCHEMA })
+  } catch (_) { return null }
+  const body = (out && typeof out.body === 'string') ? out.body.trim() : ''  // null-guarded (#280 lesson)
+  if (!body) return null
+  try { await io().writeFile(bodyPath, body) } catch (_) { return null }
+  return bodyPath
+}
+module.exports.composePrBody = composePrBody
+
+// draft-PR: one folded courier leaf returning {ok, pr, read_back, reason?}. #219: a Sonnet leaf
+// composes the durable "what & why" body first (resume-cheap; a compose failure -> null -> pr_entry
+// falls back deterministically), threaded to pr_entry via --body-file. Resolves the MANAGED build
+// worktree first (mirrors resolveBuildTarget's other callers, e.g. the mark-ready CI-settle wait)
+// so both the compose gather and pr_entry's own fallback/adopt body-set (--worktree) describe the
+// branch this PR actually ships, never the launch checkout. Best-effort: an unresolvable worktree
+// falls back to the previous unrooted behavior rather than parking the phase.
 async function draftPRPhase(workItem) {
   const _srBaseForPR = (typeof globalThis !== 'undefined' && globalThis.__SR_BASE) ? String(globalThis.__SR_BASE) : null
   const _prBaseArg = _srBaseForPR ? ` --base ${shq(_srBaseForPR)}` : ''
+  const _target = await resolveBuildTarget(workItem).catch(() => null)
+  const _wt = (_target && _target.worktree) || null
+  const _bodyPath = await composePrBody(workItem, _wt)
+  const _bodyArg = _bodyPath ? ` --body-file ${shq(_bodyPath)}` : ''
+  const _wtArg = _wt ? ` --worktree ${shq(_wt)}` : ''
   let out = null
   try {
     out = await courier.runCourierJson(
       'open draft PR',
-      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}`,
+      `python3 ${libPath('pr_entry.py')} --step draft --work-item ${shq(workItem)}${_prBaseArg}${_bodyArg}${_wtArg}`,
       { require: ['ok', 'read_back'], retryRealFailure: false },
     )
   } catch (_e) {
