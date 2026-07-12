@@ -124,6 +124,47 @@ def test_commit_result_preserves_engine_prescribed_message(tmp_path):
     assert _full_message(repo).count("Task-Id:") == 1
 
 
+def test_commit_result_preserves_engine_multiline_message(tmp_path):
+    # #386: full %B preservation — subject, body paragraph, and footer survive folding; a
+    # subject-only (%s) capture would drop the body/footer and fail this test.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    subject = "feat: do thing"
+    body = "body detail"
+    footer = "BREAKING CHANGE: note"
+    prescribed = "%s\n\n%s\n\n%s" % (subject, body, footer)
+    (tmp_path / "repo" / "target.txt").write_text("change")
+    _git(repo, "add", "target.txt")
+    _git(repo, "commit", "-qm", prescribed)
+    res = EA.commit_result(repo, "task-ml", pre)
+    assert res["ok"] is True
+    msg = _full_message(repo)
+    assert subject in msg
+    assert body in msg
+    assert footer in msg
+    assert msg.count("Task-Id:") == 1
+    assert _trailer(repo) == "task-ml"
+
+
+def test_commit_result_scrubs_secrets_in_engine_message(tmp_path):
+    # Secret-hygiene: framed engine free text is scrubbed before the folded commit is written.
+    repo = _repo(tmp_path)
+    pre = _head(repo)
+    secret = "ghp_%s" % ("a" * 36)
+    prescribed = "feat: apply engine change\n\nDetails with token=%s embedded" % secret
+    (tmp_path / "repo" / "target.txt").write_text("change")
+    _git(repo, "add", "target.txt")
+    _git(repo, "commit", "-qm", prescribed)
+    res = EA.commit_result(repo, "task-sec", pre)
+    assert res["ok"] is True
+    msg = _full_message(repo)
+    assert secret not in msg
+    assert "[REDACTED]" in msg
+    assert "feat: apply engine change" in msg
+    assert "Details with token=" in msg
+    assert _trailer(repo) == "task-sec"
+
+
 def test_commit_result_edits_only_uses_canned_subject(tmp_path):
     # (b) #386: engine EDITED without committing (HEAD == pre) → canned subject + trailer (unchanged).
     repo = _repo(tmp_path)

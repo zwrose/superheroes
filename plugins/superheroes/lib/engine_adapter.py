@@ -285,12 +285,9 @@ def _capture_engine_message(worktree):
       - trailing whitespace stripped (empty/whitespace-only → "" → canned fallback);
       - any pre-existing Task-Id trailer line removed, so composing our own never doubles it (#386).
 
-    NOT scrubbed — deliberately, by parity argument. The scrub boundary in this file (parse_result)
-    guards external free text that is PERSISTED into the durable journal and owner-facing narrator
-    logs / PR bodies. A commit message on a throwaway work branch is neither of those; it is
-    directly analogous to the commit messages native Claude workers already author for their own
-    commits, which pass through no scrub seam. Scrubbing here would diverge from native-worker
-    parity without closing any leak this repo scrubs for."""
+    Scrubbed via the same readout.scrub seam as parse_result: every external free-text surface
+    at this trust boundary is scrubbed before persistence. Commit messages reach public PR
+    history via ship_phase pushes, so an engine tip message is in scope."""
     log = _git(worktree, "log", "-1", "--format=%B", "HEAD")
     if log.returncode != 0:
         return ""
@@ -298,7 +295,8 @@ def _capture_engine_message(worktree):
     # so the trailer we append is never doubled.
     kept = [ln for ln in log.stdout.split("\n")
             if not ln.strip().startswith(TASK_ID_TRAILER + ":")]
-    return "\n".join(kept).strip()
+    scrubbed = _scrub("\n".join(kept))
+    return scrubbed.strip() if isinstance(scrubbed, str) else ""
 
 
 def commit_result(worktree, task_id, pre_sha):
