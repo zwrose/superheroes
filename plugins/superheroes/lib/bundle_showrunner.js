@@ -116,6 +116,12 @@ globalThis.agent = function (prompt, opts) {
   // dispatch for telemetry. The phase's own persist leaf is excluded by ordering (cost_meter.take
   // resets the phase before that leaf dispatches), not by any flag.
   try { __require('cost_meter').record(o.model) } catch (_) {}
+  // #402 Part A: the single dispatch choke-point is also where FR-8 composed-exact registers the EXACT
+  // bytes a dumb-pipe leaf is about to execute. \`prompt\` here is FINAL — post rootedCommand,
+  // wrapMarkedCommand, AND withTargetCommandPrompts' cd-wrap — so the recorded bytes are byte-identical
+  // to what the leaf runs. recordComposedFromPrompt gates on the two dumb-pipe command leads (a smart
+  // leaf's free-form prompt never registers) and is fail-open, so it never blocks or delays a dispatch.
+  try { __require('courier_exec').recordComposedFromPrompt(prompt) } catch (_) {}
   // #194 residual (live 2026-07-04, run wf_b408ece1-0ed): an UNKNOWN agentType makes agent() REJECT
   // ("agent type 'superheroes:courier' not found") — a dispatch THROW, which __sh's answer-shape
   // fallback never sees (it only inspects returned answers). On any plugin cache older than the
@@ -171,9 +177,11 @@ async function __sh(cmd, opts) {
   // fail-soft or via their caller's own hash check, so they need no marker guard.
   var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
   var ans = await globalThis.agent(prompt, o)
-  if (__expectMarker && __badCourierAnswer(ans)) {
+  // #402 Part B: a classifier denial is deterministic — do NOT re-dispatch the identical io bytes (that
+  // retry reads as tunneling). The marker check downstream then fails closed on the (unretried) answer.
+  if (__expectMarker && __badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
     ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
-    if (__badCourierAnswer(ans)) {
+    if (__badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
       var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
       ans = await globalThis.agent(prompt, fo)
     }

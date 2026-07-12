@@ -60,6 +60,95 @@ function currentAgent() {
   throw new Error('courier agent unavailable')
 }
 
+// --- #402 Part A: FR-8 composed-exact registration, re-aligned to EXECUTED bytes ---
+//
+// Every dumb-pipe leaf runs a shell command the spine composed verbatim and embedded, after the FIRST
+// blank line, in a "Run exactly this…"/"Execute this exact shell command…" prompt. Registering those
+// exact bytes against the run's composed-exact set BEFORE the leaf dispatches turns the leaf's Bash
+// call into a deterministic `allow` (the enforcer never consults the auto-mode classifier for it).
+//
+// The single chokepoint is `recordComposedFromPrompt(prompt)` — called from the ONE dispatch
+// choke-point that sees the FINAL prompt (the bundle preamble's agent wrapper), so the recorded bytes
+// are byte-identical to what the leaf executes REGARDLESS of any upstream rewrite (rootedCommand,
+// wrapMarkedCommand, showrunner's withTargetCommandPrompts cd-wrap). There is exactly ONE extraction
+// site, so recorded-vs-dispatched drift is impossible by construction (SSOT §11). It records ONLY the
+// two dumb-pipe command leads, so a smart leaf's free-form prompt (a builder/reviewer) is never
+// registered — the floor cannot widen to commands the spine did not compose byte-for-byte.
+//
+// The recorder is INJECTED by the showrunner wiring (it closes over the run id + work-item + the Python
+// record_composed shim); absent (node smokes with no wiring) it is a no-op. ALWAYS fail-open (UFR-2): a
+// record error NEVER blocks or delays the dispatch. A re-entrancy guard stops the recorder's OWN helper
+// leaf (which re-enters this chokepoint through the same agent wrapper) from recursing.
+const _DISPATCH_LEADS = ['Run exactly this', 'Execute this exact shell command']
+// Registration is SCOPED to the spine's own STATE-WRITE seams — the classes that actually fall through
+// the auto-mode classifier and get blocked (#402 evidence: build-state stamps, journal appends, lease/
+// fence ops, io writes, prov/deferred stamps, review-memory/telemetry writes, the reset-uncommitted git
+// command, verify-gate result writes). READ dumb pipes (gather snapshots, `cat`, `git status`, `gh …
+// view`, task-list reads) are deliberately NOT registered: they are not blocked, and registering every
+// dumb pipe would roughly DOUBLE the run's courier-leaf count (each registration rides its own store-
+// write leaf) AND break the deliberately-two-leaf startup stretch (#118). Narrowing NEVER widens the
+// floor — an unregistered command simply falls to today's classifier evaluation (fail-open). This is a
+// deterministic allowlist of the spine's OWN write shapes, not a classifier of arbitrary commands.
+// The classes #402's evidence recorded as classifier-blocked (2026-07-12) — the acceptance-1/2 set,
+// kept deliberately NARROW to bound the leaf cost (each registration rides its own store-write leaf):
+//   build-state stamps (incl. record-final-review), journal appends, lease/fence ops, io writes
+//   (the __SR_W argv writer), provenance stamps, and resetUncommitted's fixed git reset.
+// Other spine writes (test-pilot artifacts, review telemetry/memory, coverage/dod/ci stamps) were NOT
+// among the blocked classes and are left to the normal flow — registering them would add leaf cost for
+// no observed benefit. Widening this set later is a deliberate, cost-visible change.
+const _SPINE_STATE_WRITE = new RegExp([
+  'base64\\.b64decode',                       // the __SR_W argv-shape io writer (every io.writeFile)
+  'build_state_cli\\.py',                      // per-task record-built/record-reviewed + record-final-review
+  'journal_entry\\.py',                        // journal appends
+  'prov_entry\\.py',                           // provenance stamps (incl. the build-denial taint step)
+  'fence_cli\\.py', 'ref_lock',                // lease acquire/renew/release + fence ops
+  'git\\s+reset\\s+--hard',                    // build_phase.resetUncommitted's fixed git command
+].join('|'))
+let composedRecorder = null
+let _recordingComposed = false
+function setComposedRecorder(fn) { composedRecorder = (typeof fn === 'function') ? fn : null }
+function recordComposedFromPrompt(prompt) {
+  if (!composedRecorder || _recordingComposed || typeof prompt !== 'string') return
+  if (!_DISPATCH_LEADS.some((lead) => prompt.startsWith(lead))) return   // only spine-composed dumb pipes
+  const idx = prompt.indexOf('\n\n')
+  if (idx < 0) return
+  const command = prompt.slice(idx + 2)
+  if (!command || !_SPINE_STATE_WRITE.test(command)) return   // only the spine's own state-write shapes
+  _recordingComposed = true
+  try { composedRecorder(command) } catch (_e) { /* fail-open (UFR-2): never block a dispatch */ }
+  finally { _recordingComposed = false }
+}
+
+// --- #402 Part B: a classifier denial is TERMINAL for those bytes on ALL couriers ---
+//
+// A classifier denial is DETERMINISTIC — re-dispatching the identical bytes only re-denies, and that
+// retry is exactly what reads as "tunneling." Generalize the staging break-early (#341/#373, engine_
+// dispatch._stagingDenial) to every generic courier retry loop: on a denial-signature answer, do NOT
+// retry, journal a scrubbed decline, and throw CourierTransportError so the caller's EXISTING
+// fail-closed path (park/disclose) takes over.
+//
+// SSOT (§11): the denial-signature regex lives HERE (courier_exec, bundled early); engine_dispatch's
+// staging-specific `_stagingDenial` imports DENIAL_SIG rather than duplicating it. `denialReason`
+// returns an already-scrubbed, base64-redacted, length-clamped reason (JS-only — no extra leaf), the
+// same bounded shape `_stagingDenial` produces, or null when the answer carries no denial signature.
+const DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+function denialReason(text) {
+  const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
+  const m = s.match(DENIAL_SIG)
+  if (!m) return null
+  let from = s.slice(m.index).replace(/[A-Za-z0-9+/=]{24,}/g, '[redacted]')
+  return from.length > 200 ? from.slice(0, 200) + '…' : from
+}
+// The decline-journal seam — injected by the showrunner wiring (appends a `courier_declined` event to
+// the run's own events.jsonl, next to the enforcer's `allowance_fired`). Absent -> no-op. Best-effort +
+// fail-open: a journal failure never derails the fail-closed hand-off.
+let declineRecorder = null
+function setDeclineRecorder(fn) { declineRecorder = (typeof fn === 'function') ? fn : null }
+function _journalDecline(label, reason) {
+  if (!declineRecorder) return
+  try { declineRecorder(label, reason) } catch (_e) { /* fail-open */ }
+}
+
 // FR-5 cwd-rooting: mirror showrunner's selfContained() — when __SR_ROOT is set (throwaway/live-eval
 // runs), root every courier command at the TARGET repo so git/build/docs paths resolve. The lib
 // interpreter path itself comes from `${libPath(...)}` (#170: an absolute plugin-cache path in
@@ -261,9 +350,11 @@ async function dispatchMarked(label, markedCmd, opts) {
   const prompt = markedPromptFor(markedCmd)
   let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
   if (opts && opts.single) return ans
-  if (_isBadAnswer(ans, opts)) {
+  // #402 Part B: a classifier denial is deterministic — do NOT burn the marker-retry / default-dispatch
+  // chain re-running the identical bytes (that re-dispatch is what reads as tunneling). Break early.
+  if (_isBadAnswer(ans, opts) && !denialReason(ans)) {
     ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
-    if (_isBadAnswer(ans, opts)) {
+    if (_isBadAnswer(ans, opts) && !denialReason(ans)) {
       const fo = Object.assign({}, baseOpts)
       delete fo.agentType
       ans = stdoutOf(await currentAgent()(prompt, fo))
@@ -286,6 +377,10 @@ async function runCourierMarkedText(label, command, opts) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd, opts)
     lastAns = ans
+    // #402 Part B: a denial signature is terminal for these bytes — journal a scrubbed decline and fall
+    // to the caller's fail-closed path; never a second byte-identical outer attempt.
+    const denial = denialReason(ans)
+    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
     if (_isBadAnswer(ans, opts)) {
       last = 'missing execution marker'
       continue
@@ -308,6 +403,9 @@ async function runCourierMarkedJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const ans = await dispatchMarked(label, markedCmd)
     lastAns = ans
+    // #402 Part B: a denial is terminal — journal a scrubbed decline, fall to the caller's fail-closed path.
+    const denial = denialReason(ans)
+    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
     if (badCourierAnswer(ans)) {
       last = 'missing execution marker'
       continue
@@ -341,6 +439,10 @@ async function runCourierText(label, command) {
   let last = 'empty stdout'
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
+    // #402 Part B: a denial answer is terminal for these bytes — journal a scrubbed decline and fail
+    // closed; a plain command error (commandOk false, no denial signature) is a real result, unchanged.
+    const denial = denialReason(stdoutOf(raw))
+    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, stdoutOf(raw)) }
     if (!commandOk(raw)) {
       _recordRetry(label, attempt)
       return stdoutOf(raw)
@@ -359,6 +461,10 @@ async function runCourierJson(label, command, opts) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
+    // #402 Part B: a denial answer is terminal — journal a scrubbed decline and fail closed (throw),
+    // never a byte-identical re-dispatch. A plain command failure (no denial signature) is unchanged.
+    const denial = denialReason(out)
+    if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, out) }
     if (!commandOk(raw)) {
       _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
@@ -408,6 +514,13 @@ module.exports = {
   setCourierAgent,
   courierRetryTotals,
   resetCourierMeter,
+  // #402 Part A: composed-exact registration chokepoint (byte-exact to executed bytes) + its wiring seam.
+  recordComposedFromPrompt,
+  setComposedRecorder,
+  // #402 Part B: denial-signature SSOT (engine_dispatch imports DENIAL_SIG) + the decline-journal seam.
+  DENIAL_SIG,
+  denialReason,
+  setDeclineRecorder,
   // #341: the production marker framing — exported so the real-seam detector (CONVENTIONS §12.2) can
   // compose the exact prompt a courier leaf receives and drive it through a REAL cheapest-model agent.
   wrapMarkedCommand,

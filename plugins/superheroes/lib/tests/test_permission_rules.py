@@ -218,6 +218,38 @@ def test_record_composed_is_exact(monkeypatch, tmp_path):
     assert pr._hash("gh pr create --draft --title Y") not in frozen["composed"]
 
 
+def test_record_composed_append_is_idempotent_and_accumulates(monkeypatch, tmp_path):
+    # #402 acceptance 4: parallel dispatches appending to one run's composed set are safe — the append is
+    # a hash-set (a repeat of the SAME executed command is a no-op, not a duplicate), and DISTINCT executed
+    # commands accumulate. (Serial here — control_plane.atomic_write makes each write atomic; a lost update
+    # under true concurrency only drops one registration, which fail-open degrades to the classifier path.)
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3b", "/cwd", root=str(tmp_path))
+    build_stamp = "python3 lib/build_state_cli.py record-reviewed --work-item wi"
+    journal_write = "python3 lib/journal_entry.py --step ship"
+    for _ in range(3):
+        pr.record_composed("RUN3b", build_stamp, "/cwd", root=str(tmp_path))   # same command, thrice
+    pr.record_composed("RUN3b", journal_write, "/cwd", root=str(tmp_path))
+    composed = pr.frozen_rules("RUN3b", "/cwd", root=str(tmp_path))["composed"]
+    assert composed.count(pr._hash(build_stamp)) == 1, "a repeated executed command appends once (idempotent)"
+    assert pr._hash(journal_write) in composed, "a distinct executed command accumulates"
+    assert len(composed) == 2, "only the two distinct executed-command hashes are frozen"
+
+
+def test_frozen_composed_carries_only_the_hashes_it_was_given(monkeypatch, tmp_path):
+    # #402 acceptance 3: the frozen run file carries executed-command hashes ONLY. record_composed stores
+    # exactly what it is handed — no prompt hash is ever synthesized here. A hash that was never recorded
+    # (e.g. a builder-leaf prompt) is absent, so evaluate() can never composed-exact allow it.
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3c", "/cwd", root=str(tmp_path))
+    executed = "git commit -m 'feat: x'"
+    builder_prompt = "You are the builder. Implement task 7 from docs/.../tasks.md ..."
+    pr.record_composed("RUN3c", executed, "/cwd", root=str(tmp_path))
+    composed = pr.frozen_rules("RUN3c", "/cwd", root=str(tmp_path))["composed"]
+    assert composed == [pr._hash(executed)], "only the executed command's hash is frozen"
+    assert pr._hash(builder_prompt) not in composed, "a builder-leaf prompt hash is never frozen (#333)"
+
+
 def test_reap_deletes_stale_keeps_recent(monkeypatch, tmp_path):
     import time
     _write_rules(str(tmp_path), "/cwd", [], monkeypatch)

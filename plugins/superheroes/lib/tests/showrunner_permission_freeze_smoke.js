@@ -1,11 +1,13 @@
 // plugins/superheroes/lib/tests/showrunner_permission_freeze_smoke.js
-// Task 12 (FR-8, UFR-9 wiring): the spine, at run start, freezes the current rules once and records
-// each command it composes for a leaf, so evaluate()'s composed-exact set (Task 4) is populated for
-// the run that composed them — and only that run.
+// Task 12 + #402 (FR-8, UFR-9 wiring): the spine, at run start, freezes the current rules once and
+// publishes the run identity for the composed-exact recorder, so evaluate()'s composed-exact set is
+// populated for the run that composed the commands — and only that run.
 //   (1) showrunner() calls permission_rules.freeze_run_rules(run_id, cwd) exactly ONCE at run start,
-//       with the run_id = the lease generation reconcile() acquired (via the injectable seam).
-//   (2) the build phase, at the point it composes a leaf command, calls
-//       permission_rules.record_composed(run_id, command) with that same run_id.
+//       with the run_id = the lease generation reconcile() acquired (via the injectable seam), and
+//       publishes globalThis.__SR_RUN so the courier chokepoint can record against that run_id.
+//   (2) #402: the build phase NO LONGER records the builder-leaf PROMPT (dead weight per #333 — a
+//       subagent prompt is never executed as a shell command). Composed-exact is re-aligned to executed
+//       bytes at the courier chokepoint instead (see showrunner_composed_exact_smoke.js).
 //   (3) both seams shell the SAME Python permission_rules helpers (byte-exact hashing lives in Python —
 //       the JS side never re-implements the hash), and both are fail-open (a freeze/record error is
 //       logged and the run proceeds — UFR-2).
@@ -62,28 +64,26 @@ async function freezeOnceAtRunStart() {
 }
 
 // ---------------------------------------------------------------------------
-// (2) the build phase records each composed leaf command against the run's generation.
+// (2) #402: the build phase NO LONGER records the builder-leaf PROMPT. Driving buildOneTask must not
+//     feed the composed-exact recorder the (never-executed) builder prompt — that #333 dead-weight call
+//     is gone. Composed-exact now rides the courier chokepoint (executed bytes), tested separately.
 // ---------------------------------------------------------------------------
-async function buildRecordsComposedLeafCommands() {
+async function buildNeverRecordsTheBuilderPrompt() {
   const bp = require('../build_phase.js')
   const recorded = []
+  // Observe the seam build_phase USED to call with the builder prompt (#333). If the dead-weight call
+  // were still present, buildOneTask would push the builder prompt here.
   const origRecord = sr._recordComposed
   sr._recordComposed = (runId, command, workItem) => { recorded.push({ runId, command, workItem }) }
 
-  // Drive the REAL leaf-command composition: buildOneTask composes the leaf command via
-  // buildLeafPrompt, then dispatches it. We only need to reach (and pass) that composition point —
-  // the record must have fired by the time the dispatch returns. Stub the fence (needs __SR_ROOT +
-  // a 'fence lease' ok) and the dispatch; let the task park on a later unstubbed sub-step (fine).
   const task = { id: '7', title: 'Do the thing' }
-  const expectedPrompt = bp.buildLeafPrompt({ wt: '/some/wt', branch: 'feat/x', task, workItem: 'wi-rec' })
+  const builderPrompt = bp.buildLeafPrompt({ wt: '/some/wt', branch: 'feat/x', task, workItem: 'wi-rec' })
 
   const savedRoot = globalThis.__SR_ROOT
   globalThis.__SR_ROOT = '/repo'
   global.agent = async (prompt, opts) => {
     const label = (opts && opts.label) || ''
     if (label === 'exec') {
-      // execJson('fence lease') and the trailer 'check trailers' gather both ride exec: a 'fence
-      // lease' batch must read ok:true; anything else returns a benign empty batch.
       if (prompt.includes('fence_cli.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
       return [{ index: 0, ok: true, stdout: JSON.stringify({ unmapped_commits: 0 }) }]
     }
@@ -94,18 +94,15 @@ async function buildRecordsComposedLeafCommands() {
   try {
     await bp.buildOneTask('wi-rec', 'GEN9', task, 'feat/x', '7', '/some/wt', 1)
   } catch (_e) {
-    // buildOneTask may park on an unstubbed later sub-step in this minimal harness — fine.
-    // The record must have already fired at the leaf-command composition point regardless.
+    // buildOneTask may park on an unstubbed later sub-step in this minimal node harness — fine.
   } finally {
     sr._recordComposed = origRecord
     if (savedRoot !== undefined) globalThis.__SR_ROOT = savedRoot
     else delete globalThis.__SR_ROOT
   }
 
-  assert.ok(recorded.length >= 1, 'the build phase records at least one composed leaf command')
-  const hit = recorded.find((r) => r.command === expectedPrompt)
-  assert.ok(hit, 'the recorded command is byte-exactly the composed leaf command')
-  assert.strictEqual(hit.runId, 'GEN9', 'the composed command is recorded against the run generation')
+  assert.ok(!recorded.some((r) => r.command === builderPrompt),
+    'the builder-leaf PROMPT is never registered as a composed-exact command (#333 dead weight removed)')
 }
 
 // ---------------------------------------------------------------------------
@@ -139,9 +136,9 @@ function defaultSeamsShellPythonAndFailOpen() {
 
 async function main() {
   await freezeOnceAtRunStart()
-  await buildRecordsComposedLeafCommands()
+  await buildNeverRecordsTheBuilderPrompt()
   defaultSeamsShellPythonAndFailOpen()
-  console.log('ok: spine freezes rules once at run start + records each composed leaf command (FR-8, UFR-9)')
+  console.log('ok: spine freezes rules once at run start + never records the builder prompt (FR-8, UFR-9, #402)')
 }
 
 main().catch((e) => { console.error('FAIL:', e.message, e.stack); process.exit(1) })
