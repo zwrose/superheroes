@@ -1099,6 +1099,8 @@ const verifyGateTwin = require('./verify_gate.js')
 const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 const SCHEMA_VERSION = 1
+const VERIFY_TIMEOUT_SECONDS = 600
+const VERIFY_ALARM_SECONDS = 630
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
 function _jsonAnswer(out) {
   try { const p = JSON.parse((out && out.stdout) || ''); return (p && typeof p === 'object') ? p : null }
@@ -1421,7 +1423,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
   return null
 }
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep,
-                            maxRounds = 7, legKind = {}, verifyCommand = 'none',
+                            maxRounds = 7, legKind = {}, verifyCommand = 'none', verifyCwd = null,
                             forceCoverageDecisionExpectedHash, preloaded }) {
   runDir = runDir || runKey
   const runId = runKey || runDir
@@ -1515,11 +1517,11 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
     }
     let verifyResult = null
     if (legKind.code) {
-      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi, verifyCwd) }
       catch (e) { verifyResult = 'fail' }
       if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
         try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
-        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi, verifyCwd) }
         catch (e) { verifyResult = 'fail' }
         try { log(`review-panel r${round}: corrective re-run verify → ${verifyResult}`) } catch (_) {}
       }
@@ -1686,10 +1688,16 @@ function graftSynthesizedFindings(roundFindings, synthesized) {
     roundFindings[name] = Object.assign({}, result, { findings })
   }
 }
-async function verifyAgent(verifyCommand, runDir, round, ioApi) {
+async function verifyAgent(verifyCommand, runDir, round, ioApi, cwd) {
   ioApi = ioApi || io()
   const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
-  const command = `python3 ${libPath('verify_gate.py')} --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
+  const gateArgs = `--command ${shq(verifyCommand || 'none')}` +
+    (cwd ? ` --cwd ${shq(cwd)} --timeout ${VERIFY_TIMEOUT_SECONDS}` : '') +
+    ` --out ${shq(outPath)}`
+  const bareCommand = `python3 ${libPath('verify_gate.py')} ${gateArgs}`
+  const command = cwd
+    ? `perl -e 'alarm shift; exec @ARGV' ${VERIFY_ALARM_SECONDS} ${bareCommand}`
+    : bareCommand
   const prompt =
     `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
     `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +
@@ -4940,7 +4948,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
     runKey: runDir, runDir, fixStep, maxRounds: 1,
-    legKind: { panel: false, code: true }, verifyCommand: verify,
+    legKind: { panel: false, code: true }, verifyCommand: verify, verifyCwd: wt,
   })
   let haltKind = verdict && verdict.haltKind
   let reason = verdict && verdict.reason
@@ -4970,7 +4978,7 @@ async function runFinalReview(workItem, generation, branch, wt) {
       try { await recordDeferred(fixReport, verdict, runDir) } catch (_e) { /* advisory by contract */ }
       let postVerify = 'skipped'
       if (verify && String(verify).trim().toLowerCase() !== 'none') {
-        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io()) }
+        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io(), wt) }
         catch (_e) { postVerify = 'fail' }
       }
       if (postVerify === 'pass' || postVerify === 'skipped') {
