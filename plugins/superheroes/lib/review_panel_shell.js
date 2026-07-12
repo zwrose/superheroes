@@ -14,6 +14,22 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
+// #396: THREE strictly-ordered duration bounds, so a genuine verify timeout is CLASSIFIED and its
+// result file WRITTEN before any outer bound hard-kills the process:
+//   gate --timeout (VERIFY_TIMEOUT_SECONDS = 570s)
+//     < the courier's Bash-tool floor (600s — injected by hooks/bash_timeout.py, and asked for in the
+//       leaf prompt below)
+//     < the perl-alarm ceiling (VERIFY_ALARM_SECONDS = 630s).
+// verify_gate.py's own subprocess.run(timeout=570) raises TimeoutExpired FIRST and atomically writes a
+// distinct `result: "timeout"` (UFR-4) before the 600s Bash kill or the 630s alarm can fire. The alarm
+// is the OUTERMOST backstop — it only bites a courier that honors a HIGHER Bash timeout, or a host with
+// no bash_timeout hook. The gate is deliberately NOT a mirror of verify_gate.DEFAULT_TIMEOUT (600): it
+// is chosen strictly below the Bash floor for this ordering, so the two are independent by design (no
+// drift-mirror to keep in sync). `perl` is an assumed host tool here (the repo's own timeout-wrapper
+// convention; it ships on macOS + mainstream Linux) — an absent perl fails CLOSED (no result file →
+// 'fail'), the safe direction.
+const VERIFY_TIMEOUT_SECONDS = 570
+const VERIFY_ALARM_SECONDS = 630
 // #276: the blocking partition routes through circuit_breaker.isBlocking (case-normalized, fail-closed)
 // — the single shared predicate, so this shell never disagrees with the panel gate / breaker on blocks.
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
@@ -454,7 +470,7 @@ async function gatherReviewSetup({ runDir, reviewerSet, context, legKind, ioApi 
 }
 
 async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixStep,
-                            maxRounds = 7, legKind = {}, verifyCommand = 'none',
+                            maxRounds = 7, legKind = {}, verifyCommand = 'none', verifyCwd = null,
                             forceCoverageDecisionExpectedHash, preloaded }) {
   runDir = runDir || runKey
   const runId = runKey || runDir
@@ -585,7 +601,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
 
     let verifyResult = null
     if (legKind.code) {
-      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+      try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi, verifyCwd) }
       catch (e) { verifyResult = 'fail' }
       // #279 bounded corrective re-run: when verify is the SOLE blocker — a 'fail' with zero blocking
       // findings this round — the fix loop has nothing to resolve and so can never earn a re-verify,
@@ -597,7 +613,7 @@ async function reviewPanel({ reviewerSet, context, rubric, runKey, runDir, fixSt
       // fix leg (which re-verifies next round), so the re-run is scoped to the no-work case only.
       if (verifyResult === 'fail' && panelTally.presentBlockingFromDimensionResults(roundFindings) === 0) {
         try { log(`review-panel r${round}: verify failed with zero blocking findings — one bounded corrective re-run (#279)`) } catch (_) {}
-        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi) }
+        try { verifyResult = await verifyAgent(verifyCommand, runDir, round, ioApi, verifyCwd) }
         catch (e) { verifyResult = 'fail' }
         // Surface the flake vs the real regression: a fail→pass flip means the verify gate is flaky
         // (worth investigating the infra cause); a fail→fail confirms a genuine failure (halts below).
@@ -804,13 +820,29 @@ function graftSynthesizedFindings(roundFindings, synthesized) {
   }
 }
 
-async function verifyAgent(verifyCommand, runDir, round, ioApi) {
+async function verifyAgent(verifyCommand, runDir, round, ioApi, cwd) {
   // dumb pipe (run verify_gate.py, echo its JSON): courier:true so the bundle preamble pins it to
   // the cheapest model unconditionally (#118 — an unmarked label like 'run verify' inherits the
   // session model). The preamble strips the marker before the real agent().
   ioApi = ioApi || io()
   const outPath = ioApi.join(runDir, `verify-result-r${round}.json`)
-  const command = `python3 ${libPath('verify_gate.py')} --command ${shq(verifyCommand || 'none')} --out ${shq(outPath)}`
+  // #396: when a build worktree is threaded (the whole-branch final-review gate roots verify in the
+  // tree under review), pass verify_gate.py an explicit --cwd instead of letting the courier leaf run
+  // in the hosting session's inherited cwd, and enforce the duration ceiling MECHANICALLY: pass
+  // --timeout and self-bound the whole command with a perl alarm so the budget never depends on the
+  // courier honoring the Bash `timeout` param. The gate --timeout / Bash floor / perl alarm are three
+  // strictly-ordered bounds (see VERIFY_TIMEOUT_SECONDS) so verify_gate.py classifies its own
+  // TimeoutExpired and writes its result file before any outer bound kills the process. No cwd threaded
+  // (the review-code leg roots verify by cd-wrapping the courier PROMPT via showrunner.js
+  // withTargetCommandPrompts — a SEPARATE rooting mechanism, kept in sync by hand) → the composed
+  // command is byte-identical to before.
+  const gateArgs = `--command ${shq(verifyCommand || 'none')}` +
+    (cwd ? ` --cwd ${shq(cwd)} --timeout ${VERIFY_TIMEOUT_SECONDS}` : '') +
+    ` --out ${shq(outPath)}`
+  const bareCommand = `python3 ${libPath('verify_gate.py')} ${gateArgs}`
+  const command = cwd
+    ? `perl -e 'alarm shift; exec @ARGV' ${VERIFY_ALARM_SECONDS} ${bareCommand}`
+    : bareCommand
   const prompt =
     `Run exactly this command with Bash and return ONLY its final stdout JSON, unchanged.\n` +
     `This command can run for several minutes. Invoke Bash with an explicit timeout parameter of 600000 ms ` +

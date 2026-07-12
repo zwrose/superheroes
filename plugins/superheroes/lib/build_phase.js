@@ -1126,12 +1126,17 @@ async function runFinalReview(workItem, generation, branch, wt) {
   const verdict = await reviewPanel({
     reviewerSet: ['generalist'], context: { workItem, branch }, rubric: 'review-base',
     runKey: runDir, runDir, fixStep, maxRounds: 1,
+    // #396: root the whole-branch verify gate in the BUILD worktree (the tree under review), not the
+    // hosting session's cwd. Without this the per-round verify runs the project's verify command in
+    // the launching session's directory — false red (a broken session tree parks a good branch) and,
+    // worse, false green (the branch's changes are never in the tested tree). verifyCwd threads to
+    // verifyAgent's --cwd; the #382 post-cap fix-pass verify below is rooted the same way.
     // #394: this single-generalist leg's reviewerAgent (above) is tier-blind — it ALWAYS dispatches
     // at the reviewer-deep model + review-deep effort. Declaring dispatchTier makes the scheduled
     // run-tier tell that truth, so a post-baseline (resumed) round with prior findings no longer arms
     // the cheap-first escalation into a byte-identical re-dispatch that discards the first (already
     // deep) answer. The per-task panel legs keep their honest cheap-first escalation.
-    legKind: { panel: false, code: true, dispatchTier: 'reviewer-deep' }, verifyCommand: verify,
+    legKind: { panel: false, code: true, dispatchTier: 'reviewer-deep' }, verifyCommand: verify, verifyCwd: wt,
   })
   // haltKind is the STRUCTURED cap-halt discriminator (review_loop_plan.tally-round → the shell's
   // verdict). At the decider it means "round cap reached with blockers present, verify not red"; the
@@ -1184,7 +1189,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
       // No verify configured ('none') → skipped without a dispatch, green by the spec's "if configured".
       let postVerify = 'skipped'
       if (verify && String(verify).trim().toLowerCase() !== 'none') {
-        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io()) }
+        // #396: root the post-fix verify in the build worktree too (same seam, same shellVerifyAgent).
+        try { postVerify = await shellVerifyAgent(verify, runDir, ((verdict.round || 1) + 1), io(), wt) }
         catch (_e) { postVerify = 'fail' }
       }
       if (postVerify === 'pass' || postVerify === 'skipped') {
