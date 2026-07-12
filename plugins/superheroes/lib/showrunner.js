@@ -310,7 +310,6 @@ const DOC_SEVERITY_FRAME =
   'fails closed to BLOCKING. For a document review, also set each finding\'s "docSection" to the ' +
   'exact markdown heading (verbatim subsection title) it concerns; use "docSection": null only when ' +
   'the finding genuinely spans more than one subsection or is structural.'
-module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 
 // Task 11 (FR-4) probe steering: an unattended leaf/reviewer that needs to *run* something to verify
 // its work must use the sanctioned throwaway-test-file-in-worktree + allowed test-run family (which the
@@ -655,6 +654,7 @@ module.exports.ensureReviewerShape = ensureReviewerShape
 // for the FR-4 probe steering and the 15-min proceed contract; build_phase.js reuses the latter so the
 // builder leaf and reviewer leaf agree byte-for-byte on the timeout instruction).
 module.exports.reviewCodeLeaves = reviewCodeLeaves
+module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 module.exports.PROBE_STEERING = PROBE_STEERING
 module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
 module.exports.REVIEWER_DENIAL_FLAG = REVIEWER_DENIAL_FLAG

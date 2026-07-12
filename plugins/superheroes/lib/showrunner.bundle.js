@@ -5626,7 +5626,6 @@ const DOC_SEVERITY_FRAME =
   'fails closed to BLOCKING. For a document review, also set each finding\'s "docSection" to the ' +
   'exact markdown heading (verbatim subsection title) it concerns; use "docSection": null only when ' +
   'the finding genuinely spans more than one subsection or is structural.'
-module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 const PROBE_STEERING =
   'To verify by running code, write a throwaway test file inside the build worktree and run it with the ' +
   'project test-run family (e.g. pytest / the repo test command); do not improvise inline interpreter ' +
@@ -5840,6 +5839,7 @@ async function runReviewCodePanel({ runDir, context, rubric, verifyCommand, leav
 module.exports = { REVIEW_CODE_REVIEWERS, normalizeFixResult, _policyChangedSubjects }
 module.exports.ensureReviewerShape = ensureReviewerShape
 module.exports.reviewCodeLeaves = reviewCodeLeaves
+module.exports.DOC_SEVERITY_FRAME = DOC_SEVERITY_FRAME
 module.exports.PROBE_STEERING = PROBE_STEERING
 module.exports.TIMEOUT_PROCEED_CONTRACT = TIMEOUT_PROCEED_CONTRACT
 module.exports.REVIEWER_DENIAL_FLAG = REVIEWER_DENIAL_FLAG
