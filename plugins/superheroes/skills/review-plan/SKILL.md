@@ -463,8 +463,8 @@ After exit, print a terminal summary in chat:
 - Lead with the final verdict label in bold, and the **gate outcome** (`$GATE` from the
   helper — e.g. `recorded:passed`, `recorded:changes-requested`, `skipped:noncanonical`;
   or "not recorded — not a definition-doc" when `isDefinitionDoc == no`,
-  in which case step 6 was skipped). If the loop hit the 7-round cap with Critical/Important
-  unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not**
+  in which case step 6 was skipped). If the loop hit the three-round cap (baseline + at most two
+  confirmations) with Critical/Important unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not**
   declare PLAN READY.
 - List, grouped by plan section heading, the revisions applied (auto + user-approved) and
   the findings the user chose to skip — each with its POV line.

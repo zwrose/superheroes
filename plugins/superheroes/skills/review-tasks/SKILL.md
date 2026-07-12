@@ -458,8 +458,8 @@ After exit, print a terminal summary in chat:
 
 - Lead with the final verdict label in bold, and the **gate outcome** (`$GATE` from the
   helper; or "not recorded — not a definition-doc" when `isDefinitionDoc == no`, in which case
-  step 6 was skipped). If the loop hit the 7-round cap with Critical/Important unresolved, the
-  verdict is **REVISE** and the gate is `changes-requested` — do **not** declare TASKS READY.
+  step 6 was skipped). If the loop hit the three-round cap (baseline + at most two confirmations)
+  with Critical/Important unresolved, the verdict is **REVISE** and the gate is `changes-requested` — do **not** declare TASKS READY.
 - List, grouped by task/step, the revisions applied (auto + user-approved) and the findings the
   user chose to skip — each with its POV line.
 - End with a count summary (e.g. `"3 auto-revised, 1 skipped; TASKS READY; gate → passed"`).
@@ -494,7 +494,7 @@ Agents flag departures from these — every one is in the writing-plans + CONVEN
 | Re-reviewing the plan's design decisions at tasks time                      | That was review-plan's job. Here, only flag a task that contradicts or drifts from the plan — design is settled.                                                |
 | Tolerating a placeholder ("add error handling")                             | The tasks bar forbids placeholders. A placeholder is a Fix + mechanical finding — fill it with the concrete code/command, or flag the plan gap behind it.        |
 | Inventing a task to cover a missing requirement                             | If the PLAN never covered a requirement, tasks can't faithfully add it — loop back to review-plan/plan. Tasks must not re-decide design.                         |
-| Overwriting a `changes-requested` gate with `passed`                        | The gate write reflects the verdict. A skipped blocking finding or a 7-round cap with open Critical/Important → `changes-requested`, never `passed`.            |
+| Overwriting a `changes-requested` gate with `passed`                        | The gate write reflects the verdict. A skipped blocking finding or a three-round cap with open Critical/Important → `changes-requested`, never `passed`.            |
 | Hand-editing the frontmatter to set the gate                                | The gate is written only via the-architect's `definition_doc.py set-gate`. If that lib is absent, report "gate not recorded" — never hand-edit the YAML.        |
 | Citing line numbers from the wrong file                                     | Tasks-doc citations point at `$SESSION_DIR/tasks.md`; project-file citations point at repo paths. Don't mix them.                                               |
 | Re-raising findings the user skipped                                        | Check the `skip-set` and prior rounds before raising a finding.                                                                                                 |
