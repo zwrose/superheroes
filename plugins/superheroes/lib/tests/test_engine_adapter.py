@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 
@@ -510,3 +511,32 @@ def test_parse_result_codex_shapes_are_byte_identical_through_the_unwrap():
     verdict = json.dumps({"ok": True, "signal": "ok",
                           "evidence": {"testFailed": True, "testPassed": True}})
     assert EA.parse_result("codex", "build", verdict)["ok"] is True
+
+
+def test_build_argv_verify_match(tmp_path, capsys):
+    p = tmp_path / "x.prompt"
+    p.write_bytes(b"payload")
+    h = hashlib.sha256(b"payload").hexdigest()
+    EA.main(["build-argv", "--engine", "codex", "--role", "review",
+             "--effort", "high", "--verify", "%s:%s" % (p, h)])
+    out = json.loads(capsys.readouterr().out)
+    assert isinstance(out, list) and out[0] == "codex"
+
+
+def test_build_argv_verify_mismatch(tmp_path, capsys):
+    p = tmp_path / "x.prompt"
+    p.write_bytes(b"tampered")
+    h = hashlib.sha256(b"payload").hexdigest()
+    EA.main(["build-argv", "--engine", "codex", "--role", "review",
+             "--effort", "high", "--verify", "%s:%s" % (p, h)])
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"ok": False, "reason": "staged-input-mismatch", "path": str(p)}
+
+
+def test_build_argv_verify_missing_file(tmp_path, capsys):
+    p = tmp_path / "absent.prompt"
+    h = hashlib.sha256(b"payload").hexdigest()
+    EA.main(["build-argv", "--engine", "codex", "--role", "review",
+             "--effort", "high", "--verify", "%s:%s" % (p, h)])
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"ok": False, "reason": "staged-input-mismatch", "path": str(p)}
