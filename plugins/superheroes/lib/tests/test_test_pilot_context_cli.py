@@ -122,3 +122,56 @@ def test_unresolvable_base_falls_back_gracefully(two_repos):
     assert result.returncode == 0, "Should not crash on unresolvable base; stderr: %s" % result.stderr
     ctx = json.loads(result.stdout)
     assert "diff" in ctx
+
+
+# #412: profileSource is surfaced through the context CLI so a migrated project's
+# calibration reads the unified layer instead of parking at "missing profile".
+# These run IN-PROCESS with TEST_PILOT_STORE_ROOT pinned + chdir into a fixture repo, so
+# resolution really targets the fixture — never the real checkout or the developer's real
+# ~/.claude/test-pilot store (which store.resolve could self-heal-WRITE).
+
+
+def _mk_fixture_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run_git(str(repo), "init", "-b", "main")
+    _run_git(str(repo), "config", "user.email", "test@test.com")
+    _run_git(str(repo), "config", "user.name", "Test")
+    (repo / "README.md").write_text("hello")
+    _run_git(str(repo), "add", "README.md")
+    _run_git(str(repo), "commit", "-m", "initial")
+    return repo
+
+
+def _resolve_in_process(repo, tmp_path, monkeypatch):
+    sys.path.insert(0, os.path.join(_REPO_ROOT, "plugins", "superheroes", "lib"))
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", str(tmp_path / "tp-store"))
+    monkeypatch.chdir(repo)
+    import test_pilot_context_cli as cli
+    return cli.resolve("wi-1", None, worktree=str(repo), base_name="main")
+
+
+def test_context_surfaces_profile_source_layer(tmp_path, monkeypatch):
+    """A migrated project (unified layer, no profile.md) resolves via the layer and the
+    context reports profileSource=layer with the config parsed straight from it."""
+    repo = _mk_fixture_repo(tmp_path)
+    layer_dir = repo / ".claude" / "superheroes"
+    layer_dir.mkdir(parents=True)
+    (layer_dir / "test-pilot.md").write_text(
+        "<!-- test-pilot: schemaVersion=2 status=confirmed created=2026-07-01 "
+        "updated=2026-07-01 nudge-ack={} -->\n\n## Machine-readable config\n\n"
+        "```json test-pilot-config\n"
+        '{"schemaVersion": 1, "baseUrl": "http://localhost:3000"}\n```\n'
+    )
+    ctx = _resolve_in_process(repo, tmp_path, monkeypatch)
+    assert ctx["profileSource"] == "layer"
+    assert ctx["profileError"] is None
+    assert ctx["baseUrl"] == "http://localhost:3000"
+
+
+def test_context_profile_source_none_on_uncalibrated_repo(tmp_path, monkeypatch):
+    """An uncalibrated project reports profileSource=none (the honest 'no calibration')."""
+    repo = _mk_fixture_repo(tmp_path)
+    ctx = _resolve_in_process(repo, tmp_path, monkeypatch)
+    assert ctx["profileSource"] == "none"
+    assert ctx["profile"] is None
