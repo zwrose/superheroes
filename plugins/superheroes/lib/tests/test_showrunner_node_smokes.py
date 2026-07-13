@@ -35,6 +35,9 @@ SHOWRUNNER_SMOKES = [
     # Task 17 (#397 FR-4/FR-5): tasks-review non-blocking findings are journaled as routed_forward
     # events and kept out of the build worklist.
     "plugins/superheroes/lib/tests/showrunner_tasks_routed_smoke.js",
+    # Task 18 (#397 FR-10/FR-11/UFR-1): doc-review park composes a decision list into the parked
+    # event payload and discloses review_park.py dispatch failures on phaseResult.assumptions.
+    "plugins/superheroes/lib/tests/showrunner_park_disclosure_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",

@@ -1225,6 +1225,57 @@ async function collectNonBlockingFindings(runDir) {
   }
 }
 
+function _parkComposerDispatchDetail(res) {
+  if (!res || !res[0]) return 'no courier result'
+  if (!res[0].ok) return (res[0].stderr || '').trim() || 'dispatch failed'
+  try {
+    const p = JSON.parse((res[0].stdout || '').trim())
+    if (p && p.ok && p.payload) return null
+    return 'non-ok answer'
+  } catch (_) {
+    return 'non-JSON answer'
+  }
+}
+
+// #397 FR-10/FR-11: compose the doc-review park decision list via review_park.py. Fail-soft on
+// dispatch failure (UFR-1): still returns a minimal payload + an optional disclosure string.
+async function composeDocReviewPark(runDir, doc, roundNo, parkReason) {
+  const minimal = (note) => ({
+    payload: { doc, round: roundNo, reason: parkReason, decisions: [], note },
+    disclosure: note.startsWith('decision list could not be composed:')
+      ? note
+      : `decision list could not be composed: ${note}`,
+  })
+  try {
+    const res = await exec([
+      `python3 ${libPath('review_park.py')} --path ${shq(runDir + '/round-records.json')} ` +
+      `--round ${roundNo} --doc ${shq(doc)} --reason ${shq(parkReason)}`,
+    ], 'compose doc-review park')
+    let out = null
+    try { out = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
+    if (res && res[0] && res[0].ok && out && out.ok && out.payload) {
+      return { payload: out.payload, disclosure: null }
+    }
+    const detail = _parkComposerDispatchDetail(res) || 'dispatch failed'
+    return minimal(`decision list could not be composed: ${detail}`)
+  } catch (e) {
+    const detail = (e && e.message) || 'dispatch failed'
+    return minimal(`decision list could not be composed: ${detail}`)
+  }
+}
+
+function formatDocParkDetail(terminal, reason, payload) {
+  let detail = `${terminal}: ${reason}`
+  const decisions = (payload && payload.decisions) || []
+  for (let i = 0; i < decisions.length; i++) {
+    const d = decisions[i] || {}
+    detail += `\n${i + 1}. [${d.docSection || ''}] ${d.statement || ''}`
+    for (const move of (d.moves || [])) detail += `\n   - ${move}`
+  }
+  if (payload && payload.note && !decisions.length) detail += `\n(${payload.note})`
+  return detail
+}
+
 function _handoffReadDispatchFailed(detail) {
   const d = detail == null || detail === '' ? 'unknown' : String(detail)
   return { ok: false, reason: 'handoff read dispatch failed: ' + d }
@@ -1488,7 +1539,16 @@ async function reviewDocPhase(doc, workItem, opts) {
     assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
   }
   if (gate !== 'passed') {
-    phaseResult.parkDetail = `${(verdict && verdict.terminal) || 'cannot-certify'}: ${(verdict && verdict.reason) || 'review not certified'}`
+    const parkReason = (verdict && verdict.reason) || 'review not certified'
+    const roundNo = (verdict && verdict.round) || 1
+    const composed = await composeDocReviewPark(runDir, doc, roundNo, parkReason)
+    if (composed.disclosure) phaseResult.assumptions.push(composed.disclosure)
+    persist.parkPayload = composed.payload
+    phaseResult.parkDetail = formatDocParkDetail(
+      (verdict && verdict.terminal) || 'cannot-certify',
+      parkReason,
+      composed.payload,
+    )
   }
   return {
     phaseResult,
@@ -1566,6 +1626,8 @@ async function appendNotify(workItem, entries) {
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.collectNonBlockingFindings = collectNonBlockingFindings
+module.exports.composeDocReviewPark = composeDocReviewPark
+module.exports.formatDocParkDetail = formatDocParkDetail
 module.exports.journalTasksRoutedFindings = journalTasksRoutedFindings
 module.exports.notifyLedgerFor = notifyLedgerFor
 module.exports.docPathFor = docPathFor
@@ -1808,12 +1870,15 @@ async function persistPhase(workItem, opts) {
   // record (no dispatches, unmeasured) or when the caller did not opt in (recordCost).
   const costBody = opts.recordCost ? phaseCostPayload(phase) : null
   const costArg = costBody ? ` --cost-payload ${shq(JSON.stringify(costBody))}` : ''
-  // #130: on a park (journalOnly), fold a `parked` terminal marker into this same save so the run is
+  // #130: on a park, fold a `parked` terminal marker into this same save so the run is
   // classifiable as parked (parkFromPhases journals nothing) — carrying its already-folded cost.
-  const parkArg = (journalOnly && opts.parkReason) ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
+  const parkArg = (journalOnly && opts.parkReason && !opts.parkPayload)
+    ? ` --terminal-park ${shq(String(opts.parkReason))}` : ''
+  const parkPayloadArg = (journalOnly && opts.parkPayload)
+    ? ` --terminal-park-payload ${shq(JSON.stringify(opts.parkPayload))}` : ''
   const saveCmd =
     `python3 ${libPath('phase_progress_entry.py')} save --work-item ${shq(workItem)} ` +
-    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}`
+    `--step ${shq(String(step))} --phase ${shq(phase)} --payload ${shq(JSON.stringify(record))}${sideArg}${joArg}${costArg}${parkArg}${parkPayloadArg}`
   const cmd = sideEffectCmd ? `${sideEffectCmd} && ${saveCmd}` : saveCmd
   // #170: the SECOND (and last) libRoot probe site — the once-per-phase durable write covers the long
   // back half, where a plugin-cache eviction after startup would otherwise surface as a raw python
@@ -2856,6 +2921,7 @@ async function runPhases(workItem, fromStep, deps) {
       // #130: on a park, fold a `parked` terminal marker into the same save so token_trend/run_watch
       // can classify the run (parkFromPhases journals nothing of its own).
       parkReason: !proceed ? (phaseResult.parkReason || decision.reason) : null,
+      parkPayload: !proceed ? ((persist && persist.parkPayload) || null) : null,
     })
     // FR-4/UFR-2: a failed durable phase-progress write must never advance (and never park silently
     // on unrecorded state) — park naming the durable-write failure.
