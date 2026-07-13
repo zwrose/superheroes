@@ -783,7 +783,12 @@ async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferr
   // #115: write the deferred-set via the cheap exec dumb-pipe. fix-report.json is a transient hand-off
   // written first, then front_half.py record-deferred (frozen) appends the deferred identities to
   // deferred-set.json — the channel the in-process tally reads. Both run as cheap pipes.
-  await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  // #410: io.writeFile now THROWS on a persistently-unverified write. This hand-off is advisory — its
+  // own contract below is "No park: an under-count is itself fail-closed" — so swallow the throw and let
+  // the existing record-deferred / under-count path degrade, rather than parking (or, via runFixStep's
+  // catch, discarding a fix that already succeeded).
+  try { await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {})) }
+  catch (_) { try { log(`docRecordDeferred: fix-report write failed for ${runDir} (degraded — deferrals may under-count, which is fail-closed)`) } catch (__) {} }
   const results = await exec([
     `python3 ${libPath('front_half.py')} record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
@@ -2559,23 +2564,34 @@ function testPilotDeps(workItem, generation) {
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
         return launched
       }
+      // Only run() is the work that can legitimately fail and needs teardown-on-exception; the finish
+      // artifacts + finish CLI are teardown bookkeeping. Keeping them in separate try blocks means a
+      // #410 write-verify throw on the ADVISORY finish artifacts cannot be mistaken for a run failure.
+      let outcome = null
+      let runErr = null
       try {
-        const outcome = await run(launched)
-        const contextPath = await writeJson('server-finish-context', launched)
-        const outcomePath = await writeJson('server-finish-outcome', outcome || {})
-        return cli(
-          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
-          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
-          { type: 'object' })
+        outcome = await run(launched)
       } catch (err) {
+        runErr = err
+      }
+      // #410: writeJson (io.writeFile) now THROWS on a persistently-unverified courier write. The
+      // finish/teardown must ALWAYS be attempted and must NEVER mask the run's real result (or error): a
+      // transport flake on these advisory finish-context/outcome writes must not skip the server teardown
+      // nor discard a successful outcome. finish(context, outcome) tears the managed server down and echoes
+      // the outcome, so on success we return its result (falling back to the outcome itself if the finish
+      // write/CLI flaked), and on the exception path we always re-throw the ORIGINAL run error.
+      let finished = null
+      try {
         const contextPath = await writeJson('server-finish-context', launched)
-        const outcomePath = await writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
-        await cli(
+        const outcomePath = await writeJson('server-finish-outcome',
+          runErr ? { action: 'exception', reason: runErr && runErr.message ? runErr.message : String(runErr) } : (outcome || {}))
+        finished = await cli(
           `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
-        throw err
-      }
+      } catch (_) { /* finish/teardown is best-effort — never mask the run result or its error */ }
+      if (runErr) throw runErr
+      return finished != null ? finished : (outcome || {})
     },
 
     seedRecords: async (records) => {

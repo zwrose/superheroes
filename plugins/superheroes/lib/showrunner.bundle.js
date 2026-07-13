@@ -87,6 +87,7 @@ async function __sh(cmd, opts) {
 function __join() { return Array.prototype.slice.call(arguments).join('/').replace(/\/+/g, '/') }
 function __utf8Bytes(text) { return __require('bytes').utf8Bytes(text) }
 function __b64(text) { return __require('bytes').b64(text) }
+function __sha256hex(text) { return __require('bytes').sha256hex(text) }
 function __contentHash(text) {
   var bytes = __utf8Bytes(text), i, j
   var hi = (bytes.length / 0x20000000) | 0, lo = (bytes.length << 3) >>> 0
@@ -185,18 +186,33 @@ function __jsonFromText(t, dflt) {
   }
   return dflt
 }
-var __SR_W = 'import os,sys,base64' + __NL +
+var __SR_W = 'import os,sys,base64,hashlib' + __NL +
   'd=os.path.dirname(sys.argv[1])' + __NL +
   'd and os.makedirs(d,exist_ok=True)' + __NL +
-  'open(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))'
+  'open(sys.argv[1],"wb").write(base64.b64decode(sys.argv[2]))' + __NL +
+  'if len(sys.argv)>3:' + __NL +
+  ' h=hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest()' + __NL +
+  ' if h!=sys.argv[3]: sys.exit(3)' + __NL +
+  ' sys.stdout.write("__SR_WROTE:"+h[:8])'
 globalThis.io = {
   join: __join, tmpdir() { return '/tmp' },
   async mkdirp(d) { await __sh('python3 -c ' + __q('import os,sys' + __NL + 'os.makedirs(sys.argv[1],exist_ok=True)') + ' ' + __q(d)) },
   async writeFile(p, s) {
     const b = (typeof s === 'string') ? s : JSON.stringify(s)
     const encoded = __b64(b)
-    const script = 'python3 -c ' + __q(__SR_W) + ' ' + __q(p) + ' ' + __q(encoded)
-    await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
+    const expected = __sha256hex(b)
+    const marker = '__SR_WROTE:' + expected.slice(0, 8)
+    const CourierTransportError = __require('courier_exec').CourierTransportError
+    const script = 'python3 -c ' + __q(__SR_W) + ' ' + __q(p) + ' ' + __q(encoded) + ' ' + __q(expected)
+    var ans = await __sh(script, encoded.length > __PAYLOAD_BOUND ? { payload: true } : {})
+    if (String(ans == null ? '' : ans).indexOf(marker) >= 0) return
+    var denied = __require('courier_exec').denialReason(ans)
+    if (denied) throw new CourierTransportError('io:write', 'write to ' + p + ' denied: ' + denied, String(ans == null ? '' : ans))
+    ans = await __sh(script, { payload: true, agentType: undefined })
+    if (String(ans == null ? '' : ans).indexOf(marker) >= 0) return
+    throw new CourierTransportError(
+      'io:write', 'write to ' + p + ' unverified after retry (no __SR_WROTE marker)',
+      String(ans == null ? '' : ans))
   },
   async stageAndRunHelper(stagedPath, text, cmd, args) {
     const b = (typeof text === 'string') ? text : JSON.stringify(text)
@@ -5048,7 +5064,8 @@ async function runFinalReview(workItem, generation, branch, wt) {
     const p = `${rdir}/deferred-set.json`
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
-    await io().writeFile(p, JSON.stringify(set))
+    try { await io().writeFile(p, JSON.stringify(set)) }
+    catch (_) { try { log(`recordDeferred: deferred-set write failed for ${p} (degraded — findings may re-block, under-count is fail-closed)`) } catch (__) {} }
   }
   let capBlockers = []
   const fixStep = async (_fixContext, verdict, runDir) => {
@@ -6042,7 +6059,8 @@ async function saveRoundStateBestEffort(workItem, doc, round, deferred, runDir) 
   } catch (_) {}
 }
 async function docRecordDeferred(report, verdict, runDir, context, runtimeDeferred) {
-  await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {}))
+  try { await io().writeFile(`${runDir}/fix-report.json`, JSON.stringify(report || {})) }
+  catch (_) { try { log(`docRecordDeferred: fix-report write failed for ${runDir} (degraded — deferrals may under-count, which is fail-closed)`) } catch (__) {} }
   const results = await exec([
     `python3 ${libPath('front_half.py')} record-deferred --run-dir ${shq(runDir)} ` +
     `--report ${shq(runDir + '/fix-report.json')}`,
@@ -7227,23 +7245,25 @@ function testPilotDeps(workItem, generation) {
       if (!launched || launched.verdict === 'park' || launched.action === 'park' || launched.ok === false) {
         return launched
       }
+      let outcome = null
+      let runErr = null
       try {
-        const outcome = await run(launched)
-        const contextPath = await writeJson('server-finish-context', launched)
-        const outcomePath = await writeJson('server-finish-outcome', outcome || {})
-        return cli(
-          `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
-          `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
-          { type: 'object' })
+        outcome = await run(launched)
       } catch (err) {
+        runErr = err
+      }
+      let finished = null
+      try {
         const contextPath = await writeJson('server-finish-context', launched)
-        const outcomePath = await writeJson('server-finish-outcome', { action: 'exception', reason: err && err.message ? err.message : String(err) })
-        await cli(
+        const outcomePath = await writeJson('server-finish-outcome',
+          runErr ? { action: 'exception', reason: runErr && runErr.message ? runErr.message : String(runErr) } : (outcome || {}))
+        finished = await cli(
           `python3 ${libPath('test_pilot_server_config_cli.py')} finish ` +
           `--context-json ${shq(contextPath)} --outcome-json ${shq(outcomePath)}`,
           { type: 'object' })
-        throw err
-      }
+      } catch (_) { /* finish/teardown is best-effort — never mask the run result or its error */ }
+      if (runErr) throw runErr
+      return finished != null ? finished : (outcome || {})
     },
     seedRecords: async (records) => {
       const recordsPath = await writeJson('seed-records', records)

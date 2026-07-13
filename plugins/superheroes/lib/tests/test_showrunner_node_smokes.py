@@ -36,6 +36,10 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_io_seam_smoke.js",
+    # #410: io.writeFile verifies every courier write — the writer re-reads + re-hashes the landed file
+    # (__SR_WROTE marker), and a refused/empty/prose/mutated/never-dispatched write retries once on the
+    # payload tier then throws loudly. Drives the REAL bundle writeFile through a real python3 shell.
+    "plugins/superheroes/lib/tests/showrunner_writefile_verify_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_panel_shell_smoke.js",
     # #394: the whole-branch final-review leg (panel:false) schedules its honest deep dispatch tier,
     # so a post-baseline round with prior findings does NOT arm a byte-identical escalation re-dispatch;

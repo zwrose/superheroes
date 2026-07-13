@@ -157,6 +157,48 @@ async function productionManagedServerUsesLifecycleHelperAroundBrowserRun() {
   }
 }
 
+// #410: io.writeFile now THROWS on a persistently-unverified courier write. withManagedServer's finish
+// artifacts (server-finish-context / server-finish-outcome) are ADVISORY teardown bookkeeping — a
+// transport throw on them must NOT (a) discard a successful run outcome, nor (b) mask the ORIGINAL run
+// error on the exception path. Injecting a global.io whose writeFile throws for the finish artifacts (but
+// not the launch context) exercises exactly that.
+async function managedServerFinishWriteThrowPreservesOutcomeAndError() {
+  const prevIo = global.io
+  const prevAgent = global.agent
+  const commands = []
+  global.io = {
+    join: (...a) => a.join('/'),
+    tmpdir: () => '/tmp',
+    async mkdirp() {},
+    async readText() { return '' },
+    async readJson(_p, d) { return d },
+    async writeFile(p) { if (String(p).includes('server-finish')) throw new Error('io:write to ' + p + ' unverified after retry (no __SR_WROTE marker)') },
+  }
+  global.agent = async (prompt) => {
+    if (prompt.includes('test_pilot_server_config_cli.py launch')) {
+      commands.push('launch')
+      return { verdict: 'managed', shell: false, baseUrl: 'http://localhost:3000', allowedOrigins: ['http://localhost:3000'], handle: { pid: 7, port: 3000 } }
+    }
+    if (prompt.includes('test_pilot_server_config_cli.py finish')) { commands.push('finish'); return { source: 'browser', echoed: true } }
+    return { ok: true }
+  }
+  try {
+    const deps = sr.testPilotDeps('wi', 3)
+    const serverCtx = { verdict: 'managed', shell: false, baseUrl: 'http://localhost:3000', allowedOrigins: ['http://localhost:3000'] }
+    // (1) run() SUCCEEDS but the finish-context write throws — the successful outcome is NOT discarded.
+    const out = await deps.withManagedServer(serverCtx, async () => ({ source: 'browser', steps: [{ id: 's1', status: 'passed' }] }))
+    assert.strictEqual(out && out.source, 'browser', '#410: a finish-artifact write throw must not discard the successful run outcome')
+    // (2) run() THROWS — the ORIGINAL run error propagates, never masked by the finish-write transport throw.
+    let threw = null
+    try { await deps.withManagedServer(serverCtx, async () => { throw new Error('browser boom') }) } catch (e) { threw = e }
+    assert.ok(threw && /browser boom/.test(String(threw.message)),
+      '#410: a run() failure propagates the ORIGINAL error, not the finish-write transport error')
+  } finally {
+    if (prevIo === undefined) delete global.io; else global.io = prevIo
+    global.agent = prevAgent
+  }
+}
+
 async function uncertainApplicabilityParks() {
   const out = await testPilotPhase('wi', 3, {
     resolveContext: async () => baseContext({ diff: { files: ['Makefile'] }, detectors: {} }),
@@ -822,6 +864,7 @@ async function unresolvableWorktreeParksNotSkips() {
   await notApplicableProceeds()
   await productionWrapperHandlesNotApplicableWithoutMissingLeaf()
   await productionManagedServerUsesLifecycleHelperAroundBrowserRun()
+  await managedServerFinishWriteThrowPreservesOutcomeAndError()
   await uncertainApplicabilityParks()
   await emptyApplicablePlanParks()
   await missingSetupParksBeforeBrowser()
