@@ -15,6 +15,8 @@ const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 
 const SCHEMA_VERSION = 1
+const DOC_ROUND_RETRY_ATTEMPTS = 2   // #397 UFR-4: 2 failed attempts per round before parking
+                                      // (doc legs only — a code-leg round still fails on attempt 1)
 // #396: THREE strictly-ordered duration bounds, so a genuine verify timeout is CLASSIFIED and its
 // result file WRITTEN before any outer bound hard-kills the process:
 //   gate --timeout (VERIFY_TIMEOUT_SECONDS = 570s)
@@ -930,6 +932,20 @@ function verifyResultFromPayload(verifyCommand, payload, opts) {
 // scalars the durable skeleton can't hold DOWN to the tally-round decider (which owns the terminal
 // from disk + writes the fix worklist on a continue), and assemble the verdict — this round's
 // findings/drops/downgrades for the readout, the decider's decisions for control flow.
+async function _tallyRoundDeciderRetrying(opts, docMode) {
+  const attempts = docMode ? DOC_ROUND_RETRY_ATTEMPTS : 1
+  let lastErr
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await module.exports.tallyRoundDecider(opts)
+    } catch (e) {
+      lastErr = e
+      if (docMode) { try { log(`review-panel r${opts.round}: tally attempt ${i + 1}/${attempts} failed (${e && e.message ? e.message : e})`) } catch (_) {} }
+    }
+  }
+  throw lastErr
+}
+
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {},
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
@@ -972,9 +988,9 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
 
     // the decider owns the terminal (breaker + decideTerminal + #174 economics + certification) from
     // disk; on a continue it writes the fixer worklist to the SAME leaf and rides only its pointer.
-    const decided = await tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+    const decided = await _tallyRoundDeciderRetrying({ runDir, round, roster, maxRounds, gate, confidence, missing,
       presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
-      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), docMode, ioApi: api })
+      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), docMode, ioApi: api }, legKind && legKind.docMode)
     // a mangled/unparseable decider answer fails closed — never a silent clean (the #211 adversarial
     // invariant): the shell's _failClosed sentinel halts + flags recordMissing.
     if (!decided || typeof decided.terminal !== 'string') return _failClosed()
@@ -1062,4 +1078,5 @@ function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
 // stale) — reusing this leaf keeps the verify contract (round-stamped file authoritative, anti-
 // fabrication fail-closed) single-sourced instead of duplicating it at the call site.
 // tallyRoundDecider and planRoundDecider exported for #397 doc-panel smoke tests.
-module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+// tallyRound exported for #397 Task 22 doc-round retry smoke tests.
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }

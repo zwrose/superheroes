@@ -43,6 +43,8 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_convergence_smoke.js",
     # Task 21 (#397 FR-14/UFR-1): acceptance ledger consulted at re-review; recorded on gate-approval.
     "plugins/superheroes/lib/tests/showrunner_acceptance_rereview_smoke.js",
+    # Task 22 (#397 UFR-4): doc-review per-round tally retry bounded at two attempts before parking.
+    "plugins/superheroes/lib/tests/showrunner_doc_round_retry_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",

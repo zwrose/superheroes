@@ -1192,6 +1192,7 @@ const verifyGateTwin = require('./verify_gate.js')
 const reviewMemory = require('./review_memory.js')
 const { libPath } = require('./lib_root.js')   // #170: spine code root for lib composes
 const SCHEMA_VERSION = 1
+const DOC_ROUND_RETRY_ATTEMPTS = 2   // #397 UFR-4: 2 failed attempts per round before parking
 const VERIFY_TIMEOUT_SECONDS = 570
 const VERIFY_ALARM_SECONDS = 630
 const POLICY_SUBJECTS = new Set(['Test', 'Security', 'Code', 'Architecture', 'Failure-Mode'])
@@ -1868,6 +1869,19 @@ function verifyResultFromPayload(verifyCommand, payload, opts) {
   const classified = verifyGateTwin.classify({ command, returncode: rcStr, timedOut: false })
   return classified === 'pass' && !opts.allowPass ? null : classified
 }
+async function _tallyRoundDeciderRetrying(opts, docMode) {
+  const attempts = docMode ? DOC_ROUND_RETRY_ATTEMPTS : 1
+  let lastErr
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await module.exports.tallyRoundDecider(opts)
+    } catch (e) {
+      lastErr = e
+      if (docMode) { try { log(`review-panel r${opts.round}: tally attempt ${i + 1}/${attempts} failed (${e && e.message ? e.message : e})`) } catch (_) {} }
+    }
+  }
+  throw lastErr
+}
 async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {},
                            legKind = {}, synthesized = null, verifyResult = null,
                            fixStatus = 'completed', extras = null, policy = {}, coverageDecisions = [],
@@ -1901,9 +1915,9 @@ async function tallyRound({ runDir, round, roster, maxRounds, roundFindings = {}
     }
     const presentBlocking = panelTally.presentBlockingFromDimensionResults(roundFindings)
     const uncertifiedReason = (gate === 'cannot-certify') ? panelTally.uncertifiedReason(roundFindings, roster) : null
-    const decided = await tallyRoundDecider({ runDir, round, roster, maxRounds, gate, confidence, missing,
+    const decided = await _tallyRoundDeciderRetrying({ runDir, round, roster, maxRounds, gate, confidence, missing,
       presentBlocking, uncertifiedReason, fixStatus, verifyResult, enterConfirmation, coverageTarget,
-      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), docMode, ioApi: api })
+      worklistOutPath: api.join(runDir, `fix-context-r${round}.json`), docMode, ioApi: api }, legKind && legKind.docMode)
     if (!decided || typeof decided.terminal !== 'string') return _failClosed()
     const verdictOut = Object.assign({ schemaVersion: SCHEMA_VERSION, gate, confidence, findings: compiled,
       missing, drops, downgrades, terminal: decided.terminal, reason: decided.reason, round }, safeExtras)
@@ -1972,7 +1986,7 @@ const SYNTH_SCHEMA = { type: 'object', required: ['findings', 'drops'],
 const VERIFY_SCHEMA = { type: 'object', required: ['result'],
   properties: { result: {}, code: {}, tail: {}, command: {}, returncode: {}, timedOut: {} } }
 function shq(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'" }
-module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
+module.exports = { reviewPanel, gatherReviewSetup, verifyAgent, tallyRound, tallyRoundDecider, planRoundDecider, VERDICT_SCHEMA, SYNTH_SCHEMA, VERIFY_SCHEMA }
 };
 __modules["courier_exec"] = function (module, exports, require) {
 let injectedAgent = null
