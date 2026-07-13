@@ -4177,6 +4177,27 @@ async function _scrubReason(reason) {
   if (r0 && r0.ok && r0.stdout != null) return String(r0.stdout)
   return 'external error (scrubbed)'
 }
+const _RUN_KEY_MAX = 80
+const _RUN_KEY_HASH_LEN = 16
+function _boundRunKey(raw) {
+  const sanitized = String(raw).replace(/[^A-Za-z0-9_.-]+/g, '-')
+  if (sanitized.length <= _RUN_KEY_MAX) return sanitized
+  const digest = sha256hex(sanitized).slice(0, _RUN_KEY_HASH_LEN)
+  return sanitized.slice(0, _RUN_KEY_MAX - _RUN_KEY_HASH_LEN - 1) + '-' + digest
+}
+function _deriveRunKey(o, prompt, schemaText) {
+  const wi = (typeof o.workItem === 'string' && o.workItem) ? o.workItem : ''
+  let base
+  if (o.taskId) {
+    const tid = String(o.taskId)
+    base = (wi && tid !== wi && !tid.startsWith(`${wi}-`)) ? `${wi}-${tid}` : tid
+  } else if (wi) {
+    base = `${wi}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
+  } else {
+    base = 'run'
+  }
+  return _boundRunKey(base)
+}
 async function _dispatchExternalInner(o) {
   const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model, engineModel } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
@@ -4200,12 +4221,7 @@ async function _dispatchExternalInner(o) {
   const isAuthor = (roleKind === 'author-plan')
   const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   const schemaText = JSON.stringify(stagedSchema)
-  const runKeyBase = o.taskId
-    ? String(o.taskId)
-    : (o.workItem
-      ? `${String(o.workItem)}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
-      : 'run')
-  const runKey = runKeyBase.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  const runKey = _deriveRunKey(o, prompt, schemaText)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
@@ -4398,6 +4414,7 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   STAGING_DENIED_OUTCOME, STAGING_FAILED_OUTCOME, PRESHA_FAILED_OUTCOME,
   _composeDispatchCommand,
   _stageCmd, _stageInput, _SR_STAGE_SIG,
+  _deriveRunKey,
   EMIT_TAIL_BYTES }
 };
 __modules["build_phase"] = function (module, exports, require) {
