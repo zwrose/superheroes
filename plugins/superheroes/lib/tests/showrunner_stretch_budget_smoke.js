@@ -107,6 +107,7 @@ const COURIER_ALLOW = [
   /^read nonblocking findings$/,   // #397: review_handoff.py collect at plan-review terminal
   /^route tasks findings$/,        // #397 Task 17: journal routed_forward events at tasks-review terminal
   /^compose convergence record$/,  // #397 Task 19: review_convergence.py compose at doc-review terminal
+  /^load acceptance candidates$/,  // #397 FR-14: loadAcceptanceCandidates courier (pre-judge cache load)
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -140,11 +141,11 @@ const PHASE_BUDGETS = {
   // journal convergence append (1, io leaf in node / courier in bundle). Was 7 pre-#211
   // (in-memory tally), 12 post-D3, 35 pre-D3, 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings),
   // 11 pre-Task-19, 12 pre-compose/journal split.
-  'review-plan': 13,
+  'review-plan': 14,
   // Task 17 (#397 FR-4/FR-5): +1 for routed_forward journal dispatch (non-blocking findings journaled
   // at tasks-review terminal). Task 19 (#397 FR-15): +1 compose + journal convergence record. Was 8 pre-Task-17,
   // 9 pre-Task-19, 10 pre-compose/journal split.
-  'review-tasks': 11,
+  'review-tasks': 12,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
