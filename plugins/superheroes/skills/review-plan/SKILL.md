@@ -458,6 +458,34 @@ GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
 summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
 only writer.
 
+**Record accepted findings to the acceptance ledger (gate-approval only).** When the gate outcome
+is `passed`, persist the accepted findings (those not in the skip-set) to the work-item's
+acceptance ledger so future reviews can detect which findings the owner approved. The acceptance
+ledger (`plan-accept.json` or `tasks-accept.json`) tracks each accepted finding's identity,
+section, and content hash — at re-review, candidates with matching hashes are eligible for
+suppression if the synthesis judge confirms sameness:
+
+```bash
+if echo "$GATE" | grep -q "recorded:passed"; then
+  DOCS_DIR=$(dirname "$PLAN_PATH")
+  # Extract effective findings (those not in skip-set) and persist to ledger.
+  # This records the owner's acceptance so future reviews can suppress re-raising
+  # the same finding if its section hash still matches.
+  python3 -c "
+import json, sys
+sys.path.insert(0, '$ROOT_DIR/lib')
+import review_acceptance
+with open('$SESSION_DIR/compiled.json', encoding='utf-8') as f:
+    compiled = json.load(f)
+doc_text = open('$PLAN_PATH', encoding='utf-8').read()
+# Pass all findings; review_acceptance.record() extracts their identity/section/hash
+review_acceptance.record('$DOCS_DIR', 'plan', compiled.get('findings', []), doc_text)
+" > /dev/null 2>&1 || true
+fi
+```
+
+(Note: if the acceptance ledger write fails, continue — gate recording is still complete and has succeeded.)
+
 After exit, print a terminal summary in chat:
 
 - Lead with the final verdict label in bold, and the **gate outcome** (`$GATE` from the
