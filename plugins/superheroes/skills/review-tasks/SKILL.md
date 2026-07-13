@@ -437,6 +437,8 @@ this step entirely when `isDefinitionDoc == no`.**
 - **REVISE BEFORE BUILD / MAJOR GAPS**, or the three-round cap hit with Critical/Important still
   open, or the user **skipped** a blocking finding → record `changes-requested`.
 
+**Record accepted findings to the acceptance ledger (gate-approval only).** When `REVIEW` is `passed`, run the acceptance-ledger block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-tasks/reference/tasks-detail.md` **before** `gate_write.py` (FR-14: acceptance first, then `gates.review`).
+
 The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
 
 ```bash
@@ -450,9 +452,7 @@ GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc tasks \
 ```
 
 `$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
-`failed:set-gate` — surface it (and any stderr detail) in the terminal
-summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
-only writer.
+`failed:set-gate` — surface it (and stderr plus acceptance-ledger disclosure from tasks-detail) in the terminal summary. Never hand-edit the frontmatter — `gate_write.py` is the only writer.
 
 After exit, print a terminal summary in chat:
 
@@ -466,7 +466,7 @@ After exit, print a terminal summary in chat:
 
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge**, (2) the **learning-loop proposal**, then (3) the **provisional-profile confirmation**. All three are placed after the review output and none blocks.
 
-Nothing else is written to the repo — the revised `$TASKS_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
+Nothing else is written to the repo — the revised `$TASKS_PATH`, its gate, and (on `passed` only) `tasks-accept.json` are the deliverables (plus `.claude/review-decisions.json` and, on dismissal, the profile's `nudge-ack` map).
 
 For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 

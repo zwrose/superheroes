@@ -35,3 +35,24 @@ def test_review_plan_records_acceptance_ledger_before_gate_write():
     assert section.index("acceptance") < section.index("gate_write.py")
     assert "review_acceptance.py" in detail and " record " in detail
     assert "plan-accept.json" in detail
+    assert "collect-blocking" in detail
+    assert "open-blockers.json" in detail
+    assert "skip-set.json" not in detail
+    assert "finding_identity" not in detail
+
+
+def test_review_tasks_records_acceptance_ledger_before_gate_write():
+    """#397 FR-14: the certifying review-tasks skill must record accepted findings before
+    gate_write.py — not only write gates.review directly."""
+    skill = (ROOT / "skills/review-tasks/SKILL.md").read_text(encoding="utf-8")
+    detail = (ROOT / "skills/review-tasks/reference/tasks-detail.md").read_text(encoding="utf-8")
+    section = skill[skill.index("### 6. Record the review gate"):skill.index("## Tasks-Content Requirements")]
+    assert "tasks-accept.json" in section or "acceptance ledger" in section.lower()
+    assert "before" in section and "gate_write.py" in section
+    assert section.index("acceptance") < section.index("gate_write.py")
+    assert "review_acceptance.py" in detail and " record " in detail
+    assert "tasks-accept.json" in detail
+    assert "collect-blocking" in detail
+    assert "open-blockers.json" in detail
+    assert "skip-set.json" not in detail
+    assert "finding_identity" not in detail
