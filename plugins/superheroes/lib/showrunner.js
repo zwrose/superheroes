@@ -1296,21 +1296,27 @@ async function journalHandoffProvided(workItem, payload) {
 // exception bubbles to the caller (journalTasksRoutedFindings), which discloses on assumptions.
 async function journalTasksRoutedFindings(workItem, findings) {
   if (!findings || findings.length === 0) return
-  const script =
-    `import sys, json, os; sys.path.insert(0, ${pyLibDir()}); ` +
-    'import control_plane, journal, finding_identity, readout; ' +
-    'findings = json.loads(sys.argv[2]); ' +
-    'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
-    'seen = {}; order = []; ' +
-    'for f in (findings or []): ' +
-    '  if isinstance(f, dict): ' +
-    '    ident = finding_identity.finding_identity(f); ' +
-    '    if ident not in seen: ' +
-    '      seen[ident] = True; order.append(ident); ' +
-    '      text = readout.scrub((f.get("summary") or f.get("title") or ""))[0]; ' +
-    '      section = f.get("docSection") or f.get("section") or ""; ' +
-    '      payload = {"doc": "tasks", "identity": ident, "section": section, "text": text}; ' +
-    '      journal.append(p["events"], "routed_forward", payload=payload, root=os.getcwd())'
+  // python -c rejects a for-loop body on one semicolon-separated line — use real newlines
+  // (same pattern as resolveBuildTarget's embedded courier scripts).
+  const script = [
+    'import sys, json, os',
+    `sys.path.insert(0, ${pyLibDir()})`,
+    'import control_plane, journal, finding_identity, readout',
+    'findings = json.loads(sys.argv[2])',
+    'p = control_plane.paths(os.getcwd(), sys.argv[1])',
+    'seen = {}',
+    'for f in (findings or []):',
+    '    if not isinstance(f, dict):',
+    '        continue',
+    '    ident = finding_identity.finding_identity(f)',
+    '    if ident in seen:',
+    '        continue',
+    '    seen[ident] = True',
+    '    text = readout.scrub((f.get("summary") or f.get("title") or ""))[0]',
+    '    section = f.get("docSection") or f.get("section") or ""',
+    '    payload = {"doc": "tasks", "identity": ident, "section": section, "text": text}',
+    '    journal.append(p["events"], "routed_forward", payload=payload, root=os.getcwd())',
+  ].join('\n')
   const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(findings)],
     { label: 'route tasks findings' })
   if (!out || !out.ok) {
