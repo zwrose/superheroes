@@ -78,6 +78,93 @@ function applicableDeps(extra) {
   }, extra || {})
 }
 
+// #411: the folded prepare path (deps.prepareTestRun present) collapses artifacts+server+seed into a
+// single leaf. On success it returns { ok:true, artifactResult, serverContext, seedResult }; on failure
+// the showrunner folds it to { action:'park', reason:<the leaf's real diagnosis> } (or a raw
+// { ok:false, reason }). These deps drive that folded path.
+function foldedDeps(extra) {
+  return applicableDeps(Object.assign({
+    prepareTestRun: async () => ({
+      ok: true,
+      artifactResult: { ok: true, artifacts: { plan: 'plan.md', results: 'results.md' }, posting: { ok: true } },
+      serverContext: { verdict: 'ready_external', baseUrl: 'http://localhost:3000', allowedOrigins: ['http://localhost:3000'], teardownRequired: false },
+      seedResult: { action: 'ready_for_browser', status: { seeded: true } },
+    }),
+  }, extra || {}))
+}
+
+// #411 (a): a folded { action:'park', reason } must surface the leaf's own honest reason VERBATIM in
+// the low-confidence terminal — not the generic "artifact preparation returned no result" that masked
+// the live specimen's argparse usage error (weekly-eats error-tracking run, 2026-07-13, spine 0.12.0).
+async function foldedParkReasonSurfacesVerbatimInLowTerminal() {
+  const realReason = 'usage: test_pilot_server_config_cli.py resolve [-h] --profile-json PROFILE_JSON …'
+  let browserRan = false
+  const out = await testPilotPhase('wi', 3, foldedDeps({
+    prepareTestRun: async () => ({ action: 'park', reason: realReason }),
+    runBrowserPass: async () => { browserRan = true },
+  }))
+  assert.strictEqual(out.confidence, 'low')
+  assert.strictEqual(out.assumptions[0], realReason, 'the folded park reason must surface verbatim, not be masked')
+  assert.strictEqual(browserRan, false)
+}
+
+// #411 (b): a raw folded { ok:false, reason } (the inner subprocess exception shape) must surface its
+// reason the same way.
+async function foldedOkFalseReasonSurfacesInLowTerminal() {
+  const realReason = 'command failed: transport corruption in prepare exec courier'
+  let browserRan = false
+  const out = await testPilotPhase('wi', 3, foldedDeps({
+    prepareTestRun: async () => ({ ok: false, reason: realReason }),
+    runBrowserPass: async () => { browserRan = true },
+  }))
+  assert.strictEqual(out.confidence, 'low')
+  assert.strictEqual(out.assumptions[0], realReason)
+  assert.strictEqual(browserRan, false)
+}
+
+// #411: a folded top-level { confidence:'low', reason } (the module's own low() shape) is the third
+// "not ready" signal the sibling readiness predicates honor. The guard catches it too, so its reason is
+// surfaced rather than masked by the null-arm "returned no result".
+async function foldedConfidenceLowReasonSurfacesInLowTerminal() {
+  const realReason = 'prepare leaf is low-confidence: could not resolve managed server command argv'
+  let browserRan = false
+  const out = await testPilotPhase('wi', 3, foldedDeps({
+    prepareTestRun: async () => ({ confidence: 'low', reason: realReason }),
+    runBrowserPass: async () => { browserRan = true },
+  }))
+  assert.strictEqual(out.confidence, 'low')
+  assert.strictEqual(out.assumptions[0], realReason)
+  assert.strictEqual(browserRan, false)
+}
+
+// #411: a folded park with NO reason falls back to the dedicated default, not the misleading
+// "returned no result".
+async function foldedParkWithoutReasonUsesPreparationDefault() {
+  const out = await testPilotPhase('wi', 3, foldedDeps({
+    prepareTestRun: async () => ({ action: 'park' }),
+  }))
+  assert.strictEqual(out.confidence, 'low')
+  assert.strictEqual(out.assumptions[0], 'test-pilot preparation parked')
+}
+
+// #411 (c): the existing null / missing-field readiness messages are UNCHANGED — a folded value that is
+// genuinely absent (or missing its result fields) still reports "returned no result". This is not a park
+// signal (no action:'park' / ok:false), so the new guard must not swallow it.
+async function foldedNullKeepsReturnedNoResultMessage() {
+  const out = await testPilotPhase('wi', 3, foldedDeps({
+    prepareTestRun: async () => null,
+  }))
+  assert.strictEqual(out.confidence, 'low')
+  assert.match(out.assumptions[0], /artifact preparation returned no result/)
+}
+
+// #411: the happy folded path is untouched — a full { ok:true, artifactResult, serverContext, seedResult }
+// still proceeds to a high-confidence terminal (the guard's ok:true is not a park).
+async function foldedHappyPathStillProceedsToHigh() {
+  const out = await testPilotPhase('wi', 3, foldedDeps())
+  assert.strictEqual(out.confidence, 'high')
+}
+
 async function notApplicableProceeds() {
   const statuses = []
   const out = await testPilotPhase('wi', 3, {
@@ -827,6 +914,12 @@ async function unresolvableWorktreeParksNotSkips() {
   await missingSetupParksBeforeBrowser()
   await missingBrowserToolParksBeforeBrowser()
   await applicableFlowOrdersDurableMilestones()
+  await foldedParkReasonSurfacesVerbatimInLowTerminal()
+  await foldedOkFalseReasonSurfacesInLowTerminal()
+  await foldedConfidenceLowReasonSurfacesInLowTerminal()
+  await foldedParkWithoutReasonUsesPreparationDefault()
+  await foldedNullKeepsReturnedNoResultMessage()
+  await foldedHappyPathStillProceedsToHigh()
   await invalidPreparedRecordsParkBeforeArtifactsSeedAndBrowser()
   await generatedInRepoPlanStoreParksBeforeWorktreeMutation()
   await resumePreservesHumanStateAndAvoidsDuplicateIds()
