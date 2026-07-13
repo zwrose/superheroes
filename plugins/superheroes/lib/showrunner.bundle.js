@@ -6432,22 +6432,31 @@ async function loadAcceptanceCandidates(context) {
   }
 }
 async function recordAcceptanceLedger(doc, workItem, runDir) {
-  const docsDir = docDirFor(workItem)
-  const docPath = docPathFor(workItem, doc)
-  const blockers = await collectOpenBlockingFindings(runDir)
-  if (blockers === null) return { ok: false, reason: 'open blockers unreadable' }
-  const findingsPath = `${runDir}/open-blockers.json`
-  await io().writeFile(findingsPath, JSON.stringify(blockers))
-  const res = await exec([
-    `python3 ${libPath('review_acceptance.py')} record --docs-dir ${shq(docsDir)} ` +
-    `--doc ${shq(doc)} --findings ${shq(findingsPath)} --doc-path ${shq(docPath)}`,
-  ], 'record acceptance')
-  let out = null
-  try { out = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
-  if (res && res[0] && res[0].ok && out && out.ok) return { ok: true }
-  const detail = (res && res[0] && !res[0].ok && String((res[0].stderr || '')).trim()) ||
-    (out && out.reason) || 'record returned non-ok'
-  return { ok: false, reason: detail }
+  try {
+    const docsDir = docDirFor(workItem)
+    const docPath = docPathFor(workItem, doc)
+    const blockers = await collectOpenBlockingFindings(runDir)
+    if (blockers === null) return { ok: false, reason: 'open blockers unreadable' }
+    const findingsPath = `${runDir}/open-blockers.json`
+    await io().writeFile(findingsPath, JSON.stringify(blockers))
+    const res = await exec([
+      `python3 ${libPath('review_acceptance.py')} record --docs-dir ${shq(docsDir)} ` +
+      `--doc ${shq(doc)} --findings ${shq(findingsPath)} --doc-path ${shq(docPath)}`,
+    ], 'record acceptance')
+    let out = null
+    try { out = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
+    if (res && res[0] && res[0].ok && out && out.ok) return { ok: true }
+    const detail = (res && res[0] && !res[0].ok && String((res[0].stderr || '')).trim()) ||
+      (out && out.reason) || 'record returned non-ok'
+    return { ok: false, reason: detail }
+  } catch (e) {
+    return { ok: false, reason: (e && e.message) || 'record acceptance failed' }
+  }
+}
+function _acceptanceRecordDisclosure(reason) {
+  return (
+    `acceptance record could not be written: ${reason} — a re-review of unchanged content will ` +
+    're-judge this finding rather than treat it as accepted')
 }
 async function approveDocReviewGate(doc, workItem, opts) {
   opts = opts || {}
@@ -6455,12 +6464,22 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const lease = opts.lease || undefined
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
-  const rec = await recordAcceptanceLedger(doc, workItem, runDir)
-  if (!rec.ok) {
-    phaseResult.assumptions.push(
-      `acceptance record could not be written: ${rec.reason} — a re-review of unchanged content will ` +
-      're-judge this finding rather than treat it as accepted')
+  if (opts.gateAlreadySet) {
+    const blockers = await collectOpenBlockingFindings(runDir)
+    if (blockers !== null) {
+      const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+      if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
+    }
+  } else {
+    const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+    if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
   }
+  try {
+    await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
+  } catch (e) {
+    phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+  }
+  if (opts.gateAlreadySet) return { phaseResult, gate: 'passed' }
   const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
   const sideEffectCmd =
     `python3 ${libPath('definition_doc.py')} set-gate --doc ${shq(doc)} ` +
@@ -6472,11 +6491,6 @@ async function approveDocReviewGate(doc, workItem, opts) {
       phase: `review-${doc}`, gate: 'passed', confidence: 'high',
       assumptions: phaseResult.assumptions.slice(), runId, lease,
     },
-  }
-  try {
-    await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
-  } catch (e) {
-    phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
   }
   return { phaseResult, gate: 'passed', persist }
 }
@@ -6636,14 +6650,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   const lease = opts.lease || undefined
   const existing = await readGate(workItem, doc)
   if (existing === 'passed') {
-    const runDir = runDirFor(workItem, `review-${doc}`)
-    const phaseResult = { confidence: 'high', assumptions: [] }
-    try {
-      await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
-    } catch (e) {
-      phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
-    }
-    return { phaseResult, gate: 'passed' }
+    return approveDocReviewGate(doc, workItem, Object.assign({}, opts, { gateAlreadySet: true }))
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
   const docPath = docPathFor(workItem, doc)
