@@ -26,6 +26,9 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/showrunner_fronthalf_produce_smoke.js",
     # storage-mode-aware front-half doc/marker/ledger paths (out-of-repo project regression).
     "plugins/superheroes/lib/tests/showrunner_fronthalf_docdir_smoke.js",
+    # Task 15 (#397 FR-2/UFR-1): plan-review terminal writes plan-handoff.json from non-blocking
+    # findings and discloses write failures on phaseResult.assumptions.
+    "plugins/superheroes/lib/tests/showrunner_plan_handoff_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",

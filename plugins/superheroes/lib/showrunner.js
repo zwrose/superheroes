@@ -1261,6 +1261,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   // #397 FR-2: at the plan-review terminal, write the non-blocking findings to the durable
   // hand-off list the tasks author receives. A write failure discloses (UFR-1) — never silent.
+  let planHandoffAssumptions = []
   if (doc === 'plan') {
     let handoffOk = false
     try {
@@ -1277,7 +1278,9 @@ async function reviewDocPhase(doc, workItem, opts) {
       }
     } catch (_) { handoffOk = false }
     if (!handoffOk) {
-      persist.journalPayload.assumptions.push(`plan-handoff.json write may have failed for ${workItem}`)
+      const msg = `plan-handoff.json write may have failed for ${workItem}`
+      persist.journalPayload.assumptions.push(msg)
+      planHandoffAssumptions.push(msg)
       try { log(`reviewDocPhase: plan hand-off write failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
     }
   }
@@ -1297,7 +1300,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   if (!recWrite.ok) {
     if (gate === 'passed') {
       return {
-        phaseResult: { confidence: 'high', assumptions: [] },
+        phaseResult: { confidence: 'high', assumptions: planHandoffAssumptions.slice() },
         gate,
         persist,
         runtimeDeferredIds: Array.from(deferred.keys()),
@@ -1316,7 +1319,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   // #212: on a non-passed gate, name the terminal + the panel's honest reason on parkDetail so the
   // workflow park survives the phase-layer flatten (phase_step threads it into the changes-requested
   // reason). A passed gate proceeds — no park detail.
-  const phaseResult = { confidence: 'high', assumptions: [] }
+  const phaseResult = { confidence: 'high', assumptions: planHandoffAssumptions.slice() }
   if (gate !== 'passed') {
     phaseResult.parkDetail = `${(verdict && verdict.terminal) || 'cannot-certify'}: ${(verdict && verdict.reason) || 'review not certified'}`
   }

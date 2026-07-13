@@ -6319,6 +6319,7 @@ async function reviewDocPhase(doc, workItem, opts) {
     sideEffectCmd,
     journalPayload: { phase: `review-${doc}`, gate, confidence: 'high', assumptions: [], runId, lease },
   }
+  let planHandoffAssumptions = []
   if (doc === 'plan') {
     let handoffOk = false
     try {
@@ -6335,7 +6336,9 @@ async function reviewDocPhase(doc, workItem, opts) {
       }
     } catch (_) { handoffOk = false }
     if (!handoffOk) {
-      persist.journalPayload.assumptions.push(`plan-handoff.json write may have failed for ${workItem}`)
+      const msg = `plan-handoff.json write may have failed for ${workItem}`
+      persist.journalPayload.assumptions.push(msg)
+      planHandoffAssumptions.push(msg)
       try { log(`reviewDocPhase: plan hand-off write failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
     }
   }
@@ -6355,7 +6358,7 @@ async function reviewDocPhase(doc, workItem, opts) {
   if (!recWrite.ok) {
     if (gate === 'passed') {
       return {
-        phaseResult: { confidence: 'high', assumptions: [] },
+        phaseResult: { confidence: 'high', assumptions: planHandoffAssumptions.slice() },
         gate,
         persist,
         runtimeDeferredIds: Array.from(deferred.keys()),
@@ -6371,7 +6374,7 @@ async function reviewDocPhase(doc, workItem, opts) {
       runtimeDeferredIds: Array.from(deferred.keys()),
     }
   }
-  const phaseResult = { confidence: 'high', assumptions: [] }
+  const phaseResult = { confidence: 'high', assumptions: planHandoffAssumptions.slice() }
   if (gate !== 'passed') {
     phaseResult.parkDetail = `${(verdict && verdict.terminal) || 'cannot-certify'}: ${(verdict && verdict.reason) || 'review not certified'}`
   }
