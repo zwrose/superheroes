@@ -6135,14 +6135,15 @@ async function producePhase(phase, workItem) {
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
   const model = authorModel(doc)
   let handoff = null
+  let handoffJournal = null
   if (doc === 'tasks') {
     handoff = await readHandoff(docDirFor(workItem))
     if (handoff && handoff.ok) {
       const count = (handoff.findings && handoff.findings.length) || 0
-      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: count })
+      handoffJournal = await journalHandoffProvided(workItem, { doc: 'tasks', delivered: count })
     } else {
       const reason = (handoff && handoff.reason) || 'unknown'
-      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: 0, reason })
+      handoffJournal = await journalHandoffProvided(workItem, { doc: 'tasks', delivered: 0, reason })
     }
   }
   const aEngine = doc === 'plan'
@@ -6165,6 +6166,11 @@ async function producePhase(phase, workItem) {
       } else {
         base += `The plan hand-off was not available (${(handoff && handoff.reason) || 'unknown'}). ` +
           `Proceed without it.\n`
+      }
+      if (handoffJournal && handoffJournal.ok === false) {
+        base += `\nThe engine could NOT journal the handoff_provided receipt ` +
+          `(${handoffJournal.error || 'durable write failed'}). Do not claim the disclosure was ` +
+          `already journaled — proceed with authoring (UFR-5).\n`
       }
     }
     if (includeWriteMarker !== false) {
@@ -6333,8 +6339,17 @@ async function journalHandoffProvided(workItem, payload) {
       'import control_plane, journal; ' +
       'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
       'journal.append(p["events"], "handoff_provided", payload=json.loads(sys.argv[2]), root=os.getcwd())'
-    await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload || {})])
-  } catch (_) { /* fail-open: a journal outage must never derail produce (UFR-5 disclosure, not a gate) */ }
+    const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload || {})])
+    if (!out || !out.ok) {
+      const err = (out && out.stderr && out.stderr.trim()) ||
+        'handoff_provided journal write exited ' + (out && out.status != null ? out.status : 'unknown')
+      return { ok: false, error: err }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false,
+             error: (e && e.message) ? String(e.message) : 'handoff_provided journal write failed' }
+  }
 }
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}

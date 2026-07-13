@@ -115,3 +115,34 @@ test('tasks produce leaf journals handoff_provided with delivered: 0 + reason wh
 
   reset()
 })
+
+test('tasks produce leaf discloses handoff_provided journal failure in the author prompt (UFR-5)', async () => {
+  const h = harness({
+    ok: true,
+    findings: [{ identity: 'plan.md::x', planSection: '## A', text: 'finding one' }],
+    counts: { distinct: 1 },
+  })
+  const origRunHelper = global.io.runHelper
+  global.io = Object.assign({}, global.io, {
+    async runHelper(cmd, args) {
+      const a = args || []
+      if (a[0] === '-c' && typeof a[1] === 'string' && a[1].includes('handoff_provided')) {
+        return { ok: false, status: 1, stdout: '', stderr: 'event append failed: disk full' }
+      }
+      return origRunHelper.call(this, cmd, args)
+    },
+  })
+  const result = await h.run()
+  assert.strictEqual(result.confidence, 'high', 'produce still proceeds when the journal receipt fails')
+
+  const prompt = h.capturedPrompt()
+  assert.ok(prompt.includes('Hand-off from the plan review'), 'prompt still carries the hand-off section')
+  assert.ok(prompt.includes('finding one'), 'prompt still splices the hand-off finding')
+  assert.ok(/could NOT journal the handoff_provided receipt/i.test(prompt),
+    'prompt discloses the journal write failure')
+  assert.ok(/disk full|event append failed/i.test(prompt),
+    'prompt names the journal error detail')
+  assert.strictEqual(h.handoffAppends().length, 0, 'no handoff_provided append succeeded')
+
+  reset()
+})

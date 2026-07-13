@@ -1023,14 +1023,15 @@ async function producePhase(phase, workItem) {
   // HERE (before the author is dispatched), so produce-leaf.md can truthfully say "the phase has
   // already journaled that disclosure" and the author never has to (or gets to) claim it did.
   let handoff = null
+  let handoffJournal = null
   if (doc === 'tasks') {
     handoff = await readHandoff(docDirFor(workItem))
     if (handoff && handoff.ok) {
       const count = (handoff.findings && handoff.findings.length) || 0
-      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: count })
+      handoffJournal = await journalHandoffProvided(workItem, { doc: 'tasks', delivered: count })
     } else {
       const reason = (handoff && handoff.reason) || 'unknown'
-      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: 0, reason })
+      handoffJournal = await journalHandoffProvided(workItem, { doc: 'tasks', delivered: 0, reason })
     }
   }
 
@@ -1064,6 +1065,11 @@ async function producePhase(phase, workItem) {
       } else {
         base += `The plan hand-off was not available (${(handoff && handoff.reason) || 'unknown'}). ` +
           `Proceed without it.\n`
+      }
+      if (handoffJournal && handoffJournal.ok === false) {
+        base += `\nThe engine could NOT journal the handoff_provided receipt ` +
+          `(${handoffJournal.error || 'durable write failed'}). Do not claim the disclosure was ` +
+          `already journaled — proceed with authoring (UFR-5).\n`
       }
     }
     if (includeWriteMarker !== false) {
@@ -1261,7 +1267,8 @@ async function readHandoff(docsDir) {
 // the run journal from the work-item exactly as phase_progress_entry.py does (control_plane.paths).
 // Fail-open: a journal-write outage NEVER aborts produce (the hand-off is advisory input, and this
 // entry is the readout's UFR-5 disclosure, not a gate) — awaited only so the receipt lands before the
-// author is dispatched.
+// author is dispatched. Returns {ok:true} or {ok:false, error} so the caller can disclose a failed
+// write honestly in the author prompt when the durable receipt did not land (UFR-5).
 async function journalHandoffProvided(workItem, payload) {
   try {
     const script =
@@ -1269,8 +1276,17 @@ async function journalHandoffProvided(workItem, payload) {
       'import control_plane, journal; ' +
       'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
       'journal.append(p["events"], "handoff_provided", payload=json.loads(sys.argv[2]), root=os.getcwd())'
-    await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload || {})])
-  } catch (_) { /* fail-open: a journal outage must never derail produce (UFR-5 disclosure, not a gate) */ }
+    const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload || {})])
+    if (!out || !out.ok) {
+      const err = (out && out.stderr && out.stderr.trim()) ||
+        'handoff_provided journal write exited ' + (out && out.status != null ? out.status : 'unknown')
+      return { ok: false, error: err }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false,
+             error: (e && e.message) ? String(e.message) : 'handoff_provided journal write failed' }
+  }
 }
 
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
