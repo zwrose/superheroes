@@ -58,8 +58,14 @@ REQ_COVERAGE = {
         [r"doc_mode", r"confirmation"],
     ),
     "FR-7": (
-        ["plugins/superheroes/lib/tests/showrunner_fronthalf_boundary_smoke.js"],
-        [r"front-half-boundary"],
+        [
+            "plugins/superheroes/lib/tests/test_review_round_policy.py",
+            "plugins/superheroes/lib/tests/showrunner_review_round_policy_doc_mode_smoke.js",
+            "plugins/superheroes/lib/tests/parity/review_round_policy/confirmationFollowup/09_doc_mode_important_under_cap_rearm.json",
+            "plugins/superheroes/lib/tests/test_review_loop_plan.py",
+            "plugins/superheroes/lib/tests/test_review_setup_gather_doc_mode.py",
+        ],
+        [r"doc_mode|docMode", r"confirmation", r"rearm|certif"],
     ),
     "FR-8": (
         [
@@ -83,8 +89,11 @@ REQ_COVERAGE = {
         [r"review_park|decision list|FR-10"],
     ),
     "FR-11": (
-        ["plugins/superheroes/lib/phase_progress_entry.py"],
-        [r"FR-11|decision list|parked"],
+        [
+            "plugins/superheroes/lib/tests/test_review_park.py",
+            "plugins/superheroes/lib/tests/showrunner_park_disclosure_smoke.js",
+        ],
+        [r"decision list|decisions", r"parked|terminal-park-payload|payload"],
     ),
     "FR-12": (
         [
