@@ -189,6 +189,34 @@ test('FR-14: accepted finding does not re-block on re-review of unchanged doc', 
   }
 })
 
+test('UFR-1: gateAlreadySet path discloses when open blockers are unreadable', async () => {
+  cleanRunDir()
+  cleanLegacyFixture()
+  const docsDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sr-acc-'))
+  const runDir = `/tmp/showrunner-${WI}-review-plan`
+  try {
+    seedPlanDoc(docsDir)
+    fs.mkdirSync(runDir, { recursive: true })
+    fs.writeFileSync(path.join(runDir, 'round-records.json'), 'not-json')
+    globalThis.__SR_DOC_DIRS = { [WI]: docsDir }
+    globalThis.agent = makeBaseAgent()
+    const r = await sr.approveDocReviewGate('plan', WI, { runId: 'run-acc', gateAlreadySet: true })
+    assert.strictEqual(r.gate, 'passed', 'gateAlreadySet re-entry must still report passed')
+    assert.ok(!r.persist, 'gateAlreadySet must not chain set-gate')
+    const assumptions = (r.phaseResult && r.phaseResult.assumptions) || []
+    assert.ok(
+      assumptions.some((a) => /acceptance record could not be written/.test(a)),
+      'unreadable open blockers must disclose on gateAlreadySet path',
+    )
+  } finally {
+    delete globalThis.__SR_DOC_DIRS
+    delete globalThis.agent
+    try { fs.rmSync(docsDir, { recursive: true, force: true }) } catch (_) {}
+    cleanRunDir()
+    cleanLegacyFixture()
+  }
+})
+
 test('UFR-1: ledger record failure does not block gate-approval write', async () => {
   cleanRunDir()
   cleanLegacyFixture()

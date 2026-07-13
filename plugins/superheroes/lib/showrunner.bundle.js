@@ -6464,16 +6464,8 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const lease = opts.lease || undefined
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
-  if (opts.gateAlreadySet) {
-    const blockers = await collectOpenBlockingFindings(runDir)
-    if (blockers !== null) {
-      const rec = await recordAcceptanceLedger(doc, workItem, runDir)
-      if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
-    }
-  } else {
-    const rec = await recordAcceptanceLedger(doc, workItem, runDir)
-    if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
-  }
+  const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
   try {
     await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
   } catch (e) {

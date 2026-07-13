@@ -1303,19 +1303,8 @@ async function approveDocReviewGate(doc, workItem, opts) {
   const lease = opts.lease || undefined
   const runDir = runDirFor(workItem, `review-${doc}`)
   const phaseResult = { confidence: 'high', assumptions: [] }
-  if (opts.gateAlreadySet) {
-    // Gate already written (owner approved or cursor-lost re-entry): record accepted findings
-    // only when the parked round's open blockers are readable — a missing/unreadable round
-    // memory means there is nothing to accept (e.g. a clean pass), not a ledger failure.
-    const blockers = await collectOpenBlockingFindings(runDir)
-    if (blockers !== null) {
-      const rec = await recordAcceptanceLedger(doc, workItem, runDir)
-      if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
-    }
-  } else {
-    const rec = await recordAcceptanceLedger(doc, workItem, runDir)
-    if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
-  }
+  const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  if (!rec.ok) phaseResult.assumptions.push(_acceptanceRecordDisclosure(rec.reason))
   try {
     await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
   } catch (e) {
