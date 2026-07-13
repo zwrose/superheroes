@@ -1270,6 +1270,7 @@ function formatDocParkDetail(terminal, reason, payload) {
   for (let i = 0; i < decisions.length; i++) {
     const d = decisions[i] || {}
     detail += `\n${i + 1}. [${d.docSection || ''}] ${d.statement || ''}`
+    if (d.accepting_means) detail += `\n   ${d.accepting_means}`
     for (const move of (d.moves || [])) detail += `\n   - ${move}`
   }
   if (payload && payload.note && !decisions.length) detail += `\n(${payload.note})`
