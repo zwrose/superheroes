@@ -1380,20 +1380,32 @@ async function journalTasksRoutedFindings(workItem, findings) {
 
 // #397 FR-15: journal the per-review convergence record — rounds used, per-round blocking vs
 // routed-forward finding counts, and the outcome — at every doc-review terminal so a park-wall or
-// demotion-wall is visible across runs as data. Fail-soft: a dispatch failure discloses on
-// assumptions rather than blocking the terminal (UFR-1).
+// demotion-wall is visible across runs as data. Compose dispatches review_convergence.py and parses
+// JSON at the IO boundary (non-JSON dispatch failure is detectable before append); the journal write
+// rides the io() runHelper seam. Fail-soft: a dispatch failure discloses on assumptions rather than
+// blocking the terminal (UFR-1).
 async function journalReviewConvergence(workItem, doc, runDir, terminal) {
+  const recordsPath = `${runDir}/round-records.json`
+  const res = await exec([
+    `python3 ${libPath('review_convergence.py')} --path ${shq(recordsPath)} ` +
+    `--doc ${shq(doc)} --outcome ${shq(terminal)}`,
+  ], 'compose convergence record')
+  let payload = null
+  try { payload = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
+  if (!res || !res[0] || !res[0].ok || !payload || typeof payload !== 'object') {
+    const err = (res && res[0] && !res[0].ok && String((res[0].stderr || '')).trim()) ||
+      'review_convergence compose returned unparseable stdout'
+    throw new Error(err)
+  }
   const script = [
     'import sys, json, os',
     `sys.path.insert(0, ${pyLibDir()})`,
-    'import control_plane, journal, review_convergence',
+    'import control_plane, journal',
     'p = control_plane.paths(os.getcwd(), sys.argv[1])',
-    'records_path = os.path.join(sys.argv[2], "round-records.json")',
-    'payload = review_convergence.compose_convergence(records_path, sys.argv[3], sys.argv[4])',
-    'journal.append(p["events"], "review_convergence", payload=payload, root=os.getcwd())',
+    'journal.append(p["events"], "review_convergence", payload=json.loads(sys.argv[2]), root=os.getcwd())',
   ].join('\n')
-  const out = await io().runHelper('python3', ['-c', script, String(workItem), String(runDir),
-    String(doc), String(terminal)], { label: 'journal convergence record' })
+  const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload)],
+    { label: 'journal convergence record' })
   if (!out || !out.ok) {
     const err = (out && out.stderr && out.stderr.trim()) ||
       'review_convergence journal write exited ' + (out && out.status != null ? out.status : 'unknown')
@@ -1412,8 +1424,16 @@ async function reviewDocPhase(doc, workItem, opts) {
   const existing = await readGate(workItem, doc)
   if (existing === 'passed') {
     // cursor-lost re-entry guard (gate written, tail persist failed): never re-run the panel and
-    // risk overwriting a correct passed (FR-8 passed-gate skip).
-    return { phaseResult: { confidence: 'high', assumptions: [] }, gate: 'passed' }
+    // risk overwriting a correct passed (FR-8 passed-gate skip). Still journal the accepted-pass
+    // convergence record so the terminal is visible across runs (FR-15).
+    const runDir = runDirFor(workItem, `review-${doc}`)
+    const phaseResult = { confidence: 'high', assumptions: [] }
+    try {
+      await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
+    } catch (e) {
+      phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+    }
+    return { phaseResult, gate: 'passed' }
   }
   const runDir = runDirFor(workItem, `review-${doc}`)
   const docPath = docPathFor(workItem, doc)

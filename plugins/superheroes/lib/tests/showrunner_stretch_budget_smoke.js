@@ -106,6 +106,7 @@ const COURIER_ALLOW = [
   /^write plan hand-off$/,         // #397: review_handoff.py write at plan-review terminal
   /^read nonblocking findings$/,   // #397: review_handoff.py collect at plan-review terminal
   /^route tasks findings$/,        // #397 Task 17: journal routed_forward events at tasks-review terminal
+  /^compose convergence record$/,  // #397 Task 19: review_convergence.py compose at doc-review terminal
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -135,14 +136,15 @@ const PHASE_BUDGETS = {
   // decider leaf per round, plan folds into the gather, compose-fix-context folds into tally) +
   // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE leaf
   // (1) + io:read nonblocking findings (1) + io:write nonblocking.json staging (1) + save phase progress
-  // (1) + #397 plan-handoff.json write (1) + #397 Task 19 review_convergence record (1). Was 7 pre-#211
+  // (1) + #397 plan-handoff.json write (1) + #397 Task 19 review_convergence compose (1) +
+  // journal convergence append (1, io leaf in node / courier in bundle). Was 7 pre-#211
   // (in-memory tally), 12 post-D3, 35 pre-D3, 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings),
-  // 11 pre-Task-19.
-  'review-plan': 12,
+  // 11 pre-Task-19, 12 pre-compose/journal split.
+  'review-plan': 13,
   // Task 17 (#397 FR-4/FR-5): +1 for routed_forward journal dispatch (non-blocking findings journaled
-  // at tasks-review terminal). Task 19 (#397 FR-15): +1 for review_convergence record. Was 8 pre-Task-17,
-  // 9 pre-Task-19.
-  'review-tasks': 10,
+  // at tasks-review terminal). Task 19 (#397 FR-15): +1 compose + journal convergence record. Was 8 pre-Task-17,
+  // 9 pre-Task-19, 10 pre-compose/journal split.
+  'review-tasks': 11,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round
@@ -446,6 +448,32 @@ function shellResponse(cmd) {
   }
   if (cmd.includes('review_handoff.py') && cmd.includes(' write ')) {
     return JSON.stringify({ ok: true, counts: { distinct: 0 } })
+  }
+  if (cmd.includes('review_convergence.py')) {
+    const pathM = cmd.match(/--path '([^']+)'/)
+    const docM = cmd.match(/--doc '([^']+)'/)
+    const outM = cmd.match(/--outcome '([^']+)'/)
+    const doc = docM ? docM[1] : 'plan'
+    const outcome = outM ? outM[1] : 'unknown'
+    const recordsPath = pathM ? pathM[1] : ''
+    let roundsUsed = 0
+    let perRound = []
+    try {
+      const records = JSON.parse(files[recordsPath] || '[]')
+      if (Array.isArray(records)) {
+        roundsUsed = records.length
+        perRound = records.map((rec) => {
+          const findings = Array.isArray(rec && rec.findings) ? rec.findings : []
+          let blocking = 0
+          for (const f of findings) {
+            const sev = String((f && f.severity) || '').toLowerCase()
+            if (sev === 'critical' || sev === 'major' || sev === 'high') blocking += 1
+          }
+          return { round: rec.round, blocking, routedForward: findings.length - blocking }
+        })
+      }
+    } catch (_) {}
+    return JSON.stringify({ doc, outcome, roundsUsed, perRound })
   }
   return '{}'
 }
