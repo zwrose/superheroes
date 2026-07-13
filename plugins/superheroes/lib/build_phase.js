@@ -1086,7 +1086,12 @@ async function runFinalReview(workItem, generation, branch, wt) {
     // deferred finding re-blocks or gets re-reviewed (waste, not corruption).
     let set = await io().readJson(p, {})
     for (const id of (report && report.fixed) || []) set[String(id)] = (verdict && verdict.gate) || 'resolved'
-    await io().writeFile(p, JSON.stringify(set))
+    // #410: io.writeFile now THROWS on a persistently-unverified courier write. This deferred-set write
+    // is deliberately degrade-tolerant (above) — a transport flake here is "waste, not corruption" — so
+    // swallow the throw rather than let it propagate to runFixStep, which would mislabel a round whose
+    // fix ALREADY succeeded as a failed fix step and discard it (review_panel_shell runFixStep catch).
+    try { await io().writeFile(p, JSON.stringify(set)) }
+    catch (_) { try { log(`recordDeferred: deferred-set write failed for ${p} (degraded — findings may re-block, under-count is fail-closed)`) } catch (__) {} }
   }
   // Populated after reviewPanel returns on a round-cap halt; fixStep reads it when dispatching.
   let capBlockers = []

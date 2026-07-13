@@ -341,9 +341,16 @@ function shellResponse(cmd) {
     const out = runHelperResponse(cw[3])
     return (out != null ? out : '{}') + '\n__SR_EXIT:0'
   }
-  // The OPAQUE write transport: base64 payload in a python heredoc, decoded byte-exact.
-  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)'$/)
-  if (bw) { files[bw[1]] = Buffer.from(bw[2], 'base64').toString('utf8'); return 'ok' }
+  // The OPAQUE write transport: base64 payload in a python argv, decoded byte-exact. #410: io.writeFile
+  // now passes an expected-hash third argv and VERIFIES the landed file, so the courier answer must
+  // carry the `__SR_WROTE:<hash8>` marker (a faithful copy hashes to the expected value) or writeFile
+  // reads the write as unverified and retries/parks.
+  const bw = cmd.match(/^python3 -c '[\s\S]*?' '([^']*)' '([A-Za-z0-9+/=]*)' '([0-9a-f]{64})'$/)
+  if (bw) {
+    const content = Buffer.from(bw[2], 'base64').toString('utf8')
+    files[bw[1]] = content
+    return '__SR_WROTE:' + sha256(content).slice(0, 8)
+  }
   // Legacy cat-heredoc write (pre-opaque bundles): body+'\n' lands on disk — model that
   // faithfully; the staged-hash checks tolerate exactly the one transport-appended newline.
   const w = cmd.match(/cat > '([^']+)' <<'__SR_EOF__'\n([\s\S]*)\n__SR_EOF__$/)
