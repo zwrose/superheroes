@@ -1266,15 +1266,17 @@ async function reviewDocPhase(doc, workItem, opts) {
     let handoffOk = false
     try {
       const nonBlocking = await collectNonBlockingFindings(runDir)
-      if (nonBlocking && nonBlocking.length > 0) {
-        await io().writeFile(`${runDir}/nonblocking.json`, JSON.stringify(nonBlocking || []))
+      if (nonBlocking === null) {
+        handoffOk = false
+      } else {
+        await io().writeFile(`${runDir}/nonblocking.json`, JSON.stringify(nonBlocking))
         const res = await exec([
           `python3 ${libPath('review_handoff.py')} write --docs-dir ${shq(docDirFor(workItem))} ` +
           `--work-item ${shq(workItem)} --findings ${shq(runDir + '/nonblocking.json')}`,
         ], 'write plan hand-off')
-        handoffOk = !!(res && res[0] && res[0].ok)
-      } else {
-        handoffOk = true  // no nonblocking findings to write is still success
+        let out = null
+        try { out = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
+        handoffOk = !!(res && res[0] && res[0].ok && out && out.ok)
       }
     } catch (_) { handoffOk = false }
     if (!handoffOk) {

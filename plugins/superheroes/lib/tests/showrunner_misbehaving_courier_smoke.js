@@ -246,6 +246,9 @@ function shellResponse(cmd) {
   if (cmd.includes('loop_readout.py')) return '## readout'
   if (cmd.includes('record_deferred.py') || cmd.includes('record-deferred')) return JSON.stringify({ ok: true })
   if (cmd.includes('append-notify')) return JSON.stringify({ ok: true })
+  if (cmd.includes('review_handoff.py') && cmd.includes(' write ')) {
+    return JSON.stringify({ ok: true, counts: { distinct: 0 } })
+  }
   return '{}'
 }
 

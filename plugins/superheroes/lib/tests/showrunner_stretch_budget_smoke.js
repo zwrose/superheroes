@@ -103,6 +103,7 @@ const COURIER_ALLOW = [
   /^resolve head$/,                // resolveHead: git rev-parse
   /^read pr$/,                     // loadPr: checkpoint_entry.py --read-pr
   /^pr-body context$/,             // #219: composePrBody's context courier (pr_body.py context)
+  /^write plan hand-off$/,         // #397: review_handoff.py write at plan-review terminal
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -126,9 +127,10 @@ const PHASE_BUDGETS = {
   // (1) + #211 tally-round DECIDER (1 — breaker + terminal + certification from disk; the ONE new
   // decider leaf per round, plan folds into the gather, compose-fix-context folds into tally) +
   // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE leaf
-  // (1) + save phase progress (1) + #397 plan-handoff.json write (1). Was 7 pre-#211 (in-memory tally),
-  // 12 post-D3, 35 pre-D3, 8 pre-#397.
-  'review-plan': 9,
+  // (1) + io:read nonblocking findings (1) + io:write nonblocking.json staging (1) + save phase progress
+  // (1) + #397 plan-handoff.json write (1). Was 7 pre-#211 (in-memory tally), 12 post-D3, 35 pre-D3,
+  // 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings).
+  'review-plan': 11,
   'review-tasks': 8,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
@@ -383,6 +385,9 @@ function shellResponse(cmd) {
   if (cmd.includes('loop_readout.py')) return '## readout'
   if (cmd.includes('record_deferred.py') || cmd.includes('record-deferred')) return JSON.stringify({ ok: true })
   if (cmd.includes('append-notify')) return JSON.stringify({ ok: true })
+  if (cmd.includes('review_handoff.py') && cmd.includes(' write ')) {
+    return JSON.stringify({ ok: true, counts: { distinct: 0 } })
+  }
   return '{}'
 }
 
