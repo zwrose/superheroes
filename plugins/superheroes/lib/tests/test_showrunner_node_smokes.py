@@ -38,6 +38,9 @@ SHOWRUNNER_SMOKES = [
     # Task 18 (#397 FR-10/FR-11/UFR-1): doc-review park composes a decision list into the parked
     # event payload and discloses review_park.py dispatch failures on phaseResult.assumptions.
     "plugins/superheroes/lib/tests/showrunner_park_disclosure_smoke.js",
+    # Task 19 (#397 FR-15/UFR-1): review_convergence event is journaled at every doc-review terminal
+    # (pass, park, accepted) with rounds used, per-round blocking vs routed-forward counts, and outcome.
+    "plugins/superheroes/lib/tests/showrunner_convergence_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",

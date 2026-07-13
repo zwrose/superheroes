@@ -135,12 +135,14 @@ const PHASE_BUDGETS = {
   // decider leaf per round, plan folds into the gather, compose-fix-context folds into tally) +
   // telemetry write (1) + save round state (1) + terminal-record compose-terminal write as ONE leaf
   // (1) + io:read nonblocking findings (1) + io:write nonblocking.json staging (1) + save phase progress
-  // (1) + #397 plan-handoff.json write (1). Was 7 pre-#211 (in-memory tally), 12 post-D3, 35 pre-D3,
-  // 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings).
-  'review-plan': 11,
+  // (1) + #397 plan-handoff.json write (1) + #397 Task 19 review_convergence record (1). Was 7 pre-#211
+  // (in-memory tally), 12 post-D3, 35 pre-D3, 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings),
+  // 11 pre-Task-19.
+  'review-plan': 12,
   // Task 17 (#397 FR-4/FR-5): +1 for routed_forward journal dispatch (non-blocking findings journaled
-  // at tasks-review terminal). Was 8 pre-Task-17.
-  'review-tasks': 9,
+  // at tasks-review terminal). Task 19 (#397 FR-15): +1 for review_convergence record. Was 8 pre-Task-17,
+  // 9 pre-Task-19.
+  'review-tasks': 10,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round

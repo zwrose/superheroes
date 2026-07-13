@@ -6427,6 +6427,24 @@ async function journalTasksRoutedFindings(workItem, findings) {
     throw new Error(err)
   }
 }
+async function journalReviewConvergence(workItem, doc, runDir, terminal) {
+  const script = [
+    'import sys, json, os',
+    `sys.path.insert(0, ${pyLibDir()})`,
+    'import control_plane, journal, review_convergence',
+    'p = control_plane.paths(os.getcwd(), sys.argv[1])',
+    'records_path = os.path.join(sys.argv[2], "round-records.json")',
+    'payload = review_convergence.compose_convergence(records_path, sys.argv[3], sys.argv[4])',
+    'journal.append(p["events"], "review_convergence", payload=payload, root=os.getcwd())',
+  ].join('\n')
+  const out = await io().runHelper('python3', ['-c', script, String(workItem), String(runDir),
+    String(doc), String(terminal)], { label: 'journal convergence record' })
+  if (!out || !out.ok) {
+    const err = (out && out.stderr && out.stderr.trim()) ||
+      'review_convergence journal write exited ' + (out && out.status != null ? out.status : 'unknown')
+    throw new Error(err)
+  }
+}
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}
   const runId = opts.runId || `review-${doc}-${workItem}`
@@ -6528,6 +6546,13 @@ async function reviewDocPhase(doc, workItem, opts) {
       parkReason,
       composed.payload,
     )
+    const terminal = (verdict && verdict.terminal) || 'unknown'
+    try {
+      await journalReviewConvergence(workItem, doc, runDir, terminal)
+    } catch (e) {
+      const msg = `review_convergence record may have failed for ${workItem}`
+      phaseResult.assumptions.push(msg)
+    }
     return {
       phaseResult,
       gate: null,
@@ -6537,11 +6562,18 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   if (!recWrite.ok) {
     if (gate === 'passed') {
+      const phaseResult = {
+        confidence: 'high',
+        assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
+      }
+      const terminal = (verdict && verdict.terminal) || 'unknown'
+      try {
+        await journalReviewConvergence(workItem, doc, runDir, terminal)
+      } catch (e) {
+        phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+      }
       return {
-        phaseResult: {
-          confidence: 'high',
-          assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
-        },
+        phaseResult,
         gate,
         persist,
         runtimeDeferredIds: Array.from(deferred.keys()),
@@ -6561,6 +6593,12 @@ async function reviewDocPhase(doc, workItem, opts) {
       parkReason,
       composed.payload,
     )
+    const terminal = (verdict && verdict.terminal) || 'unknown'
+    try {
+      await journalReviewConvergence(workItem, doc, runDir, terminal)
+    } catch (e) {
+      phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+    }
     return {
       phaseResult,
       gate,
@@ -6583,6 +6621,14 @@ async function reviewDocPhase(doc, workItem, opts) {
       parkReason,
       composed.payload,
     )
+  }
+  const terminal = (verdict && verdict.terminal) || 'unknown'
+  try {
+    await journalReviewConvergence(workItem, doc, runDir, terminal)
+  } catch (e) {
+    const msg = `review_convergence record may have failed for ${workItem}: ${(e && e.message) || 'unknown'}`
+    phaseResult.assumptions.push(msg)
+    try { log(`reviewDocPhase: convergence record failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
   }
   return {
     phaseResult,

@@ -1378,6 +1378,29 @@ async function journalTasksRoutedFindings(workItem, findings) {
   }
 }
 
+// #397 FR-15: journal the per-review convergence record — rounds used, per-round blocking vs
+// routed-forward finding counts, and the outcome — at every doc-review terminal so a park-wall or
+// demotion-wall is visible across runs as data. Fail-soft: a dispatch failure discloses on
+// assumptions rather than blocking the terminal (UFR-1).
+async function journalReviewConvergence(workItem, doc, runDir, terminal) {
+  const script = [
+    'import sys, json, os',
+    `sys.path.insert(0, ${pyLibDir()})`,
+    'import control_plane, journal, review_convergence',
+    'p = control_plane.paths(os.getcwd(), sys.argv[1])',
+    'records_path = os.path.join(sys.argv[2], "round-records.json")',
+    'payload = review_convergence.compose_convergence(records_path, sys.argv[3], sys.argv[4])',
+    'journal.append(p["events"], "review_convergence", payload=payload, root=os.getcwd())',
+  ].join('\n')
+  const out = await io().runHelper('python3', ['-c', script, String(workItem), String(runDir),
+    String(doc), String(terminal)], { label: 'journal convergence record' })
+  if (!out || !out.ok) {
+    const err = (out && out.stderr && out.stderr.trim()) ||
+      'review_convergence journal write exited ' + (out && out.status != null ? out.status : 'unknown')
+    throw new Error(err)
+  }
+}
+
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin. #118: the gate write rides the
 // per-phase 'save phase progress' tail in runPhases (set-gate chained ahead of journal+checkpoint)
@@ -1514,6 +1537,15 @@ async function reviewDocPhase(doc, workItem, opts) {
       parkReason,
       composed.payload,
     )
+    // #397 FR-15: record the convergence event at the terminal. A write failure discloses
+    // but does not block the return.
+    const terminal = (verdict && verdict.terminal) || 'unknown'
+    try {
+      await journalReviewConvergence(workItem, doc, runDir, terminal)
+    } catch (e) {
+      const msg = `review_convergence record may have failed for ${workItem}`
+      phaseResult.assumptions.push(msg)
+    }
     return {
       phaseResult,
       gate: null,
@@ -1523,11 +1555,19 @@ async function reviewDocPhase(doc, workItem, opts) {
   }
   if (!recWrite.ok) {
     if (gate === 'passed') {
+      const phaseResult = {
+        confidence: 'high',
+        assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
+      }
+      // #397 FR-15: record the convergence event even in this error case
+      const terminal = (verdict && verdict.terminal) || 'unknown'
+      try {
+        await journalReviewConvergence(workItem, doc, runDir, terminal)
+      } catch (e) {
+        phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+      }
       return {
-        phaseResult: {
-          confidence: 'high',
-          assumptions: planHandoffAssumptions.concat(tasksRoutedAssumptions),
-        },
+        phaseResult,
         gate,
         persist,
         runtimeDeferredIds: Array.from(deferred.keys()),
@@ -1547,6 +1587,14 @@ async function reviewDocPhase(doc, workItem, opts) {
       parkReason,
       composed.payload,
     )
+    // #397 FR-15: record the convergence event at the terminal. A write failure discloses
+    // but does not block the return.
+    const terminal = (verdict && verdict.terminal) || 'unknown'
+    try {
+      await journalReviewConvergence(workItem, doc, runDir, terminal)
+    } catch (e) {
+      phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+    }
     return {
       phaseResult,
       gate,
@@ -1572,6 +1620,16 @@ async function reviewDocPhase(doc, workItem, opts) {
       parkReason,
       composed.payload,
     )
+  }
+  // #397 FR-15: record the convergence event at the terminal (pass, park, accepted). A write
+  // failure discloses on assumptions (UFR-1) but does not block the terminal.
+  const terminal = (verdict && verdict.terminal) || 'unknown'
+  try {
+    await journalReviewConvergence(workItem, doc, runDir, terminal)
+  } catch (e) {
+    const msg = `review_convergence record may have failed for ${workItem}: ${(e && e.message) || 'unknown'}`
+    phaseResult.assumptions.push(msg)
+    try { log(`reviewDocPhase: convergence record failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
   }
   return {
     phaseResult,
