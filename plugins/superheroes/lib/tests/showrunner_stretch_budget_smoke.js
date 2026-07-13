@@ -105,6 +105,7 @@ const COURIER_ALLOW = [
   /^pr-body context$/,             // #219: composePrBody's context courier (pr_body.py context)
   /^write plan hand-off$/,         // #397: review_handoff.py write at plan-review terminal
   /^read nonblocking findings$/,   // #397: review_handoff.py collect at plan-review terminal
+  /^route tasks findings$/,        // #397 Task 17: journal routed_forward events at tasks-review terminal
 ]
 function isAllowedCourier(label) { return COURIER_ALLOW.some((re) => re.test(label)) }
 
@@ -126,7 +127,8 @@ const PHASE_BUDGETS = {
   plan: 3,
   // #397 Task 16: +2 over the pre-#397 baseline of 3 — readHandoff (deliver the plan hand-off to the
   // tasks author) + the handoff_provided journal-append (the honest FR-3/UFR-5 receipt, an 'io' leaf).
-  tasks: 5,
+  // Task 17: +1 more for routed_forward journal dispatch (non-blocking findings journaled at terminal).
+  tasks: 9,
   // read-gate exec (1) + #211 pre-round SETUP GATHER (1 — run-dir mkdir + resume DECISION + round-1
   // plan + deferred seed + coverage, folded Python-side by review_setup_gather.py) + persist-skeleton
   // (1) + #211 tally-round DECIDER (1 — breaker + terminal + certification from disk; the ONE new
@@ -136,7 +138,9 @@ const PHASE_BUDGETS = {
   // (1) + #397 plan-handoff.json write (1). Was 7 pre-#211 (in-memory tally), 12 post-D3, 35 pre-D3,
   // 8 pre-#397, 9 pre-Task-15 (handoff skipped when zero findings).
   'review-plan': 11,
-  'review-tasks': 8,
+  // Task 17 (#397 FR-4/FR-5): +1 for routed_forward journal dispatch (non-blocking findings journaled
+  // at tasks-review terminal). Was 8 pre-Task-17.
+  'review-tasks': 9,
   // entry gathers (read-gate, build_entry, task list, fence — exec) + gather build state ×2 +
   // per-task record-built/record-reviewed + verify+minors + final-review round: #211 setup gather
   // (1 — folds resume + plan + coverage + deferred) + run verify + persist-skeleton + tally-round

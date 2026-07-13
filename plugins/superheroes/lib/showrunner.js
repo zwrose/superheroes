@@ -1289,6 +1289,32 @@ async function journalHandoffProvided(workItem, payload) {
   }
 }
 
+// #397 FR-4/FR-5: journal the tasks-review non-blocking findings as routed_forward events.
+// Dedupes by finding_identity and scrubs text before it enters the journal payload (UFR-1).
+// The Python courier one-liner imports control_plane to resolve the work-item's journal,
+// finding_identity to dedupe, and readout to scrub the finding text. Fails closed: an
+// exception bubbles to the caller (journalTasksRoutedFindings), which discloses on assumptions.
+async function journalTasksRoutedFindings(workItem, findings) {
+  if (!findings || findings.length === 0) return
+  const script =
+    `import sys, json, os; sys.path.insert(0, ${pyLibDir()}); ` +
+    'import control_plane, journal, finding_identity, readout; ' +
+    'findings = json.loads(sys.argv[2]); ' +
+    'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
+    'seen = {}; order = []; ' +
+    'for f in (findings or []): ' +
+    '  if isinstance(f, dict): ' +
+    '    ident = finding_identity.finding_identity(f); ' +
+    '    if ident not in seen: ' +
+    '      seen[ident] = True; order.append(ident); ' +
+    '      text = readout.scrub((f.get("summary") or f.get("title") or ""))[0]; ' +
+    '      section = f.get("docSection") or f.get("section") or ""; ' +
+    '      payload = {"doc": "tasks", "identity": ident, "section": section, "text": text}; ' +
+    '      journal.append(p["events"], "routed_forward", payload=payload, root=os.getcwd())'
+  const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(findings)],
+    { label: 'route tasks findings' })
+}
+
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.
 // #115 Task 12: gateForTerminal is now the in-process JS twin. #118: the gate write rides the
 // per-phase 'save phase progress' tail in runPhases (set-gate chained ahead of journal+checkpoint)
@@ -1387,6 +1413,25 @@ async function reviewDocPhase(doc, workItem, opts) {
       persist.journalPayload.assumptions.push(msg)
       planHandoffAssumptions.push(msg)
       try { log(`reviewDocPhase: plan hand-off write failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
+    }
+  }
+  // #397 FR-4/FR-5: at the tasks-review terminal, journal the non-blocking findings as
+  // routed_forward events so they never reach the build. A journal failure discloses (UFR-1).
+  let tasksRoutedAssumptions = []
+  if (doc === 'tasks') {
+    let routedOk = true
+    try {
+      const nonBlocking = await collectNonBlockingFindings(runDir)
+      if (nonBlocking !== null && nonBlocking.length > 0) {
+        // Journal each distinct non-blocking finding as routed_forward; text must be scrubbed before payload
+        await journalTasksRoutedFindings(workItem, nonBlocking)
+      }
+    } catch (e) {
+      routedOk = false
+      const msg = `routed_forward events may have failed for ${workItem}: ${(e && e.message) || 'unknown'}`
+      persist.journalPayload.assumptions.push(msg)
+      tasksRoutedAssumptions.push(msg)
+      try { log(`reviewDocPhase: tasks routed-forward journal failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
     }
   }
   const recPath = `${runDir}/terminal-record.json`
@@ -1504,6 +1549,7 @@ async function appendNotify(workItem, entries) {
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.collectNonBlockingFindings = collectNonBlockingFindings
+module.exports.journalTasksRoutedFindings = journalTasksRoutedFindings
 module.exports.notifyLedgerFor = notifyLedgerFor
 module.exports.docPathFor = docPathFor
 

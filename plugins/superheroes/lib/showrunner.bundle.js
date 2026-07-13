@@ -6351,6 +6351,26 @@ async function journalHandoffProvided(workItem, payload) {
              error: (e && e.message) ? String(e.message) : 'handoff_provided journal write failed' }
   }
 }
+async function journalTasksRoutedFindings(workItem, findings) {
+  if (!findings || findings.length === 0) return
+  const script =
+    `import sys, json, os; sys.path.insert(0, ${pyLibDir()}); ` +
+    'import control_plane, journal, finding_identity, readout; ' +
+    'findings = json.loads(sys.argv[2]); ' +
+    'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
+    'seen = {}; order = []; ' +
+    'for f in (findings or []): ' +
+    '  if isinstance(f, dict): ' +
+    '    ident = finding_identity.finding_identity(f); ' +
+    '    if ident not in seen: ' +
+    '      seen[ident] = True; order.append(ident); ' +
+    '      text = readout.scrub((f.get("summary") or f.get("title") or ""))[0]; ' +
+    '      section = f.get("docSection") or f.get("section") or ""; ' +
+    '      payload = {"doc": "tasks", "identity": ident, "section": section, "text": text}; ' +
+    '      journal.append(p["events"], "routed_forward", payload=payload, root=os.getcwd())'
+  const out = await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(findings)],
+    { label: 'route tasks findings' })
+}
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}
   const runId = opts.runId || `review-${doc}-${workItem}`
@@ -6417,6 +6437,22 @@ async function reviewDocPhase(doc, workItem, opts) {
       persist.journalPayload.assumptions.push(msg)
       planHandoffAssumptions.push(msg)
       try { log(`reviewDocPhase: plan hand-off write failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
+    }
+  }
+  let tasksRoutedAssumptions = []
+  if (doc === 'tasks') {
+    let routedOk = true
+    try {
+      const nonBlocking = await collectNonBlockingFindings(runDir)
+      if (nonBlocking !== null && nonBlocking.length > 0) {
+        await journalTasksRoutedFindings(workItem, nonBlocking)
+      }
+    } catch (e) {
+      routedOk = false
+      const msg = `routed_forward events may have failed for ${workItem}: ${(e && e.message) || 'unknown'}`
+      persist.journalPayload.assumptions.push(msg)
+      tasksRoutedAssumptions.push(msg)
+      try { log(`reviewDocPhase: tasks routed-forward journal failed for ${workItem} (UFR-1 disclosure)`) } catch (_) {}
     }
   }
   const recPath = `${runDir}/terminal-record.json`
@@ -6505,6 +6541,7 @@ async function appendNotify(workItem, entries) {
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
 module.exports.collectNonBlockingFindings = collectNonBlockingFindings
+module.exports.journalTasksRoutedFindings = journalTasksRoutedFindings
 module.exports.notifyLedgerFor = notifyLedgerFor
 module.exports.docPathFor = docPathFor
 async function frontHalfBoundary(workItem) {

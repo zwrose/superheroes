@@ -32,6 +32,9 @@ SHOWRUNNER_SMOKES = [
     # Task 16 (#397 FR-3): tasks produce leaf receives hand-off from plan review via readHandoff,
     # splices into prompt, and journals handoff_provided event on success/failure.
     "plugins/superheroes/lib/tests/showrunner_handoff_delivery_smoke.js",
+    # Task 17 (#397 FR-4/FR-5): tasks-review non-blocking findings are journaled as routed_forward
+    # events and kept out of the build worklist.
+    "plugins/superheroes/lib/tests/showrunner_tasks_routed_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",
