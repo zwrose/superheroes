@@ -6299,6 +6299,20 @@ async function collectNonBlockingFindings(runDir) {
     return null
   }
 }
+function _handoffReadDispatchFailed(detail) {
+  const d = detail == null || detail === '' ? 'unknown' : String(detail)
+  return { ok: false, reason: 'handoff read dispatch failed: ' + d }
+}
+function _handoffReadDispatchDetail(out) {
+  if (!out) return 'no helper result'
+  if (!out.ok) {
+    const err = (out.stderr || '').trim()
+    if (err) return err
+    return 'exit ' + (out.status == null ? 'unknown' : out.status)
+  }
+  const raw = (out.stdout || '').trim()
+  return raw ? 'unparseable stdout' : 'empty stdout'
+}
 async function readHandoff(docsDir) {
   try {
     const out = await io().runHelper('python3', [
@@ -6306,10 +6320,10 @@ async function readHandoff(docsDir) {
       '--docs-dir', docsDir,
     ], { label: 'read plan hand-off', courier: true })
     const ans = _helperJsonAnswer(out)
-    if (!ans) return { ok: false, reason: 'read-failed' }
+    if (!ans) return _handoffReadDispatchFailed(_handoffReadDispatchDetail(out))
     return ans  // pass through the {ok, findings, counts} or {ok: false, reason}
-  } catch (_) {
-    return { ok: false, reason: 'read-dispatch-failed' }
+  } catch (e) {
+    return _handoffReadDispatchFailed((e && e.message) || e)
   }
 }
 async function journalHandoffProvided(workItem, payload) {

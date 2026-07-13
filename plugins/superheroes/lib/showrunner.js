@@ -1219,8 +1219,26 @@ async function collectNonBlockingFindings(runDir) {
   }
 }
 
+function _handoffReadDispatchFailed(detail) {
+  const d = detail == null || detail === '' ? 'unknown' : String(detail)
+  return { ok: false, reason: 'handoff read dispatch failed: ' + d }
+}
+
+function _handoffReadDispatchDetail(out) {
+  if (!out) return 'no helper result'
+  if (!out.ok) {
+    const err = (out.stderr || '').trim()
+    if (err) return err
+    return 'exit ' + (out.status == null ? 'unknown' : out.status)
+  }
+  const raw = (out.stdout || '').trim()
+  return raw ? 'unparseable stdout' : 'empty stdout'
+}
+
 // #397 FR-3: readHandoff reads the plan-handoff.json written by the plan-review terminal.
 // Returns {ok, findings, counts} on success or {ok: false, reason} on failure (absent/unreadable).
+// Courier/transport failures disclose as 'handoff read dispatch failed: <error>' (UFR-5) so the
+// handoff_provided journal receipt names the outage instead of a generic stub reason.
 // The tasks produce phase uses this to deliver the hand-off as input to the tasks author.
 async function readHandoff(docsDir) {
   try {
@@ -1229,10 +1247,10 @@ async function readHandoff(docsDir) {
       '--docs-dir', docsDir,
     ], { label: 'read plan hand-off', courier: true })
     const ans = _helperJsonAnswer(out)
-    if (!ans) return { ok: false, reason: 'read-failed' }
+    if (!ans) return _handoffReadDispatchFailed(_handoffReadDispatchDetail(out))
     return ans  // pass through the {ok, findings, counts} or {ok: false, reason}
-  } catch (_) {
-    return { ok: false, reason: 'read-dispatch-failed' }
+  } catch (e) {
+    return _handoffReadDispatchFailed((e && e.message) || e)
   }
 }
 
