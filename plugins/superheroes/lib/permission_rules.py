@@ -24,6 +24,7 @@ per-run frozen snapshot (a mid-run edit never reaches a running run, UFR-9), the
 composed-command set (FR-8), and stale-run-file retention (30-day, no-live-lease reap).
 """
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -441,6 +442,10 @@ def _reap_stale(cwd, root):
                 if _run_is_live(rid, cwd, root):
                     continue                                 # live lease -> keep
                 os.remove(path)
+                try:
+                    os.remove(path + ".lock")                # #402: reap the record_composed lock sidecar too
+                except OSError:
+                    pass                                     # no lock sidecar (pre-#402 file) -> fine
             except OSError:
                 continue                                     # one bad file never stops the sweep
     except Exception:
@@ -484,14 +489,44 @@ def record_composed(run_id, command, cwd, root=None, work_item=None):
     """Append the byte-exact hash of a spine-composed `command` to `run_id`'s frozen file
     (read-modify-write, idempotent — a repeat of the same command is a no-op). This is how
     `evaluate`'s composed-exact allow set (FR-8) is populated for the run that composed the
-    command, and only that run."""
-    snapshot = frozen_rules(run_id, cwd, root, work_item=work_item)
-    h = _hash(command)
-    if h not in snapshot["composed"]:
-        snapshot["composed"].append(h)
+    command, and only that run.
+
+    #402: the composed-exact recorder now fires once per spine STATE-WRITE (many per phase),
+    each on its own fire-and-forget courier leaf — so two record_composed processes for the
+    SAME run can overlap. The read-append-write is NOT atomic on its own (`atomic_write` only
+    makes the final replace torn-free), so concurrent appends of DISTINCT hashes would
+    lost-update — last writer wins, the earlier hash dropped. A blocking advisory flock on a
+    per-run lock file serialises the whole read-modify-write, so distinct concurrent appends
+    accumulate instead of clobbering. The lock is per-run-file, so different runs never
+    contend; a holder that dies releases it (OS-released on fd close). Fail-open (UFR-2): if
+    the lock can't be taken, fall through to an unlocked RMW rather than raise (a dropped
+    registration degrades to the classifier path, never a park)."""
     path = _run_path(run_id, cwd, root, work_item=work_item)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    control_plane.atomic_write(path, json.dumps(snapshot))
+    lock_fd = None
+    try:
+        lock_fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except OSError:
+        # fail-open: proceed unlocked rather than raise (UFR-2). If os.open succeeded but flock
+        # raised (ENOLCK/EOPNOTSUPP on e.g. NFS, EINTR), close the now-orphaned fd BEFORE dropping
+        # the reference — the finally below only closes a non-None lock_fd (#402 review round 2:
+        # a leaked fd per registration would exhaust the process fd table over a long run).
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+        lock_fd = None
+    try:
+        snapshot = frozen_rules(run_id, cwd, root, work_item=work_item)
+        h = _hash(command)
+        if h not in snapshot["composed"]:
+            snapshot["composed"].append(h)
+        control_plane.atomic_write(path, json.dumps(snapshot))
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)   # releases the flock
 
 
 # --- Task 4: evaluate — the pure allowance decision (FR-5/6/8, UFR-1, UFR-2) ---

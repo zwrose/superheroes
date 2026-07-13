@@ -44,6 +44,12 @@ EVENT_TYPES = {
     # blockers, the fix batch lands, and post-fix verify is green. Structured non-secret `payload`
     # ({branch, open_findings, fix_dispatched, ...}), written as-is; run_watch may render it.
     "final_review_handoff",
+    # #402 Part B: a courier/exec dispatch whose answer carried a classifier-denial signature — the
+    # bytes are declined TERMINALLY (never re-dispatched identically), and the caller's fail-closed
+    # path (park/disclose) takes over. Recorded next to the enforcer's allowance_fired so the run's
+    # audit trail shows the decline. `detail` = {"reason": <scrubbed>} — the reason is already
+    # base64-redacted + length-clamped by courier_exec.denialReason and is scrubbed again here.
+    "courier_declined",
 }
 
 

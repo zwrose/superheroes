@@ -193,6 +193,27 @@ def test_permission_denied_is_a_valid_event_type(tmp_path):
     assert any('"type": "permission_denied"' in l for l in lines)
 
 
+def test_courier_declined_is_a_valid_event_type(tmp_path):
+    # #402 Part B: the decline-journal seam (showrunner _defaultDeclineRecorder) shells
+    # journal.append(events, "courier_declined", step=<label>, detail={"reason": <scrubbed>}). Prove the
+    # REAL append path succeeds and the event is durable — the smokes inject an observer that bypasses
+    # this, so without a real-path test a missing EVENT_TYPES entry would silently drop every decline.
+    p = str(tmp_path / "events.jsonl")
+    journal.append(p, "courier_declined", step="save phase progress",
+                   detail={"reason": "permission for this action was denied"}, root=str(tmp_path))
+    evs = journal.read_events(p)
+    assert evs[-1]["type"] == "courier_declined"
+    assert evs[-1]["step"] == "save phase progress"
+    # detail is scrubbed to a string (journal._scrub stringifies then readout-scrubs the whole value).
+    assert "denied" in evs[-1]["detail"]
+
+
+def test_courier_declined_is_a_known_event_type():
+    # An unknown type fails closed (DurableWriteError) and — because the decline recorder is fail-open —
+    # would be swallowed, dropping the decline. courier_declined MUST be registered.
+    assert "courier_declined" in journal.EVENT_TYPES
+
+
 def test_allowance_fired_is_a_valid_event_type(tmp_path):
     # #149 auditability NFR: an automatic ALLOWANCE (not just a denial) is recorded with a
     # structured, non-secret payload written AS-IS — the command HASH, never the raw command

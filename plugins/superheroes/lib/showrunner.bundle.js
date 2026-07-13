@@ -45,6 +45,7 @@ globalThis.agent = function (prompt, opts) {
   if (!o.phase && globalThis.__SR_PHASE) o.phase = globalThis.__SR_PHASE
   if (!o.label || o.label === 'lib' || o.label === 'io') o.label = __leafLabel(String(prompt), o.label)
   try { __require('cost_meter').record(o.model) } catch (_) {}
+  try { __require('courier_exec').recordComposedFromPrompt(prompt) } catch (_) {}
   if (o.agentType) {
     var __fallbackOpts = Object.assign({}, o); delete __fallbackOpts.agentType
     return Promise.resolve().then(function () { return __realAgent(prompt, o) }).catch(function (e) {
@@ -74,9 +75,9 @@ async function __sh(cmd, opts) {
   var prompt = __require('courier_exec').markedPromptFor(cmd)
   var __expectMarker = String(cmd).indexOf('__SR_EXIT') >= 0
   var ans = await globalThis.agent(prompt, o)
-  if (__expectMarker && __badCourierAnswer(ans)) {
+  if (__expectMarker && __badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
     ans = await globalThis.agent(prompt, Object.assign({}, o))               // retry once, same courier agent
-    if (__badCourierAnswer(ans)) {
+    if (__badCourierAnswer(ans) && !__require('courier_exec').denialReason(ans)) {
       var fo = Object.assign({}, o); delete fo.agentType                     // fall back to the default dispatch
       ans = await globalThis.agent(prompt, fo)
     }
@@ -1908,6 +1909,42 @@ function currentAgent() {
   if (root && typeof root.agent === 'function') return root.agent
   throw new Error('courier agent unavailable')
 }
+const _DISPATCH_LEADS = ['Run exactly this', 'Execute this exact shell command']
+const _SPINE_STATE_WRITE = new RegExp([
+  'base64\\.b64decode',                       // the __SR_W argv-shape io writer (every io.writeFile)
+  'build_state_cli\\.py',                      // per-task record-built/record-reviewed + record-final-review
+  'journal_entry\\.py',                        // journal appends
+  'prov_entry\\.py',                           // provenance stamps (incl. the build-denial taint step)
+  'fence_cli\\.py', 'ref_lock',                // lease acquire/renew/release + fence ops
+].join('|'))
+let composedRecorder = null
+let _recordingComposed = false
+function setComposedRecorder(fn) { composedRecorder = (typeof fn === 'function') ? fn : null }
+function recordComposedFromPrompt(prompt) {
+  if (!composedRecorder || _recordingComposed || typeof prompt !== 'string') return
+  if (!_DISPATCH_LEADS.some((lead) => prompt.startsWith(lead))) return   // only spine-composed dumb pipes
+  const idx = prompt.indexOf('\n\n')
+  if (idx < 0) return
+  const command = prompt.slice(idx + 2)
+  if (!command || !_SPINE_STATE_WRITE.test(command)) return   // only the spine's own state-write shapes
+  _recordingComposed = true
+  try { composedRecorder(command) } catch (_e) { /* fail-open (UFR-2): never block a dispatch */ }
+  finally { _recordingComposed = false }
+}
+const DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)/i
+function denialReason(text) {
+  const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim()
+  const m = s.match(DENIAL_SIG)
+  if (!m) return null
+  let from = s.slice(m.index).replace(/[A-Za-z0-9+/=]{24,}/g, '[redacted]')
+  return from.length > 200 ? from.slice(0, 200) + '…' : from
+}
+let declineRecorder = null
+function setDeclineRecorder(fn) { declineRecorder = (typeof fn === 'function') ? fn : null }
+function _journalDecline(label, reason) {
+  if (!declineRecorder) return
+  try { declineRecorder(label, reason) } catch (_e) { /* fail-open */ }
+}
 function rootedCommand(command) {
   const root = (typeof globalThis !== 'undefined' && globalThis.__SR_ROOT) ? String(globalThis.__SR_ROOT) : null
   if (!root) return command
@@ -2035,9 +2072,9 @@ async function dispatchMarked(label, markedCmd, opts) {
   const prompt = markedPromptFor(markedCmd)
   let ans = stdoutOf(await currentAgent()(prompt, baseOpts))
   if (opts && opts.single) return ans
-  if (_isBadAnswer(ans, opts)) {
+  if (_isBadAnswer(ans, opts) && !denialReason(ans)) {
     ans = stdoutOf(await currentAgent()(prompt, Object.assign({}, baseOpts)))
-    if (_isBadAnswer(ans, opts)) {
+    if (_isBadAnswer(ans, opts) && !denialReason(ans)) {
       const fo = Object.assign({}, baseOpts)
       delete fo.agentType
       ans = stdoutOf(await currentAgent()(prompt, fo))
@@ -2054,6 +2091,8 @@ async function runCourierMarkedText(label, command, opts) {
     const ans = await dispatchMarked(label, markedCmd, opts)
     lastAns = ans
     if (_isBadAnswer(ans, opts)) {
+      const denial = denialReason(ans)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
       last = 'missing execution marker'
       continue
     }
@@ -2072,6 +2111,8 @@ async function runCourierMarkedJson(label, command, opts) {
     const ans = await dispatchMarked(label, markedCmd)
     lastAns = ans
     if (badCourierAnswer(ans)) {
+      const denial = denialReason(ans)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, lastAns) }
       last = 'missing execution marker'
       continue
     }
@@ -2101,6 +2142,8 @@ async function runCourierText(label, command) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await callOnce(label, command)
     if (!commandOk(raw)) {
+      const denial = denialReason(stdoutOf(raw))
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, stdoutOf(raw)) }
       _recordRetry(label, attempt)
       return stdoutOf(raw)
     }
@@ -2118,6 +2161,8 @@ async function runCourierJson(label, command, opts) {
     const raw = await callOnce(label, command, promptOpts)
     const out = stdoutOf(raw)
     if (!commandOk(raw)) {
+      const denial = denialReason(out)
+      if (denial) { _journalDecline(label, denial); throw new CourierTransportError(label, denial, out) }
       _recordRetry(label, attempt)
       return { ok: false, error: out.trim() || 'command failed' }
     }
@@ -2162,6 +2207,11 @@ module.exports = {
   setCourierAgent,
   courierRetryTotals,
   resetCourierMeter,
+  recordComposedFromPrompt,
+  setComposedRecorder,
+  DENIAL_SIG,
+  denialReason,
+  setDeclineRecorder,
   wrapMarkedCommand,
   markedPromptFor,
   PAYLOAD_IS_DATA_CLAUSE,
@@ -4080,7 +4130,7 @@ function _declinePrefix(answer) {
   if (!s) return 'courier returned no execution marker'
   return s.length > 200 ? s.slice(0, 200) + '…' : s
 }
-const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+const { DENIAL_SIG: _DENIAL_SIG } = require('./courier_exec.js')
 const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
 function _stagingDenial(results) {
   const arr = Array.isArray(results) ? results : []
@@ -4715,7 +4765,6 @@ async function buildOneTask(workItem, generation, task, branch, validIds, wt, ta
       retryNote: attempt > 1 ? buildRetryNote(task, docPath) : '',
       deniedNote: buildDeniedNote(deniedActions),
     })
-    try { require('./showrunner.js')._recordComposed(generation, prompt, workItem) } catch (_e) { /* fail-open */ }
     const builderModel = modelTierTwin.resolveModel('builder', _overrides(), null)
     const worker = await _implDispatch({
       workItem, roleKind: 'build', taskId: task.id, wt, branch,
@@ -5720,6 +5769,29 @@ function _defaultRecordComposed(runId, command, workItem) {
     [runId, command, procCwd(), workItem || ''])
 }
 const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
+function _composedRecorderFromRun(command) {
+  const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
+  if (!run || run.runId == null) return
+  _permissionSeam.recordComposed(run.runId, command, run.workItem)
+}
+function _defaultDeclineRecorder(label, reason) {
+  const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
+  if (!run || run.runId == null) return
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import control_plane, journal; ` +
+    'events = control_plane.paths(sys.argv[1], (sys.argv[2] or None))["events"]; ' +
+    'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
+  try {
+    const p = io().runHelper('python3', ['-c', script,
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
+}
+const _declineSeam = { record: _defaultDeclineRecorder }
+try {
+  courier.setComposedRecorder(_composedRecorderFromRun)
+  courier.setDeclineRecorder((label, reason) => _declineSeam.record(label, reason))
+} catch (_e) { /* fail-open: the courier module always exports these; guard belt-and-suspenders */ }
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -6706,6 +6778,9 @@ async function showrunner({ workItem }) {
   }
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
   _permissionSeam.freeze(r.generation, procCwd(), workItem)
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_RUN_CTX = { runId: r.generation, workItem: workItem, cwd: procCwd() }
+  }
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   const startupFacts = await readStartupState(workItem)
   const _explicitRoute = (typeof globalThis !== 'undefined' && globalThis.__SR_ROUTE) || null

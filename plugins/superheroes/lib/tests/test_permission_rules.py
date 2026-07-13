@@ -218,6 +218,114 @@ def test_record_composed_is_exact(monkeypatch, tmp_path):
     assert pr._hash("gh pr create --draft --title Y") not in frozen["composed"]
 
 
+def test_record_composed_append_is_idempotent_and_accumulates(monkeypatch, tmp_path):
+    # #402 acceptance 4 (serial leg): the append is a hash-set — a repeat of the SAME executed command is a
+    # no-op (not a duplicate), and DISTINCT executed commands accumulate. The concurrent leg (that distinct
+    # appends do not lost-update under true parallelism) is proven separately below.
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3b", "/cwd", root=str(tmp_path))
+    build_stamp = "python3 lib/build_state_cli.py record-reviewed --work-item wi"
+    journal_write = "python3 lib/journal_entry.py --step ship"
+    for _ in range(3):
+        pr.record_composed("RUN3b", build_stamp, "/cwd", root=str(tmp_path))   # same command, thrice
+    pr.record_composed("RUN3b", journal_write, "/cwd", root=str(tmp_path))
+    composed = pr.frozen_rules("RUN3b", "/cwd", root=str(tmp_path))["composed"]
+    assert composed.count(pr._hash(build_stamp)) == 1, "a repeated executed command appends once (idempotent)"
+    assert pr._hash(journal_write) in composed, "a distinct executed command accumulates"
+    assert len(composed) == 2, "only the two distinct executed-command hashes are frozen"
+
+
+def test_record_composed_concurrent_distinct_appends_do_not_lose_update(monkeypatch, tmp_path):
+    # #402 acceptance 4 (concurrent leg) + review premortem-002: the composed-exact recorder fires once per
+    # spine state-write, each on its OWN fire-and-forget leaf, so many record_composed PROCESSES for one run
+    # overlap. record_composed's read-append-write is guarded by a per-run flock, so N truly-concurrent
+    # appends of DISTINCT commands all land — no last-writer-wins lost update. Without the lock this fails
+    # intermittently (the whole-file atomic_write clobbers a concurrent append).
+    import multiprocessing as _mp
+
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    root = str(tmp_path)
+    pr.freeze_run_rules("RUN3d", "/cwd", root=root)
+    n = 24
+    cmds = ["python3 lib/journal_entry.py --step s%02d" % i for i in range(n)]
+
+    def _worker(cmd):
+        # re-import in the child (spawn start method reruns the module) and hammer the same run file.
+        import permission_rules as _pr
+        _pr.record_composed("RUN3d", cmd, "/cwd", root=root)
+
+    ctx = _mp.get_context("fork")   # fork keeps monkeypatched sys.path/cwd resolution simple in the child
+    procs = [ctx.Process(target=_worker, args=(c,)) for c in cmds]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(30)
+    composed = pr.frozen_rules("RUN3d", "/cwd", root=root)["composed"]
+    for c in cmds:
+        assert pr._hash(c) in composed, "every concurrent distinct append survives (no lost update): %s" % c
+    assert len(composed) == n, "all %d distinct concurrent appends accumulate, none clobbered" % n
+
+
+def test_record_composed_flock_failure_fails_open_and_leaks_no_fd(monkeypatch, tmp_path):
+    # #402 review round 2: the flock fail-open branch (ENOLCK/EOPNOTSUPP on NFS, EINTR) must (a) still
+    # perform the unlocked RMW — a lock failure degrades to today's behavior, never a raise/park — and
+    # (b) close the already-opened lock fd before dropping the reference (the finally only closes a
+    # non-None lock_fd, so reassigning without closing leaked one fd per registration).
+    import fcntl as _fcntl
+
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3e", "/cwd", root=str(tmp_path))
+
+    opened = []
+    real_open = os.open
+
+    def tracking_open(p, *a, **k):
+        fd = real_open(p, *a, **k)
+        if str(p).endswith(".lock"):
+            opened.append(fd)
+        return fd
+
+    def failing_flock(fd, op):
+        raise OSError(37, "No locks available")   # ENOLCK — the designed fail-open case
+
+    # manual save/restore (NOT monkeypatch.undo(), which would also undo _write_rules' config_key patch
+    # and break the frozen_rules read below).
+    real_flock = _fcntl.flock
+    os.open = tracking_open
+    _fcntl.flock = failing_flock
+    try:
+        cmd = "python3 lib/journal_entry.py --step flocked"
+        pr.record_composed("RUN3e", cmd, "/cwd", root=str(tmp_path))   # must not raise (fail-open)
+    finally:
+        os.open = real_open
+        _fcntl.flock = real_flock
+
+    composed = pr.frozen_rules("RUN3e", "/cwd", root=str(tmp_path))["composed"]
+    assert pr._hash(cmd) in composed, "a lock failure still performs the unlocked RMW (fail-open, UFR-2)"
+    assert len(opened) == 1, "the lock fd was opened exactly once"
+    for fd in opened:
+        try:
+            os.fstat(fd)
+            leaked = True
+        except OSError:
+            leaked = False   # EBADF -> the fd was closed, no leak
+        assert not leaked, "the lock fd is closed on the flock-failure path (no fd leak)"
+
+
+def test_frozen_composed_carries_only_the_hashes_it_was_given(monkeypatch, tmp_path):
+    # #402 acceptance 3: the frozen run file carries executed-command hashes ONLY. record_composed stores
+    # exactly what it is handed — no prompt hash is ever synthesized here. A hash that was never recorded
+    # (e.g. a builder-leaf prompt) is absent, so evaluate() can never composed-exact allow it.
+    _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
+    pr.freeze_run_rules("RUN3c", "/cwd", root=str(tmp_path))
+    executed = "git commit -m 'feat: x'"
+    builder_prompt = "You are the builder. Implement task 7 from docs/.../tasks.md ..."
+    pr.record_composed("RUN3c", executed, "/cwd", root=str(tmp_path))
+    composed = pr.frozen_rules("RUN3c", "/cwd", root=str(tmp_path))["composed"]
+    assert composed == [pr._hash(executed)], "only the executed command's hash is frozen"
+    assert pr._hash(builder_prompt) not in composed, "a builder-leaf prompt hash is never frozen (#333)"
+
+
 def test_reap_deletes_stale_keeps_recent(monkeypatch, tmp_path):
     import time
     _write_rules(str(tmp_path), "/cwd", [], monkeypatch)
@@ -422,10 +530,15 @@ def test_no_pending_request_state_is_ever_persisted(monkeypatch, tmp_path):
     assert pr.evaluate("python3 -m pytest -q", "/cwd", "R", root=str(store))[0] == "allow"  # allow path
     assert pr.evaluate("curl http://evil", "/cwd", "R", root=str(store))[0] == "fall"        # fall path
     perm = os.path.join(str(store), "projects", "KEY", "permission")
-    # (1) EXACT file inventory — no stray pending/queue/request file was written.
+    # (1) EXACT file inventory — no stray pending/queue/request file was written. #402: the empty advisory
+    # `runs/*.json.lock` sidecar (record_composed's per-run flock) carries NO state — a 0-byte lock file —
+    # so it is excluded here; it cannot hold pending-request structure and the byte-vocabulary check below
+    # would see nothing in it regardless.
     inventory = set()
     for dirpath, _dirs, files in os.walk(perm):
         for f in files:
+            if f.endswith(".lock"):
+                continue
             inventory.add(os.path.relpath(os.path.join(dirpath, f), perm))
     assert inventory == {"rules.json", "audit.json", os.path.join("runs", "R.json")}, inventory
     # (2) No file's bytes carry any pending/waiting/queued request vocabulary.

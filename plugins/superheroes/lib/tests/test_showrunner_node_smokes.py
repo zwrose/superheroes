@@ -10,6 +10,12 @@ SHOWRUNNER_SMOKES = [
     "plugins/superheroes/lib/tests/courier_exec_smoke.js",
     # B5 (#315): the courier retry meter counts a dispatch that needed >1 attempt (retry pressure).
     "plugins/superheroes/lib/tests/courier_retry_meter_smoke.js",
+    # #402 Part A: FR-8 composed-exact re-aligned to executed bytes — the single dispatch chokepoint
+    # records the exact leaf command (byte-exact through the real bundle preamble, floor-safe, fail-open).
+    "plugins/superheroes/lib/tests/showrunner_composed_exact_smoke.js",
+    # #402 Part B: a classifier denial is terminal on every courier — one attempt, journaled scrubbed
+    # decline, fail-closed; a non-denial failure still retries.
+    "plugins/superheroes/lib/tests/courier_denial_terminal_smoke.js",
     "plugins/superheroes/lib/tests/test_pilot_deciders_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_test_pilot_leaf_budget_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_ship_leaf_budget_smoke.js",
