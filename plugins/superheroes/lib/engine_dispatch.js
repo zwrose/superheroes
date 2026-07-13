@@ -547,7 +547,9 @@ function _declinePrefix(answer) {
 // truncates at the signature so the staged prompt never leaks. Whitespace-collapsed and clamped to
 // ~200 chars. Returns null when the failure carries NO denial signature (a plain courier/exec error),
 // so the caller distinguishes `staging-denied` from `staging-failed`.
-const _DENIAL_SIG = /permission for this action was denied|auto[- ]?mode classifier|blocked (?:it|this|the) (?:request|action|command)|permission (?:was )?denied|\bdenied by\b/i
+// #402 SSOT (§11): the denial-signature regex lives in courier_exec (bundled before this module) so the
+// staging break-early here and the generic-courier break-early there can never drift apart.
+const { DENIAL_SIG: _DENIAL_SIG } = require('./courier_exec.js')
 const _DENIAL_TAINTED = 'denial signature detected after the echoed stage command — text withheld'
 function _stagingDenial(results) {
   const arr = Array.isArray(results) ? results : []

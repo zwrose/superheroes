@@ -421,6 +421,49 @@ function _defaultRecordComposed(runId, command, workItem) {
 // Mutable holders so both seams are overridable (the smoke harness swaps in observers).
 const _permissionSeam = { freeze: _defaultFreezeRunRules, recordComposed: _defaultRecordComposed }
 
+// #402 Part A: the composed-exact recorder the courier chokepoint (courier_exec.recordComposedFromPrompt)
+// calls with the EXACT bytes a dumb-pipe leaf is about to execute. It reads the active run identity from
+// globalThis.__SR_RUN_CTX (set at run start, right after the freeze) and threads it into record_composed, so a
+// registration lands in the run that composed the command — and only that run. No active run -> no-op
+// (FR-3: the allowance layer is inert with no live run). Concurrency (#402 review — premortem-002): the
+// recorder fires once per state-write on its own fire-and-forget leaf, so two record_composed processes
+// for one run can overlap; record_composed serialises its read-append-write under a per-run flock so
+// DISTINCT concurrent hashes accumulate (a REPEAT of the same hash is the idempotent no-op). Fail-open
+// lives in _defaultRecordComposed: a dropped registration degrades to the classifier path, never a park.
+function _composedRecorderFromRun(command) {
+  const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
+  if (!run || run.runId == null) return
+  _permissionSeam.recordComposed(run.runId, command, run.workItem)
+}
+// #402 Part B: the decline-journal seam the couriers call when an answer carries a classifier-denial
+// signature. Appends a `courier_declined` event (with the scrubbed reason) to the active run's own
+// events.jsonl — the SAME journal the enforcer writes `allowance_fired` to — via the io() runHelper shim
+// (works under node's fs-backed defaultIo AND the bundle's leaf-bash io). Best-effort + fail-open (UFR-2):
+// a journal failure never derails the caller's fail-closed hand-off. No active run -> no-op.
+function _defaultDeclineRecorder(label, reason) {
+  const run = (typeof globalThis !== 'undefined') ? globalThis.__SR_RUN_CTX : null
+  if (!run || run.runId == null) return
+  const script =
+    `import sys; sys.path.insert(0, ${pyLibDir()}); import control_plane, journal; ` +
+    'events = control_plane.paths(sys.argv[1], (sys.argv[2] or None))["events"]; ' +
+    'journal.append(events, "courier_declined", step=sys.argv[3], detail={"reason": sys.argv[4]})'
+  try {
+    const p = io().runHelper('python3', ['-c', script,
+      run.cwd || procCwd(), run.workItem || '', String(label || 'courier'), String(reason || '')])
+    if (p && typeof p.then === 'function') p.then(() => {}, () => {})   // swallow the async result
+  } catch (_e) { /* fail-open: never let a decline journal derail the fail-closed hand-off (UFR-2) */ }
+}
+const _declineSeam = { record: _defaultDeclineRecorder }
+
+// Wire the courier chokepoint's injectable seams to the spine's run-aware recorders. Done at module load
+// (the registry is populated before any leaf runs); the recorders read globalThis.__SR_RUN_CTX live, so a
+// wiring here is safe before any run is active. Fail-open: a courier with no wiring (a raw node harness)
+// simply records nothing.
+try {
+  courier.setComposedRecorder(_composedRecorderFromRun)
+  courier.setDeclineRecorder((label, reason) => _declineSeam.record(label, reason))
+} catch (_e) { /* fail-open: the courier module always exports these; guard belt-and-suspenders */ }
+
 function ensureReviewerShape(out, opts = {}) {
   if (Array.isArray(out)) {
     const conf = (opts.tier === 'reviewer' && out.length > 0) ? 'low' : 'high'
@@ -664,8 +707,10 @@ Object.defineProperty(module.exports, '_denialRecorder', {
   set(fn) { _denialSeam.record = fn },
 })
 // Task 12 seams: overridable through mutable holders so an assignment (`sr._freezeRunRules = fn`,
-// `sr._recordComposed = fn`) rebinds what showrunner()/build_phase call. build_phase.js reaches
-// _recordComposed through this export (lazy require) so the smoke's override is honored there too.
+// `sr._recordComposed = fn`) rebinds what showrunner() calls. #402: build_phase.js no longer records
+// the builder-leaf prompt here — composed-exact is fed executed bytes by the courier chokepoint via
+// _composedRecorderFromRun, which calls _permissionSeam.recordComposed; this export stays the smoke's
+// observation/override point for that recorder.
 Object.defineProperty(module.exports, '_freezeRunRules', {
   get() { return _permissionSeam.freeze },
   set(fn) { _permissionSeam.freeze = fn },
@@ -1855,6 +1900,16 @@ async function showrunner({ workItem }) {
   // the deliberately-two-leaf startup stretch (#118 budget): a single run-start bookkeeping leaf.
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'permission-freeze'
   _permissionSeam.freeze(r.generation, procCwd(), workItem)
+  // #402 Part A/B: publish the active run identity for the courier chokepoint's composed-exact recorder
+  // (byte-exact registration BEFORE each dumb-pipe dispatch) and the decline-journal seam. Set AFTER the
+  // freeze so the freeze's own helper leaf isn't recorded, and BEFORE any command dispatch so every
+  // spine-composed leaf command is registered. The showrunner runs one work-item per process and exits,
+  // so this ambient global is process-scoped like __SR_ROOT/__SR_PHASE (#402 review — code-003: it is not
+  // cleared on return; a run that parks BEFORE this line — e.g. at the reconcile gate above — never sets it,
+  // and the recorders no-op on a null __SR_RUN_CTX, so no prior value can be misattributed in a fresh process).
+  if (typeof globalThis !== 'undefined') {
+    globalThis.__SR_RUN_CTX = { runId: r.generation, workItem: workItem, cwd: procCwd() }
+  }
   if (typeof globalThis !== 'undefined') globalThis.__SR_PHASE = 'startup'
   // UFR-1 / #25 intake: refuse to run unless the route's input artifact is approved. resolveIntake
   // (pure) picks the route from the durable artifact state (spec present ⇒ full, else tasks ⇒ quick)

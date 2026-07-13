@@ -613,16 +613,20 @@ def test_hook_passes_cwd_run_id_and_work_item(monkeypatch):
     # keeps the allowance journal attributed to the same run the evaluation used).
     seen = {}
 
-    def fake_classify(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None):
-        seen.update(cwd=cwd, run_id=run_id, work_item=work_item)
+    def fake_classify(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None,
+                      session_id=None):
+        seen.update(cwd=cwd, run_id=run_id, work_item=work_item, session_id=session_id)
         return ("allow", "")
 
     monkeypatch.setattr(enforcer, "classify_command", fake_classify)
     monkeypatch.setattr(enforcer.permission_rules, "resolve_active_lease",
                         lambda cwd, run_id=None: ("wi-9", "RUN9"))
-    payload = '{"tool_name":"Bash","tool_input":{"command":"python3 -m pytest"},"cwd":"/w"}'
+    payload = ('{"tool_name":"Bash","tool_input":{"command":"python3 -m pytest"},'
+               '"cwd":"/w","session_id":"SESS-9"}')
     enforcer.hook(payload, host="claude")
     assert seen["cwd"] == "/w" and seen["run_id"] == "RUN9" and seen["work_item"] == "wi-9"
+    # #379: the triggering session id is threaded from the payload into classify_command.
+    assert seen["session_id"] == "SESS-9"
 
 
 def test_selfcheck_matrix_holds_with_allowance(monkeypatch):
@@ -1109,3 +1113,255 @@ def test_hook_subprocess_gated_merge_still_asks_no_monkeypatch(tmp_path, monkeyp
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
     assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+# --- #379: session-scoped allowance attribution ------------------------------------------
+# The enforcer's allowance journaling must attribute an allowance_fired event to a run ONLY
+# when the TRIGGERING session is that run's session. With concurrent runs (or an unrelated
+# session) on one checkout, an event from a foreign session must land in the project-level
+# allowances.jsonl trail, never in a sibling run's events.jsonl.
+
+
+def _real_lease_with_session(tmp_path, monkeypatch, work_item, session_cwd):
+    """A real LIVE lease for `work_item` that records `session_cwd` as its owning session's
+    launch dir, in the pinned tmp store. Returns (store, generation)."""
+    import control_plane
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    store = control_plane.ensure_store(session_cwd)
+    ok, generation, _ = ref_lock.acquire(store, work_item,
+                                         session_cwd=os.path.realpath(session_cwd))
+    assert ok
+    return store, generation
+
+
+def test_allowance_attributed_to_owning_session_run(tmp_path, monkeypatch):
+    # (a) An allowance triggered from the run's OWN session lands in that run's events.jsonl,
+    # carrying the run_id (generation) and the triggering session_id.
+    import control_plane
+    import journal
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    store, generation = _real_lease_with_session(tmp_path, monkeypatch, "wi-run", sess)
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    cmd = "python3 -m pytest"
+    decision, reason = enforcer.classify_command(cmd, host="claude", in_scope=True,
+                                                 cwd=sess, run_id=generation,
+                                                 work_item="wi-run", session_id="SESS-A")
+    assert decision == "allow" and "auto-allowed" in reason
+    events = control_plane.paths(sess, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1
+    p = fired[0]["payload"]
+    assert p["run_id"] == generation and p["session_id"] == "SESS-A"
+    assert p["command_sha256"] == permission_rules._hash(cmd)[:16]
+
+
+def test_allowance_from_foreign_session_goes_to_project_trail(tmp_path, monkeypatch):
+    # (b) A live run exists, but the command is triggered from a DIFFERENT (foreign) session's
+    # cwd. The event must land in the project-level allowances.jsonl trail, NOT in the run's
+    # events.jsonl. This is the exact #379 defect (a sibling session's pytest contaminating the
+    # run's #149 audit trail).
+    import control_plane
+    import journal
+    sess = str(tmp_path / "sessionA")
+    foreign = str(tmp_path / "foreign-agent")
+    for d in (sess, foreign):
+        os.makedirs(d, exist_ok=True)
+    store, generation = _real_lease_with_session(tmp_path, monkeypatch, "wi-run", sess)
+    # Pin the store so the foreign cwd resolves to the SAME clone store (mirrors one checkout).
+    monkeypatch.setattr(control_plane, "checkout_dir", lambda c, root=None: store)
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                              cwd=foreign, run_id=generation, work_item="wi-run",
+                              session_id="SESS-FOREIGN")
+    run_events = control_plane.paths(sess, "wi-run")["events"]
+    run_fired = [e for e in journal.read_events(run_events)
+                 if e.get("type") == "allowance_fired"]
+    assert run_fired == [], "a foreign session's allowance must NOT enter the run's journal"
+    trail = os.path.join(store, "allowances.jsonl")
+    trail_fired = [e for e in journal.read_events(trail)
+                   if e.get("type") == "allowance_fired"]
+    assert len(trail_fired) == 1
+    p = trail_fired[0]["payload"]
+    assert p["run_id"] is None and p["session_id"] == "SESS-FOREIGN"
+    # The trail event honors the same non-secret contract as a run event: the command HASH is
+    # present, the raw command text is NEVER written.
+    assert p["command_sha256"] == permission_rules._hash("python3 -m pytest")[:16]
+    assert "command" not in p
+    assert "python3 -m pytest" not in open(trail).read()
+    # premortem-001: the multi-writer trail append is dense_seq=False — no per-append whole-file
+    # seq read on the hook path. The trail event carries `ts` (its ordering key) but no `seq`.
+    assert "seq" not in trail_fired[0] and trail_fired[0].get("ts")
+
+
+def test_two_concurrent_runs_each_journal_only_their_own(tmp_path, monkeypatch):
+    # (c) Two live leases on one checkout, launched from two sessions. Each session's allowance
+    # lands ONLY in its own run's journal — never crossing into the sibling's (the corroboration
+    # comment's both-directions misroute).
+    import control_plane
+    import journal
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess_a = str(tmp_path / "sessionA")
+    sess_b = str(tmp_path / "sessionB")
+    for d in (sess_a, sess_b):
+        os.makedirs(d, exist_ok=True)
+    store = control_plane.ensure_store(sess_a)
+    monkeypatch.setattr(control_plane, "checkout_dir", lambda c, root=None: store)
+    _, gen_a, _ = ref_lock.acquire(store, "wi-a", session_cwd=os.path.realpath(sess_a))
+    _, gen_b, _ = ref_lock.acquire(store, "wi-b", session_cwd=os.path.realpath(sess_b))
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    # Each session is deliberately handed the SIBLING's (work_item, run_id) as the threaded
+    # guess — the value the pre-#379 cwd-resolution would have produced under this misroute. If
+    # _journal_allowance used that guess instead of resolve_journal_target's session-attributed
+    # owner, A's event would land in wi-b and B's in wi-a. The assertions below therefore fail
+    # unless attribution keys on the SESSION (sessionCwd), not the passed-in guess.
+    enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                              cwd=sess_a, run_id=gen_b, work_item="wi-b", session_id="A")
+    enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                              cwd=sess_b, run_id=gen_a, work_item="wi-a", session_id="B")
+    a_fired = [e for e in journal.read_events(control_plane.paths(sess_a, "wi-a")["events"])
+               if e.get("type") == "allowance_fired"]
+    b_fired = [e for e in journal.read_events(control_plane.paths(sess_b, "wi-b")["events"])
+               if e.get("type") == "allowance_fired"]
+    assert len(a_fired) == 1 and a_fired[0]["payload"]["run_id"] == gen_a
+    assert len(b_fired) == 1 and b_fired[0]["payload"]["run_id"] == gen_b
+    # DISCRIMINATOR (test-reviewer test-001): both work-items count from generation 1, so
+    # run_id alone cannot tell a correct attribution from the swap (each swapped event would
+    # still be a lone run_id==1 in its file). Assert the SESSION identity that only the correct
+    # routing produces: session A's event lands in wi-a, session B's in wi-b. Under the old
+    # guess-keyed misroute A's event would land in wi-b and B's in wi-a — so wi-a would carry
+    # session_id "B" and wi-b "A", and BOTH assertions below fail.
+    assert a_fired[0]["payload"]["session_id"] == "A"
+    assert b_fired[0]["payload"]["session_id"] == "B"
+
+
+def test_legacy_lease_without_session_falls_back_to_todays_run(tmp_path, monkeypatch):
+    # (d) A pre-#379 lease (no sessionCwd) resolves to ('legacy', ...) so journaling uses
+    # today's cwd-resolved run — never fail closed on missing data.
+    import control_plane
+    import journal
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    store = control_plane.ensure_store(sess)
+    ok, generation, _ = ref_lock.acquire(store, "wi-run")   # legacy: no session_cwd
+    assert ok
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                              cwd=sess, run_id=generation, work_item="wi-run", session_id="S")
+    events = control_plane.paths(sess, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1 and fired[0]["payload"]["run_id"] == generation
+
+
+def test_attribution_error_falls_back_to_todays_run(tmp_path, monkeypatch):
+    # (e) An error inside the attribution resolver must fall back to today's behavior (journal
+    # to the cwd-resolved run) AND never disturb the allow decision.
+    import control_plane
+    import journal
+    monkeypatch.setattr(permission_rules, "_live_leases",
+                        lambda cwd: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: "wi-x")
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    sess = str(tmp_path / "sessionA")
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude",
+                                                 in_scope=True, cwd=sess, run_id="RUN1",
+                                                 work_item=None, session_id="S")
+    assert decision == "allow" and "auto-allowed" in reason
+    events = control_plane.paths(sess, "wi-x")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1, "attribution error -> today's fallback still journals to the run"
+
+
+def test_attribution_total_failure_never_blocks_command(tmp_path, monkeypatch):
+    # Belt-and-suspenders: even a resolver that raises past its own guard is swallowed by
+    # _journal_allowance's outer try — the command still allows, nothing escapes.
+    monkeypatch.setattr(permission_rules, "resolve_journal_target",
+                        lambda cwd: (_ for _ in ()).throw(RuntimeError("kaboom")))
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude",
+                                                 in_scope=True, cwd=str(tmp_path),
+                                                 run_id="RUN1", work_item="wi-x", session_id="S")
+    assert decision == "allow" and "auto-allowed" in reason
+
+
+def test_hook_threads_session_id_to_journal(tmp_path, monkeypatch, capsys):
+    # End-to-end through hook(): the payload's session_id reaches the journaled event, and a
+    # real owning lease routes it into the run's own journal.
+    import control_plane
+    import journal
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    store, generation = _real_lease_with_session(tmp_path, monkeypatch, "wi-run", sess)
+    permission_rules.set_rule(sess, {"family": "test-run", "pattern": r"\bpytest\b"})
+    permission_rules.freeze_run_rules(generation, sess, work_item="wi-run")
+    cmd = "python3 -m pytest -q"
+    rc = enforcer.hook(json.dumps({"tool_name": "Bash", "cwd": sess, "session_id": "SESS-XYZ",
+                                   "tool_input": {"command": cmd}}), host="claude")
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    events = control_plane.paths(sess, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1
+    assert fired[0]["payload"]["session_id"] == "SESS-XYZ"
+    assert fired[0]["payload"]["run_id"] == generation
+
+
+def test_allowance_from_session_subdir_still_attributes_to_run(tmp_path, monkeypatch):
+    # #379 / premortem-001: the lease records the run's EXECUTION ROOT (worktree toplevel); the
+    # hook payload cwd is the session cwd, which may be a SUBDIRECTORY of that root (a session
+    # launched from a subdir, or the courier re-rooting the acquire leaf to the toplevel). An
+    # equal-or-descendant match must still attribute the event to the run — never divert it to
+    # the trail and silently empty the run's #149 audit trail.
+    import control_plane
+    import journal
+    import ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    root = str(tmp_path / "worktree-root")
+    subdir = os.path.join(root, "pkg", "sub")
+    os.makedirs(subdir, exist_ok=True)
+    store = control_plane.ensure_store(root)
+    monkeypatch.setattr(control_plane, "checkout_dir", lambda c, root=None: store)
+    ok, generation, _ = ref_lock.acquire(store, "wi-run", session_cwd=os.path.realpath(root))
+    assert ok
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    enforcer.classify_command("python3 -m pytest", host="claude", in_scope=True,
+                              cwd=subdir, run_id=generation, work_item="wi-run", session_id="S")
+    events = control_plane.paths(root, "wi-run")["events"]
+    fired = [e for e in journal.read_events(events) if e.get("type") == "allowance_fired"]
+    assert len(fired) == 1, "a session subdir within the run's root attributes to the run"
+    assert fired[0]["payload"]["run_id"] == generation
+    trail = os.path.join(store, "allowances.jsonl")
+    assert journal.read_events(trail) == [], "must NOT divert to the trail"
+
+
+def test_legacy_fallback_with_no_resolvable_work_item_journals_nothing(tmp_path, monkeypatch):
+    # #379: the legacy branch's `if not target_wi: return` guard — a legacy (no sessionCwd) lease
+    # path where neither the threaded work_item nor _active_work_item resolves a run must journal
+    # NOTHING (never call paths(cwd, None)) and never disturb the allow decision.
+    import control_plane
+    import journal
+    monkeypatch.setattr(permission_rules, "resolve_journal_target",
+                        lambda cwd: ("legacy", None, None))
+    monkeypatch.setattr(enforcer, "_active_work_item", lambda c, r: None)
+    monkeypatch.setattr(permission_rules, "evaluate",
+                        lambda *a, **k: ("allow", "routine:test-run"))
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    decision, reason = enforcer.classify_command("python3 -m pytest", host="claude",
+                                                 in_scope=True, cwd=sess, run_id=None,
+                                                 work_item=None, session_id="S")
+    assert decision == "allow" and "auto-allowed" in reason
+    trail = os.path.join(control_plane.checkout_dir(sess), "allowances.jsonl")
+    assert journal.read_events(trail) == [], "no resolvable run -> nothing journaled anywhere"
