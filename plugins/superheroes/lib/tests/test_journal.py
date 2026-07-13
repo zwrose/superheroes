@@ -231,6 +231,29 @@ def test_allowance_fired_is_a_known_event_type():
     assert "allowance_fired" in journal.EVENT_TYPES
 
 
+def test_dense_seq_false_omits_seq_and_skips_the_whole_file_read(tmp_path, monkeypatch):
+    # premortem-001 / #379: the multi-writer checkout allowance trail appends with
+    # dense_seq=False. The event must carry `ts` + `type` (readable/roundtrippable) but NO `seq`,
+    # and the append must NOT re-read the whole file to compute one (the O(n^2) hot-path cost the
+    # trail routing avoids). Default (dense_seq=True) still stamps a dense seq.
+    p = str(tmp_path / "trail.jsonl")
+    calls = []
+    real_next_seq = journal._next_seq
+    monkeypatch.setattr(journal, "_next_seq",
+                        lambda path: calls.append(path) or real_next_seq(path))
+    journal.append(p, "allowance_fired", payload={"reason": "r"}, dense_seq=False)
+    journal.append(p, "allowance_fired", payload={"reason": "r"}, dense_seq=False)
+    assert calls == [], "dense_seq=False must not read the file to compute a seq"
+    evs = journal.read_events(p)
+    assert len(evs) == 2
+    assert all("seq" not in e for e in evs)
+    assert all(e["ts"] and e["type"] == "allowance_fired" for e in evs)
+    # Default keeps the dense seq (and does read the file).
+    journal.append(p, "allowance_fired", payload={"reason": "r"})
+    assert calls == [p], "dense_seq=True (default) computes a dense seq"
+    assert journal.read_events(p)[-1]["seq"] == 3
+
+
 def test_unknown_event_type_still_parks(tmp_path):
     p = str(tmp_path / "events.jsonl")
     try:

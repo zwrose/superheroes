@@ -6,8 +6,15 @@ non-gated branch (where today's outcome is the unconditional `allow`). It turns 
 would-be permission prompt into an `allow` when — and only when — a command matches an
 owner-curated routine family (FR-6), is confined to a real managed build worktree under
 the managed-worktree root (FR-5), or byte-equals a spine-composed command frozen for the
-current run (FR-8). Every code path is fail-safe *toward prompting* (UFR-2): any error,
-non-match, or missing data falls through, never toward allowing.
+current run (FR-8). Every allowance-DECISION code path is fail-safe *toward prompting*
+(UFR-2): any error, non-match, or missing data falls through, never toward allowing.
+
+The module also hosts the enforcer-facing lease-resolution seams (`resolve_active_lease`
+and, #379, `resolve_journal_target`) that share this module's `ref_lock`/`control_plane`
+dependencies. These are NOT permission decisions — `resolve_journal_target` is allowance
+audit-EVENT ROUTING, whose fail-safe direction is `('legacy', …)` (today's behavior), not
+"toward prompting" — so co-locating them with the shared lease seam prevents the two
+lookups from drifting.
 
 Task 1 scope: `worktree_confined` — the realpath strict-descendant + interpreter check.
 Task 2 scope: `_store_dir` / `_provenance_ok` / `rules` — the config-keyed out-of-repo
@@ -278,13 +285,10 @@ def resolve_active_lease(cwd, run_id=None):
     `(None, None)`/None result only makes the allowance layer MORE conservative, so the
     fail-safe direction is always toward prompting."""
     try:
-        store = control_plane.checkout_dir(cwd)
-        live = []
-        for work_item in ref_lock.active_work_items(store):
-            _sha, lease = ref_lock.read_lease(store, work_item)
-            if not isinstance(lease, dict):
-                continue
-            live.append((work_item, lease.get("generation")))
+        # Read the clone's live leases through the ONE shared enumeration seam (`_live_leases`)
+        # so this run-decision path and the #379 journal-routing path can never drift; drop the
+        # raw lease dict here (only generation is needed).
+        live = [(wi, gen) for (wi, gen, _lease) in _live_leases(cwd)]
         if run_id is not None:
             # "is THIS run live" — with two same-numbered generations (each work-item counts from
             # 1), prefer the lease whose work-item appears in cwd (the leaf's own build worktree
@@ -306,6 +310,100 @@ def resolve_active_lease(cwd, run_id=None):
         return live[0] if live else (None, None)
     except Exception:
         return (None, None)
+
+
+# --- #379: session-scoped allowance-event attribution -----------------------------------
+
+
+def _live_leases(cwd):
+    """`[(work_item, generation, lease_dict), ...]` for every LIVE lease in `cwd`'s clone.
+
+    The lease store is ALWAYS the real per-clone control-plane checkout store (a permission
+    `root` override never relocates it; a fresh build worktree shares the common-dir key).
+    Fail-safe (UFR-2): any error / no store / no live lease → `[]`."""
+    try:
+        store = control_plane.checkout_dir(cwd)
+        out = []
+        for work_item in ref_lock.active_work_items(store):
+            _sha, lease = ref_lock.read_lease(store, work_item)
+            if isinstance(lease, dict):
+                out.append((work_item, lease.get("generation"), lease))
+        return out
+    except Exception:
+        return []
+
+
+def _within(child, ancestor):
+    """True iff realpath(`child`) is `ancestor` itself OR a descendant of it — the run's
+    recorded `sessionCwd` is the run's execution ROOT (the worktree toplevel), and the hook
+    payload cwd is that session's cwd, which is the root itself or a subdirectory of it. Uses
+    the same realpath-anchored `commonpath` check `_cwd_in_managed_worktree` uses (a symlinked
+    dir resolves; a name-prefix lookalike sibling does NOT). Fail-safe False on falsy input,
+    a `ValueError` (different drives), or any other error."""
+    if not child or not ancestor:
+        return False
+    try:
+        rc, ra = os.path.realpath(child), os.path.realpath(ancestor)
+        return os.path.commonpath([rc, ra]) == ra
+    except Exception:
+        return False
+
+
+def resolve_journal_target(cwd):
+    """Where an allowance audit event triggered from session `cwd` must be journaled — #379.
+
+    The enforcer's allowance journaling previously resolved its target run from the
+    project/checkout (cwd/work-item-name guessing), so with two concurrent runs on one checkout
+    — now the owner's normal mode — a foreign session's events cross-contaminated a sibling
+    run's #149 audit trail. This attributes an event to a run ONLY when the TRIGGERING session
+    IS that run's session, identified by the run's execution ROOT recorded on the §4.4 lease at
+    acquire time (`sessionCwd`).
+
+    Session identity is a cwd, not session_id: Claude Code does not expose session_id to a
+    subprocess (spike: hooks/session_start.py), so the acquiring leaf records its os.getcwd()
+    — the run's worktree toplevel (in production the courier re-roots the acquire leaf to
+    `--root`; in dev it is the inherited session cwd). The enforcer hook's payload cwd for that
+    session's tool calls is the session cwd, which is that toplevel OR a subdirectory of it — so
+    a payload cwd is attributed to the run whose `sessionCwd` it lies WITHIN (equal-or-descendant,
+    `_within`); the LONGEST such ancestor wins, so nested worktrees resolve to the most specific.
+
+    Returns `(kind, work_item, generation)`:
+      * `('run', wi, gen)`     — this session's cwd lies within run `wi`'s `sessionCwd` (uniquely)
+                                 → journal to that run's own events.jsonl;
+      * `('trail', None, None)` — session-aware live leases exist but the cwd is within NONE of
+                                 them → the event belongs to no live run here → project-level trail;
+      * `('legacy', None, None)` — no live lease records a `sessionCwd` (pre-#379 leases), OR the
+                                 match is ambiguous → the caller keeps today's cwd-resolved run.
+
+    NOTE (accepted residual): during a deploy's upgrade window a legacy lease (no `sessionCwd`)
+    may coexist with a session-aware one; a legacy run's OWN allowance then routes to the trail
+    rather than its own journal (events preserved, never contaminating a sibling). Bounded by the
+    lease TTL and preferred over reintroducing any cross-contamination risk.
+
+    Fail-safe / never fail closed on missing data (UFR-2): any error, no live lease, or an
+    ambiguous match → `('legacy', None, None)` — today's deterministic behavior, never worse
+    than pre-#379. This is audit ROUTING, not a gate: it can never change what is allowed/denied."""
+    try:
+        session_aware = [(wi, gen, lease) for (wi, gen, lease) in _live_leases(cwd)
+                         if lease.get("sessionCwd")]
+        if not session_aware:
+            return ("legacy", None, None)
+        # Score every lease whose sessionCwd is an ancestor-or-equal of the payload cwd by the
+        # sessionCwd length; the LONGEST (most specific) wins. A tie (two equal-length ancestors,
+        # e.g. two runs from the identical launch dir) can't disambiguate → fall back to legacy.
+        scored = [(len(os.path.realpath(lease["sessionCwd"])), wi, gen)
+                  for (wi, gen, lease) in session_aware
+                  if _within(cwd, lease.get("sessionCwd"))]
+        if scored:
+            longest = max(s[0] for s in scored)
+            top = [s for s in scored if s[0] == longest]
+            if len(top) == 1:
+                return ("run", top[0][1], top[0][2])
+            return ("legacy", None, None)
+        # session-aware leases exist, but the cwd is within none of them → not a run event here.
+        return ("trail", None, None)
+    except Exception:
+        return ("legacy", None, None)
 
 
 def _run_is_live(run_id, cwd, root):

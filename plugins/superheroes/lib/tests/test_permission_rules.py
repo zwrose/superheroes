@@ -639,3 +639,99 @@ def test_seed_audit_traces_every_family(monkeypatch, tmp_path):
     audited_families = {e.get("disposition") for e in audit}
     for fam in ("test-run", "validators", "worktree-vcs", "draft-pr"):
         assert fam in audited_families, fam
+
+
+# --- #379: resolve_journal_target — attribute an allowance event to a run ONLY when the
+# triggering session (identified by its launch cwd, recorded on the lease at acquire) IS that
+# run's session. Cross-session / foreign events go to the project-level trail; pre-#379 leases
+# without a sessionCwd fall back to today's cwd-resolved run.
+
+
+def _pin_store(monkeypatch, store):
+    # Both the store keying (resolve_active_lease / _live_leases) and control_plane.paths must
+    # resolve to the ONE store so two "sessions" share a clone; tolerate the optional root arg.
+    import control_plane
+    monkeypatch.setattr(control_plane, "checkout_dir", lambda c, root=None: store)
+
+
+def test_resolve_journal_target_owning_session_matches_run(tmp_path, monkeypatch):
+    import control_plane, ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    store = control_plane.ensure_store(sess)
+    _pin_store(monkeypatch, store)
+    ok, gen, _ = ref_lock.acquire(store, "wi-run", session_cwd=os.path.realpath(sess))
+    assert ok
+    kind, wi, g = pr.resolve_journal_target(sess)
+    assert (kind, wi, g) == ("run", "wi-run", gen)
+
+
+def test_resolve_journal_target_foreign_session_goes_to_trail(tmp_path, monkeypatch):
+    import control_plane, ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess = str(tmp_path / "sessionA")
+    foreign = str(tmp_path / "foreign-agent-worktree")
+    for d in (sess, foreign):
+        os.makedirs(d, exist_ok=True)
+    store = control_plane.ensure_store(sess)
+    _pin_store(monkeypatch, store)
+    ref_lock.acquire(store, "wi-run", session_cwd=os.path.realpath(sess))
+    # A live, session-aware lease exists, but the FOREIGN session owns none of it.
+    assert pr.resolve_journal_target(foreign) == ("trail", None, None)
+
+
+def test_resolve_journal_target_two_runs_each_attributed_to_own_session(tmp_path, monkeypatch):
+    import control_plane, ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess_a = str(tmp_path / "sessionA")
+    sess_b = str(tmp_path / "sessionB")
+    for d in (sess_a, sess_b):
+        os.makedirs(d, exist_ok=True)
+    store = control_plane.ensure_store(sess_a)
+    _pin_store(monkeypatch, store)
+    _, gen_a, _ = ref_lock.acquire(store, "wi-a", session_cwd=os.path.realpath(sess_a))
+    _, gen_b, _ = ref_lock.acquire(store, "wi-b", session_cwd=os.path.realpath(sess_b))
+    assert pr.resolve_journal_target(sess_a) == ("run", "wi-a", gen_a)
+    assert pr.resolve_journal_target(sess_b) == ("run", "wi-b", gen_b)
+
+
+def test_resolve_journal_target_legacy_lease_falls_back(tmp_path, monkeypatch):
+    # A pre-#379 lease has NO sessionCwd -> ('legacy', ...) so the caller keeps today's behavior.
+    import control_plane, ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    store = control_plane.ensure_store(sess)
+    _pin_store(monkeypatch, store)
+    ref_lock.acquire(store, "wi-run")   # legacy acquire: no session_cwd
+    assert pr.resolve_journal_target(sess) == ("legacy", None, None)
+
+
+def test_resolve_journal_target_no_live_lease_is_legacy(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess = str(tmp_path / "sessionA")
+    os.makedirs(sess, exist_ok=True)
+    assert pr.resolve_journal_target(sess) == ("legacy", None, None)
+
+
+def test_resolve_journal_target_ambiguous_same_cwd_falls_back(tmp_path, monkeypatch):
+    # Two session-aware runs launched from the IDENTICAL cwd — cwd can't disambiguate, so fall
+    # back to today's deterministic behavior rather than guess (no worse than pre-#379).
+    import control_plane, ref_lock
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "store"))
+    sess = str(tmp_path / "sessionShared")
+    os.makedirs(sess, exist_ok=True)
+    store = control_plane.ensure_store(sess)
+    _pin_store(monkeypatch, store)
+    ref_lock.acquire(store, "wi-a", session_cwd=os.path.realpath(sess))
+    ref_lock.acquire(store, "wi-b", session_cwd=os.path.realpath(sess))
+    assert pr.resolve_journal_target(sess) == ("legacy", None, None)
+
+
+def test_resolve_journal_target_fail_safe_on_error(tmp_path, monkeypatch):
+    # An internal error in the resolver must fall back to ('legacy', ...) — never raise, never
+    # drop the audit event (this is routing, not a gate).
+    monkeypatch.setattr(pr, "_live_leases",
+                        lambda cwd: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert pr.resolve_journal_target(str(tmp_path)) == ("legacy", None, None)

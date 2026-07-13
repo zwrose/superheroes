@@ -109,7 +109,17 @@ def main():
     # is the sole mutex; because the store is common-dir keyed, the lease is visible from every
     # worktree of the clone, so a duplicate launch of the same work item is refused wherever it
     # was launched from.
-    ok, generation, reason = ref_lock.acquire(store, args.work_item)
+    # #379: stamp the run's EXECUTION ROOT onto the lease so allowance journaling can attribute
+    # an event to THIS run only when the triggering session is its session. `cwd` here is
+    # os.getcwd() of this leaf: in a live run the spine dispatches this snapshot through the
+    # courier, which re-roots it to `--root` (the worktree toplevel), so os.getcwd() is that
+    # toplevel; in dev/smoke (no courier re-root) it is the inherited session cwd. Either way it
+    # is an ANCESTOR-OR-EQUAL of the enforcer hook's payload cwd for that session's tool calls
+    # (the session cwd is the toplevel, or a subdir of it) — which is exactly what
+    # resolve_journal_target's `_within` (equal-or-descendant) match keys on. A session launched
+    # OUTSIDE this root simply routes to the checkout trail, never to a sibling run (fail-safe).
+    ok, generation, reason = ref_lock.acquire(
+        store, args.work_item, session_cwd=os.path.realpath(cwd))
     if not ok:
         return _park("work-item lease %s — another run is in progress (UFR-3)" % reason)
     paths = control_plane.paths(checkout_root, args.work_item)

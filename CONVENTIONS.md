@@ -358,6 +358,7 @@ config-vs-state line, because the two have opposite sharing needs:
     .git/
     meta.json                           # { schemaVersion, sourcePath }  (mode lives in registry.json, not here — §6.3)
     queue.json                          # producer-owned ordered work-list (schema in §4.3)
+    allowances.jsonl                    # checkout-level allowance audit trail (#379): allowance_fired events not attributable to a live run's session (multi-writer, ts-ordered, seq-less)
     issues/<work-item>/
       checkpoint.json
       resume-brief.md
@@ -419,11 +420,14 @@ explicit (`order`), not array position. Item lifecycle is
 ### 4.4 Coordination = git refs and a config lock, not file polling
 
 **Work-item lock — a leased git ref**, `refs/superheroes/locks/<work-item>`, valued
-`{ holder, host, acquiredAt, generation }`, in the per-clone control-plane store (so the
-lease is visible identically from every worktree of the clone, §4.2):
+`{ holder, host, acquiredAt, generation }` (plus an optional `sessionCwd` — the run's
+execution root, #379, used only to attribute allowance audit events to the run whose
+session triggered them; absent on a legacy lease → today's behavior), in the per-clone
+control-plane store (so the lease is visible identically from every worktree of the clone,
+§4.2):
 
-- The holder **renews** the ref (bumps `acquiredAt`) on a heartbeat interval **≪ TTL**
-  while it works.
+- The holder **renews** the ref (bumps `acquiredAt`, carrying `sessionCwd` forward) on a
+  heartbeat interval **≪ TTL** while it works.
 - A contender may **reclaim** only when `now - acquiredAt > TTL`, via **compare-and-swap**
   on the ref (atomic), **incrementing `generation`**.
 - **Fencing:** the current `generation` is written into `checkpoint.json`

@@ -223,7 +223,8 @@ def _in_superheroes_repo(cwd):
         return False
 
 
-def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None):
+def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None, work_item=None,
+                     session_id=None):
     """('allow'|'ask'|'deny', reason). Decision order:
 
       1. non-string                         → deny (fail-closed)
@@ -280,9 +281,12 @@ def classify_command(command, host="codex", in_scope=True, cwd=None, run_id=None
                                                  work_item=work_item, gated_check=gated_action)
         if verdict == "allow":
             # #149 auditability NFR: record this auto-allowance in the run's own journal. Pure
-            # best-effort observability — fail-open, NEVER affects the decision or latency, and
-            # fires ONLY here (the allowance layer's allow), not on the default-allow fall-through.
-            _journal_allowance(command, cwd, run_id, why, work_item=work_item)
+            # best-effort observability — fail-open, NEVER affects the DECISION, and fires ONLY
+            # here (the allowance layer's allow), not on the default-allow fall-through. #379 adds
+            # a bounded lease read (resolve_journal_target) to attribute it to the owning run —
+            # small, wrapped best-effort, and off the deny/ask paths.
+            _journal_allowance(command, cwd, run_id, why, work_item=work_item,
+                               session_id=session_id)
             return ("allow", "auto-allowed (%s)" % why)
     except Exception:
         pass
@@ -404,31 +408,65 @@ def _active_work_item(cwd, run_id):
     return permission_rules.resolve_active_lease(cwd, run_id)[0]
 
 
-def _journal_allowance(command, cwd, run_id, reason, work_item=None):
-    """Record an auto-allowance in the active run's own events.jsonl (#149 auditability NFR:
-    "every automatic allowance ... made during a run is visible in that run's records").
+def _journal_allowance(command, cwd, run_id, reason, work_item=None, session_id=None):
+    """Record an auto-allowance in the audit trail (#149 auditability NFR: "every automatic
+    allowance ... made during a run is visible in that run's records").
 
-    Best-effort OBSERVABILITY, NEVER gating: this append is wrapped whole so any error in path
-    resolution or the write is swallowed — the hook's decision and latency are untouched (no
-    retries). The raw command is NEVER written (it may embed tokens/secrets); only the first 16
-    hex of its sha256, hashed with the SAME `permission_rules._hash` the composed-command store
-    uses, so the two correlate. Fires ONLY for the allowance layer's allow — the caller does not
-    reach here on the default-allow fall-through, which must journal nothing."""
+    #379 — session-scoped attribution: the event lands in a run's OWN events.jsonl only when the
+    TRIGGERING session is that run's session (its lease `sessionCwd` matches the payload cwd).
+    An event from a session that owns no live run here (a foreign agent, or a sibling run's
+    session) goes to the project-level `<checkout>/allowances.jsonl` trail instead — preserving
+    the #149 contract without contaminating another run's journal. A pre-#379 lease with no
+    `sessionCwd` falls back to today's cwd-resolved run (never fail closed on missing data).
+
+    Best-effort OBSERVABILITY, NEVER gating: this append is wrapped whole so any error in
+    attribution, path resolution, or the write is swallowed — the hook's decision and latency
+    are untouched (no retries). The raw command is NEVER written (it may embed tokens/secrets);
+    only the first 16 hex of its sha256, hashed with the SAME `permission_rules._hash` the
+    composed-command store uses, so the two correlate. Fires ONLY for the allowance layer's
+    allow — the caller does not reach here on the default-allow fall-through."""
     try:
         import control_plane
         import journal
-        if not work_item:
-            # fallback for callers that did not thread the pair (e.g. direct classify_command
-            # use in tests) — same shared seam, so attribution cannot drift.
-            work_item = _active_work_item(cwd, run_id)
-        if not work_item:
-            return
-        events = control_plane.paths(cwd, work_item)["events"]
-        journal.append(events, "allowance_fired", payload={
+        payload = {
             "reason": reason,
             "command_sha256": permission_rules._hash(command)[:16],
             "cwd": cwd or None,
-        })
+            # #379: the explicit identity fields make attribution testable/auditable — the
+            # TRIGGERING session (from the hook payload) and the run it was attributed to.
+            "session_id": session_id or None,
+        }
+        kind, owner_wi, owner_gen = permission_rules.resolve_journal_target(cwd)
+        if kind == "trail":
+            # No live run here belongs to the triggering session — journal to the project-level
+            # allowance trail, NOT a sibling run's journal (the #379 misroute this fix closes).
+            # The trail is a MULTI-WRITER, checkout-lived file: journal.append is O_APPEND so lines
+            # are never torn/lost, and dense_seq=False skips the per-append whole-file seq read (a
+            # dense seq is unreliable under concurrent writers AND would grow O(n^2) on this hot
+            # hook path as the trail accumulates — premortem-001); trail events order by `ts` (at
+            # second granularity — two events in the same second have undefined relative order,
+            # benign for a best-effort audit trail with no seq consumer). The
+            # file is append-only with no reaper: it shares the write model of a run's events.jsonl
+            # but NOT its bound (a run's journal is reaped with its run; this trail is checkout-lived,
+            # so a slow linear accumulator). Growth is ~1 line per FOREIGN auto-allowance (a bounded-
+            # rate event, not per-tool-call); broader trail rotation is deferred out of this fix.
+            payload["run_id"] = None
+            journal.append(control_plane.allowance_trail(cwd), "allowance_fired",
+                           payload=payload, dense_seq=False)
+            return
+        if kind == "run":
+            target_wi, target_gen = owner_wi, owner_gen
+        else:
+            # 'legacy' (no session-aware lease) → today's behavior: the cwd-resolved run. The
+            # threaded (work_item, run_id) is that same resolution; fall back to the shared seam
+            # for direct callers (e.g. tests) that pass no work_item.
+            target_wi = work_item or _active_work_item(cwd, run_id)
+            target_gen = run_id
+        if not target_wi:
+            return
+        payload["run_id"] = target_gen
+        events = control_plane.paths(cwd, target_wi)["events"]
+        journal.append(events, "allowance_fired", payload=payload)
     except Exception:
         return
 
@@ -448,16 +486,24 @@ def hook(stdin_text, host="codex"):
     tool = payload.get("tool_name")
     ti = payload.get("tool_input") or {}
     cwd = payload.get("cwd")
+    # #379: the triggering session's id (Claude Code PreToolUse payloads carry `session_id`).
+    # Recorded on the journaled allowance event for testable/auditable attribution; the routing
+    # decision itself keys on the session-launch cwd recorded on the lease (session_id is not
+    # available at lease-acquire time — see recover_entry / resolve_journal_target).
+    session_id = payload.get("session_id")
     in_scope = _in_superheroes_repo(cwd)
     if tool in _CMD_TOOLS:
         command = _command_text(ti)
-        # Resolve the active run's (work_item, run_id) pair ONCE per hook invocation (a single
-        # Bash call), then thread both + the payload cwd into the allowance layer — the pair keeps
-        # the frozen-file read work-item-namespaced and the allowance journal attributed to the
-        # SAME run the evaluation used (never re-resolved downstream).
+        # Resolve the active run's (work_item, run_id) pair for this hook invocation, then thread
+        # both + the payload cwd into the allowance layer — the pair keeps the frozen-file read
+        # work-item-namespaced and is the legacy-branch fallback the allowance journal uses. #379
+        # note: on the allowance-allow branch the journal path re-reads the clone's leases once
+        # more (resolve_journal_target, for session-scoped attribution); both reads go through the
+        # one shared `_live_leases` seam, so they can never disagree about which runs are live.
         work_item, run_id = permission_rules.resolve_active_lease(cwd)
         decision, reason = classify_command(command, host=host, in_scope=in_scope,
-                                            cwd=cwd, run_id=run_id, work_item=work_item)
+                                            cwd=cwd, run_id=run_id, work_item=work_item,
+                                            session_id=session_id)
         action = gated_action(command)
         # Codex (deny-only host) gated overlay: the deny is the BACKSTOP that forces the
         # ask; a live owner-minted allowance lets the next matching call through once.

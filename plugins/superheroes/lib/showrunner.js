@@ -570,8 +570,16 @@ function reviewCodeLeaves(tiers, opts) {
       // a dispatch fact — the adapter's owner-policy map keeps a cursor reviewer on composer, and the
       // readout shows the same map's truth. #309: the moderate read ceiling for effortKey
       // (review/review-deep); the owner `timeout` override still wins.
+      // #395 follow-up: engine_dispatch's runKeyBase uses taskId ALONE when present (it wins over
+      // workItem — see engine_dispatch.js runKeyBase) — a bare `${reviewer}-r${round}` taskId
+      // collides across DIFFERENT work items reviewing concurrently (same reviewer name + round
+      // land on one shared /tmp staging path). Prefix with the resolved workItem so the key is
+      // unique both across parallel same-work-item reviewers (the #395 fix) and across concurrent
+      // work items (this fix) — same sanitize/truncate in runKeyBase makes any workItem value safe.
+      const dispatchWorkItem = typeof workItem === 'string' ? workItem : 'review-code'
       const res = await engineDispatch.dispatchExternal({
-        workItem: typeof workItem === 'string' ? workItem : 'review-code',
+        workItem: dispatchWorkItem,
+        taskId: `${dispatchWorkItem}-${reviewer}-r${round}`,
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
@@ -1554,6 +1562,8 @@ async function exec(commands, label) {
   const cmdList = cmds.map(function(c, i) { return (i + 1) + '. ' + selfContained(c) }).join('\n')
   const prompt =
     'Run each of the following commands in order using the Bash tool. ' +
+    courier.PAYLOAD_IS_DATA_CLAUSE + ' Your hard tool budget is exactly ' + cmds.length +
+    ' Bash call' + (cmds.length === 1 ? '' : 's') + ' — one per numbered command — and no other tool. ' +
     'Return ONLY a raw JSON array and NOTHING else — no prose, no explanation, no markdown fences; ' +
     'your entire response must be valid for JSON.parse. ' +
     'Each element: {"index":<0-based>,"ok":<true|false>,"stdout":<string>}. ' +

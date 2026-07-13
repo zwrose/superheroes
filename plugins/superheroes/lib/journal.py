@@ -34,8 +34,11 @@ EVENT_TYPES = {
     # #149 auditability NFR ("every automatic allowance or timeout denial made during a run is
     # visible in that run's records"): an AUTO-ALLOWANCE the below-the-floor allowance layer
     # fired (denials already ride permission_denied). Structured non-secret `payload`
-    # ({reason, command_sha256, cwd}), written as-is — the command HASH (first 16 hex of
-    # sha256), never the raw command text (which may embed tokens/secrets).
+    # ({reason, command_sha256, cwd, session_id, run_id}), written as-is — the command HASH
+    # (first 16 hex of sha256), never the raw command text (which may embed tokens/secrets).
+    # #379: `session_id` (the triggering session) + `run_id` make attribution auditable, and an
+    # event that belongs to no live run's session is written to the checkout-level
+    # `allowances.jsonl` trail (same event shape) instead of a run's events.jsonl.
     "allowance_fired",
     # #381 whole-branch final review: auditable handoff to review-code when the one-pass cap surfaces
     # blockers, the fix batch lands, and post-fix verify is green. Structured non-secret `payload`
@@ -74,13 +77,22 @@ def _next_seq(events_path):
 
 
 def append(events_path, event_type, *, step=None, detail=None, world=None,
-           payload=None, root=None, ts=None):
+           payload=None, root=None, ts=None, dense_seq=True):
     # Fail closed on an unknown event type: a typo'd "ci_fix_attempt" would be silently
     # ignored by ci_attempts() and UNDER-count the step 8 bound (inverting the over-count
     # fail-safe). Parking on it (the orchestrator catches DurableWriteError) is safe.
     if event_type not in EVENT_TYPES:
         raise DurableWriteError("unknown event type: %r" % event_type)
-    ev = {"ts": _stamp(ts), "seq": _next_seq(events_path), "type": event_type}
+    ev = {"ts": _stamp(ts)}
+    if dense_seq:
+        # Dense, monotonic seq for a SINGLE-writer run journal. Skipped (dense_seq=False) for a
+        # MULTI-writer file — the #379 checkout-level allowance trail: a read-derived seq is
+        # unreliable under concurrent writers anyway, and computing it re-reads the whole file on
+        # every append (_next_seq → read_events), an O(n^2) cost on the synchronous PreToolUse
+        # hook path as the trail grows over the checkout's life (premortem-001). A seq-less event
+        # orders by `ts`; consumers that read seq use `.get("seq")` and tolerate its absence.
+        ev["seq"] = _next_seq(events_path)
+    ev["type"] = event_type
     if step is not None:
         ev["step"] = step
     if detail is not None:
