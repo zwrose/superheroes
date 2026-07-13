@@ -1019,17 +1019,18 @@ async function producePhase(phase, workItem) {
 
   // #397 FR-3: read the hand-off from plan review for tasks phase, and journal handoff_provided.
   // A hand-off read failure is disclosed (UFR-5) via the prompt and journal event, but does NOT
-  // block produce — the produce phase proceeds with or without the hand-off.
+  // block produce — the produce phase proceeds with or without the hand-off. The receipt is journaled
+  // HERE (before the author is dispatched), so produce-leaf.md can truthfully say "the phase has
+  // already journaled that disclosure" and the author never has to (or gets to) claim it did.
   let handoff = null
-  let handoffEvent = null
   if (doc === 'tasks') {
     handoff = await readHandoff(docDirFor(workItem))
     if (handoff && handoff.ok) {
       const count = (handoff.findings && handoff.findings.length) || 0
-      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: count } }
+      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: count })
     } else {
       const reason = (handoff && handoff.reason) || 'unknown'
-      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: 0, reason } }
+      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: 0, reason })
     }
   }
 
@@ -1158,9 +1159,7 @@ async function producePhase(phase, workItem) {
           schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     }
     if (authored == null) {
-      const result = { confidence: 'low', assumptions: [`produce step failed for ${doc}`] }
-      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-      return result  // UFR-4
+      return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] }  // UFR-4
     }
     // surface any produce-phase NOTIFY default in the durable ledger the boundary reads (UFR-2): a
     // produce phase has no #104 loop record to ride, so it is named via the ledger, not the extras seam.
@@ -1171,20 +1170,16 @@ async function producePhase(phase, workItem) {
       if (!ok) {
         // a NOTIFY default that can't be durably recorded must NOT be silently lost (UFR-2): park and
         // name it. No marker is stamped yet, so a resume re-produces and retries the NOTIFY.
-        const result = { confidence: 'low',
+        return { confidence: 'low',
           assumptions: ['produce NOTIFY default not durably recorded: ' +
                  authored.notify.map((n) => (n && n.message) || '').join('; ')] }
-        if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-        return result
       }
     }
     // Verify the author actually stamped the marker (UFR-4 guard). usableDraft re-reads via exec+twin.
     // The why-signal (missing_sections, placeholder) is preserved for the next retry's gap hint.
     const after = await usableDraft(workItem, doc)
     if (after.usable) {
-      const result = { confidence: 'high', assumptions: [] }
-      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-      return result
+      return { confidence: 'high', assumptions: [] }
     }
     // Store the gap signal for the next attempt's targeted hint.
     lastSignal = after
@@ -1195,10 +1190,8 @@ async function producePhase(phase, workItem) {
   const gapDesc = (lastSignal && lastSignal.missing_sections && lastSignal.missing_sections.length)
     ? `missing ## headings: ${lastSignal.missing_sections.join(', ')}`
     : (lastSignal && lastSignal.placeholder ? 'placeholder token present' : 'content check failed')
-  const result = { confidence: 'low',
+  return { confidence: 'low',
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
-  if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-  return result
 }
 
 // #397 FR-2: collectNonBlockingFindings asks the Python courier helper to read round-records.json
@@ -1241,6 +1234,25 @@ async function readHandoff(docsDir) {
   } catch (_) {
     return { ok: false, reason: 'read-dispatch-failed' }
   }
+}
+
+// #397 FR-3 + UFR-5: journal the `handoff_provided` receipt for the tasks produce phase — delivered
+// > 0 when the plan hand-off was read, or delivered: 0 + reason when it was absent/unreadable — so the
+// receipt is honest either way. Runs through the io() runHelper seam (same shim the denial recorder
+// uses: pyLibDir() on sys.path, no __dirname — works under node AND the Workflow bundle) and resolves
+// the run journal from the work-item exactly as phase_progress_entry.py does (control_plane.paths).
+// Fail-open: a journal-write outage NEVER aborts produce (the hand-off is advisory input, and this
+// entry is the readout's UFR-5 disclosure, not a gate) — awaited only so the receipt lands before the
+// author is dispatched.
+async function journalHandoffProvided(workItem, payload) {
+  try {
+    const script =
+      `import sys, json, os; sys.path.insert(0, ${pyLibDir()}); ` +
+      'import control_plane, journal; ' +
+      'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
+      'journal.append(p["events"], "handoff_provided", payload=json.loads(sys.argv[2]), root=os.getcwd())'
+    await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload || {})])
+  } catch (_) { /* fail-open: a journal outage must never derail produce (UFR-5 disclosure, not a gate) */ }
 }
 
 // the review phase: idempotent passed-gate skip, else run the panel-doc leg and map terminal->gate.

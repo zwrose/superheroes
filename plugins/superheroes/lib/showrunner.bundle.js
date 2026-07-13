@@ -6135,15 +6135,14 @@ async function producePhase(phase, workItem) {
   if (draft.usable) return { confidence: 'high', assumptions: [] } // FR-8 resume — do not re-author
   const model = authorModel(doc)
   let handoff = null
-  let handoffEvent = null
   if (doc === 'tasks') {
     handoff = await readHandoff(docDirFor(workItem))
     if (handoff && handoff.ok) {
       const count = (handoff.findings && handoff.findings.length) || 0
-      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: count } }
+      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: count })
     } else {
       const reason = (handoff && handoff.reason) || 'unknown'
-      handoffEvent = { type: 'handoff_provided', payload: { doc: 'tasks', delivered: 0, reason } }
+      await journalHandoffProvided(workItem, { doc: 'tasks', delivered: 0, reason })
     }
   }
   const aEngine = doc === 'plan'
@@ -6257,36 +6256,28 @@ async function producePhase(phase, workItem) {
           schema: { type: 'object', properties: { status: {}, notify: { type: 'array' } } } })
     }
     if (authored == null) {
-      const result = { confidence: 'low', assumptions: [`produce step failed for ${doc}`] }
-      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-      return result  // UFR-4
+      return { confidence: 'low', assumptions: [`produce step failed for ${doc}`] }  // UFR-4
     }
     if (authored.notify && authored.notify.length) {
       const ok = await appendNotify(workItem, authored.notify.map(
         (n) => ({ phase: doc, identity: n && n.identity, message: n && n.message })))
       if (!ok) {
-        const result = { confidence: 'low',
+        return { confidence: 'low',
           assumptions: ['produce NOTIFY default not durably recorded: ' +
                  authored.notify.map((n) => (n && n.message) || '').join('; ')] }
-        if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-        return result
       }
     }
     const after = await usableDraft(workItem, doc)
     if (after.usable) {
-      const result = { confidence: 'high', assumptions: [] }
-      if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-      return result
+      return { confidence: 'high', assumptions: [] }
     }
     lastSignal = after
   }
   const gapDesc = (lastSignal && lastSignal.missing_sections && lastSignal.missing_sections.length)
     ? `missing ## headings: ${lastSignal.missing_sections.join(', ')}`
     : (lastSignal && lastSignal.placeholder ? 'placeholder token present' : 'content check failed')
-  const result = { confidence: 'low',
+  return { confidence: 'low',
     assumptions: [`produce step yielded no usable ${doc} draft after ${_PRODUCE_MAX_RETRIES + 1} attempts: ${gapDesc}`] }
-  if (handoffEvent) result.persist = { journalPayload: handoffEvent }
-  return result
 }
 function _helperJsonAnswer(out) {
   if (!out || !out.ok) return null
@@ -6320,6 +6311,16 @@ async function readHandoff(docsDir) {
   } catch (_) {
     return { ok: false, reason: 'read-dispatch-failed' }
   }
+}
+async function journalHandoffProvided(workItem, payload) {
+  try {
+    const script =
+      `import sys, json, os; sys.path.insert(0, ${pyLibDir()}); ` +
+      'import control_plane, journal; ' +
+      'p = control_plane.paths(os.getcwd(), sys.argv[1]); ' +
+      'journal.append(p["events"], "handoff_provided", payload=json.loads(sys.argv[2]), root=os.getcwd())'
+    await io().runHelper('python3', ['-c', script, String(workItem), JSON.stringify(payload || {})])
+  } catch (_) { /* fail-open: a journal outage must never derail produce (UFR-5 disclosure, not a gate) */ }
 }
 async function reviewDocPhase(doc, workItem, opts) {
   opts = opts || {}
