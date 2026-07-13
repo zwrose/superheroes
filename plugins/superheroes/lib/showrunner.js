@@ -1500,13 +1500,24 @@ async function reviewDocPhase(doc, workItem, opts) {
   const recPath = `${runDir}/terminal-record.json`
   const recWrite = await writeTerminalRecord(recPath, verdict || {}, { runId, lease, runDir })
   if (verdict && verdict.reason === 'round-memory-unreadable') {
+    const parkReason = 'round-memory-unreadable'
+    const phaseResult = {
+      confidence: 'low',
+      assumptions: ['round-memory-unreadable'],
+      parkReason,
+    }
+    const roundNo = (verdict && verdict.round) || 1
+    const composed = await composeDocReviewPark(runDir, doc, roundNo, parkReason)
+    if (composed.disclosure) phaseResult.assumptions.push(composed.disclosure)
+    phaseResult.parkDetail = formatDocParkDetail(
+      (verdict && verdict.terminal) || 'cannot-certify',
+      parkReason,
+      composed.payload,
+    )
     return {
-      phaseResult: {
-        confidence: 'low',
-        assumptions: ['round-memory-unreadable'],
-        parkReason: 'round-memory-unreadable',
-      },
+      phaseResult,
       gate: null,
+      persist: { parkPayload: composed.payload },
       runtimeDeferredIds: Array.from(deferred.keys()),
     }
   }
@@ -1522,13 +1533,24 @@ async function reviewDocPhase(doc, workItem, opts) {
         runtimeDeferredIds: Array.from(deferred.keys()),
       }
     }
+    const parkReason = `terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`
+    const phaseResult = {
+      confidence: 'low',
+      assumptions: [parkReason],
+      parkReason,
+    }
+    const roundNo = (verdict && verdict.round) || 1
+    const composed = await composeDocReviewPark(runDir, doc, roundNo, parkReason)
+    if (composed.disclosure) phaseResult.assumptions.push(composed.disclosure)
+    phaseResult.parkDetail = formatDocParkDetail(
+      (verdict && verdict.terminal) || 'cannot-certify',
+      parkReason,
+      composed.payload,
+    )
     return {
-      phaseResult: {
-        confidence: 'low',
-        assumptions: [`terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`],
-        parkReason: `terminal-record.json ${recWrite.reason || 'write-failed'} for ${doc}`,
-      },
+      phaseResult,
       gate,
+      persist: { parkPayload: composed.payload },
       runtimeDeferredIds: Array.from(deferred.keys()),
     }
   }
