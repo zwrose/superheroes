@@ -41,6 +41,8 @@ SHOWRUNNER_SMOKES = [
     # Task 19 (#397 FR-15/UFR-1): review_convergence event is journaled at every doc-review terminal
     # (pass, park, accepted) with rounds used, per-round blocking vs routed-forward counts, and outcome.
     "plugins/superheroes/lib/tests/showrunner_convergence_smoke.js",
+    # Task 21 (#397 FR-14/UFR-1): acceptance ledger consulted at re-review; recorded on gate-approval.
+    "plugins/superheroes/lib/tests/showrunner_acceptance_rereview_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fronthalf_switch_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullpipeline_smoke.js",
     "plugins/superheroes/lib/tests/showrunner_fullrun_smoke.js",

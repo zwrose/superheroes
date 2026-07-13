@@ -64,6 +64,25 @@ def write_handoff(docs_dir, work_item, findings):
     return {"ok": True, "path": path, "counts": payload["counts"]}
 
 
+def collect_blocking(records_path):
+    """Read round-records.json and return open BLOCKING findings from the terminal round."""
+    try:
+        with open(records_path, encoding="utf-8") as fh:
+            records = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "reason": "unreadable: " + str(exc)}
+    if not isinstance(records, list):
+        return {"ok": True, "findings": []}
+    rec = records[-1] if records else None
+    findings = []
+    for f in (rec or {}).get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        if circuit_breaker.is_blocking(f.get("severity")):
+            findings.append(dict(f))
+    return {"ok": True, "findings": findings}
+
+
 def collect_nonblocking(records_path):
     """Read round-records.json from disk and return non-blocking findings for plan-handoff staging.
 
@@ -124,6 +143,8 @@ def main(argv):
     r.add_argument("--docs-dir", required=True)
     c = sub.add_parser("collect")
     c.add_argument("--records-path", required=True)
+    cb = sub.add_parser("collect-blocking")
+    cb.add_argument("--records-path", required=True)
     args = ap.parse_args(argv)
     if args.cmd == "write":
         with open(args.findings, encoding="utf-8") as fh:
@@ -131,6 +152,8 @@ def main(argv):
         print(json.dumps(write_handoff(args.docs_dir, args.work_item, findings)))
     elif args.cmd == "collect":
         print(json.dumps(collect_nonblocking(args.records_path)))
+    elif args.cmd == "collect-blocking":
+        print(json.dumps(collect_blocking(args.records_path)))
     else:
         print(json.dumps(read_handoff(args.docs_dir)))
     return 0

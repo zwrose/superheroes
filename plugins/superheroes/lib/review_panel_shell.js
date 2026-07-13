@@ -7,6 +7,7 @@
 const { io } = require('./io_seam.js')
 const panelTally = require('./panel_tally.js')
 const loopSynthesis = require('./loop_synthesis.js')
+const acceptanceRereview = require('./acceptance_rereview.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
@@ -780,8 +781,19 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
 
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const compiled = panelTally.compileDimensionResults(roundFindings)
-  const leaf = await synthesisLeaf(compiled, context, rubric, runDir, round)
-  const consumed = loopSynthesis.consume(compiled, leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : [])
+  const loadCandidates = (typeof globalThis !== 'undefined' && globalThis.loadAcceptanceCandidates) || null
+  let candidates = []
+  if (loadCandidates) {
+    try { candidates = await loadCandidates(context) || [] } catch (_) { candidates = [] }
+  }
+  const enrichedContext = Object.assign({}, context || {}, {
+    acceptanceCandidates: acceptanceRereview.prefilterForJudge(compiled, candidates),
+  })
+  const leaf = await synthesisLeaf(compiled, enrichedContext, rubric, runDir, round)
+  const verdicts = leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : []
+  const consumed = loadCandidates
+    ? acceptanceRereview.consumeWithAcceptance(compiled, verdicts, candidates)
+    : loopSynthesis.consume(compiled, verdicts)
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 

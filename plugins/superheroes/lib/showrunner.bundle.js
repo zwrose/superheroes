@@ -1110,6 +1110,7 @@ __modules["review_panel_shell"] = function (module, exports, require) {
 const { io } = require('./io_seam.js')
 const panelTally = require('./panel_tally.js')
 const loopSynthesis = require('./loop_synthesis.js')
+const acceptanceRereview = require('./acceptance_rereview.js')
 const circuitBreaker = require('./circuit_breaker.js')
 const loopState = require('./loop_state.js')
 const verifyGateTwin = require('./verify_gate.js')
@@ -1681,8 +1682,19 @@ async function dispatchReviewer(reviewer, context, rubric, runDir, round, roundF
 }
 async function synthesizeRound(roundFindings, context, rubric, runDir, round) {
   const compiled = panelTally.compileDimensionResults(roundFindings)
-  const leaf = await synthesisLeaf(compiled, context, rubric, runDir, round)
-  const consumed = loopSynthesis.consume(compiled, leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : [])
+  const loadCandidates = (typeof globalThis !== 'undefined' && globalThis.loadAcceptanceCandidates) || null
+  let candidates = []
+  if (loadCandidates) {
+    try { candidates = await loadCandidates(context) || [] } catch (_) { candidates = [] }
+  }
+  const enrichedContext = Object.assign({}, context || {}, {
+    acceptanceCandidates: acceptanceRereview.prefilterForJudge(compiled, candidates),
+  })
+  const leaf = await synthesisLeaf(compiled, enrichedContext, rubric, runDir, round)
+  const verdicts = leaf && Array.isArray(leaf.verdicts) ? leaf.verdicts : []
+  const consumed = loadCandidates
+    ? acceptanceRereview.consumeWithAcceptance(compiled, verdicts, candidates)
+    : loopSynthesis.consume(compiled, verdicts)
   return Object.assign(consumed, { usage: leaf && leaf.usage })
 }
 function graftSynthesizedFindings(roundFindings, synthesized) {
@@ -5893,11 +5905,19 @@ async function docReviewerAgent(reviewer, context, rubric, runDir, round, opts =
 async function docSynthesisLeaf(merged, context, rubric, runDir, round) {
   const overrides = (typeof globalThis !== 'undefined' && globalThis.__SR_OVERRIDES) || null
   const model = modelTierTwin.resolveModel('synthesis', overrides, null)
+  const acceptanceCandidates = (context && context.acceptanceCandidates) || []
+  const acceptanceClause = acceptanceCandidates.length
+    ? (` For finding identities ${JSON.stringify(acceptanceCandidates)}, the owner previously accepted ` +
+      'this concern — emit action "same" (with a non-empty reason) if this re-raised finding is the ' +
+      'same concern the owner accepted, or action "different" (with reason) if it is NOT the same; ' +
+      'keep-on-uncertain means treat as NOT the same (judged afresh).')
+    : ''
   const out = await agent(
     `You are the panel synthesis judge for round ${round} of the ${context.docType} doc review. ` +
     `For each merged finding below and the doc at ${context.docPath}, per the synthesis-leaf prompt ` +
     `(plugins/superheroes/eval/synthesis-leaf.md) emit one keep/drop/severity verdict (keep-on-uncertain). ` +
-    `${DOC_SEVERITY_FRAME} Return ONLY a JSON object {"verdicts":[{"id","action":"keep|drop","reason","severity"}]} keyed by ` +
+    `${DOC_SEVERITY_FRAME}${acceptanceClause} Return ONLY a JSON object ` +
+    `{"verdicts":[{"id","action":"keep|drop|same|different","reason","severity"}]} keyed by ` +
     `each finding's file::normalized-title identity.\n\nMerged findings:\n${JSON.stringify(merged)}`,
     Object.assign({ model }, { label: `synthesis:r${round}`, schema: SYNTH_VERDICTS_SCHEMA }))
   return out || null
@@ -5955,6 +5975,7 @@ async function runReviewDocPanel({ workItem, docType, docPath, runDir, runtimeDe
   }
   globalThis.reviewerAgent = docReviewerAgent
   globalThis.synthesisLeaf = docSynthesisLeaf
+  globalThis.loadAcceptanceCandidates = (ctx) => loadAcceptanceCandidates(ctx)
   globalThis.recordDeferred = (report, verdict, rd) =>
     docRecordDeferred(report, verdict, rd, context, runtimeDeferred || new Map())
   return reviewPanel({
@@ -6304,6 +6325,85 @@ async function collectNonBlockingFindings(runDir) {
   } catch (_) {
     return null
   }
+}
+async function collectOpenBlockingFindings(runDir) {
+  try {
+    const out = await io().runHelper('python3', [
+      libPath('review_handoff.py'), 'collect-blocking',
+      '--records-path', `${runDir}/round-records.json`,
+    ], { label: 'read open blockers', courier: true })
+    const ans = _helperJsonAnswer(out)
+    if (!ans || !ans.ok) return null
+    return Array.isArray(ans.findings) ? ans.findings : []
+  } catch (_) {
+    return null
+  }
+}
+async function loadAcceptanceCandidates(context) {
+  const workItem = context && context.workItem
+  const doc = context && context.docType
+  const docPath = context && context.docPath
+  if (!workItem || !doc || !docPath) return []
+  try {
+    const res = await exec([
+      `python3 ${libPath('review_acceptance.py')} candidates --docs-dir ${shq(docDirFor(workItem))} ` +
+      `--doc ${shq(doc)} --doc-path ${shq(docPath)}`,
+    ], 'load acceptance candidates')
+    let cands = null
+    try { cands = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
+    return Array.isArray(cands) ? cands : []
+  } catch (_) {
+    return []
+  }
+}
+async function recordAcceptanceLedger(doc, workItem, runDir) {
+  const docsDir = docDirFor(workItem)
+  const docPath = docPathFor(workItem, doc)
+  const blockers = await collectOpenBlockingFindings(runDir)
+  if (blockers === null) return { ok: false, reason: 'open blockers unreadable' }
+  const findingsPath = `${runDir}/open-blockers.json`
+  await io().writeFile(findingsPath, JSON.stringify(blockers))
+  const res = await exec([
+    `python3 ${libPath('review_acceptance.py')} record --docs-dir ${shq(docsDir)} ` +
+    `--doc ${shq(doc)} --findings ${shq(findingsPath)} --doc-path ${shq(docPath)}`,
+  ], 'record acceptance')
+  let out = null
+  try { out = JSON.parse((res && res[0] && res[0].stdout) || '') } catch (_) {}
+  if (res && res[0] && res[0].ok && out && out.ok) return { ok: true }
+  const detail = (res && res[0] && !res[0].ok && String((res[0].stderr || '')).trim()) ||
+    (out && out.reason) || 'record returned non-ok'
+  return { ok: false, reason: detail }
+}
+async function approveDocReviewGate(doc, workItem, opts) {
+  opts = opts || {}
+  const runId = opts.runId || `approve-${doc}-${workItem}`
+  const lease = opts.lease || undefined
+  const runDir = runDirFor(workItem, `review-${doc}`)
+  const phaseResult = { confidence: 'high', assumptions: [] }
+  const rec = await recordAcceptanceLedger(doc, workItem, runDir)
+  if (!rec.ok) {
+    phaseResult.assumptions.push(
+      `acceptance record could not be written: ${rec.reason} — a re-review of unchanged content will ` +
+      're-judge this finding rather than treat it as accepted')
+  }
+  const leaseArg = lease ? ` --lease ${shq(lease)}` : ''
+  const sideEffectCmd =
+    `python3 ${libPath('definition_doc.py')} set-gate --doc ${shq(doc)} ` +
+    `--work-item ${shq(workItem)} --review passed --root "$(git rev-parse --show-toplevel)" ` +
+    `--expected-hash current --run-id ${shq(runId)}${leaseArg}`
+  const persist = {
+    sideEffectCmd,
+    journalPayload: {
+      phase: `review-${doc}`, gate: 'passed', confidence: 'high',
+      assumptions: phaseResult.assumptions.slice(), runId, lease,
+    },
+  }
+  try {
+    await journalReviewConvergence(workItem, doc, runDir, 'accepted-pass')
+  } catch (e) {
+    phaseResult.assumptions.push(`review_convergence record may have failed for ${workItem}`)
+  }
+  return { phaseResult, gate: 'passed', persist }
 }
 function _parkComposerDispatchDetail(res) {
   if (!res || !res[0]) return 'no courier result'
@@ -6696,7 +6796,11 @@ async function appendNotify(workItem, entries) {
 }
 module.exports.producePhase = producePhase
 module.exports.reviewDocPhase = reviewDocPhase
+module.exports.approveDocReviewGate = approveDocReviewGate
 module.exports.collectNonBlockingFindings = collectNonBlockingFindings
+module.exports.collectOpenBlockingFindings = collectOpenBlockingFindings
+module.exports.loadAcceptanceCandidates = loadAcceptanceCandidates
+module.exports.recordAcceptanceLedger = recordAcceptanceLedger
 module.exports.composeDocReviewPark = composeDocReviewPark
 module.exports.formatDocParkDetail = formatDocParkDetail
 module.exports.journalTasksRoutedFindings = journalTasksRoutedFindings
