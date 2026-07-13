@@ -46,6 +46,41 @@ def test_drift_check_passes_when_phases_match_and_target_exists():
     assert res["ok"] is True
 
 
+def test_committed_fixture_target_is_one_newline_terminated_line():
+    # #419: the fixture-dir target.txt is the ONLY source of the seeded baseline the tasks
+    # doc copies onto the branch; its steps assert `wc -l` == 1 pre-append and == 2 after.
+    # A second line or a lost trailing newline would corrupt the append mid-run, deep in a
+    # paid acceptance run — pin the shape here instead.
+    p = os.path.join(FIXTURE, "target.txt")
+    assert os.path.isfile(p)
+    body = open(p, encoding="utf-8").read()
+    assert body.endswith("\n")
+    assert body.count("\n") == 1
+
+
+def test_materialize_copies_target_alongside_docs():
+    # #419: the tasks doc's seed step reads target.txt from the SAME directory as the
+    # materialized docs — materialize() silently skips a missing source (os.path.isfile
+    # guard), so assert the copy actually lands and is reported in paths.
+    store = tempfile.mkdtemp()
+    try:
+        out = af.materialize("target-copy-check", FIXTURE, store)
+        assert any(p.endswith("target.txt") for p in out["paths"])
+        assert os.path.isfile(os.path.join(store, out["work_item"], "target.txt"))
+    finally:
+        shutil.rmtree(store, ignore_errors=True)
+
+
+def test_fixture_tasks_doc_seeds_its_own_baseline():
+    # #419: the branch carries no target.txt; the tasks doc must keep seeding it from the
+    # doc-adjacent copy. Pin the executable seed mechanics (not prose) so a future edit
+    # cannot silently revert to the pre-#419 false premise ("modify the existing tracked
+    # file") that strict spec-compliance reviewers correctly fail.
+    text = open(os.path.join(FIXTURE, "tasks.md"), encoding="utf-8").read()
+    assert 'cp "$TASKS_DOC_DIR/target.txt" target.txt' in text
+    assert "Task-Id: 1" in text
+
+
 def test_fixture_expected_phases_match_showrunner_source_of_truth():
     phases = deps.real_expected_phases()()
     assert af.expected_phases(FIXTURE) == phases
