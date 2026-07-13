@@ -441,6 +441,8 @@ gate to set; say so and stop at the terminal summary).
   still open, or the user **skipped** a blocking finding → record `changes-requested` (the
   plan is not cleared to advance; report what remains).
 
+**Record accepted findings to the acceptance ledger (gate-approval only).** When `REVIEW` is `passed`, run the acceptance-ledger block in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-plan/reference/plan-detail.md` **before** `gate_write.py` (FR-14: acceptance first, then `gates.review`).
+
 The gate write lives in `lib/gate_write.py` (canonical-path guard, parent-gate precondition, fenced `set-gate`). It prints stderr detail and a one-word outcome to stdout:
 
 ```bash
@@ -453,38 +455,7 @@ GATE=$(python3 "$ROOT_DIR/lib/gate_write.py" --mode certify --doc plan \
   --expected-hash "$REVIEWED_HASH" --run-id "$RUN_ID" --lease "$LEASE")
 ```
 
-`$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` /
-`failed:set-gate` — surface it (and any stderr detail) in the terminal
-summary. Never hand-edit the frontmatter — `gate_write.py` (via the-architect's CLI) is the
-only writer.
-
-**Record accepted findings to the acceptance ledger (gate-approval only).** When the gate outcome
-is `passed`, persist the accepted findings (those not in the skip-set) to the work-item's
-acceptance ledger so future reviews can detect which findings the owner approved. The acceptance
-ledger (`plan-accept.json` or `tasks-accept.json`) tracks each accepted finding's identity,
-section, and content hash — at re-review, candidates with matching hashes are eligible for
-suppression if the synthesis judge confirms sameness:
-
-```bash
-if echo "$GATE" | grep -q "recorded:passed"; then
-  DOCS_DIR=$(dirname "$PLAN_PATH")
-  # Extract effective findings (those not in skip-set) and persist to ledger.
-  # This records the owner's acceptance so future reviews can suppress re-raising
-  # the same finding if its section hash still matches.
-  python3 -c "
-import json, sys
-sys.path.insert(0, '$ROOT_DIR/lib')
-import review_acceptance
-with open('$SESSION_DIR/compiled.json', encoding='utf-8') as f:
-    compiled = json.load(f)
-doc_text = open('$PLAN_PATH', encoding='utf-8').read()
-# Pass all findings; review_acceptance.record() extracts their identity/section/hash
-review_acceptance.record('$DOCS_DIR', 'plan', compiled.get('findings', []), doc_text)
-" > /dev/null 2>&1 || true
-fi
-```
-
-(Note: if the acceptance ledger write fails, continue — gate recording is still complete and has succeeded.)
+`$GATE` is one of `recorded:passed` / `recorded:changes-requested` / `skipped:noncanonical` / `failed:set-gate` — surface it (and any stderr detail, plus any acceptance-ledger disclosure from plan-detail) in the terminal summary. Never hand-edit the frontmatter — `gate_write.py` is the only writer.
 
 After exit, print a terminal summary in chat:
 
@@ -501,7 +472,7 @@ After exit, print a terminal summary in chat:
 
 **Then, after the terminal summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the review output and none blocks.
 
-Nothing else is written to the repo — the revised `$PLAN_PATH` and its gate are the deliverables (plus the project-level `.claude/review-decisions.json` learning-loop store and, only on a dismissal, the profile's `nudge-ack` map).
+Nothing else is written to the repo — the revised `$PLAN_PATH`, its gate, and (on `passed` only) `plan-accept.json` are the deliverables (plus `.claude/review-decisions.json` and, on dismissal, the profile's `nudge-ack` map).
 
 For recurrence handling, coverage decisions, dimension skipping, tier cascade, final confirmation, and telemetry, use `plugins/superheroes/reference/review-loop.md` as the shared loop contract. This skill owns only its leg-specific setup, reviewer framing, and gate-write rules.
 

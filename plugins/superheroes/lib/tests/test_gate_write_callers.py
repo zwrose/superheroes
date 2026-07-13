@@ -22,3 +22,16 @@ def test_showrunner_direct_gate_path_passes_fence_args():
     assert "--expected-hash" in review_doc
     assert "--run-id" in review_doc
     assert "--lease" in review_doc
+
+
+def test_review_plan_records_acceptance_ledger_before_gate_write():
+    """#397 FR-14: the certifying review-plan skill must record accepted findings before
+    gate_write.py — not only write gates.review directly."""
+    skill = (ROOT / "skills/review-plan/SKILL.md").read_text(encoding="utf-8")
+    detail = (ROOT / "skills/review-plan/reference/plan-detail.md").read_text(encoding="utf-8")
+    section = skill[skill.index("### 6. Record the review gate"):skill.index("## Plan-Content Requirements")]
+    assert "plan-accept.json" in section or "acceptance ledger" in section.lower()
+    assert "before" in section and "gate_write.py" in section
+    assert section.index("acceptance") < section.index("gate_write.py")
+    assert "review_acceptance.py" in detail and " record " in detail
+    assert "plan-accept.json" in detail
