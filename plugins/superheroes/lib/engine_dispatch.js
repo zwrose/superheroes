@@ -581,6 +581,47 @@ async function _scrubReason(reason) {
   return 'external error (scrubbed)'
 }
 
+// #408: sanitize the run key, then bound it to 80 chars WITHOUT letting truncation delete the
+// distinguishing tail. The old `sanitized.slice(0, 80)` (inherited #383 Part C caveat) would, for a
+// very long work-item slug, cut the taskId / content-suffix that makes the key unique — reintroducing
+// the exact cross-run collision this fold is meant to close. So when the sanitized key overflows, keep
+// a readable head PLUS a deterministic sha256 of the FULL sanitized key: two distinct keys stay
+// distinct (the hash covers everything, including the tail truncation would have dropped), and
+// identical inputs recompute the identical key (FR-8: no wall-clock, no PRNG — resume-safe).
+const _RUN_KEY_MAX = 80
+const _RUN_KEY_HASH_LEN = 16
+function _boundRunKey(raw) {
+  const sanitized = String(raw).replace(/[^A-Za-z0-9_.-]+/g, '-')
+  if (sanitized.length <= _RUN_KEY_MAX) return sanitized
+  const digest = sha256hex(sanitized).slice(0, _RUN_KEY_HASH_LEN)
+  return sanitized.slice(0, _RUN_KEY_MAX - _RUN_KEY_HASH_LEN - 1) + '-' + digest
+}
+
+// #408: derive the /tmp staging run key. It MUST distinguish concurrent runs in DIFFERENT projects —
+// a bare taskId is the tasks-doc task NUMBER (machine-global, project-blind), so two runs at the same
+// task index + engine + role collided on one staging path (a weekly-eats prompt was shipped to another
+// repo's codex review, falsely parking the run — #408). Fold the workItem into the key for EVERY role.
+// FR-8: caller-supplied identifiers only, no wall-clock / PRNG, so resume recomputes the identical key.
+function _deriveRunKey(o, prompt, schemaText) {
+  const wi = (typeof o.workItem === 'string' && o.workItem) ? o.workItem : ''
+  let base
+  if (o.taskId) {
+    const tid = String(o.taskId)
+    // Prefix the workItem UNLESS the taskId already carries it as a `${wi}-` delimited prefix — the
+    // review-code panel leaves pass `${workItem}-${reviewer}-r${round}` (ee8a5b5), so folding again
+    // would double it. Match on the delimiter (not a bare startsWith) so a workItem that is only a
+    // CHARACTER-prefix of another ('wi' vs 'window-…') is not mistaken for an already-prefixed taskId.
+    base = (wi && tid !== wi && !tid.startsWith(`${wi}-`)) ? `${wi}-${tid}` : tid
+  } else if (wi) {
+    // taskId-less roles (a review panel fanning out parallel reviewers sharing workItem/roleKind/engine)
+    // keep the #403 deterministic content suffix so each private prompt still gets a private path.
+    base = `${wi}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
+  } else {
+    base = 'run'
+  }
+  return _boundRunKey(base)
+}
+
 // FIX 3: the body runs inside a try/catch in the exported dispatchExternal below, so ANY thrown
 // error (a synchronous throw from a step here, or an unavailable Buffer/setTimeout global) still
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
@@ -638,18 +679,17 @@ async function _dispatchExternalInner(o) {
   //    build-argv via --schema-path (codex --output-schema for read roles).
   // runId is built from CALLER-SUPPLIED identifiers only — no wall-clock time or PRNG calls (FR-8:
   // the Workflow sandbox has no time/random globals, and the bundle-smoke statically bans those APIs
-  // because they break deterministic resume). taskId (write roles and callers that pass one) wins;
-  // workItem-only keys append a deterministic content suffix so a review panel fanning out parallel
-  // reviewers (same workItem/roleKind/engine) never share one /tmp staging path — without that,
-  // concurrent dispatches clobber each other's prompt/schema between stage, verify, and _runArgv.
+  // because they break deterministic resume). #408: _deriveRunKey folds the workItem into the key for
+  // EVERY role — a bare taskId is the tasks-doc task NUMBER (machine-global, project-blind), so two
+  // concurrent runs in DIFFERENT projects at the same task index + engine + role used to collide on
+  // one /tmp staging path (a weekly-eats prompt shipped to another repo's codex review, falsely
+  // parking that run). Folding distinguishes projects whose workItem slugs differ (the live-specimen
+  // case); it does NOT fold the checkout root, so two roots resolving to the SAME workItem slug on one
+  // machine remain a known residual (#408 scope note). An already-prefixed taskId (review panel leaves)
+  // is not double-prefixed, and the #403 workItem-only content suffix is preserved.
   const stagedSchema = engine === 'codex' ? strictify(schema || {}) : (schema || {})
   const schemaText = JSON.stringify(stagedSchema)
-  const runKeyBase = o.taskId
-    ? String(o.taskId)
-    : (o.workItem
-      ? `${String(o.workItem)}-${sha256hex((prompt || '') + '\0' + schemaText).slice(0, 12)}`
-      : 'run')
-  const runKey = runKeyBase.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 80)
+  const runKey = _deriveRunKey(o, prompt, schemaText)
   const runId = `${engine}-${roleKind}-${runKey}`
   const promptPath = `/tmp/engine-${runId}.prompt`
   const schemaPath = `/tmp/engine-${runId}.schema.json`
@@ -990,5 +1030,8 @@ module.exports = { dispatchExternal, DEFAULT_STALL_LIMIT_SECONDS, __resetHarness
   // fail-closed) and pins that no base64 blob rides the staged command; the routing signature lets
   // mocks target the stage leaf.
   _stageCmd, _stageInput, _SR_STAGE_SIG,
+  // #408 test-only: the pure staging-key derivation (workItem-folded, no-double-prefix, over-length
+  // safe), exported so the smoke pins every branch directly without spinning up full dispatches.
+  _deriveRunKey,
   // #347 test-only: the watchdog's stdout-relay cap, exported so the flood smoke pins the bound.
   EMIT_TAIL_BYTES }
