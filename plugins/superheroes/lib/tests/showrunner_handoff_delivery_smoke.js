@@ -2,20 +2,45 @@
 // #397 Task 16 (FR-3 + UFR-5): the tasks produce leaf must (a) receive the plan review's hand-off
 // list spliced into the author prompt and (b) journal a `handoff_provided` event — delivered > 0
 // when the hand-off was read, or delivered: 0 + reason when it was absent/unreadable — so the
-// receipt is honest either way. This smoke drives producePhase('tasks', ...) directly through the
-// injectable seams: globalThis.agent (the exec courier + the author dispatch) and global.io.runHelper
-// (the review_handoff.py read AND the handoff_provided journal append), asserting BOTH the prompt
-// splice and the journaled receipt.
+// receipt is honest either way. This smoke drives producePhase('tasks', ...) with a REAL
+// plan-handoff.json planted in a REAL docs dir (via globalThis.__SR_DOC_DIRS, the same seam
+// showrunner_fronthalf_docdir_smoke.js plants): the file is written by the actual
+// `review_handoff.py write` CLI and the produce path's `review_handoff.py read` dispatch runs the
+// actual Python against it (defaultIo.runHelper fall-through) — the docs-dir file integration and
+// the missing-file path are exercised for real, not stubbed. Only the journal append and the
+// unrelated exec pipes stay mocked.
 'use strict'
 const assert = require('node:assert')
 const test = require('node:test')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 const { defaultIo } = require('../io_seam.js')
 const sr = require('../showrunner.js')
 
-// Build the injectable seams for a single producePhase('tasks') run.
-//   handoffRead: the {ok,...} object the mocked `review_handoff.py read` returns.
-// Returns { run, capturedPrompt(), handoffAppends() }.
-function harness(handoffRead) {
+const RH = path.join(__dirname, '..', 'review_handoff.py')
+
+// Plant a REAL plan-handoff.json in docsDir through the actual writer CLI (the same code the
+// plan-review terminal runs), so the read side below exercises the true write→read pair.
+async function plantHandoff(docsDir, findings) {
+  const staged = path.join(docsDir, 'staged-findings.json')
+  fs.writeFileSync(staged, JSON.stringify(findings))
+  const out = await defaultIo.runHelper('python3', [
+    RH, 'write', '--docs-dir', docsDir, '--work-item', 'wi-handoff', '--findings', staged,
+  ])
+  assert.ok(out.ok, `real review_handoff.py write must succeed: ${out.stderr}`)
+  const ans = JSON.parse(out.stdout)
+  assert.ok(ans.ok && fs.existsSync(path.join(docsDir, 'plan-handoff.json')),
+    'a real plan-handoff.json exists in the planted docs dir')
+  return ans
+}
+
+// Build the injectable seams for a single producePhase('tasks') run against a REAL docs dir.
+// Returns { run, capturedPrompt(), handoffAppends(), docsDir }.
+function harness() {
+  const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), `handoff-smoke-${process.pid}-`))
+  globalThis.__SR_DOC_DIRS = { 'wi-handoff': docsDir }
+
   let authored = false
   let capturedPrompt = null
   const handoffAppends = []
@@ -47,9 +72,11 @@ function harness(handoffRead) {
         handoffAppends.push(payload)
         return { ok: true, status: 0, stdout: '', stderr: '' }
       }
-      // review_handoff.py read: return the canned hand-off object
+      // review_handoff.py read: NOT stubbed — run the REAL CLI against the REAL planted docs dir
+      // (this is the integration Task 16 requires the smoke to verify, including the missing-file
+      // path when nothing was planted).
       if (a.some((x) => String(x).includes('review_handoff.py')) && a.includes('read')) {
-        return { ok: true, status: 0, stdout: JSON.stringify(handoffRead), stderr: '' }
+        return defaultIo.runHelper.call(this, cmd, args)
       }
       return { ok: true, status: 0, stdout: '{}', stderr: '' }
     },
@@ -59,26 +86,30 @@ function harness(handoffRead) {
     run: () => sr.producePhase('tasks', 'wi-handoff'),
     capturedPrompt: () => capturedPrompt,
     handoffAppends: () => handoffAppends,
+    docsDir,
   }
 }
 
-function reset() { delete global.io; delete globalThis.agent }
+function reset() {
+  delete global.io
+  delete globalThis.agent
+  delete globalThis.__SR_DOC_DIRS
+}
 
-test('tasks produce leaf receives the hand-off AND journals handoff_provided (delivered > 0)', async () => {
-  const h = harness({
-    ok: true,
-    findings: [
-      { identity: 'plan.md::retry constant is two literals', planSection: '## Architecture',
-        text: 'the retry constant appears as two separate literals' },
-      { identity: 'plan.md::no named test for fallback', planSection: '## Testing',
-        text: 'no named unit test for the fallback branch' },
-    ],
-    counts: { distinct: 2 },
-  })
+test('tasks produce leaf receives a REAL planted hand-off AND journals handoff_provided (delivered > 0)', async () => {
+  const h = harness()
+  await plantHandoff(h.docsDir, [
+    { file: 'plan.md', title: 'retry constant is two literals', severity: 'Minor',
+      planSection: '## Architecture',
+      summary: 'the retry constant appears as two separate literals' },
+    { file: 'plan.md', title: 'no named test for fallback', severity: 'Minor',
+      planSection: '## Testing',
+      summary: 'no named unit test for the fallback branch' },
+  ])
   const result = await h.run()
   assert.strictEqual(result.confidence, 'high', 'the tasks author certified the draft')
 
-  // (a) the author prompt carries the hand-off entries verbatim
+  // (a) the author prompt carries the hand-off entries the REAL read returned from disk
   const prompt = h.capturedPrompt()
   assert.ok(prompt, 'the author was dispatched')
   assert.ok(prompt.includes('Hand-off from the plan review'), 'prompt has the hand-off section')
@@ -87,7 +118,7 @@ test('tasks produce leaf receives the hand-off AND journals handoff_provided (de
   assert.ok(prompt.includes('no named unit test for the fallback branch'),
     'prompt splices the second hand-off finding text')
 
-  // (b) a handoff_provided event was journaled with delivered == the hand-off count
+  // (b) a handoff_provided event was journaled with delivered == the on-disk hand-off count
   const appends = h.handoffAppends()
   assert.strictEqual(appends.length, 1, 'exactly one handoff_provided journal append')
   assert.strictEqual(appends[0].doc, 'tasks')
@@ -96,12 +127,12 @@ test('tasks produce leaf receives the hand-off AND journals handoff_provided (de
   reset()
 })
 
-test('tasks produce leaf journals handoff_provided with delivered: 0 + reason when absent', async () => {
-  const h = harness({ ok: false, reason: 'absent' })
+test('tasks produce leaf journals handoff_provided with delivered: 0 + reason when the file is absent', async () => {
+  const h = harness()   // planted docs dir exists, but NO plan-handoff.json was written
   const result = await h.run()
   assert.strictEqual(result.confidence, 'high', 'produce proceeds without the hand-off (advisory only)')
 
-  // the prompt discloses the hand-off was unavailable and does NOT claim findings were consumed
+  // the REAL read hit the real missing-file path and returned {ok:false, reason:'absent'}
   const prompt = h.capturedPrompt()
   assert.ok(prompt.includes('Hand-off from the plan review'), 'prompt still has the hand-off section')
   assert.ok(/not available|absent|unreadable/i.test(prompt), 'prompt discloses the hand-off was unavailable')
@@ -117,11 +148,11 @@ test('tasks produce leaf journals handoff_provided with delivered: 0 + reason wh
 })
 
 test('tasks produce leaf discloses handoff_provided journal failure in the author prompt (UFR-5)', async () => {
-  const h = harness({
-    ok: true,
-    findings: [{ identity: 'plan.md::x', planSection: '## A', text: 'finding one' }],
-    counts: { distinct: 1 },
-  })
+  const h = harness()
+  await plantHandoff(h.docsDir, [
+    { file: 'plan.md', title: 'x finding one', severity: 'Minor',
+      planSection: '## A', summary: 'finding one' },
+  ])
   const origRunHelper = global.io.runHelper
   global.io = Object.assign({}, global.io, {
     async runHelper(cmd, args) {
