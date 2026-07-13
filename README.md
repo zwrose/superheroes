@@ -96,6 +96,10 @@ Two things make it more than a clever prompt:
   implementation engine. Plan authoring alone can use a third **`planAuthor` engine**
   (tasks always authors on Claude); pair it with an **`author-plan` model tier** when
   you want a stronger plan model via an external host.
+  Codex dispatches are tier-aware on GPT-5.6 by default. Codex tier map:
+  haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol, fable=gpt-5.6-sol.
+  Project calibration and one-run preflight overrides can pin an individual Codex role to `gpt-5.5` or a
+  specific 5.6 model. `gpt-5.5` + `max` is rejected; `max` is opt-in on GPT-5.6 only.
 - **Measured, not vibes.** The reviewer agents ship with a frozen eval harness
   (planted findings + decoy traps, a deterministic scorer) and a non-regression
   gate: a change has to prove it catches real issues without inflating false

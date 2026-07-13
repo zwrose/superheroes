@@ -29,7 +29,7 @@ def test_build_argv_codex_review_read_only():
     assert "model_reasoning_effort=high" in argv
     assert "--output-schema" in argv and argv[argv.index("--output-schema") + 1] == "/tmp/s.json"
     assert "-m" in argv  # explicit model, never ambient default
-    assert argv[argv.index("-m") + 1] == "gpt-5.5"  # gpt-5-codex is rejected under ChatGPT-account auth
+    assert argv[argv.index("-m") + 1] == "gpt-5.6-sol"  # capable default when no tier fact is supplied
     assert argv[-1] == "-"  # codex reads the prompt from stdin (fed by the Task-10 JS runner)
 
 
@@ -44,6 +44,26 @@ def test_build_argv_codex_fix_low_effort():
     argv = EA.build_argv("codex", "fix", "low", {"cwd": "/wt"})
     assert "model_reasoning_effort=low" in argv
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
+
+
+def test_build_argv_codex_maps_shared_tier_to_gpt_5_6_model():
+    expected = {"haiku": "gpt-5.6-luna", "sonnet": "gpt-5.6-terra",
+                "opus": "gpt-5.6-sol", "fable": "gpt-5.6-sol"}
+    for tier, model in expected.items():
+        argv = EA.build_argv("codex", "review", "high", {"model": tier})
+        assert argv[argv.index("-m") + 1] == model
+
+
+def test_build_argv_codex_explicit_engine_model_pin_wins():
+    argv = EA.build_argv("codex", "review", "xhigh",
+                         {"model": "opus", "engine_model": "gpt-5.5"})
+    assert argv[argv.index("-m") + 1] == "gpt-5.5"
+
+
+def test_build_argv_codex_invalid_engine_model_fails_capable():
+    argv = EA.build_argv("codex", "review", "high",
+                         {"model": "sonnet", "engine_model": "bogus"})
+    assert argv[argv.index("-m") + 1] == "gpt-5.6-terra"
 
 
 def test_build_argv_cursor_review_plan_mode():
@@ -66,9 +86,10 @@ def test_build_argv_cursor_build_force_write():
 
 def test_build_argv_cli(capsys):
     rc = EA.main(["build-argv", "--engine", "codex", "--role", "build", "--effort", "high",
-                  "--cwd", "/wt"])
+                  "--cwd", "/wt", "--model", "opus", "--engine-model", "gpt-5.5"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out[0] == "codex" and "workspace-write" in out
+    assert out[out.index("-m") + 1] == "gpt-5.5"
 
 
 def test_build_state_uses_shared_trailer_constant():
@@ -355,9 +376,9 @@ def test_build_argv_cursor_unmapped_model_keeps_composer_default():
     assert argv[argv.index("--model") + 1] == "composer-2.5-fast"
 
 
-def test_build_argv_codex_author_plan_ignores_model_override():
+def test_build_argv_codex_author_plan_maps_fable_capability_to_sol():
     argv = EA.build_argv("codex", "author-plan", "xhigh", {"cwd": "/wt", "model": "fable"})
-    assert argv[argv.index("-m") + 1] == "gpt-5.5"   # codex has no fable; pinned model stands
+    assert argv[argv.index("-m") + 1] == "gpt-5.6-sol"
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
     assert "model_reasoning_effort=xhigh" in argv
 

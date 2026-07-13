@@ -583,7 +583,10 @@ function reviewCodeLeaves(tiers, opts) {
         engine: rEngine, roleKind: 'review', effort: eff, prompt,
         cwd: (target.worktree || procCwd()),
         schema: FINDINGS_SCHEMA,
-        model, timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
+        model,
+        engineModel: enginePrefTwin.resolveEngineModel(rEngine,
+          tier === 'reviewer' ? 'reviewer' : 'reviewer-deep', model, _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), effortKey),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), effortKey),   // #309 read stall monitor
       })
       if (res && Array.isArray(res.findings)) {
@@ -636,7 +639,9 @@ function reviewCodeLeaves(tiers, opts) {
       const res = await engineDispatch.dispatchExternal({
         workItem: 'review-code', engine: iEngine, roleKind: 'fix', effort: eff, prompt,
         cwd: (target.worktree || procCwd()), schema: FIX_RESULT_SCHEMA,
-        model: pinnedTier('fixer'), timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
+        model: pinnedTier('fixer'),
+        engineModel: enginePrefTwin.resolveEngineModel(iEngine, 'fixer', pinnedTier('fixer'), _enginePrefs()),
+        timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'fix'),
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'fix'),   // #309 write stall monitor
       })
       if (res && res.ok) return normalizeFixResult({ fixed: [], deferred: [], changedSubjects: [], coverageDecisions: [] }, fixContext)
@@ -1118,6 +1123,7 @@ async function producePhase(phase, workItem) {
       const res = await engineDispatch.dispatchExternal({
         workItem, engine: aEngine, roleKind: 'author-plan', effort: eff, prompt: extPrompt,
         cwd: checkoutRoot() || procCwd(), model,
+        engineModel: enginePrefTwin.resolveEngineModel(aEngine, 'author-plan', model, _enginePrefs()),
         timeoutSeconds: enginePrefTwin.resolveTimeout(_enginePrefs(), 'author-plan'),  // #309 write ceiling
         idleSeconds: enginePrefTwin.resolveIdle(_enginePrefs(), 'author-plan'),        // #309 write stall monitor
       })
@@ -1956,6 +1962,10 @@ async function showrunner({ workItem }) {
       planAuthor: _epParsed.planAuthor || 'claude',
       effort: (_epParsed.effort && typeof _epParsed.effort === 'object' && !Array.isArray(_epParsed.effort)) ? _epParsed.effort : {},
     }
+    if (_epParsed.codexModels && typeof _epParsed.codexModels === 'object'
+        && !Array.isArray(_epParsed.codexModels)) {
+      _epMap.codexModels = Object.assign({}, _epParsed.codexModels)
+    }
     // #309 owner timeout override: carry the positive-int `timeout` so resolveTimeout(_enginePrefs(),
     // role) honors it at dispatch (load_engine_prefs already validated it; guard again defensively).
     if (typeof _epParsed.timeout === 'number' && Number.isInteger(_epParsed.timeout) && _epParsed.timeout > 0) {
@@ -1981,19 +1991,20 @@ async function showrunner({ workItem }) {
     globalThis.__SR_OVERRIDES = _merged.overrides
     globalThis.__SR_ENGINE_PREFS = _merged.enginePrefs
   }
-  // D (detectability): fail-open never blocks the run, but a silent revert to live config must be
-  // LOUD. A frozenSnapshot record was on disk (run_overrides_present, from the same run_overrides.read)
-  // yet no pin reached dispatch — the snapshot was dropped in transit (courier lost frozen_snapshot),
-  // version-gated stale (B), or every row was skipped by the merge exclusions/validation (C). Narrate
-  // it on the existing log() channel so the run isn't silently dispatching on live config unnoticed.
+  // A confirmed frozenSnapshot record was on disk but no pin reached dispatch: it was dropped in
+  // transit, is version-stale, or failed validation. This is run-confirmation safety machinery, so
+  // unknown state must park for a fresh preflight instead of dispatching on unconfirmed live config.
   if ((startupFacts && startupFacts.run_overrides_present) && (!_merged || !_merged.pinnedCount)) {
     const _why = (_merged && _merged.reason) ? _merged.reason
       : (_frozenSnapshot ? 'no pins produced' : 'frozen_snapshot dropped in transit')
     try {
       if (typeof log === 'function') {
-        log(`frozen readout snapshot present but NOT applied — dispatching on live config (${_why})`)
+        log(`frozen readout snapshot present but NOT applied — fresh preflight confirmation required (${_why})`)
       }
     } catch (_) { /* logging must never break the run */ }
+    await releaseLease(workItem, r.generation, r.root)
+    return { outcome: 'parked', phase: 'startup',
+      reason: `frozen readout snapshot could not be applied; fresh preflight confirmation required (${_why})` }
   }
   // 'continue' (from_step) or 'world_derive' (from_step 0) -> run the phase loop (Task 8).
   // lastGoodStep = the last *completed* phase index; resume at the next one (no re-run, FR-3).
@@ -2228,16 +2239,15 @@ const _ENGINE_ROLE_KIND = { review: 'reviewer', build: 'implementation', fix: 'i
 // frozenSnapshots and stamps its READOUT_VERSION onto each (assemble's `version` field). A snapshot
 // whose `version` !== this is from an incompatible commit — its rows predate the current merge
 // exclusions/validation, so re-interpreting them could pin values this consumer would now refuse.
-// mergeFrozenSnapshot ignores such a snapshot entirely (falls through to live config, the documented
-// rollback state). This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
+// mergeFrozenSnapshot refuses to interpret such a snapshot; startup then parks for a fresh preflight
+// confirmation rather than dispatching on live config. This is a JS COPY of the Python constant, drift-guarded: the freeze-version drift
 // smoke asserts it equals preflight_readout.READOUT_VERSION via a `python3 -c` dump (roster-parity
 // pattern), so a Python-side bump that isn't mirrored here fails CI rather than silently ungating.
 // Bumped to 3 (#219 pr-body dispatch row): older snapshots (version 2 or lower) predate the concrete
 // "pr-body" row for draft-PR's compose-PR-body leaf and only carry the old `kind: none` row, so
 // re-interpreting them would leave pr-body unpinned and let it resolve from LIVE config at dispatch —
-// silently bypassing the confirmed preflight readout. Ignored (falls through to live) rather than
-// mis-merged.
-const READOUT_VERSION = 3
+// silently bypassing the confirmed preflight readout. Refused and re-confirmed rather than mis-merged.
+const READOUT_VERSION = 4
 function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const overrides = (baseOverrides && typeof baseOverrides === 'object' && !Array.isArray(baseOverrides))
     ? Object.assign({}, baseOverrides) : {}
@@ -2246,6 +2256,9 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
   const enginePrefs = Object.assign({}, src)
   enginePrefs.effort = (src.effort && typeof src.effort === 'object' && !Array.isArray(src.effort))
     ? Object.assign({}, src.effort) : {}
+  if (src.codexModels && typeof src.codexModels === 'object' && !Array.isArray(src.codexModels)) {
+    enginePrefs.codexModels = Object.assign({}, src.codexModels)
+  }
   // Track how many pins we actually plant + why we might plant none, so the caller can log a loud
   // no-apply narrator line (D) when a snapshot WAS present on disk but nothing survived to dispatch.
   let pinnedCount = 0
@@ -2260,6 +2273,17 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       reason: `snapshot version ${JSON.stringify(frozen.version)} != expected ${READOUT_VERSION} (stale — ignored)` }
   }
   const rows = (frozen && Array.isArray(frozen.phases)) ? frozen.phases : []
+  // Validate provider-specific pairs before planting ANY field from the snapshot. Rejecting only
+  // engineModel/effort after shared model + engine were already pinned would create a hybrid of
+  // confirmed and live state while still incrementing pinnedCount, bypassing startup's fresh-
+  // confirmation park. A malformed current-version Codex row invalidates the whole snapshot.
+  const invalidCodexRow = rows.find((row) => row && typeof row === 'object'
+    && !row.fallbackToClaude && row.engine === 'codex'
+    && !enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort))
+  if (invalidCodexRow) {
+    return { overrides, enginePrefs, pinnedCount: 0,
+      reason: `invalid Codex model/effort pair for ${String(invalidCodexRow.role || 'unknown role')}` }
+  }
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
     // --- Exclusions: rows that must NOT freeze a snapshot value (each keeps the resolve-live path) ---
@@ -2296,7 +2320,8 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
     // Pin the engine onto the engine-pref map (resolveEngine reads __SR_ENGINE_PREFS by role_key).
     // The pref map is keyed by role_kind, so normalize review-deep -> review for the engine key.
     const kind = row.kind === 'review-deep' ? 'review'
-      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' ? row.kind : null)
+      : (row.kind === 'build' || row.kind === 'fix' || row.kind === 'review' || row.kind === 'author-plan'
+        ? row.kind : null)
     const epKey = kind && Object.prototype.hasOwnProperty.call(_ENGINE_ROLE_KIND, kind)
       ? _ENGINE_ROLE_KIND[kind] : null
     // Set validation (C): pin an engine ONLY if it is in the known ENGINES set (the producer's domain).
@@ -2306,11 +2331,23 @@ function mergeFrozenSnapshot(frozen, baseOverrides, baseEnginePrefs) {
       enginePrefs[epKey] = effectiveEngine
       pinnedCount++
     }
+    // Provider-specific model pins never enter the shared model-tier map: native Claude fallback
+    // keeps row.model, while Codex dispatch reads enginePrefs.codexModels[role]. Set/pair validation
+    // mirrors the producer so a malformed same-version snapshot cannot freeze gpt-5.5 + max.
+    if (!row.fallbackToClaude && effectiveEngine === 'codex' && typeof role === 'string'
+        && typeof row.engineModel === 'string'
+        && enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort)) {
+      if (!enginePrefs.codexModels) enginePrefs.codexModels = {}
+      enginePrefs.codexModels[role] = row.engineModel
+      pinnedCount++
+    }
     // Pin the effort onto the effort sub-map (resolveEffort reads __SR_ENGINE_PREFS.effort[role_kind]).
     // The effort sub-map is keyed by role_kind (review/review-deep/build/fix), not the role name. A
     // Claude fallback has null effort (resolveEffort returns null for claude), so a fallback row that
     // still carries the target engine's effort must not pin it — only pin effort for a non-fallback row.
-    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()) {
+    if (kind && !row.fallbackToClaude && typeof row.effort === 'string' && row.effort.trim()
+        && !(effectiveEngine === 'codex' && typeof row.engineModel === 'string'
+          && !enginePrefTwin.validCodexModelEffort(row.engineModel, row.effort))) {
       const effortKind = row.kind === 'review-deep' ? 'review-deep' : kind
       enginePrefs.effort[effortKind] = row.effort
       pinnedCount++

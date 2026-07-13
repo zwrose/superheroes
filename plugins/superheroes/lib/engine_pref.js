@@ -4,6 +4,15 @@
 const ENGINES = ['claude', 'codex', 'cursor']
 const DEFAULT_STALL_LIMIT_SECONDS = 300
 
+// Provider-specific model ids stay separate from model_tier's Claude-family capability names.
+// A GPT pin is never returned for another engine, so native fallback keeps its valid shared tier.
+const CODEX_MODELS = ['gpt-5.5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
+const CODEX_MODEL_BY_TIER = {
+  haiku: 'gpt-5.6-luna', sonnet: 'gpt-5.6-terra', opus: 'gpt-5.6-sol', fable: 'gpt-5.6-sol'
+}
+const CODEX_EFFORTS = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+const CODEX_MAX_UNSUPPORTED_MODELS = ['gpt-5.5']
+
 // #309 role-appropriate dispatch ceilings (owner policy: HIGH ceilings + monitors, never borderline
 // limits). Before this, EVERY external dispatch inherited the bare 300s DEFAULT as a pure wall-clock
 // kill, SIGALRMing legitimately-working builds at 5 minutes (a test-first build cannot reliably
@@ -68,6 +77,21 @@ function resolveEffort(engine, roleKind, overrides) {
   return def
 }
 
+function resolveEngineModel(engine, tierRole, tierModel, prefs) {
+  if (engine !== 'codex') return null
+  const pins = prefs && typeof prefs === 'object' && !Array.isArray(prefs) ? prefs.codexModels : null
+  if (pins && typeof pins === 'object' && !Array.isArray(pins) && hasOwn(pins, tierRole)) {
+    const pinned = pins[tierRole]
+    if (typeof pinned === 'string' && CODEX_MODELS.indexOf(pinned) !== -1) return pinned
+  }
+  return hasOwn(CODEX_MODEL_BY_TIER, tierModel) ? CODEX_MODEL_BY_TIER[tierModel] : 'gpt-5.6-sol'
+}
+
+function validCodexModelEffort(model, effort) {
+  if (CODEX_MODELS.indexOf(model) === -1 || CODEX_EFFORTS.indexOf(effort) === -1) return false
+  return !(CODEX_MAX_UNSUPPORTED_MODELS.indexOf(model) !== -1 && effort === 'max')
+}
+
 // Twin of resolve_timeout: the finite UFR-5 stall limit in seconds. Resolution order (#309): a valid
 // positive int owner override (`overrides.timeout`) wins over everything; else the role-appropriate
 // ceiling for `roleKind` (WRITE_TIMEOUT_SECONDS / READ_TIMEOUT_SECONDS); else the legacy
@@ -98,6 +122,8 @@ function resolveIdle(overrides, roleKind) {
   return DEFAULT_IDLE_SECONDS
 }
 
-module.exports = { resolveEngine, resolveEffort, resolveTimeout, resolveIdle, ENGINES,
+module.exports = { resolveEngine, resolveEffort, resolveEngineModel, validCodexModelEffort,
+  ENGINES, CODEX_MODELS, CODEX_MODEL_BY_TIER, CODEX_EFFORTS, CODEX_MAX_UNSUPPORTED_MODELS,
+  resolveTimeout, resolveIdle,
   DEFAULT_STALL_LIMIT_SECONDS, WRITE_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS,
   WRITE_IDLE_SECONDS, READ_IDLE_SECONDS, DEFAULT_IDLE_SECONDS }

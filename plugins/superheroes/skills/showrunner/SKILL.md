@@ -99,7 +99,8 @@ state is; a never-started showrunner pick simply re-enters here.
 
        ```bash
        python3 "$LIB/preflight_readout.py" validate-override \
-         --role "<role>" --field "<field>" --value "<value>"
+         --role "<role>" --field "<field>" --value "<value>" \
+         --snapshot "$SNAPSHOT_JSON"
        ```
 
        On `ok:false`, show the verdict's `acceptedValues` + `reason`, keep the currently-effective

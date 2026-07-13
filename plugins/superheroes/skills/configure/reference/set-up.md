@@ -87,6 +87,11 @@ completes.
    absent block reads as both `claude`. (A third key, `planAuthor`, routes the showrunner's
    plan-author leaf; it is a tune-level knob — offer it only when the owner asks, per
    `reference/view-and-tune.md`.)
+   When Codex is selected and no concrete model pin exists, explain the effective GPT-5.6 defaults.
+   Codex tier map: haiku=gpt-5.6-luna, sonnet=gpt-5.6-terra, opus=gpt-5.6-sol,
+   fable=gpt-5.6-sol.
+   `gpt-5.5` remains available later as a per-role tune-level compatibility pin; `gpt-5.5` +
+   `max` is rejected, and `max` is opt-in on GPT-5.6 only.
 
 3. **Show the build authorization — never apply it (FR-13).** If an external **implementation** engine
    is chosen, an external autonomous write needs a one-time owner grant. Show the exact snippet and where
@@ -107,6 +112,8 @@ completes.
    # -> {"engine":E,"ok":false} (denied or no-response bounded by the UFR-5 limit -> falls open to
    #    Claude; tell the owner how to enable, leave the engine not-ready with a retry instruction)
    ```
+   For Codex, this probes the GPT-5.6 Sol capability explicitly as well as the host write grant, so
+   an authenticated CLI that is too old for GPT-5.6 remains not-ready.
    A failed or timed-out test dispatch leaves the engine **not-ready** — builds and mechanical fixes fall
    open to Claude until it works. Never present a not-working engine as ready.
 

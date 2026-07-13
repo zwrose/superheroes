@@ -103,6 +103,23 @@ def render(cwd, *, root=None):
         out.append("")
         out.append("### Threat model")
         out.append((core.get("threatModel") or "(none)").strip())
+        prefs = core.get("enginePreferences")
+        prefs = prefs if isinstance(prefs, dict) else {}
+        out.append("")
+        out.append("## Engine preferences")
+        out.append(f"reviewer: {prefs.get('reviewer') or 'claude'}")
+        out.append(f"implementation: {prefs.get('implementation') or 'claude'}")
+        out.append(f"planAuthor: {prefs.get('planAuthor') or 'claude'}")
+        effort = prefs.get("effort") if isinstance(prefs.get("effort"), dict) else {}
+        out.append("effort overrides: " + (", ".join(f"{k}={v}" for k, v in sorted(effort.items()))
+                                           or "(none)"))
+        codex_models = prefs.get("codexModels") if isinstance(prefs.get("codexModels"), dict) else {}
+        out.append("Codex model pins:")
+        if codex_models:
+            for role, model in sorted(codex_models.items()):
+                out.append(f"  {role}: {model}")
+        else:
+            out.append("  (none; GPT-5.6 models derive from shared tiers)")
     for hero, text in data["layers"]:
         out.append("")
         out.append(f"## Layer: {hero}")

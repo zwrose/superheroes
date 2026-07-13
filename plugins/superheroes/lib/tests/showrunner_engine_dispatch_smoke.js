@@ -139,33 +139,34 @@ function makeAgent(routes) {
         execLogEnrich.push(prompt)
         if (prompt.includes('git') && prompt.includes('rev-parse HEAD')) return [{ index: 0, ok: true, stdout: 'preSHA-abc\n' }]
         if (prompt.includes('engine_adapter.py build-argv')) {
-          // What the real adapter emits for a cursor work role under the owner policy (2026-07-09):
-          // the composer default — the threaded tier informs the adapter, the policy map decides.
-          capturedArgv = ['cursor-agent', '--model', 'composer-2.5-fast', '-p', '--trust', '-f', '--output-format', 'stream-json']
+          capturedArgv = ['codex', 'exec', '--sandbox', 'workspace-write', '-m', 'gpt-5.6-sol', '-']
           return [{ index: 0, ok: true, stdout: JSON.stringify(capturedArgv) }]
         }
         if (prompt.includes('engine_adapter.py parse-result')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, signal: 'ok', evidence: {} }) }]
         if (prompt.includes('engine_adapter.py commit')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true, sha: 'newsha' }) }]
         if (prompt.includes('journal_entry.py')) return [{ index: 0, ok: true, stdout: JSON.stringify({ ok: true }) }]
-        if (prompt.includes('--model')) return markedStdout('{"raw":"external build output"}')
+        if (prompt.includes('gpt-5.6-sol') && prompt.includes('perl -e')) return markedStdout('{"raw":"external build output"}')
         return [{ index: 0, ok: true, stdout: '{}' }]
       }],
     ])
-    const rEnrich = await d.dispatchExternal({ engine: 'cursor', roleKind: 'build', effort: 'composer',
-      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, model: 'opus', taskId: 'T1', workItem: 'wi-abc' })
+    const rEnrich = await d.dispatchExternal({ engine: 'codex', roleKind: 'build', effort: 'high',
+      prompt: 'build', cwd: '/tmp/wt', schema: {}, timeoutSeconds: 2400, model: 'opus',
+      engineModel: 'gpt-5.6-sol', taskId: 'T1', workItem: 'wi-abc' })
     assert.strictEqual(rEnrich.ok, true, '#308/#309: the enriched write dispatch still succeeds')
     // build-argv received the resolved model (the #308 fix: dispatch forwards the tier).
     const argvCmd = execLogEnrich.find((c) => c.includes('engine_adapter.py build-argv'))
     assert.ok(argvCmd.includes("--model 'opus'"), '#308: dispatch forwards the resolved model to build-argv: ' + argvCmd)
+    assert.ok(argvCmd.includes("--engine-model 'gpt-5.6-sol'"),
+      'GPT-5.6: dispatch forwards the provider-specific model separately from the fallback-safe tier: ' + argvCmd)
     // the perl-alarm OS-kill guard carries the caller's effective timeout (#309), not the 300s default.
-    const runCmd = execLogEnrich.find((c) => c.includes('--model') && c.includes(' < '))
+    const runCmd = execLogEnrich.find((c) => c.includes("'gpt-5.6-sol'") && c.includes(' < '))
     assert.ok(/perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' 2400 /.test(runCmd),
       '#309: the perl-alarm guard carries the threaded timeout (2400s): ' + runCmd)
     // the external_dispatch journal payload is enriched with model + argv + effectiveTimeout (#299 audit).
     const journalCmd = execLogEnrich.find((c) => c.includes('journal_entry.py') && c.includes('external_dispatch'))
     const pm = journalCmd.match(/--payload '(.*)'$/s)
     const payload = JSON.parse(pm[1])
-    assert.strictEqual(payload.model, 'opus', '#308: the journal records the resolved model')
+    assert.strictEqual(payload.model, 'gpt-5.6-sol', 'the journal records the concrete attempted engine model')
     assert.strictEqual(payload.effectiveTimeout, 2400, '#309: the journal records the effective timeout ceiling')
     assert.deepStrictEqual(payload.argv, capturedArgv, '#308: the journal records the exact dispatched argv')
     console.log('OK: engine_dispatch enriched journal (model + argv + effectiveTimeout) + threaded timeout')
@@ -1430,4 +1431,3 @@ function makeAgent(routes) {
     console.log('OK: engine_dispatch #257 _stageInput retries a mangle once, gives up on persistent failure, breaks early on a denial')
   }
 })()
-

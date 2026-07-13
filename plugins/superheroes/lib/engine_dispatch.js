@@ -586,7 +586,7 @@ async function _scrubReason(reason) {
 // returns the native {ok:false} failure shape instead of throwing — callers' fall-open-to-Claude
 // path (UFR-2 discard + native worker) only fires on a returned failure, never on an exception.
 async function _dispatchExternalInner(o) {
-  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model } = o
+  const { engine, roleKind, effort, prompt, cwd, schema, timeoutSeconds, model, engineModel } = o
   const limitSeconds = Number(timeoutSeconds) > 0 ? Number(timeoutSeconds) : DEFAULT_STALL_LIMIT_SECONDS
   const limitMs = limitSeconds * 1000
   const isWrite = (roleKind === 'build' || roleKind === 'fix')
@@ -616,10 +616,11 @@ async function _dispatchExternalInner(o) {
   // The invariant audit-line fields for THIS dispatch (#308/#309): engine/effort/roleKind + the
   // resolved model, effective timeout ceiling, (once build-argv resolves) the exact argv, and the
   // stall-monitor state + idle threshold. Read at journal time so `argv` reflects resolvedArgv whenever
-  // it is available. Each outcome-specific call overlays its own {verify, outcome}. `model` is a native
-  // tier short-name or null (session inherit).
+  // it is available. Each outcome-specific call overlays its own {verify, outcome}. The journal names
+  // the concrete provider model when supplied; `model` remains the native/fallback-safe tier fact.
   const _jbase = () => Object.assign({ workItem: o.workItem, engine, effort, roleKind,
-    model: (typeof model === 'string' && model) ? model : null,
+    model: (typeof engineModel === 'string' && engineModel) ? engineModel
+      : ((typeof model === 'string' && model) ? model : null),
     argv: resolvedArgv, effectiveTimeout: limitSeconds,
     stallMonitor, idleSeconds },
     // #347: disclose a bounded relay on EVERY outcome line for this dispatch — the parser saw only
@@ -703,6 +704,7 @@ async function _dispatchExternalInner(o) {
       `--effort ${shq(String(effort == null ? '' : effort))} --cwd ${shq(cwd || '.')} ` +
       `--schema-path ${shq(schemaPath)}` +
       (typeof model === 'string' && model ? ` --model ${shq(model)}` : '') +
+      (typeof engineModel === 'string' && engineModel ? ` --engine-model ${shq(engineModel)}` : '') +
       ` --verify ${shq(promptPath + ':' + sha256hex(prompt || ''))}` +
       ` --verify ${shq(schemaPath + ':' + sha256hex(schemaText))}`
     let argvObj = await _execJson(buildArgvCmd)
